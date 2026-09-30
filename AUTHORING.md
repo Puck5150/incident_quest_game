@@ -25,9 +25,12 @@ Scenarios are data. You don't write any code to add an incident.
 2. **Investigating:** the player explores `terminal`, `logs`, `files`, and `diagram`.
 3. **Hypothesis:** the player picks from `hypotheses`. The wrong ones show their
    `feedback`. Fix actions stay locked until the player picks the correct one.
-4. **Acting:** the player chooses from `actions`. The incident resolves when every
-   action in any one `solution_paths` entry has been taken, in any order.
-5. **Debrief:** shows `debrief`, `analogy`, and `sources`.
+4. **Acting:** the player chooses from `actions`. Once every action in any one
+   `solution_paths` entry has been taken (in any order), a **Close incident**
+   button appears. The gap between fixing and closing is where the player verifies.
+5. **Hints** are available the whole time: nudge, then direction (which also shows
+   the `analogy`), then answer.
+6. **Debrief:** shows `debrief`, `analogy`, and `sources`.
 
 ## Writing good incidents
 
@@ -45,7 +48,11 @@ Scenarios are data. You don't write any code to add an incident.
   pre-fix entry, because the first match wins.
 - **Terminal matching:** `match` compares against what the player typed, ignoring
   extra spaces. Use `match_regex` for variants (`du -sh /var/log` vs
-  `du -sh /var/log/*`). Remember to escape backslashes in YAML strings (`\\*`).
+  `du -sh /var/log/*`). The regex runs against the input *after* spaces are
+  collapsed. Remember to escape backslashes in YAML strings (`\\*`).
+- **`help` in the terminal** lists your `match` commands, but not the regex ones.
+  Use `match` for the obvious first steps and `match_regex` for the deeper digging
+  you want players to think of themselves. `clear` and `history` are built in.
 - **The analogy should use no IT words.** If you need jargon to explain it, it's
   not an analogy yet.
 

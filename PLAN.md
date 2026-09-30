@@ -248,7 +248,7 @@ Ranks (XP thresholds tuned in Milestone 4): Help Desk, Support Engineer, Systems
 ## 5. Game loop
 
 ```
- BRIEFING ──start──▶ INVESTIGATING ──declare hypothesis──▶ ACTING ──solution path complete──▶ RESOLVED ──▶ DEBRIEF
+ BRIEFING ──start──▶ INVESTIGATING ──declare hypothesis──▶ ACTING ──fix complete + "Close incident"──▶ RESOLVED ──▶ DEBRIEF
                        ▲    │                                 │
                        │    └── hints (any time, cost XP)     │
                        └────── wrong hypothesis / "back to investigating" ◀──┘
@@ -258,8 +258,9 @@ Ranks (XP thresholds tuned in Milestone 4): Help Desk, Support Engineer, Systems
 2. **Investigating:** terminal, logs, files, and the optional trace/metric/pipeline views. The engine records every command and artifact you open. That record drives both the scoring and the "what you did" section of the debrief.
 3. **Hypothesis:** pick a root cause from the scenario's list. A wrong pick shows its feedback, costs a little XP, and sends you back to investigating. This step exists to make you *think before acting*, which is the core skill.
 4. **Acting:** the action panel unlocks. `fix` actions move you toward a solution path. `wrong` actions show feedback with a small penalty. `destructive` actions show feedback with a large penalty; this is the "restart everything" trap. After an action, terminal output can change via `when_actions`, so you can **verify** the fix (e.g., run `df -h` again). Verifying is worth a small bonus.
-5. **Resolved:** a short celebration animation, then the XP counter tallies up.
-6. **Debrief:** root cause, the ideal path, a side-by-side of your path vs. the ideal, evidence you found and missed, the analogy, and the source links.
+5. **Close:** *(changed in M3)* a finished fix doesn't resolve the incident by itself. The player clicks "Close incident", which leaves a window to verify first. Without it, the verification bonus would be impossible to earn.
+6. **Resolved:** a short celebration animation, then the XP counter tallies up.
+7. **Debrief:** root cause, the ideal path, a side-by-side of your path vs. the ideal, evidence you found and missed, the analogy, and the source links.
 
 **Terminal behavior:** built-ins are `help` (lists commands this scenario understands, which is itself a mild hint and free), `clear`, and up/down history. Commands are matched after trimming and collapsing whitespace. Anything unmatched returns the scenario's `unknown_output` or a sensible default. **The terminal only reads.** Fixes happen through the action panel, so outcomes stay unambiguous. Typing fix commands is in the parking lot.
 
