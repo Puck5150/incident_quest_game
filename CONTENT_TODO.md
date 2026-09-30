@@ -101,3 +101,13 @@ from your own experience and tick them off.
 ## cloud-design/gcp-launch-day-signups
 - [ ] "About 60 Cloud Run instances at peak" and the 500-connection limit are
       scenario numbers, not Google figures.
+
+## cloud-design/aws-checkout-canvas (canvas, not playable until C3)
+- [ ] Web server capacity (2× normal traffic each) is a scenario number.
+- [ ] The engine's model: a `sync` link = automatic failover with no lost
+      writes; an `async` link = manual promotion, possible lost writes. That
+      matches RDS Multi-AZ vs. read replicas (sourced), but it's a simplification
+      for other databases.
+- [ ] Apps reaching the database "through its endpoint" (so a traffic link to
+      the primary also reaches its sync standby after failover) models the RDS
+      DNS switch described in the failover docs.

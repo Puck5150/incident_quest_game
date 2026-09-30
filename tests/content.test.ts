@@ -86,6 +86,19 @@ describe('validator rejects', () => {
     expect(() => loadContent(dir)).toThrow(/reference design "Recommended" fails: az-outage, sale-traffic/)
   })
 
+  it('a canvas counter-example that no longer fails what it claims', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iq-content-'))
+    fs.copyFileSync(path.join(CONTENT, 'tracks.yaml'), path.join(dir, 'tracks.yaml'))
+    fs.mkdirSync(path.join(dir, 'cloud-design'))
+    const original = fs.readFileSync(path.join(CONTENT, 'cloud-design/aws-checkout-canvas.yaml'), 'utf8')
+    // Turn the "async replica" counter-example's link into sync: it now passes.
+    fs.writeFileSync(
+      path.join(dir, 'cloud-design/aws-checkout-canvas.yaml'),
+      original.replace('- { from: db-1, to: db-2, kind: async }', '- { from: db-1, to: db-2, kind: sync }'),
+    )
+    expect(() => loadContent(dir)).toThrow(/counter-example "An async replica instead of a synchronous standby" should fail \[az1-outage\] but fails \[\]/)
+  })
+
   it('missing sources', () => {
     expect(loadMutated((y) => y.slice(0, y.indexOf('sources:')))).toThrow(/sources/)
   })

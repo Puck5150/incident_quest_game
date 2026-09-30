@@ -1,0 +1,243 @@
+type: challenge
+mode: canvas
+id: aws-checkout-canvas
+track: cloud-design
+difficulty: 3
+title: "Build a checkout that survives losing a zone"
+provider: aws
+par_minutes: 15
+
+brief: |
+  Same shop as before, but this time there's no menu of ready-made options.
+  You build the architecture yourself: place the load balancer, web servers
+  and databases into zones, connect them, and decide how the data is
+  replicated. Sales days bring 3× normal traffic, and a zone can fail on a
+  sales day too.
+
+requirements:
+  - "Serve 3× normal traffic, even with one Availability Zone down"
+  - "Keep accepting orders if either zone fails, without losing committed orders"
+  - "Survive any single web server failing"
+  - "Stay within 12 cost units per month"
+budget: 12
+
+layout:
+  regions:
+    - id: use1
+      label: "us-east-1"
+      zones:
+        - { id: use1-az1, label: "us-east-1a" }
+        - { id: use1-az2, label: "us-east-1b" }
+    - id: usw2
+      label: "us-west-2"
+      zones:
+        - { id: usw2-az1, label: "us-west-2a" }
+
+palette:
+  - id: alb
+    label: "Application Load Balancer"
+    short: "ALB"
+    scope: regional
+    roles: [route]
+    cost: 1
+    facts:
+      - "A regional load balancer. AWS load balancers reroute traffic to targets in healthy Availability Zones."
+  - id: ec2-web
+    label: "EC2 web server"
+    short: "web"
+    scope: zonal
+    roles: [serve]
+    capacity: 2
+    cost: 1
+    facts:
+      - "Runs in one Availability Zone."
+      - "Each server handles 2× normal traffic (scenario number)."
+  - id: rds
+    label: "RDS for PostgreSQL DB instance"
+    short: "RDS"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts:
+      - "A DB instance runs in one Availability Zone."
+      - "Connect two instances with a replication link to make one a standby or a replica of the other."
+  - id: rds-dr
+    label: "Cross-Region read replica (disaster recovery)"
+    short: "RDS DR replica"
+    scope: zonal
+    roles: [write-store]
+    cost: 3
+    facts:
+      - "A read replica in another AWS Region, kept up to date asynchronously."
+      - "It can be promoted to a standalone instance for disaster recovery."
+    overkill: "Region-level recovery wasn't in the brief. The zone requirements are met inside one Region for less."
+
+link_facts:
+  sync:
+    - "Like RDS Multi-AZ: a synchronous standby in another Availability Zone."
+    - "Failover is automatic, typically 60–120 seconds; the database's DNS name moves to the standby."
+  async:
+    - "Like an RDS read replica: replication is asynchronous, so it can lag behind."
+    - "Promotion to a standalone instance is a manual step."
+
+stress_tests:
+  - id: sale
+    label: "A normal sales day: 3× traffic"
+    event: { none: true }
+    check: { reach: [serve, write-store], capacity: 3 }
+  - id: az1-outage
+    label: "us-east-1a fails during the sale"
+    event: { zone_outage: use1-az1 }
+    check: { reach: [serve, write-store], capacity: 3 }
+  - id: az2-outage
+    label: "us-east-1b fails during the sale"
+    event: { zone_outage: use1-az2 }
+    check: { reach: [serve, write-store], capacity: 3 }
+  - id: web-failure
+    label: "Any one web server fails during the sale"
+    event: { single_failure: ec2-web }
+    check: { reach: [serve], capacity: 3 }
+
+reference_designs:
+  - name: "Recommended"
+    why: "Two web servers per zone keep 4× capacity when a zone fails, above the 3× needed. A synchronous standby in the other zone takes over writes automatically."
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: web-3, type: ec2-web, lane: use1-az2 }
+        - { id: web-4, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: alb, to: web-3, kind: traffic }
+        - { from: alb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+
+counter_examples:
+  - name: "Everything in one zone"
+    fails: [az1-outage, web-failure]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+  - name: "An async replica instead of a synchronous standby"
+    fails: [az1-outage]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: web-3, type: ec2-web, lane: use1-az2 }
+        - { id: web-4, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: alb, to: web-3, kind: traffic }
+        - { from: alb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: async }
+  - name: "One web server per zone"
+    fails: [az1-outage, az2-outage, web-failure]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "Everything, plus disaster recovery in another Region"
+    fails: [budget]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: web-3, type: ec2-web, lane: use1-az1 }
+        - { id: web-4, type: ec2-web, lane: use1-az2 }
+        - { id: web-5, type: ec2-web, lane: use1-az2 }
+        - { id: web-6, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+        - { id: db-dr, type: rds-dr, lane: usw2-az1 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: alb, to: web-3, kind: traffic }
+        - { from: alb, to: web-4, kind: traffic }
+        - { from: alb, to: web-5, kind: traffic }
+        - { from: alb, to: web-6, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: db-1, to: db-dr, kind: async }
+
+hints:
+  nudge: "Take any one zone away in your head. What's left, and is it enough?"
+  direction: "Count the web capacity left after losing a zone, and ask which database takes over writes, and whether it does so on its own."
+  answer: "Two web servers in each zone behind the ALB, and an RDS instance in each zone joined by a sync replication link."
+
+analogy:
+  title: "Two kitchens, one recipe book"
+  text: |
+    Two kitchens in separate wings, each staffed for more than half the dinner
+    rush, so either one can carry the night alone. They share one recipe book
+    that's copied to the other wing the moment anything changes. A copy that's
+    updated "sometime later" might be missing tonight's changes, and someone
+    has to decide to start using it.
+
+debrief:
+  summary: |
+    Surviving a zone isn't one setting; it's a shape. Every tier needs a
+    working copy outside any single zone, and the survivors need enough
+    capacity on their own. For the data,
+    only a synchronous standby takes over automatically with no lost writes;
+    an asynchronous replica needs a manual promotion and can lag behind.
+  real_world: |
+    This is the shape AWS's Well-Architected Reliability Pillar recommends:
+    deploy to at least two Availability Zones, and enable Multi-AZ replication
+    for services like RDS that don't do it by default.
+
+sources:
+  - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"
+    url: "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Multi-AZ DB instance deployments"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Failing over a Multi-AZ DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Promoting a read replica to be a standalone DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.Promote.html"
+    retrieved: 2026-09-30

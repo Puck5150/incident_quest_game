@@ -2,6 +2,7 @@
 declare module 'virtual:content' {
   import type { Scenario, Track } from './schema/scenario.ts'
   import type { Challenge } from './schema/challenge.ts'
-  const content: { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[] }
+  import type { CanvasChallenge } from './schema/canvas.ts'
+  const content: { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[]; canvases: CanvasChallenge[] }
   export default content
 }

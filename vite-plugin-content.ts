@@ -14,8 +14,10 @@ import type { Plugin } from 'vite'
 import { ScenarioSchema, TrackSchema, type Scenario, type Track } from './src/schema/scenario.ts'
 import { ChallengeSchema, type Challenge } from './src/schema/challenge.ts'
 import { evaluate } from './src/game/challenge.ts'
+import { CanvasChallengeSchema, type CanvasChallenge } from './src/schema/canvas.ts'
+import { evaluateCanvas } from './src/game/canvas.ts'
 
-export type Content = { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[] }
+export type Content = { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[]; canvases: CanvasChallenge[] }
 
 export function loadContent(dir: string): Content {
   const errors: string[] = []
@@ -26,11 +28,20 @@ export function loadContent(dir: string): Content {
 
   const scenarios: Scenario[] = []
   const challenges: Challenge[] = []
+  const canvases: CanvasChallenge[] = []
   for (const file of scenarioFiles(dir)) {
     const rel = path.relative(dir, file)
-    // `type: challenge` files are design challenges; everything else is an incident.
-    const isChallenge = /^type:\s*challenge\s*$/m.test(fs.readFileSync(file, 'utf8'))
-    const s = isChallenge ? check(file, ChallengeSchema, errors) : check(file, ScenarioSchema, errors)
+    // `type: challenge` files are design challenges (`mode: canvas` for the
+    // canvas kind); everything else is an incident. Top-level keys only: block
+    // text is indented, so it can't match these.
+    const raw = fs.readFileSync(file, 'utf8')
+    const isChallenge = /^type:\s*challenge\s*$/m.test(raw)
+    const isCanvas = isChallenge && /^mode:\s*canvas\s*$/m.test(raw)
+    const s = isCanvas
+      ? check(file, CanvasChallengeSchema, errors)
+      : isChallenge
+        ? check(file, ChallengeSchema, errors)
+        : check(file, ScenarioSchema, errors)
     if (!s) continue
     const fileId = path.basename(file).replace(/\.ya?ml$/, '')
     const folder = path.dirname(rel)
@@ -40,9 +51,23 @@ export function loadContent(dir: string): Content {
     if (s.id !== fileId) errors.push(`${rel}: id "${s.id}" must match the filename ("${fileId}")`)
     if (s.track !== folder) errors.push(`${rel}: track "${s.track}" must match the folder ("${folder}")`)
     if (!trackIds.has(s.track)) errors.push(`${rel}: track "${s.track}" is not defined in tracks.yaml`)
-    if ([...scenarios, ...challenges].some((o) => o.id === s.id)) errors.push(`${rel}: duplicate id "${s.id}"`)
+    if ([...scenarios, ...challenges, ...canvases].some((o) => o.id === s.id)) errors.push(`${rel}: duplicate id "${s.id}"`)
 
-    if (s.type === 'challenge') {
+    if ('mode' in s) {
+      // Reference designs must pass; counter-examples must fail exactly the
+      // tests they name, proving each test catches the mistake it's meant to.
+      s.reference_designs.forEach((d) => {
+        const e = evaluateCanvas(s, d.design)
+        if (!e.pass) errors.push(`${rel}: reference design "${d.name}" fails: ${failedIds(e).join(', ')}`)
+      })
+      s.counter_examples.forEach((x) => {
+        const got = failedIds(evaluateCanvas(s, x.design)).sort()
+        const want = [...x.fails].sort()
+        if (JSON.stringify(got) !== JSON.stringify(want))
+          errors.push(`${rel}: counter-example "${x.name}" should fail [${want.join(', ')}] but fails [${got.join(', ')}]`)
+      })
+      canvases.push(s)
+    } else if (s.type === 'challenge') {
       // Every reference design must actually pass, or the debrief would teach a wrong answer.
       s.reference_designs.forEach((d) => {
         const e = evaluate(s, d.picks)
@@ -63,8 +88,13 @@ export function loadContent(dir: string): Content {
   )
 
   if (errors.length) throw new Error(`Invalid content:\n\n${errors.join('\n\n')}`)
-  return { tracks, scenarios, challenges }
+  return { tracks, scenarios, challenges, canvases }
 }
+
+const failedIds = (e: ReturnType<typeof evaluateCanvas>) => [
+  ...e.tests.filter((t) => !t.pass).map((t) => t.id),
+  ...(e.withinBudget ? [] : ['budget']),
+]
 
 // Parse + validate one file. Returns undefined (and records errors) on failure
 // so we can report every broken file at once, not just the first.
