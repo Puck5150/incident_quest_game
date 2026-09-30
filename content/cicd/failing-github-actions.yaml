@@ -1,0 +1,240 @@
+id: failing-github-actions
+track: cicd
+difficulty: 2
+title: "main is red and staging stopped deploying"
+par_minutes: 10
+
+ticket:
+  from: "QA lead"
+  priority: P2
+  body: |
+    Staging hasn't picked up any changes since this morning, and the CI badge
+    on main is red. Several people have hit "re-run" already. Can someone
+    figure out what's going on?
+
+environment: |
+  A Node.js web app on GitHub. The CI workflow (.github/workflows/ci.yml) runs
+  on every push to main: a "test" job installs dependencies with npm ci and
+  runs the tests, then a "deploy-staging" job (needs: test) deploys.
+  main has no branch protection yet; people sometimes push directly.
+
+terminal:
+  prompt: "you@laptop:~/webapp (main)$"
+  commands:
+    - match: "git log --oneline -3"
+      when_actions: [commit-lockfile]
+      output: |
+        c7d2e90 (HEAD -> main, origin/main) Update package-lock.json for express 5
+        9b41f3a Bump express to v5
+        2e7a0c1 Fix typo on pricing page
+    - match: "git log --oneline -3"
+      output: |
+        9b41f3a (HEAD -> main, origin/main) Bump express to v5
+        2e7a0c1 Fix typo on pricing page
+        8f02d5b Add pricing page tests
+    - match: "git show --stat HEAD"
+      when_actions: [commit-lockfile]
+      output: |
+        commit c7d2e90
+        Author: You
+            Update package-lock.json for express 5
+
+         package-lock.json | 214 ++++++++++++++++++-----------
+         1 file changed, 131 insertions(+), 83 deletions(-)
+    - match: "git show --stat HEAD"
+      evidence: lock-not-committed
+      output: |
+        commit 9b41f3a
+        Author: Sam
+            Bump express to v5
+
+         package.json | 2 +-
+         1 file changed, 1 insertion(+), 1 deletion(-)
+    - match_regex: "^git diff HEAD~1( -- package\\.json)?$"
+      output: |
+        --- a/package.json
+        +++ b/package.json
+        @@ "dependencies": {
+        -    "express": "^4.21.2",
+        +    "express": "^5.1.0",
+    - match: "grep -A2 '\"node_modules/express\"' package-lock.json"
+      when_actions: [commit-lockfile]
+      output: |
+        "node_modules/express": {
+          "version": "5.1.0",
+          "resolved": "https://registry.npmjs.org/express/-/express-5.1.0.tgz",
+    - match: "grep -A2 '\"node_modules/express\"' package-lock.json"
+      evidence: lock-stale
+      output: |
+        "node_modules/express": {
+          "version": "4.21.2",
+          "resolved": "https://registry.npmjs.org/express/-/express-4.21.2.tgz",
+    - match: "gh run list --limit 3"
+      when_actions: [commit-lockfile]
+      output: |
+        STATUS  TITLE                                        WORKFLOW  BRANCH  EVENT
+        ✓       Update package-lock.json for express 5       CI        main    push
+        X       Bump express to v5                           CI        main    push
+        ✓       Fix typo on pricing page                     CI        main    push
+    - match: "gh run list --limit 3"
+      output: |
+        STATUS  TITLE                                        WORKFLOW  BRANCH  EVENT
+        X       Bump express to v5                           CI        main    push
+        ✓       Fix typo on pricing page                     CI        main    push
+        ✓       Add pricing page tests                       CI        main    push
+
+pipeline:
+  name: "CI · run #1482 (attempt 3)"
+  trigger: "push to main · 9b41f3a \"Bump express to v5\" · Sam"
+  stages:
+    - name: "test / Set up job"
+      status: success
+      duration_s: 2
+    - name: "test / Run actions/checkout@v6"
+      status: success
+      duration_s: 1
+    - name: "test / Use Node.js"
+      status: success
+      duration_s: 4
+      log: |
+        Attempting to download 20.x...
+        Found in cache
+    - name: "test / Run npm ci"
+      status: failure
+      duration_s: 3
+      evidence: ci-out-of-sync
+      log: |
+        Run npm ci
+        npm error code EUSAGE
+        npm error
+        npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+        npm error
+        npm error Invalid: lock file's express@4.21.2 does not satisfy express@^5.1.0
+        Error: Process completed with exit code 1.
+    - name: "test / Run npm test"
+      status: skipped
+    - name: "deploy-staging"
+      status: skipped
+      evidence: deploy-skipped
+
+files:
+  - path: ".github/workflows/ci.yml"
+    content: |
+      name: CI
+      on:
+        push:
+          branches: [main]
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v6
+            - name: Use Node.js
+              uses: actions/setup-node@v7
+              with:
+                node-version: '20.x'
+                cache: 'npm'
+            - run: npm ci
+            - run: npm test
+
+        deploy-staging:
+          needs: test
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v6
+            - run: ./scripts/deploy.sh staging
+
+hypotheses:
+  - id: lock-out-of-sync
+    text: "package.json was changed without updating package-lock.json, so npm ci refuses to install."
+    correct: true
+  - id: registry-outage
+    text: "The npm registry is having an outage."
+    feedback: "npm ci failed immediately with a specific message about package.json and the lock file being out of sync. That's a problem in the repo, not the network."
+  - id: flaky-tests
+    text: "The tests are flaky."
+    feedback: "The tests never ran. The npm test step was skipped because the step before it failed."
+  - id: deploy-broken
+    text: "The staging deploy script is broken."
+    feedback: "deploy-staging never started. It needs the test job, and when a needed job fails, the jobs that need it are skipped."
+
+actions:
+  - id: commit-lockfile
+    label: "Run npm install locally, commit the updated package-lock.json, and push"
+    kind: fix
+    feedback: "package.json and the lock file agree again. npm ci succeeds, the tests run, and staging deploys."
+  - id: protect-main
+    label: "Protect main: require a pull request and the CI status check before merging"
+    kind: fix
+    feedback: "A broken commit now fails CI on its pull request instead of landing on main and blocking everyone."
+  - id: rerun
+    label: "Re-run the failed jobs again"
+    kind: wrong
+    feedback: "npm ci is deterministic: the same commit fails the same way every time. That's why three re-runs didn't help."
+  - id: switch-to-install
+    label: "Change the workflow from npm ci to npm install"
+    kind: wrong
+    feedback: "CI would go green, but it would now resolve dependency versions on every run instead of installing exactly what's in the lock file. Builds stop being reproducible."
+  - id: delete-lock
+    label: "Delete package-lock.json and commit"
+    kind: destructive
+    feedback: "npm ci requires a lock file, so CI still fails. And you've thrown away the pinned versions that make installs reproducible, which is a supply-chain risk."
+  - id: force-push
+    label: "Force-push main back to the last green commit"
+    kind: destructive
+    feedback: "Rewriting shared history on main breaks everyone's local clones and silently drops Sam's change. Fix forward instead."
+
+solution_paths:
+  - [commit-lockfile, protect-main]
+
+key_evidence: [ci-out-of-sync, lock-not-committed]
+
+hints:
+  nudge: "Don't look at the last step that ran. Look at the first one that failed."
+  direction: "Read the npm ci log carefully, then check which files the breaking commit actually changed."
+  answer: "npm ci says package.json and package-lock.json are out of sync. The commit bumped express in package.json only. Update and commit the lock file, then protect main so this is caught on a pull request."
+
+analogy:
+  title: "A shopping list that doesn't match the receipt"
+  text: |
+    The warehouse (CI) only ships exactly what's on the approved packing slip
+    (the lock file). Someone changed the order form (package.json) to ask for a
+    newer model but never updated the packing slip. The warehouse refuses to
+    guess, and it's right to refuse.
+
+debrief:
+  root_cause: |
+    Commit 9b41f3a bumped express to ^5.1.0 in package.json without updating
+    package-lock.json. npm ci exits with an error when the lock file doesn't
+    match package.json, instead of updating it, so the test job failed at
+    install. deploy-staging needs test, so it was skipped. Because main has no
+    branch protection, the commit landed without CI running on a pull request.
+  ideal_path:
+    - "Open the failed run and find the FIRST failed step: npm ci."
+    - "Read its error: package.json and package-lock.json are out of sync."
+    - "Check the breaking commit: it changed package.json only."
+    - "Recognize that skipped steps and jobs are consequences, not causes."
+    - "Fix: regenerate and commit the lock file. Prevent: require PRs and passing CI on main."
+    - "Verify: the next run on main is green and staging deploys."
+  real_world: |
+    Lock files pin exact dependency versions so every install is identical.
+    That's a reproducibility and supply-chain safeguard. Using npm ci in CI is
+    what catches this mistake; switching to npm install would only hide it.
+
+sources:
+  - title: "npm Docs: npm ci"
+    url: "https://docs.npmjs.com/cli/v11/commands/npm-ci"
+    retrieved: 2026-09-30
+  - title: "GitHub Docs: Building and testing Node.js"
+    url: "https://docs.github.com/en/actions/tutorials/build-and-test-code/nodejs"
+    retrieved: 2026-09-30
+  - title: "GitHub Docs: Using jobs in a workflow (needs)"
+    url: "https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-jobs"
+    retrieved: 2026-09-30
+  - title: "GitHub Docs: Expressions (success() default status check)"
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/expressions"
+    retrieved: 2026-09-30
+  - title: "GitHub Docs: About protected branches"
+    url: "https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches"
+    retrieved: 2026-09-30

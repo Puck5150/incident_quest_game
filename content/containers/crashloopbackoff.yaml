@@ -1,0 +1,238 @@
+id: crashloopbackoff
+track: containers
+difficulty: 2
+title: "Orders API down after upgrade"
+par_minutes: 12
+
+ticket:
+  from: "Release channel"
+  priority: P1
+  body: |
+    We shipped orders-api v2.0.0 at 10:05. Since then the orders page shows
+    "Service Unavailable". v1.9 was fine yesterday.
+
+environment: |
+  orders-api runs as a Kubernetes Deployment (3 replicas) in the "shop"
+  namespace, behind a Service. Config comes from environment variables set in
+  the Deployment manifest. The team deploys with kubectl apply from Git.
+
+diagram:
+  nodes:
+    - { id: ingress, label: "ingress", col: 0, row: 0, status: ok }
+    - { id: svc, label: "Service orders-api", col: 1, row: 0, status: down }
+    - { id: db, label: "orders DB", col: 2, row: 0, status: ok }
+  edges:
+    - { from: ingress, to: svc }
+    - { from: svc, to: db }
+
+terminal:
+  prompt: "you@laptop:~/shop-deploy$"
+  commands:
+    - match_regex: "^kubectl get pods( -n shop)?$"
+      when_actions: [fix-env]
+      output: |
+        NAME                          READY   STATUS    RESTARTS   AGE
+        orders-api-6d9f7b5c8-4xk2p    1/1     Running   0          40s
+        orders-api-6d9f7b5c8-9mzq7    1/1     Running   0          32s
+        orders-api-6d9f7b5c8-tq8wd    1/1     Running   0          25s
+    - match_regex: "^kubectl get pods( -n shop)?$"
+      when_actions: [rollback]
+      output: |
+        NAME                          READY   STATUS    RESTARTS   AGE
+        orders-api-58c4d9f6b-2hvnc    1/1     Running   0          38s
+        orders-api-58c4d9f6b-8rt5l    1/1     Running   0          31s
+        orders-api-58c4d9f6b-wd6xj    1/1     Running   0          24s
+    - match_regex: "^kubectl get pods( -n shop)?$"
+      evidence: crashloop
+      output: |
+        NAME                          READY   STATUS             RESTARTS      AGE
+        orders-api-7f8c6d9b4-7lq2x    0/1     CrashLoopBackOff   6 (82s ago)   9m
+        orders-api-7f8c6d9b4-b5n8r    0/1     CrashLoopBackOff   6 (75s ago)   9m
+        orders-api-7f8c6d9b4-kz4hd    0/1     CrashLoopBackOff   6 (70s ago)   9m
+    - match_regex: "^kubectl describe pod orders-api-7f8c6d9b4-7lq2x( -n shop)?$"
+      evidence: exit-code-1
+      output: |
+        Name:             orders-api-7f8c6d9b4-7lq2x
+        Namespace:        shop
+        ...
+        Containers:
+          orders-api:
+            Image:          registry.example.com/orders-api:2.0.0
+            ...
+            State:          Waiting
+              Reason:       CrashLoopBackOff
+            Last State:     Terminated
+              Reason:       Error
+              Exit Code:    1
+            Ready:          False
+            Restart Count:  6
+            Environment:
+              DB_URL:       <set to the key 'url' in secret 'orders-db'>
+              LOG_LEVEL:    info
+        ...
+        Events:
+          ... Normal   Pulled   Container image "registry.example.com/orders-api:2.0.0" already present on machine
+          ... Warning  BackOff  Back-off restarting failed container
+    - match_regex: "^kubectl logs (--previous|-p) orders-api-7f8c6d9b4-7lq2x( -n shop)?$"
+      evidence: missing-env
+      output: |
+        2026-09-30T10:14:51Z INFO  orders-api 2.0.0 starting
+        2026-09-30T10:14:51Z FATAL config: required environment variable DATABASE_URL is not set
+    - match_regex: "^kubectl logs orders-api-7f8c6d9b4-7lq2x( -n shop)?$"
+      output: |
+        2026-09-30T10:16:13Z INFO  orders-api 2.0.0 starting
+        2026-09-30T10:16:13Z FATAL config: required environment variable DATABASE_URL is not set
+    - match_regex: "^kubectl rollout history deployment/orders-api( -n shop)?$"
+      output: |
+        deployment.apps/orders-api
+        REVISION  CHANGE-CAUSE
+        11        <none>
+        12        <none>
+    - match_regex: "^kubectl rollout status deployment/orders-api( -n shop)?$"
+      when_actions: [fix-env]
+      output: |
+        deployment "orders-api" successfully rolled out
+    - match_regex: "^kubectl rollout status deployment/orders-api( -n shop)?$"
+      when_actions: [rollback]
+      output: |
+        deployment "orders-api" successfully rolled out
+    - match_regex: "^kubectl rollout status deployment/orders-api( -n shop)?$"
+      output: |
+        Waiting for deployment "orders-api" rollout to finish: 0 of 3 updated replicas are available...
+    - match: "kubectl top pods -n shop"
+      output: |
+        NAME                          CPU(cores)   MEMORY(bytes)
+        orders-api-7f8c6d9b4-7lq2x    1m           12Mi
+        orders-api-7f8c6d9b4-b5n8r    1m           11Mi
+        orders-api-7f8c6d9b4-kz4hd    1m           12Mi
+
+files:
+  - path: "deployment.yaml"
+    evidence: manifest-env
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: orders-api
+        namespace: shop
+      spec:
+        replicas: 3
+        selector:
+          matchLabels:
+            app: orders-api
+        template:
+          metadata:
+            labels:
+              app: orders-api
+          spec:
+            containers:
+              - name: orders-api
+                image: registry.example.com/orders-api:2.0.0
+                env:
+                  - name: DB_URL
+                    valueFrom:
+                      secretKeyRef:
+                        name: orders-db
+                        key: url
+                  - name: LOG_LEVEL
+                    value: info
+                resources:
+                  limits:
+                    memory: 256Mi
+  - path: "CHANGELOG.md (orders-api repo)"
+    evidence: renamed-env
+    content: |
+      ## 2.0.0 (2026-09-30)
+      ### Breaking changes
+      - Config: `DB_URL` has been renamed to `DATABASE_URL`. The service now
+        refuses to start if `DATABASE_URL` is missing.
+      ### Features
+      - Faster order search.
+
+hypotheses:
+  - id: env-renamed
+    text: "v2.0.0 needs an environment variable the Deployment doesn't provide."
+    correct: true
+  - id: oom
+    text: "The new version runs out of memory and gets killed."
+    feedback: "An out-of-memory kill shows Reason: OOMKilled. describe shows Reason: Error, Exit Code: 1, and the containers use about 12Mi of their 256Mi limit."
+  - id: image-missing
+    text: "The v2.0.0 image can't be pulled."
+    feedback: "A pull failure shows ImagePullBackOff. The events show the image is already present on the node; the container starts and then exits."
+  - id: db-down
+    text: "The orders database is down."
+    feedback: "The app exits during config loading, before it ever connects. The previous container's log tells you exactly what's missing."
+
+actions:
+  - id: fix-env
+    label: "Rename DB_URL to DATABASE_URL in deployment.yaml, commit, and kubectl apply"
+    kind: fix
+    feedback: "The new pods get DATABASE_URL, pass config loading, and become Ready."
+  - id: rollback
+    label: "kubectl rollout undo deployment/orders-api (back to v1.9)"
+    kind: fix
+    feedback: "Rolling back restores service fast while you fix forward. That's a valid mitigation: stop the bleeding first."
+  - id: delete-pods
+    label: "kubectl delete pod on the crashing pods"
+    kind: wrong
+    feedback: "The Deployment recreates them from the same template, and they crash the same way."
+  - id: raise-memory
+    label: "Raise the memory limit to 1Gi"
+    kind: wrong
+    feedback: "Memory isn't the problem. The container exits with code 1 during startup, using a few MiB."
+  - id: delete-deployment
+    label: "Delete the Deployment and recreate it from scratch"
+    kind: destructive
+    feedback: "You took down every remaining replica and lost the rollout history, and the new Deployment still has the wrong variable name."
+
+solution_paths:
+  - [fix-env]
+  - [rollback]
+
+key_evidence: [crashloop, exit-code-1, missing-env]
+
+hints:
+  nudge: "Pods that start and immediately die usually say why on the way out. Where would that be?"
+  direction: "Check the pod's status details (kubectl describe pod), then the logs of the container that crashed (kubectl logs --previous)."
+  answer: "The log says DATABASE_URL is not set. The CHANGELOG says v2.0.0 renamed DB_URL to DATABASE_URL, but the manifest still sets DB_URL. Fix the manifest, or roll back first."
+
+analogy:
+  title: "A new chef who needs the recipe book by a different name"
+  text: |
+    The restaurant hired a new head chef (v2.0.0) who insists the recipe binder
+    is labelled "Recipes". The kitchen still labels it "Cookbook". Each morning
+    the chef walks in, can't find "Recipes", and walks out. The manager keeps
+    re-hiring them, waiting a little longer each time. Relabel the binder, or
+    bring back yesterday's chef until you can.
+
+debrief:
+  root_cause: |
+    orders-api v2.0.0 renamed its database setting from DB_URL to DATABASE_URL
+    and exits if it's missing. The Deployment manifest still set DB_URL. Every
+    container exited with code 1 during startup, and the kubelet restarted it
+    with an exponential back-off (10s, 20s, 40s, … capped at 5 minutes). That's
+    the CrashLoopBackOff status.
+  ideal_path:
+    - "kubectl get pods: all replicas in CrashLoopBackOff with rising restarts."
+    - "kubectl describe pod: Last State Terminated, Reason Error, Exit Code 1 (not OOMKilled, not an image pull problem)."
+    - "kubectl logs --previous: the crashed container says DATABASE_URL is not set."
+    - "Compare the manifest's env with the release notes: DB_URL was renamed."
+    - "Mitigate (roll back) or fix forward (rename the variable), then verify with kubectl rollout status and kubectl get pods."
+  real_world: |
+    The Kubernetes docs list "incorrect environment variables" as a classic
+    CrashLoopBackOff cause. Treat breaking config changes like breaking API
+    changes: call them out in release notes and check them in deploy review.
+
+sources:
+  - title: "Kubernetes: Pod Lifecycle (CrashLoopBackOff, container restarts)"
+    url: "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    retrieved: 2026-09-30
+  - title: "Kubernetes: Debug Running Pods"
+    url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/"
+    retrieved: 2026-09-30
+  - title: "Kubernetes: Deployments (rolling back)"
+    url: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+    retrieved: 2026-09-30
+  - title: "Kubernetes: Assign Memory Resources (OOMKilled, BackOff events)"
+    url: "https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/"
+    retrieved: 2026-09-30

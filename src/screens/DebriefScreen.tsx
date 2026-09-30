@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
-import type { Scenario } from '../schema/scenario.ts'
+import { artifacts, type Scenario } from '../schema/scenario.ts'
 import { evidenceSeen, type GameEvent } from '../game/engine.ts'
+import Prose from '../components/Prose.tsx'
 import type { Score } from '../game/scoring.ts'
 
 export default function DebriefScreen({
@@ -101,7 +102,7 @@ export default function DebriefScreen({
       </div>
 
       <Card title="Root cause">
-        <p className="whitespace-pre-line">{debrief.root_cause}</p>
+        <Prose text={debrief.root_cause} />
       </Card>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
@@ -136,12 +137,12 @@ export default function DebriefScreen({
       </Card>
 
       <Card title={`Analogy: ${analogy.title}`}>
-        <p className="whitespace-pre-line">{analogy.text}</p>
+        <Prose text={analogy.text} />
       </Card>
 
       {debrief.real_world && (
         <Card title="In the real world">
-          <p className="whitespace-pre-line">{debrief.real_world}</p>
+          <Prose text={debrief.real_world} />
         </Card>
       )}
 
@@ -211,7 +212,6 @@ function describe(scenario: Scenario, e: GameEvent): string {
 function whereIs(scenario: Scenario, tag: string): string[] {
   return [
     ...(scenario.terminal?.commands ?? []).filter((c) => c.evidence === tag).map((c) => `$ ${c.match ?? c.match_regex}`),
-    ...(scenario.logs ?? []).filter((l) => l.evidence === tag).map((l) => l.name),
-    ...(scenario.files ?? []).filter((f) => f.evidence === tag).map((f) => f.path),
+    ...artifacts(scenario).filter((a) => a.evidence === tag).map((a) => `${a.kind} ${a.name}`),
   ]
 }

@@ -30,7 +30,7 @@ function log(steps: string[], closeAt = 60_000): GameEvent[] {
 }
 
 const FIX = ['hyp disk-full', 'act truncate-log', 'act fix-logrotate']
-const EVIDENCE = ['run df -h', 'log app stderr (journalctl -u checkout)']
+const EVIDENCE = ['run df -h', 'log journalctl -u checkout']
 const lines = (l: GameEvent[]) => Object.fromEntries(score(scenario, l).lines.map((x) => [x.label, x.xp]))
 
 describe('scoring', () => {

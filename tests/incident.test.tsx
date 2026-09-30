@@ -2,7 +2,7 @@
 // Click-through of the incident loop, through the real UI.
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../src/App.tsx'
 
 beforeEach(() => localStorage.clear())
@@ -27,7 +27,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   type('df -h')
   expect(output()).toMatch(/100%/)
   type('nope')
-  expect(output()).toMatch(/nope: command not found/)
+  expect(output()).toMatch(/nope: no simulated output/)
 
   fireEvent.click(screen.getByRole('tab', { name: 'Logs' }))
   fireEvent.click(screen.getByRole('button', { name: /journalctl/ }))
@@ -84,4 +84,13 @@ it('hints reveal one tier at a time, analogy with the second', () => {
   expect(screen.getByText(/filing cabinet/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: /Show answer hint/ }))
   expect(screen.getByText('No hints left.')).toBeTruthy()
+})
+
+it('shuffles hypotheses so the right answer is not always first', () => {
+  const spy = vi.spyOn(Math, 'random').mockReturnValue(0)
+  render(<App />)
+  openIncident()
+  const first = screen.getAllByRole('radio')[0].closest('label')!.textContent
+  expect(first).not.toMatch(/filesystem is full/) // listed first in the YAML
+  spy.mockRestore()
 })

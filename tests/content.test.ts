@@ -7,6 +7,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { check, loadContent } from '../vite-plugin-content.ts'
 import { ScenarioSchema } from '../src/schema/scenario.ts'
+import { newSession, step, type GameEvent } from '../src/game/engine.ts'
 
 const CONTENT = path.resolve(import.meta.dirname, '../content')
 
@@ -15,6 +16,21 @@ describe('content', () => {
     const { scenarios } = loadContent(CONTENT)
     expect(scenarios.length).toBeGreaterThan(0)
   })
+
+  // Every solution path must actually resolve through the real engine.
+  it.each(loadContent(CONTENT).scenarios.flatMap((s) => s.solution_paths.map((p) => [s.id, p, s] as const)))(
+    '%s is winnable via %j',
+    (_id, path, s) => {
+      const correct = s.hypotheses.find((h) => h.correct)!.id
+      const events: GameEvent[] = [
+        { type: 'START', at: 0 },
+        { type: 'DECLARE_HYPOTHESIS', id: correct, at: 1 },
+        ...path.map((id, i): GameEvent => ({ type: 'TAKE_ACTION', id, at: 2 + i })),
+        { type: 'CLOSE_INCIDENT', at: 100 },
+      ]
+      expect(events.reduce((sess, e) => step(s, sess, e), newSession()).phase).toBe('resolved')
+    },
+  )
 
   it('_template.yaml is itself a valid scenario', () => {
     const errors: string[] = []

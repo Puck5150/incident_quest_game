@@ -46,7 +46,7 @@ terminal:                     # optional
     - match_regex: "^journalctl -u example"  # regex alternative to `match`
       output: |
         (output)
-  unknown_output: "bash: {cmd}: command not found"   # optional
+  unknown_output: "bash: {cmd}: command not found"   # optional; default says "no simulated output"
 
 logs:                         # optional
   - name: "/var/log/example.log"
@@ -66,6 +66,29 @@ diagram:                      # optional: boxes on a grid, arrows between them
     - { id: server, label: "server", col: 1, row: 0, status: down }
   edges:
     - { from: client, to: server }
+
+# Optional distributed-systems views (see AUTHORING.md)
+traces:
+  - name: "GET /example at 12:00 (trace abc123)"
+    evidence: slow-call
+    spans:
+      - { id: root, service: "gateway", operation: "GET /example", start_ms: 0, duration_ms: 2000, status: error, note: "504" }
+      - { id: call, parent: root, service: "server", operation: "SELECT ...", start_ms: 5, duration_ms: 1990 }
+
+metrics:
+  - name: "server latency p99"
+    unit: ms                  # "%" is shown as a percent sign
+    threshold: { value: 500, label: "SLO: 500 ms" }   # optional reference line
+    series:                   # max 3; all share the same x labels
+      - label: "p99"
+        points: [["12:00", 120], ["12:05", 130], ["12:10", 1900]]
+
+pipeline:
+  name: "CI · run #1"
+  trigger: "push to main"
+  stages:
+    - { name: "build", status: success, duration_s: 30, log: "ok" }
+    - { name: "deploy", status: skipped }
 
 # ---------------------------------------------------------------------------
 # Reasoning and resolution

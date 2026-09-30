@@ -6,14 +6,14 @@
 // player DID; anything derived (evidence found, hints used) is recomputed
 // from it by the helpers at the bottom, so there's one source of truth.
 
-import type { Scenario } from '../schema/scenario.ts'
+import { artifacts, type ArtifactKind, type Scenario } from '../schema/scenario.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
 export type GameEvent =
   | { type: 'START'; at: number }
   | { type: 'RUN_COMMAND'; input: string; at: number }
-  | { type: 'OPEN_ARTIFACT'; kind: 'log' | 'file'; name: string; at: number }
+  | { type: 'OPEN_ARTIFACT'; kind: ArtifactKind; name: string; at: number }
   | { type: 'REQUEST_HINT'; at: number }
   | { type: 'DECLARE_HYPOTHESIS'; id: string; at: number }
   | { type: 'TAKE_ACTION'; id: string; at: number }
@@ -117,8 +117,10 @@ export function runCommand(
   )
   if (hit) return { output: hit.output.replace(/\n$/, ''), evidence: hit.evidence, scripted: true }
 
+  // Default is honest rather than realistic: a real command we didn't script
+  // shouldn't pretend to be "command not found".
   const name = cmd.split(' ')[0]
-  return { output: (t.unknown_output ?? 'bash: {cmd}: command not found').replaceAll('{cmd}', name) }
+  return { output: (t.unknown_output ?? '{cmd}: no simulated output for that here. Type help for commands that work.').replaceAll('{cmd}', name) }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,11 +142,7 @@ export function evidenceSeen(scenario: Scenario, log: GameEvent[]): Set<string> 
     let tag: string | undefined
     if (e.type === 'TAKE_ACTION') taken.add(e.id)
     if (e.type === 'RUN_COMMAND') tag = runCommand(scenario, e.input, taken).evidence
-    if (e.type === 'OPEN_ARTIFACT')
-      tag =
-        e.kind === 'log'
-          ? scenario.logs?.find((l) => l.name === e.name)?.evidence
-          : scenario.files?.find((f) => f.path === e.name)?.evidence
+    if (e.type === 'OPEN_ARTIFACT') tag = artifacts(scenario).find((a) => a.kind === e.kind && a.name === e.name)?.evidence
     if (tag) seen.add(tag)
   }
   return seen

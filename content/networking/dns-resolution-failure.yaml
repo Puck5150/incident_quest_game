@@ -1,0 +1,194 @@
+id: dns-resolution-failure
+track: networking
+difficulty: 1
+title: "Nightly report job can't reach the API"
+par_minutes: 10
+
+ticket:
+  from: "Finance team"
+  priority: P3
+  body: |
+    The nightly revenue report didn't arrive this morning. The job on
+    reports-01 says it "could not resolve host". Everything else seems fine?
+
+environment: |
+  reports-01 is an older Debian VM that was built by hand. It runs a cron job
+  that calls https://api.internal.example.com. Its /etc/resolv.conf is a plain
+  file (no local DNS cache or resolver service). Most other servers get their
+  DNS settings from the configuration-management system (Ansible).
+
+diagram:
+  nodes:
+    - { id: reports, label: "reports-01", col: 0, row: 0, status: degraded }
+    - { id: dns, label: "DNS 10.0.0.2/.3", col: 1, row: 0, status: ok }
+    - { id: api, label: "internal API", col: 1, row: 1, status: ok }
+  edges:
+    - { from: reports, to: dns }
+    - { from: reports, to: api }
+
+terminal:
+  prompt: "ops@reports-01:~$"
+  commands:
+    - match: "cat /etc/resolv.conf"
+      when_actions: [update-resolv]
+      output: |
+        search example.com
+        nameserver 10.0.0.2
+        nameserver 10.0.0.3
+    - match: "cat /etc/resolv.conf"
+      evidence: stale-resolver
+      output: |
+        search example.com
+        nameserver 10.0.0.53
+    - match: "dig +short api.internal.example.com"
+      when_actions: [update-resolv]
+      output: |
+        10.0.8.21
+    - match: "dig +short api.internal.example.com"
+      output: |
+        ;; connection timed out; no servers could be reached
+    - match: "dig +short @10.0.0.2 api.internal.example.com"
+      evidence: new-dns-works
+      output: |
+        10.0.8.21
+    - match: "ping -c 3 10.0.0.53"
+      output: |
+        PING 10.0.0.53 (10.0.0.53) 56(84) bytes of data.
+
+        --- 10.0.0.53 ping statistics ---
+        3 packets transmitted, 0 received, 100% packet loss, time 2046ms
+    - match: "ping -c 3 10.0.8.21"
+      output: |
+        PING 10.0.8.21 (10.0.8.21) 56(84) bytes of data.
+        64 bytes from 10.0.8.21: icmp_seq=1 ttl=63 time=0.61 ms
+        64 bytes from 10.0.8.21: icmp_seq=2 ttl=63 time=0.58 ms
+        64 bytes from 10.0.8.21: icmp_seq=3 ttl=63 time=0.60 ms
+
+        --- 10.0.8.21 ping statistics ---
+        3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+    - match_regex: "^curl (-s )?https://api\\.internal\\.example\\.com"
+      when_actions: [update-resolv]
+      output: |
+        {"status":"ok"}
+    - match_regex: "^curl (-s )?https://api\\.internal\\.example\\.com"
+      output: |
+        curl: (6) Could not resolve host: api.internal.example.com
+    - match: "cat CHANGE-2291.txt"
+      evidence: dns-migrated
+      output: |
+        CHANGE-2291  (completed 2026-09-29)
+        Migrate internal DNS from 10.0.0.53 to the new resolver pair
+        10.0.0.2 and 10.0.0.3. Rollout via Ansible role "resolv" to all
+        hosts in inventory. Old server 10.0.0.53 decommissioned at 18:00.
+    - match: "ls"
+      output: |
+        CHANGE-2291.txt  report.sh
+
+logs:
+  - name: "/var/log/reports/nightly.log"
+    evidence: resolve-fail
+    lines: |
+      2026-09-30 02:00:01 starting nightly revenue report
+      2026-09-30 02:00:11 fetching https://api.internal.example.com/v1/revenue?day=2026-09-29
+      2026-09-30 02:00:31 curl: (6) Could not resolve host: api.internal.example.com
+      2026-09-30 02:00:31 ERROR report aborted, no data
+
+files:
+  - path: "/etc/ansible/inventory/hosts.ini (on the Ansible server)"
+    evidence: not-in-inventory
+    content: |
+      [web]
+      web-01
+      web-02
+
+      [db]
+      db-01
+
+      [batch]
+      batch-01
+
+hypotheses:
+  - id: stale-dns
+    text: "reports-01 is still pointed at the old, decommissioned DNS server."
+    correct: true
+  - id: api-down
+    text: "The internal API is down."
+    feedback: "curl error 6 means the name never resolved, so curl never tried to connect. The API's IP answers ping fine."
+  - id: record-deleted
+    text: "The DNS record for api.internal.example.com was deleted."
+    feedback: "Asking the new DNS server directly (dig @10.0.0.2) returns the record. The name exists; this host is asking the wrong server."
+  - id: firewall
+    text: "A firewall is blocking reports-01 from reaching the API."
+    feedback: "A blocked connection is a different failure (curl error 7, couldn't connect, or a timeout while connecting). This fails earlier, at name resolution."
+
+actions:
+  - id: update-resolv
+    label: "Point /etc/resolv.conf at 10.0.0.2 and 10.0.0.3"
+    kind: fix
+    feedback: "reports-01 now asks the live DNS servers. The report job can resolve the API again."
+  - id: add-to-inventory
+    label: "Add reports-01 to the Ansible inventory so the resolv role manages it"
+    kind: fix
+    feedback: "Next time DNS changes, this host gets updated with everyone else. That's the real fix for why it was missed."
+  - id: hosts-entry
+    label: "Add api.internal.example.com to /etc/hosts"
+    kind: wrong
+    feedback: "This hides the problem for one name. Every other lookup from this host still goes to a dead server, and the hard-coded IP will break silently if the API moves."
+  - id: restart-api
+    label: "Restart the internal API"
+    kind: wrong
+    feedback: "The API was healthy. Restarting it interrupts every other client and doesn't help a host that can't find it."
+  - id: flush-firewall
+    label: "Flush all firewall rules on reports-01 (iptables -F)"
+    kind: destructive
+    feedback: "You removed this host's firewall protection to fix a problem that had nothing to do with the firewall."
+
+solution_paths:
+  - [update-resolv, add-to-inventory]
+
+key_evidence: [resolve-fail, stale-resolver, new-dns-works]
+
+hints:
+  nudge: "The error says 'could not resolve host'. Which part of the system turns names into IP addresses?"
+  direction: "Look at which DNS server this host asks, and whether that server is still alive. There's a change record in the home directory."
+  answer: "/etc/resolv.conf still lists 10.0.0.53, which CHANGE-2291 decommissioned. dig @10.0.0.2 works. Update resolv.conf, then add the host to the Ansible inventory."
+
+analogy:
+  title: "A speed-dial to an empty desk"
+  text: |
+    You press speed-dial for reception to look up a colleague's extension, but
+    reception moved to a new desk yesterday. Everyone else's phones were updated;
+    yours was set up by hand and got missed. The colleague is at work and
+    reachable. You just can't find out their number.
+
+debrief:
+  root_cause: |
+    DNS was migrated from 10.0.0.53 to 10.0.0.2/10.0.0.3 using Ansible, but
+    reports-01 was built by hand and was never in the Ansible inventory. Its
+    /etc/resolv.conf still pointed only at the decommissioned server, so every
+    lookup timed out and curl failed with error 6 (could not resolve host).
+  ideal_path:
+    - "Read the error: curl (6) is a name-resolution failure, not a connection failure."
+    - "Check which resolver the host uses: cat /etc/resolv.conf."
+    - "Test that resolver vs. a known-good one: dig times out, dig @10.0.0.2 answers."
+    - "Find why: CHANGE-2291 moved DNS, and the host isn't in the inventory."
+    - "Fix the config, then fix the process gap (inventory) so it can't happen again."
+    - "Verify: dig and curl succeed from reports-01."
+  real_world: |
+    "It's always DNS" is a joke because it's so often true. Hand-built "snowflake"
+    servers that config management doesn't know about are a classic way for
+    infrastructure changes to miss a host.
+
+sources:
+  - title: "resolv.conf(5) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man5/resolv.conf.5.html"
+    retrieved: 2026-09-30
+  - title: "BIND 9 manual pages — dig"
+    url: "https://bind9.readthedocs.io/en/latest/manpages.html"
+    retrieved: 2026-09-30
+  - title: "libcurl error codes (CURLE_COULDNT_RESOLVE_HOST)"
+    url: "https://curl.se/libcurl/c/libcurl-errors.html"
+    retrieved: 2026-09-30
+  - title: "Ansible: How to build your inventory"
+    url: "https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html"
+    retrieved: 2026-09-30

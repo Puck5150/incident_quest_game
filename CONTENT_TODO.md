@@ -1,19 +1,59 @@
 # Content TODO
 
 Things in scenario files that are unverified, or representative rather than
-copied from official docs. Resolve each item before calling a scenario "done".
+copied verbatim from official docs. Every scenario's *behavior* claims (what a
+command does, why the fix works) are sourced; the items below are mostly exact
+*output formatting* that the docs don't print. Check them against a real run
+from your own experience and tick them off.
 
-## linux/full-disk (Milestone 2 placeholder; full rewrite in Milestone 5)
-- [ ] Entire scenario is a placeholder written to exercise the engine.
-- [ ] `df -h` output: column headers and layout are representative. The df(1) man
-      page (coreutils 9.11) does not document the default header row.
-- [ ] Deleting a file a process holds open doesn't free space until it's closed:
-      cite unlink(2).
-- [ ] Truncating with `: > file` keeps the inode, so the open file handle stays valid.
-      Find an official source.
-- [ ] logrotate syntax (`daily`, `rotate`, `compress`, `missingok`) and the claim
-      that `missingok` hides a glob that matches nothing: verify against logrotate(8).
-- [ ] Python `OSError: [Errno 28] No space left on device` message format: verify
-      against docs.python.org.
-- [ ] nginx "upstream prematurely closed connection" log line format: verify
-      against nginx.org docs.
+## linux/full-disk
+- [ ] `df -h` header row and column layout: df(1) (coreutils 9.11) doesn't print a sample.
+- [ ] `du -sh` and `ls -lh` output layout: representative.
+- [ ] `OSError: [Errno 28] No space left on device`: the Python docs describe
+      errno/strerror but don't show the str() format.
+- [ ] logrotate with `missingok` and a glob that matches nothing: logrotate(8)
+      documents missingok for a *missing log file*. Confirm it's also silent for
+      a non-matching glob (the debrief relies on the documented wording only).
+- [ ] `: > file`: Bash docs confirm output redirection truncates an existing file;
+      `:` as the null command is standard but not quoted here.
+
+## networking/dns-resolution-failure
+- [ ] `dig +short` timeout text `;; connection timed out; no servers could be reached`:
+      the BIND 9 dig manual documents exit code 9 ("No reply from server") but not
+      this exact message, which differs between BIND versions.
+- [ ] `ping -c 3` output (iputils format): representative.
+- [ ] `curl: (6) Could not resolve host: <name>`: the libcurl docs confirm error 6
+      and its meaning; the exact CLI prefix format is representative.
+- [ ] Ansible INI inventory: group syntax matches the docs. Whether `#` comments are
+      allowed isn't stated there, so the scenario avoids them.
+
+## containers/crashloopbackoff
+- [ ] `kubectl get pods` RESTARTS column `6 (82s ago)`: the docs' example shows a bare count.
+- [ ] `kubectl describe pod` `Environment:` line `<set to the key 'url' in secret 'orders-db'>`: representative.
+- [ ] `kubectl top pods` output: representative.
+- [ ] `kubectl rollout history` with `<none>` change-cause: representative.
+
+## iac/terraform-state-lock
+- [ ] The `Error acquiring the state lock` block (box-drawing borders, Lock Info
+      fields, closing paragraph) isn't printed in the HashiCorp docs.
+      The behavior (lock blocks the run, force-unlock takes the lock ID, docs warn
+      against -lock=false) is sourced.
+- [ ] `aws s3 ls` output layout and the `terraform.tfstate.tflock` object name: the
+      S3 backend docs confirm the `.tflock` suffix.
+- [ ] GitHub Actions cancelled-step message `Error: The operation was canceled.`: representative.
+- [ ] terraform plan output formatting: representative.
+
+## cicd/failing-github-actions
+- [ ] npm ci error lines (`npm error code EUSAGE`, the "can only install packages
+      when your package.json and package-lock.json ... are in sync" sentence, the
+      `Invalid: lock file's ...` line): npm docs confirm the behavior ("npm ci will
+      exit with an error") but don't print the message.
+- [ ] setup-node log lines and `Error: Process completed with exit code 1.`: representative.
+- [ ] `gh run list` column layout: representative.
+
+## microservices/cascading-failure
+- [ ] All traces, metrics and logs are synthetic: realistic shapes built from the
+      SRE book's and Azure Circuit Breaker pattern's descriptions, not copied from
+      a real system.
+- [ ] Amazon Builders' Library "Timeouts, retries and backoff with jitter" would be a
+      good extra source, but the page is now JavaScript-rendered and couldn't be fetched.

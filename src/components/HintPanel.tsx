@@ -1,5 +1,6 @@
 import type { Scenario } from '../schema/scenario.ts'
 import { HINT_TIERS } from '../game/engine.ts'
+import Prose from './Prose.tsx'
 
 // Hints unlock one tier at a time. The analogy arrives with the "direction"
 // tier: it explains the concept, which is a big clue on its own.
@@ -24,10 +25,10 @@ export default function HintPanel({
             <span className="text-muted">{t.label}: </span>
             {scenario.hints[t.key]}
             {t.key === 'direction' && (
-              <p className="mt-2 border-l-2 border-accent pl-3">
-                <span className="text-muted">Think of it like {scenario.analogy.title.toLowerCase()}: </span>
-                {scenario.analogy.text}
-              </p>
+              <div className="mt-2 border-l-2 border-accent pl-3">
+                <p className="text-muted">Think of it like {scenario.analogy.title.toLowerCase()}:</p>
+                <Prose text={scenario.analogy.text} />
+              </div>
             )}
           </li>
         ))}

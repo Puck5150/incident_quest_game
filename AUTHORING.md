@@ -38,6 +38,11 @@ Scenarios are data. You don't write any code to add an incident.
 - **Evidence should chain.** Each artifact should point at the next place to look.
   Tag the essential ones with `evidence:` and list them in `key_evidence`. Players
   who find all of them before declaring a hypothesis earn the methodical bonus.
+- **Prose fields reflow.** `ticket.body`, `environment`, `analogy.text` and the
+  debrief text are shown like Markdown paragraphs: single line breaks become
+  spaces, and a blank line starts a new paragraph. Wrap lines wherever you like.
+- **Unscripted commands** print "no simulated output for that here" by default.
+  Set `terminal.unknown_output` if you want something else.
 - **Wrong hypotheses must be plausible.** Their `feedback` should say which evidence
   rules them out. That's where the learning happens.
 - **Every scenario needs a shotgun trap:** a `destructive` action a panicked
@@ -55,6 +60,31 @@ Scenarios are data. You don't write any code to add an incident.
   you want players to think of themselves. `clear` and `history` are built in.
 - **The analogy should use no IT words.** If you need jargon to explain it, it's
   not an analogy yet.
+
+## Distributed-systems views
+
+Optional, and each item can carry `evidence:` like logs and files:
+
+- **`traces`**: one entry per trace, with spans that have `start_ms`, `duration_ms`,
+  an optional `parent` span id, `status: ok | error`, and a `note` for the attribute
+  that matters ("rows scanned: 4,812,331"). Include a healthy "before" trace so
+  players can compare.
+- **`metrics`**: line charts. Every series must share the same x labels (clock
+  times). There's a maximum of 3 series, since the chart palette has 3 colors that
+  have been checked for color-blind safety. An optional `threshold` draws a labelled
+  reference line (a pool size or an SLO).
+- **`pipeline`**: a CI run: `name`, `trigger`, and `stages` in order, each with a
+  `status` (success / failure / skipped / cancelled) and its `log`.
+- **`diagram`**: node `status` is what *monitoring currently shows*, not the root
+  cause. A slow-but-successful service is honestly "ok". That can be the lesson.
+
+## Things the validator enforces for you
+
+- Every `key_evidence` tag must be findable **before** any fix (not only on a
+  `when_actions` entry). Otherwise the methodical bonus can't be earned.
+- Every solution path is played through the real engine in the test suite.
+- Hypotheses and actions are **shuffled** in the game, so list them in whatever
+  order is easiest to write.
 
 ## Accuracy rules (non-negotiable)
 

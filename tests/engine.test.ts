@@ -75,7 +75,7 @@ describe('terminal', () => {
   })
 
   it('unknown commands say so, using the command name', () => {
-    expect(runCommand(scenario, 'foo --bar', none).output).toBe('bash: foo: command not found')
+    expect(runCommand(scenario, 'foo --bar', none).output).toMatch(/^foo: no simulated output/)
   })
 
   it('help lists exact-match commands once each', () => {
@@ -86,7 +86,7 @@ describe('terminal', () => {
 
 describe('derived from the log', () => {
   it('collects evidence from commands and opened artifacts', () => {
-    const s = play(start, run('df -h'), open('log', 'app stderr (journalctl -u checkout)'), open('file', '/etc/logrotate.d/app'))
+    const s = play(start, run('df -h'), open('log', 'journalctl -u checkout'), open('file', '/etc/logrotate.d/app'))
     expect(evidenceSeen(scenario, s.log)).toEqual(new Set(['disk-full', 'write-failure', 'rotate-typo']))
   })
 

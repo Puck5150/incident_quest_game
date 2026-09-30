@@ -2,9 +2,15 @@ import { useReducer, useState } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
 import { actionsTaken, fixComplete, hintsUsed, newSession, step, type Feedback, type GameEvent, type Session } from '../game/engine.ts'
 import Terminal from '../components/Terminal.tsx'
-import TextViewer from '../components/TextViewer.tsx'
+import Browser from '../components/Browser.tsx'
+import TextView from '../components/TextView.tsx'
+import Diagram from '../components/Diagram.tsx'
+import TraceWaterfall from '../components/TraceWaterfall.tsx'
+import MetricChart from '../components/MetricChart.tsx'
+import PipelineView from '../components/PipelineView.tsx'
 import HintPanel from '../components/HintPanel.tsx'
 import Tabs from '../components/Tabs.tsx'
+import Prose from '../components/Prose.tsx'
 
 // Status is never shown by color alone: every tone also has a text label.
 const TONE: Record<Feedback['tone'], { label: string; className: string }> = {
@@ -38,6 +44,9 @@ export default function IncidentScreen({
   const [session, dispatch] = useReducer((s: Session, e: GameEvent) => step(scenario, s, e), undefined, newSession)
   const send = (e: Intent) => dispatch({ ...e, at: Date.now() } as GameEvent)
   const [picked, setPicked] = useState<string>()
+  // Authors list the right answer first; shuffle once per attempt so order isn't a tell.
+  const [hypotheses] = useState(() => shuffle(scenario.hypotheses))
+  const [actions] = useState(() => shuffle(scenario.actions))
   const taken = actionsTaken(session.log)
   const { phase, feedback } = session
 
@@ -58,10 +67,10 @@ export default function IncidentScreen({
       id: 'logs',
       label: 'Logs',
       panel: (
-        <TextViewer
-          kind="log"
-          items={scenario.logs.map((l) => ({ name: l.name, content: l.lines }))}
+        <Browser
+          noun="log"
           onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'log', name })}
+          items={scenario.logs.map((l) => ({ name: l.name, render: () => <TextView content={l.lines} isLog /> }))}
         />
       ),
     },
@@ -69,12 +78,39 @@ export default function IncidentScreen({
       id: 'files',
       label: 'Files',
       panel: (
-        <TextViewer
-          kind="file"
-          items={scenario.files.map((f) => ({ name: f.path, content: f.content }))}
+        <Browser
+          noun="file"
           onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'file', name })}
+          items={scenario.files.map((f) => ({ name: f.path, render: () => <TextView content={f.content} /> }))}
         />
       ),
+    },
+    scenario.traces && {
+      id: 'traces',
+      label: 'Traces',
+      panel: (
+        <Browser
+          noun="trace"
+          onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'trace', name })}
+          items={scenario.traces.map((t) => ({ name: t.name, render: () => <TraceWaterfall spans={t.spans} /> }))}
+        />
+      ),
+    },
+    scenario.metrics && {
+      id: 'metrics',
+      label: 'Metrics',
+      panel: (
+        <Browser
+          noun="metric"
+          onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'metric', name })}
+          items={scenario.metrics.map((m) => ({ name: m.name, render: () => <MetricChart metric={m} /> }))}
+        />
+      ),
+    },
+    scenario.pipeline && {
+      id: 'pipeline',
+      label: 'Pipeline',
+      panel: <PipelineView pipeline={scenario.pipeline} onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'stage', name })} />,
     },
   ].filter((t) => !!t)
 
@@ -92,9 +128,15 @@ export default function IncidentScreen({
         <h2 id="ticket-h" className="text-sm text-muted">
           Ticket from {scenario.ticket.from}
         </h2>
-        <p className="mt-2 whitespace-pre-line">{scenario.ticket.body}</p>
+        <Prose className="mt-2" text={scenario.ticket.body} />
         <h3 className="mt-4 text-sm text-muted">Environment</h3>
-        <p className="mt-1 whitespace-pre-line">{scenario.environment}</p>
+        <Prose className="mt-1" text={scenario.environment} />
+        {scenario.diagram && (
+          <div className="mt-4">
+            <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
+            <Diagram diagram={scenario.diagram} />
+          </div>
+        )}
       </section>
 
       {phase === 'briefing' ? (
@@ -116,7 +158,7 @@ export default function IncidentScreen({
               >
                 <fieldset className="space-y-2">
                   <legend className="mb-2 font-semibold">What's the root cause?</legend>
-                  {scenario.hypotheses.map((h) => (
+                  {hypotheses.map((h) => (
                     <label key={h.id} className="flex cursor-pointer items-start gap-2">
                       <input
                         type="radio"
@@ -142,7 +184,7 @@ export default function IncidentScreen({
                   Take action
                 </h2>
                 <ul className="space-y-2">
-                  {scenario.actions.map((a) => {
+                  {actions.map((a) => {
                     const done = a.kind === 'fix' && taken.has(a.id)
                     return (
                       <li key={a.id}>
@@ -182,4 +224,13 @@ export default function IncidentScreen({
       )}
     </div>
   )
+}
+
+function shuffle<T>(xs: T[]): T[] {
+  const a = [...xs]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
 }

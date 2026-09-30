@@ -1,0 +1,252 @@
+id: cascading-failure
+track: microservices
+difficulty: 3
+title: "Whole shop timing out, even the cart"
+par_minutes: 15
+
+ticket:
+  from: "Customer support"
+  priority: P1
+  body: |
+    Customers can't check out, and now even viewing the cart spins for 30
+    seconds and fails with "Gateway Timeout". Started around 14:08 UTC.
+    Payments team says they're fine.
+
+environment: |
+  The shop is split into services on Kubernetes. The API gateway routes
+  /api/checkout and /api/cart to checkout-svc (4 replicas, 16 worker threads
+  each = 64 total). checkout-svc calls payments-svc and inventory-svc over
+  HTTP. inventory-svc reads from its own PostgreSQL database. The gateway gives
+  up on any request after 30 s and returns 504. All services emit
+  OpenTelemetry traces and Prometheus metrics.
+
+diagram:
+  nodes:
+    - { id: gw, label: "API gateway", col: 0, row: 1, status: degraded }
+    - { id: checkout, label: "checkout-svc", col: 1, row: 1, status: down }
+    - { id: payments, label: "payments-svc", col: 2, row: 0, status: ok }
+    - { id: inventory, label: "inventory-svc", col: 2, row: 2, status: ok }
+    - { id: invdb, label: "inventory DB", col: 3, row: 2, status: ok }
+  edges:
+    - { from: gw, to: checkout }
+    - { from: checkout, to: payments }
+    - { from: checkout, to: inventory }
+    - { from: inventory, to: invdb }
+
+traces:
+  - name: "POST /api/checkout at 14:12 (trace 4bf92f35)"
+    evidence: slow-inventory
+    spans:
+      - { id: gw, service: "api-gateway", operation: "POST /api/checkout", start_ms: 0, duration_ms: 30000, status: error, note: "504 Gateway Timeout after 30s" }
+      - { id: co, parent: gw, service: "checkout-svc", operation: "POST /checkout", start_ms: 4, duration_ms: 29996, status: error, note: "client disconnected" }
+      - { id: pay, parent: co, service: "payments-svc", operation: "POST /authorize", start_ms: 10, duration_ms: 142 }
+      - { id: inv1, parent: co, service: "checkout-svc", operation: "GET inventory /stock (attempt 1)", start_ms: 160, duration_ms: 8910 }
+      - { id: db1, parent: inv1, service: "inventory-svc", operation: "SELECT stock WHERE sku = $1", start_ms: 172, duration_ms: 8880, note: "rows scanned: 4,812,331" }
+      - { id: inv2, parent: co, service: "checkout-svc", operation: "GET inventory /stock (attempt 2)", start_ms: 9075, duration_ms: 8930 }
+      - { id: inv3, parent: co, service: "checkout-svc", operation: "GET inventory /stock (attempt 3)", start_ms: 18010, duration_ms: 8900 }
+      - { id: inv4, parent: co, service: "checkout-svc", operation: "GET inventory /stock (attempt 4)", start_ms: 26915, duration_ms: 3085, status: error, note: "canceled" }
+  - name: "GET /api/cart at 14:12 (trace 7a1d0c9e)"
+    evidence: cart-queued
+    spans:
+      - { id: gw, service: "api-gateway", operation: "GET /api/cart", start_ms: 0, duration_ms: 30000, status: error, note: "504 Gateway Timeout after 30s" }
+      - { id: co, parent: gw, service: "checkout-svc", operation: "GET /cart", start_ms: 29940, duration_ms: 60, status: error, note: "waited 29.9s for a free worker" }
+  - name: "POST /api/checkout at 14:02, before the incident (trace 19c3e7aa)"
+    spans:
+      - { id: gw, service: "api-gateway", operation: "POST /api/checkout", start_ms: 0, duration_ms: 262 }
+      - { id: co, parent: gw, service: "checkout-svc", operation: "POST /checkout", start_ms: 3, duration_ms: 256 }
+      - { id: pay, parent: co, service: "payments-svc", operation: "POST /authorize", start_ms: 9, duration_ms: 138 }
+      - { id: inv1, parent: co, service: "checkout-svc", operation: "GET inventory /stock (attempt 1)", start_ms: 152, duration_ms: 96 }
+      - { id: db1, parent: inv1, service: "inventory-svc", operation: "SELECT stock WHERE sku = $1", start_ms: 160, duration_ms: 71, note: "rows scanned: 1" }
+
+metrics:
+  - name: "Downstream latency p99"
+    unit: ms
+    evidence: inventory-latency
+    series:
+      - label: "inventory-svc"
+        points: [["14:00", 84], ["14:02", 81], ["14:04", 86], ["14:06", 7900], ["14:08", 8850], ["14:10", 8920], ["14:12", 8870], ["14:14", 8910], ["14:16", 8880], ["14:18", 8930], ["14:20", 8890], ["14:22", 8900], ["14:24", 8870], ["14:26", 8920], ["14:28", 8910], ["14:30", 8900]]
+      - label: "payments-svc"
+        points: [["14:00", 131], ["14:02", 128], ["14:04", 134], ["14:06", 129], ["14:08", 133], ["14:10", 131], ["14:12", 130], ["14:14", 127], ["14:16", 132], ["14:18", 130], ["14:20", 129], ["14:22", 133], ["14:24", 131], ["14:26", 128], ["14:28", 130], ["14:30", 132]]
+  - name: "checkout-svc busy workers"
+    unit: workers
+    evidence: workers-saturated
+    threshold: { value: 64, label: "pool size: 64" }
+    series:
+      - label: "busy"
+        points: [["14:00", 11], ["14:02", 12], ["14:04", 11], ["14:06", 38], ["14:08", 64], ["14:10", 64], ["14:12", 64], ["14:14", 64], ["14:16", 64], ["14:18", 64], ["14:20", 64], ["14:22", 64], ["14:24", 64], ["14:26", 64], ["14:28", 64], ["14:30", 64]]
+  - name: "Gateway error rate (5xx)"
+    unit: "%"
+    evidence: cart-errors
+    series:
+      - label: "POST /api/checkout"
+        points: [["14:00", 0.1], ["14:02", 0.1], ["14:04", 0.2], ["14:06", 4], ["14:08", 31], ["14:10", 58], ["14:12", 61], ["14:14", 60], ["14:16", 62], ["14:18", 61], ["14:20", 60], ["14:22", 62], ["14:24", 61], ["14:26", 60], ["14:28", 61], ["14:30", 62]]
+      - label: "GET /api/cart"
+        points: [["14:00", 0], ["14:02", 0.1], ["14:04", 0], ["14:06", 0.3], ["14:08", 12], ["14:10", 47], ["14:12", 55], ["14:14", 54], ["14:16", 56], ["14:18", 55], ["14:20", 54], ["14:22", 56], ["14:24", 55], ["14:26", 54], ["14:28", 55], ["14:30", 56]]
+  - name: "inventory-svc error rate"
+    unit: "%"
+    series:
+      - label: "5xx"
+        points: [["14:00", 0], ["14:02", 0], ["14:04", 0], ["14:06", 0], ["14:08", 0], ["14:10", 0], ["14:12", 0], ["14:14", 0], ["14:16", 0], ["14:18", 0], ["14:20", 0], ["14:22", 0], ["14:24", 0], ["14:26", 0], ["14:28", 0], ["14:30", 0]]
+
+logs:
+  - name: "deploys (#shop-releases)"
+    evidence: inventory-deploy
+    lines: |
+      13:40 payments-svc v2.8.1 deployed (canary 100%)
+      14:05 inventory-svc v3.4.0 deployed, includes DB migration 0042_rebuild_stock_table
+      14:05 inventory-svc migration 0042: recreated table stock (index idx_stock_sku not recreated)
+  - name: "checkout-svc"
+    lines: |
+      14:07:41 WARN  worker pool 60/64 busy
+      14:08:03 WARN  worker pool exhausted (64/64 busy), queueing request GET /cart
+      14:08:03 WARN  worker pool exhausted (64/64 busy), queueing request POST /checkout
+      14:08:12 ERROR client disconnected before response (POST /checkout)
+      14:08:33 ERROR client disconnected before response (GET /cart)
+
+files:
+  - path: "checkout-svc/config/clients.yaml"
+    evidence: no-timeout
+    content: |
+      # HTTP clients used by checkout-svc
+      payments:
+        base_url: http://payments-svc:8080
+        timeout_ms: 2000
+        retries: 1
+        retry_backoff: exponential_jitter
+
+      inventory:
+        base_url: http://inventory-svc:8080
+        timeout_ms: 0          # 0 = no timeout (wait forever)
+        retries: 3
+        retry_backoff: none
+
+terminal:
+  prompt: "you@bastion:~$"
+  commands:
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' https://shop.example.com/api/cart"
+      when_actions: [add-timeout]
+      output: |
+        200 0.048
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' https://shop.example.com/api/cart"
+      when_actions: [rollback-inventory]
+      output: |
+        200 0.051
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' https://shop.example.com/api/cart"
+      output: |
+        504 30.002
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
+      when_actions: [rollback-inventory]
+      output: |
+        200 0.271
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
+      when_actions: [add-timeout]
+      output: |
+        503 1.013
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
+      output: |
+        504 30.001
+
+hypotheses:
+  - id: slow-dep-no-timeout
+    text: "inventory-svc got slow after its 14:05 deploy, and checkout calls it with no timeout, so every checkout worker is stuck waiting."
+    correct: true
+  - id: payments-down
+    text: "payments-svc is failing."
+    feedback: "payments-svc p99 is flat at about 130 ms and its spans succeed. The long bars in the traces are inventory calls."
+  - id: checkout-capacity
+    text: "checkout-svc simply needs more replicas; traffic outgrew it."
+    feedback: "The workers aren't busy computing. They're blocked waiting on inventory. The cart request in the trace did 60 ms of work after waiting 29.9 s for a free worker."
+  - id: inventory-down
+    text: "inventory-svc is down."
+    feedback: "inventory-svc's error rate is 0%. Every request succeeds, just after about 9 s. That's why its dashboard is green, and why this was hard to spot."
+
+actions:
+  - id: rollback-inventory
+    label: "Roll back inventory-svc to v3.3.2 and restore the idx_stock_sku index"
+    kind: fix
+    feedback: "Stock lookups are back to milliseconds. The trigger is gone and checkout's workers drain."
+  - id: add-timeout
+    label: "Give checkout's inventory client a 1 s timeout, 1 retry with jittered backoff, and a circuit breaker"
+    kind: fix
+    feedback: "The next slow dependency can't hold checkout hostage: calls fail fast, the breaker opens, and unrelated endpoints like /cart keep working."
+  - id: scale-checkout
+    label: "Scale checkout-svc from 4 to 12 replicas"
+    kind: wrong
+    feedback: "The new workers block on inventory too, and now three times as many retries pile onto an already slow service. The SRE book warns that adding resources may not be enough to recover from a death spiral."
+  - id: more-retries
+    label: "Raise the inventory retry count to 5 so fewer requests fail"
+    kind: destructive
+    feedback: "Retries multiply load on the struggling service (retry amplification), and each retry holds a checkout worker even longer. You made the cascade worse."
+  - id: restart-all
+    label: "Restart every service in the shop namespace"
+    kind: destructive
+    feedback: "You dropped every in-flight order and cold-started all the caches. Within two minutes the workers were stuck again, because the slow query is still there."
+  - id: restart-payments
+    label: "Restart payments-svc"
+    kind: wrong
+    feedback: "payments-svc was healthy. Restarting it only added failures of its own."
+
+solution_paths:
+  - [rollback-inventory, add-timeout]
+
+key_evidence: [slow-inventory, workers-saturated, no-timeout]
+
+hints:
+  nudge: "Every request that fails takes almost exactly 30 seconds. What is it waiting on?"
+  direction: "Open a trace for a failed checkout and look for the longest bar. Then compare checkout's busy workers with its pool size, and check how the HTTP client is configured."
+  answer: "inventory-svc's stock query went from ~80 ms to ~9 s after the 14:05 migration dropped an index. checkout calls it with no timeout and 3 retries, so all 64 workers block and even /cart can't get a worker. Roll back inventory, and add a timeout and circuit breaker to the client."
+
+analogy:
+  title: "Waiters stuck at the dessert station"
+  text: |
+    The dessert station suddenly takes 10 minutes per plate. The restaurant's
+    waiters each walk over with a tray and stand there waiting, and some ask
+    again three more times. Soon every waiter is standing at dessert, so
+    tables that only want a glass of water can't get served either. A
+    sensible rule ("wait one minute, then tell the table dessert is delayed")
+    is the timeout. A sign that says "dessert closed, don't go over there" is
+    the circuit breaker, just like the breaker in your house that trips so one
+    faulty appliance doesn't burn the whole house down.
+
+debrief:
+  root_cause: |
+    inventory-svc v3.4.0 ran a migration that recreated the stock table without
+    its sku index. Stock lookups became full table scans (~9 s). checkout-svc
+    called inventory with no timeout and up to 3 immediate retries, so each
+    checkout request held a worker for 30 s or more. All 64 workers filled up,
+    and requests for unrelated endpoints like /cart queued until the gateway's
+    30 s limit returned 504. inventory itself never errored, so its dashboards
+    stayed green. That's a textbook cascading failure: a slow dependency
+    exhausts the caller's shared resources.
+  ideal_path:
+    - "Notice the 30 s failures: something is waiting, not crashing."
+    - "Open a failed checkout trace: inventory calls take ~9 s and are retried back to back."
+    - "Check checkout's worker pool: pinned at 64/64. Cart traces show time spent waiting for a worker."
+    - "Find the trigger: inventory v3.4.0's migration dropped an index at 14:05."
+    - "Find the amplifier: checkout's inventory client has no timeout and 3 retries with no backoff."
+    - "Mitigate by rolling back inventory; fix the client with a timeout, bounded retries with jitter, and a circuit breaker."
+    - "Verify: /cart and /checkout return 200 in milliseconds."
+  real_world: |
+    The Google SRE book's chapter on cascading failures describes exactly this:
+    requests that miss their deadlines still consume server resources, and
+    retries multiply load at every layer. Microsoft's Circuit Breaker pattern
+    notes that blocked requests can hold threads and connections until
+    unrelated parts of a system fail. Distributed tracing is what makes the
+    slow hop visible when every dashboard says "no errors".
+
+sources:
+  - title: "Google SRE Book: Addressing Cascading Failures"
+    url: "https://sre.google/sre-book/addressing-cascading-failures/"
+    retrieved: 2026-09-30
+  - title: "Azure Architecture Center: Circuit Breaker pattern"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker"
+    retrieved: 2026-09-30
+  - title: "OpenTelemetry: Traces"
+    url: "https://opentelemetry.io/docs/concepts/signals/traces/"
+    retrieved: 2026-09-30
+  - title: "Prometheus: Histograms and summaries (latency percentiles)"
+    url: "https://prometheus.io/docs/practices/histograms/"
+    retrieved: 2026-09-30
+  - title: "curl: --write-out variables (http_code, time_total)"
+    url: "https://curl.se/docs/manpage.html#-w"
+    retrieved: 2026-09-30

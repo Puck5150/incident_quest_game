@@ -1,7 +1,3 @@
-# PLACEHOLDER (Milestone 2). Written to exercise the engine end to end.
-# Command output and logrotate behavior are NOT yet doc-verified.
-# Rewritten with full sources in Milestone 5. See CONTENT_TODO.md.
-
 id: full-disk
 track: linux
 difficulty: 1
@@ -16,8 +12,19 @@ ticket:
     No deploys in the last 24h. On-call, please investigate.
 
 environment: |
-  One Ubuntu VM (web-01) running nginx in front of a Python checkout app.
-  The app writes its logs to /var/log/app/. logrotate runs nightly.
+  One Ubuntu VM (web-01) running nginx in front of a Python checkout app
+  (systemd unit: checkout). The app writes its logs to /var/log/app/.
+  logrotate runs daily. Orders are stored in a separate managed PostgreSQL
+  database.
+
+diagram:
+  nodes:
+    - { id: nginx, label: "nginx (web-01)", col: 0, row: 0, status: ok }
+    - { id: app, label: "checkout app", col: 1, row: 0, status: down }
+    - { id: db, label: "PostgreSQL", col: 2, row: 0, status: ok }
+  edges:
+    - { from: nginx, to: app }
+    - { from: app, to: db }
 
 terminal:
   prompt: "ops@web-01:~$"
@@ -32,16 +39,30 @@ terminal:
       output: |
         Filesystem      Size  Used Avail Use% Mounted on
         /dev/sda1        40G   40G     0 100% /
-    - match_regex: "^du -sh /var/log/?\\*?$"
+    - match_regex: "^(sudo )?du -sh /var/log/?\\*?$"
       output: |
         29G     /var/log/app
         112M    /var/log/journal
         4.0K    /var/log/nginx
     - match: "ls -lh /var/log/app"
+      when_actions: [truncate-log]
+      output: |
+        total 0
+        -rw-r--r-- 1 app app 0 Sep 30 02:31 app.log
+    - match: "ls -lh /var/log/app"
       evidence: huge-log
       output: |
         total 29G
         -rw-r--r-- 1 app app 29G Sep 30 02:14 app.log
+    - match: "cat /etc/logrotate.d/app"
+      when_actions: [fix-logrotate]
+      output: |
+        /var/log/app/*.log {
+            daily
+            rotate 7
+            compress
+            missingok
+        }
     - match: "cat /etc/logrotate.d/app"
       evidence: rotate-typo
       output: |
@@ -51,14 +72,33 @@ terminal:
             compress
             missingok
         }
+    - match_regex: "^(sudo )?journalctl -u checkout"
+      evidence: write-failure
+      output: |
+        Sep 30 02:14:03 web-01 checkout[1190]: ERROR writing order audit record
+        Sep 30 02:14:03 web-01 checkout[1190]: OSError: [Errno 28] No space left on device
+    - match: "tail /var/log/nginx/access.log"
+      when_actions: [truncate-log]
+      output: |
+        10.0.4.18 - - [30/Sep/2026:02:33:10 +0000] "POST /checkout HTTP/1.1" 200 187 "-" "Mozilla/5.0"
+        10.0.4.22 - - [30/Sep/2026:02:33:12 +0000] "POST /checkout HTTP/1.1" 200 187 "-" "Mozilla/5.0"
+    - match: "tail /var/log/nginx/access.log"
+      output: |
+        10.0.4.18 - - [30/Sep/2026:02:14:05 +0000] "POST /checkout HTTP/1.1" 500 21 "-" "Mozilla/5.0"
+        10.0.4.22 - - [30/Sep/2026:02:14:07 +0000] "POST /checkout HTTP/1.1" 500 21 "-" "Mozilla/5.0"
+        10.0.4.31 - - [30/Sep/2026:02:14:09 +0000] "GET /health HTTP/1.1" 200 2 "-" "uptime-check"
 
 logs:
-  - name: "/var/log/nginx/error.log"
+  - name: "/var/log/nginx/access.log"
     lines: |
-      2026/09/30 02:14:07 [error] 812#812: *4411 upstream prematurely closed connection while reading response header from upstream
-  - name: "app stderr (journalctl -u checkout)"
+      10.0.4.18 - - [30/Sep/2026:02:14:05 +0000] "POST /checkout HTTP/1.1" 500 21 "-" "Mozilla/5.0"
+      10.0.4.22 - - [30/Sep/2026:02:14:07 +0000] "POST /checkout HTTP/1.1" 500 21 "-" "Mozilla/5.0"
+      10.0.4.31 - - [30/Sep/2026:02:14:09 +0000] "GET /health HTTP/1.1" 200 2 "-" "uptime-check"
+  - name: "journalctl -u checkout"
     evidence: write-failure
     lines: |
+      Sep 30 02:13:58 web-01 checkout[1190]: INFO order 88121 placed
+      Sep 30 02:14:03 web-01 checkout[1190]: ERROR writing order audit record
       Sep 30 02:14:03 web-01 checkout[1190]: OSError: [Errno 28] No space left on device
 
 files:
@@ -72,39 +112,37 @@ files:
           missingok
       }
 
-diagram:
-  nodes:
-    - { id: nginx, label: "nginx", col: 0, row: 0, status: ok }
-    - { id: app, label: "checkout app", col: 1, row: 0, status: down }
-    - { id: disk, label: "/dev/sda1", col: 2, row: 0, status: down }
-  edges:
-    - { from: nginx, to: app }
-    - { from: app, to: disk }
-
 hypotheses:
   - id: disk-full
     text: "The root filesystem is full, so the app can't write."
     correct: true
   - id: db-down
     text: "The database is unreachable."
-    feedback: "Errno 28 is a local write failure, not a network or connection error."
+    feedback: "Errno 28 (ENOSPC) is a local write failure, not a network error. Monitoring also shows PostgreSQL healthy."
   - id: bad-deploy
     text: "A recent deploy introduced a bug."
     feedback: "The ticket says there were no deploys in 24h. Look at what the errors actually say."
+  - id: nginx-broken
+    text: "nginx is misconfigured."
+    feedback: "nginx is passing requests through fine (the health check returns 200). The 500s come from the app."
 
 actions:
   - id: truncate-log
     label: "Truncate app.log in place (: > /var/log/app/app.log)"
     kind: fix
-    feedback: "Space is freed immediately, and the app keeps its open file handle."
+    feedback: "Output redirection truncates an existing file to zero size. The app keeps its open file handle, and the space comes back immediately."
   - id: fix-logrotate
-    label: "Fix the path typo in /etc/logrotate.d/app"
+    label: "Fix the path typo in /etc/logrotate.d/app (/var/log/ap → /var/log/app)"
     kind: fix
-    feedback: "The log will rotate nightly again, so this won't recur."
+    feedback: "logrotate will now find and rotate app.log daily, so this won't recur."
   - id: rm-log
     label: "rm /var/log/app/app.log"
     kind: wrong
-    feedback: "The app still holds the file open, so the space isn't released until the process closes it."
+    feedback: "The app still has the file open. Per unlink(2), the file stays in existence until the last file descriptor to it is closed, so no space is freed."
+  - id: restart-db
+    label: "Restart the PostgreSQL database"
+    kind: wrong
+    feedback: "The database was healthy. Restarting it interrupts every other client and changes nothing on web-01's disk."
   - id: reboot
     label: "Reboot web-01"
     kind: destructive
@@ -116,9 +154,9 @@ solution_paths:
 key_evidence: [write-failure, disk-full]
 
 hints:
-  nudge: "What does Errno 28 mean?"
-  direction: "Check how much free space each filesystem has."
-  answer: "Run df -h, then find what's filling / with du and ls. Then check why logrotate didn't catch it."
+  nudge: "What does Errno 28 mean? Check the app's own logs first."
+  direction: "Check how much free space each filesystem has, then find what's using it."
+  answer: "df -h shows / at 100%. du and ls show one 29G app.log. cat /etc/logrotate.d/app shows why it was never rotated."
 
 analogy:
   title: "A full filing cabinet"
@@ -130,20 +168,41 @@ analogy:
 debrief:
   root_cause: |
     A typo in the logrotate config (/var/log/ap instead of /var/log/app) meant
-    app.log was never rotated. `missingok` hid the problem. The log grew until
-    / hit 100%, and every write the app made failed with ENOSPC.
+    app.log was never rotated. With missingok, logrotate moves on from a missing
+    log without issuing an error, so the mistake was silent. The log grew until
+    / hit 100%, and every write the app made failed with ENOSPC (errno 28,
+    "No space left on device").
   ideal_path:
-    - "Read the app error: Errno 28 (ENOSPC) points at storage, not the network."
+    - "Read the app's errors (journalctl -u checkout): Errno 28 (ENOSPC) points at storage, not the network."
     - "Confirm with df -h: / is at 100%."
     - "Find the culprit with du and ls: one 29G app.log."
-    - "Free space safely by truncating, not deleting, a file the app holds open."
+    - "Free space by truncating the file in place. Deleting a file the app holds open frees nothing."
     - "Fix the root cause: the logrotate path typo."
-    - "Verify: df -h shows free space and checkout errors stop."
+    - "Verify: df -h shows free space, and the nginx access log shows 200s again."
+  real_world: |
+    Full disks are one of the most common production incidents, and logs are
+    the usual culprit. Alert on disk usage trends (not just 100%), and treat
+    log rotation config as code that gets reviewed and tested.
 
 sources:
   - title: "df(1) — Linux manual page"
     url: "https://man7.org/linux/man-pages/man1/df.1.html"
     retrieved: 2026-09-30
-  - title: "errno(3) — Linux manual page"
+  - title: "du(1) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man1/du.1.html"
+    retrieved: 2026-09-30
+  - title: "errno(3) — Linux manual page (ENOSPC)"
     url: "https://man7.org/linux/man-pages/man3/errno.3.html"
+    retrieved: 2026-09-30
+  - title: "unlink(2) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man2/unlink.2.html"
+    retrieved: 2026-09-30
+  - title: "logrotate(8) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man8/logrotate.8.html"
+    retrieved: 2026-09-30
+  - title: "Bash Reference Manual — Redirections"
+    url: "https://www.gnu.org/software/bash/manual/html_node/Redirections.html"
+    retrieved: 2026-09-30
+  - title: "nginx ngx_http_log_module (combined log format)"
+    url: "https://nginx.org/en/docs/http/ngx_http_log_module.html"
     retrieved: 2026-09-30

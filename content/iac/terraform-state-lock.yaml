@@ -1,0 +1,192 @@
+id: terraform-state-lock
+track: iac
+difficulty: 2
+title: "Can't run terraform plan on prod network"
+par_minutes: 12
+
+ticket:
+  from: "Teammate (platform team)"
+  priority: P3
+  body: |
+    I need to add a subnet today but every `terraform plan` on the prod network
+    stack fails with a state lock error. Is someone else running Terraform?
+
+environment: |
+  The prod network stack's Terraform state lives in S3 (backend "s3" with
+  use_lockfile = true). Changes normally go through a GitHub Actions workflow
+  that runs terraform plan on pull requests and terraform apply on merge to main.
+  Engineers may run plan locally, never apply.
+
+terminal:
+  prompt: "you@laptop:~/infra/prod/network$"
+  commands:
+    - match_regex: "^terraform plan"
+      when_actions: [force-unlock]
+      evidence: partial-apply
+      output: |
+        aws_route_table_association.private_c: Refreshing state...
+        ...
+
+        Terraform will perform the following actions:
+
+          # aws_route_table_association.private_c will be created
+          + resource "aws_route_table_association" "private_c" {
+              + route_table_id = "rtb-0a3c9d51e2f7b6480"
+              + subnet_id      = "subnet-07d2e61b9c4fa1e53"
+            }
+
+        Plan: 1 to add, 0 to change, 0 to destroy.
+    - match_regex: "^terraform plan"
+      evidence: lock-info
+      output: |
+        ╷
+        │ Error: Error acquiring the state lock
+        │
+        │ Lock Info:
+        │   ID:        6f1c2a9e-8b4d-4e57-9c1a-3d0e7b2f5a18
+        │   Path:      acme-tfstate/prod/network/terraform.tfstate
+        │   Operation: OperationTypeApply
+        │   Who:       runner@gha-runner-7
+        │   Created:   2026-09-30 09:12:44 +0000 UTC
+        │   Info:
+        │
+        │ Terraform acquires a state lock to protect the state from being written
+        │ by multiple users at the same time. Please resolve the issue above and try
+        │ again. For most commands, you can disable locking with the "-lock=false"
+        │ flag, but this is not recommended.
+        ╵
+    - match: "cat backend.tf"
+      output: |
+        terraform {
+          backend "s3" {
+            bucket       = "acme-tfstate"
+            key          = "prod/network/terraform.tfstate"
+            region       = "us-east-1"
+            use_lockfile = true
+          }
+        }
+    - match: "aws s3 ls s3://acme-tfstate/prod/network/"
+      when_actions: [force-unlock]
+      output: |
+        2026-09-30 09:13:02      48211 terraform.tfstate
+    - match: "aws s3 ls s3://acme-tfstate/prod/network/"
+      evidence: lockfile-present
+      output: |
+        2026-09-30 09:13:02      48211 terraform.tfstate
+        2026-09-30 09:12:44        271 terraform.tfstate.tflock
+    - match: "date -u"
+      output: |
+        Tue Sep 30 12:41:07 UTC 2026
+
+pipeline:
+  name: "terraform (prod/network) · run #212"
+  trigger: "push to main · commit 4e1a7c0 \"add private subnet c\" · started 09:11 UTC"
+  stages:
+    - name: "plan"
+      status: success
+      duration_s: 41
+      log: |
+        Plan: 3 to add, 0 to change, 0 to destroy.
+    - name: "apply"
+      status: cancelled
+      duration_s: 83
+      evidence: cancelled-run
+      log: |
+        aws_subnet.private_c: Creating...
+        aws_subnet.private_c: Creation complete after 2s [id=subnet-07d2e61b9c4fa1e53]
+        aws_route_table.private_c: Creating...
+        aws_route_table.private_c: Creation complete after 1s [id=rtb-0a3c9d51e2f7b6480]
+        aws_route_table_association.private_c: Creating...
+        Error: The operation was canceled.
+
+logs:
+  - name: "#platform-oncall (chat)"
+    evidence: nobody-running
+    lines: |
+      09:14 jordan: cancelled the prod/network apply run, it was taking forever and I needed the runner for a hotfix. will re-run later
+      12:30 you: is anyone running terraform against prod/network right now?
+      12:34 jordan: not me, I never re-ran it. sorry!
+      12:35 alex: nope
+
+hypotheses:
+  - id: stale-lock
+    text: "A cancelled CI apply left a stale lock behind, and nothing is holding it anymore."
+    correct: true
+  - id: someone-applying
+    text: "Someone is applying right now; wait for them to finish."
+    feedback: "The lock is over three hours old, the CI run that created it was cancelled, and nobody on the team is running Terraform."
+  - id: bad-credentials
+    text: "Your AWS credentials expired."
+    feedback: "Expired credentials fail with an authentication error. This error is specifically about the state lock, and aws s3 ls works."
+  - id: corrupt-state
+    text: "The state file is corrupted."
+    feedback: "Nothing says the state is unreadable. Terraform stopped before reading it because it couldn't get the lock."
+
+actions:
+  - id: force-unlock
+    label: "terraform force-unlock 6f1c2a9e-8b4d-4e57-9c1a-3d0e7b2f5a18"
+    kind: fix
+    feedback: "The stale lock is released. force-unlock doesn't touch your infrastructure, only the lock."
+  - id: rerun-apply
+    label: "Re-run the apply through the CI workflow"
+    kind: fix
+    feedback: "The cancelled apply left one resource uncreated. Re-running the normal pipeline finishes the change the same way it started, with review and logs."
+  - id: lock-false
+    label: "Run terraform apply -lock=false locally to get past it"
+    kind: destructive
+    feedback: "Terraform's docs recommend against disabling locking, and applying locally breaks the team's process. If anyone else wrote at the same time, the state could be corrupted."
+  - id: delete-state
+    label: "Delete terraform.tfstate from S3 and start fresh"
+    kind: destructive
+    feedback: "Terraform no longer knows about any of your prod network resources. The next apply would try to create duplicates of everything."
+  - id: wait
+    label: "Wait an hour and try again"
+    kind: wrong
+    feedback: "The process that took the lock was killed, so nothing is going to release it. Terraform provides force-unlock for this case."
+
+solution_paths:
+  - [force-unlock, rerun-apply]
+
+key_evidence: [lock-info, cancelled-run, nobody-running]
+
+hints:
+  nudge: "The error tells you who took the lock, when, and for what. Who was it?"
+  direction: "Find out what happened to that run, and make sure nobody is still using it before you touch the lock."
+  answer: "The lock came from CI run #212, which was cancelled mid-apply. Nobody is running Terraform. force-unlock with the lock ID, check the plan, then re-run the apply through CI."
+
+analogy:
+  title: "An 'occupied' sign on an empty meeting room"
+  text: |
+    Someone hung "Occupied" on the meeting room door, then got called away and
+    left through the back. The room is empty, but everyone politely waits
+    outside. Before you take the sign down, knock and look inside. Taking it
+    down while someone's still in there would cause a real collision.
+
+debrief:
+  root_cause: |
+    CI run #212 took the state lock for an apply, then was cancelled partway
+    through. The cancelled run never released the lock, so the .tflock object
+    stayed in S3 and every later plan failed. The apply had also stopped before
+    creating one resource (the route table association).
+  ideal_path:
+    - "Read the lock info: who (a CI runner), what (apply), when (09:12, hours ago)."
+    - "Find that run: #212 was cancelled during apply."
+    - "Confirm nobody is running Terraform. force-unlock is only safe when no one holds the lock."
+    - "terraform force-unlock <ID>."
+    - "Run terraform plan: it shows the one resource the cancelled apply didn't finish."
+    - "Re-run the apply through CI, not by hand."
+  real_world: |
+    Cancelling a Terraform job mid-apply is a common source of stale locks and
+    half-applied changes. Many teams make apply jobs non-cancellable. Note that
+    the S3 backend's DynamoDB locking is deprecated in favor of use_lockfile.
+
+sources:
+  - title: "Terraform: State Locking"
+    url: "https://developer.hashicorp.com/terraform/language/state/locking"
+    retrieved: 2026-09-30
+  - title: "Terraform CLI: terraform force-unlock"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/force-unlock"
+    retrieved: 2026-09-30
+  - title: "Terraform: Backend Type s3 (State Locking)"
+    url: "https://developer.hashicorp.com/terraform/language/backend/s3"
+    retrieved: 2026-09-30

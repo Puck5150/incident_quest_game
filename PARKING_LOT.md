@@ -19,7 +19,11 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - Multi-stage incidents (fix reveals a second problem)
 - Postmortem-writing exercise after the debrief (SRE track)
 
+- Collapse the ticket/diagram once investigating starts, so the tools sit higher on the screen
+- Human-readable labels for evidence tags in the debrief (currently shows the tag id plus where it lives)
+
 ## Content
+- Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - Tracks beyond the six MVP scenarios: Fundamentals, Windows/identity, Scripting and code, Cloud (AWS/Azure), Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
 - More scenarios per track and difficulty levels 3–5
 

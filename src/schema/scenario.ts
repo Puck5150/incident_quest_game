@@ -82,6 +82,68 @@ export const ScenarioSchema = z
       })
       .optional(),
 
+    // Distributed-systems views. Each trace, metric and pipeline stage is an
+    // artifact the player opens, so each can carry an evidence tag.
+    traces: z
+      .array(
+        z.strictObject({
+          name: z.string().min(1),
+          evidence: evidenceTag,
+          spans: z
+            .array(
+              z.strictObject({
+                id,
+                parent: id.optional(),
+                service: z.string().min(1),
+                operation: z.string().min(1),
+                start_ms: z.number().min(0),
+                duration_ms: z.number().min(0),
+                status: z.enum(['ok', 'error']).default('ok'),
+                note: z.string().optional(), // e.g. an attribute or event worth showing
+              }),
+            )
+            .min(1),
+        }),
+      )
+      .optional(),
+    metrics: z
+      .array(
+        z.strictObject({
+          name: z.string().min(1),
+          unit: z.string().min(1),
+          evidence: evidenceTag,
+          threshold: z.strictObject({ value: z.number(), label: z.string().min(1) }).optional(),
+          // Every series shares the same x labels (usually clock times).
+          series: z
+            .array(
+              z.strictObject({
+                label: z.string().min(1),
+                points: z.array(z.tuple([z.string(), z.number()])).min(2),
+              }),
+            )
+            .min(1)
+            .max(3), // the chart palette has 3 validated colors
+        }),
+      )
+      .optional(),
+    pipeline: z
+      .strictObject({
+        name: z.string().min(1),
+        trigger: z.string().min(1),
+        stages: z
+          .array(
+            z.strictObject({
+              name: z.string().min(1),
+              status: z.enum(['success', 'failure', 'skipped', 'cancelled']),
+              duration_s: z.number().min(0).optional(),
+              evidence: evidenceTag,
+              log: z.string().default(''),
+            }),
+          )
+          .min(1),
+      })
+      .optional(),
+
     hypotheses: z
       .array(
         z.strictObject({
@@ -136,9 +198,7 @@ export const ScenarioSchema = z
     const actionIds = new Set(s.actions.map((a) => a.id))
     const fixIds = new Set(s.actions.filter((a) => a.kind === 'fix').map((a) => a.id))
     const evidence = new Set(
-      [...(s.terminal?.commands ?? []), ...(s.logs ?? []), ...(s.files ?? [])]
-        .map((a) => a.evidence)
-        .filter(Boolean),
+      [...(s.terminal?.commands ?? []), ...artifacts(s)].map((a) => a.evidence).filter(Boolean),
     )
 
     dupes(s.actions.map((a) => a.id)).forEach((d) => issue(`duplicate action id "${d}"`, ['actions']))
@@ -170,8 +230,30 @@ export const ScenarioSchema = z
       }
     })
 
+    // Key evidence must be findable BEFORE any fix, or the methodical bonus
+    // (evidence before hypothesis) would be impossible to earn.
+    const beforeFix = new Set(
+      [...(s.terminal?.commands ?? []).filter((c) => !c.when_actions?.length), ...artifacts(s)]
+        .map((a) => a.evidence)
+        .filter(Boolean),
+    )
     s.key_evidence.forEach((e, i) => {
       if (!evidence.has(e)) issue(`no artifact is tagged with evidence "${e}"`, ['key_evidence', i])
+      else if (!beforeFix.has(e)) issue(`key evidence "${e}" is only visible after an action`, ['key_evidence', i])
+    })
+
+    s.traces?.forEach((t, i) => {
+      const spans = new Set(t.spans.map((x) => x.id))
+      t.spans.forEach((x, j) => {
+        if (x.parent && !spans.has(x.parent)) issue(`unknown parent span "${x.parent}"`, ['traces', i, 'spans', j])
+      })
+    })
+    s.metrics?.forEach((m, i) => {
+      const xs = JSON.stringify(m.series[0].points.map((p) => p[0]))
+      m.series.forEach((ser, j) => {
+        if (JSON.stringify(ser.points.map((p) => p[0])) !== xs)
+          issue('every series must use the same x labels', ['metrics', i, 'series', j])
+      })
     })
 
     if (s.diagram) {
@@ -181,6 +263,26 @@ export const ScenarioSchema = z
       })
     }
   })
+
+export type ArtifactKind = 'log' | 'file' | 'trace' | 'metric' | 'stage'
+
+// Everything the player can "open", flattened. Used by the validator, the
+// engine (evidence tracking) and the debrief (where evidence lived).
+export function artifacts(s: {
+  logs?: { name: string; evidence?: string }[]
+  files?: { path: string; evidence?: string }[]
+  traces?: { name: string; evidence?: string }[]
+  metrics?: { name: string; evidence?: string }[]
+  pipeline?: { stages: { name: string; evidence?: string }[] }
+}): { kind: ArtifactKind; name: string; evidence?: string }[] {
+  return [
+    ...(s.logs ?? []).map((a) => ({ kind: 'log' as const, name: a.name, evidence: a.evidence })),
+    ...(s.files ?? []).map((a) => ({ kind: 'file' as const, name: a.path, evidence: a.evidence })),
+    ...(s.traces ?? []).map((a) => ({ kind: 'trace' as const, name: a.name, evidence: a.evidence })),
+    ...(s.metrics ?? []).map((a) => ({ kind: 'metric' as const, name: a.name, evidence: a.evidence })),
+    ...(s.pipeline?.stages ?? []).map((a) => ({ kind: 'stage' as const, name: a.name, evidence: a.evidence })),
+  ]
+}
 
 function dupes(xs: string[]): string[] {
   return [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))]
