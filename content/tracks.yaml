@@ -7,3 +7,4 @@
 - { id: iac,           name: "Infrastructure as Code", requires: [] }
 - { id: cicd,          name: "CI/CD",                  requires: [] }
 - { id: microservices, name: "Microservices",          requires: [networking, containers] }
+- { id: cloud,         name: "Cloud Platforms",        requires: [networking] }

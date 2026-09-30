@@ -6,7 +6,9 @@ traces, metrics and CI pipeline views, name the root cause, fix it, and get a
 debrief with the ideal path, a non-IT analogy, and links to the official docs.
 
 Current incidents cover DNS, Linux disk space, Kubernetes CrashLoopBackOff,
-Terraform state locking, GitHub Actions, and a microservices cascading failure.
+Terraform state locking, GitHub Actions, a microservices cascading failure, and
+cloud architecture failures on AWS (single-AZ database), Azure (Application
+Gateway health probes) and Google Cloud (Cloud Run vs. Cloud SQL connections).
 
 ## Run it
 

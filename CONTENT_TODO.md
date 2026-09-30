@@ -57,3 +57,26 @@ from your own experience and tick them off.
       a real system.
 - [ ] Amazon Builders' Library "Timeouts, retries and backoff with jitter" would be a
       good extra source, but the page is now JavaScript-rendered and couldn't be fetched.
+
+## cloud/aws-single-az-database
+- [ ] AWS Health Dashboard event wording: representative, modeled on typical AZ
+      connectivity events rather than copied from a specific one.
+- [ ] `aws rds describe-db-instances` JSON: field names match the RDS API
+      reference (AvailabilityZone, MultiAZ, ReadReplica*); the trimmed layout
+      (with `...`) is ours.
+- [ ] ALB target-health and app log lines: representative.
+
+## cloud/azure-appgw-health-probe
+- [ ] `az network application-gateway show-backend-health` JSON: the health
+      states and the "Status code of the backend's HTTP response didn't match
+      the probe setting. Expected:... Received:..." message are from Microsoft's
+      docs; the lowercase JSON field names and structure are representative.
+- [ ] `az network application-gateway probe show` JSON: representative.
+
+## cloud/gcp-cloud-run-connection-exhaustion
+- [ ] PostgreSQL `FATAL:  sorry, too many clients already` wording, wrapped by
+      psycopg2/SQLAlchemy: widely seen but not quoted from the PostgreSQL docs here.
+- [ ] `gcloud run services describe` and `gcloud sql instances describe` output:
+      representative.
+- [ ] `--max` flag: taken from the current Cloud Run docs (older docs and
+      scripts use `--max-instances`).

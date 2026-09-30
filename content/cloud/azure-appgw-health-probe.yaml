@@ -1,0 +1,224 @@
+id: azure-appgw-health-probe
+track: cloud
+difficulty: 2
+title: "Customer portal returns 502 after a routine release"
+par_minutes: 12
+
+ticket:
+  from: "Service desk"
+  priority: P1
+  body: |
+    Customers get "502 Bad Gateway" on portal.example.com since about 16:20.
+    The release team says v3.8 deployed cleanly at 16:15 and both VMs are
+    running.
+
+environment: |
+  Azure. An Application Gateway v2 (agw-portal, resource group rg-portal)
+  fronts a backend pool of two VMs (10.1.2.4 and 10.1.2.5) running the portal
+  app on port 80. The gateway uses a custom health probe named probe-portal.
+  The gateway was built by hand in the portal two years ago; the app is
+  released by a pipeline.
+
+diagram:
+  nodes:
+    - { id: users, label: "customers", col: 0, row: 0, status: ok }
+    - { id: agw, label: "agw-portal", col: 1, row: 0, status: degraded }
+    - { id: vm4, label: "vm 10.1.2.4", col: 2, row: 0, status: ok }
+    - { id: vm5, label: "vm 10.1.2.5", col: 2, row: 1, status: ok }
+  edges:
+    - { from: users, to: agw }
+    - { from: agw, to: vm4 }
+    - { from: agw, to: vm5 }
+
+terminal:
+  prompt: "you@jumpbox:~$"
+  commands:
+    - match: "az network application-gateway show-backend-health -g rg-portal -n agw-portal"
+      when_actions: [update-probe]
+      output: |
+        {
+          "backendAddressPools": [
+            {
+              "backendHttpSettingsCollection": [
+                {
+                  "servers": [
+                    { "address": "10.1.2.4", "health": "Healthy" },
+                    { "address": "10.1.2.5", "health": "Healthy" }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+    - match: "az network application-gateway show-backend-health -g rg-portal -n agw-portal"
+      evidence: all-unhealthy
+      output: |
+        {
+          "backendAddressPools": [
+            {
+              "backendHttpSettingsCollection": [
+                {
+                  "servers": [
+                    {
+                      "address": "10.1.2.4",
+                      "health": "Unhealthy",
+                      "healthProbeLog": "Status code of the backend's HTTP response didn't match the probe setting. Expected:200-399 Received:404."
+                    },
+                    {
+                      "address": "10.1.2.5",
+                      "health": "Unhealthy",
+                      "healthProbeLog": "Status code of the backend's HTTP response didn't match the probe setting. Expected:200-399 Received:404."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+    - match: "az network application-gateway probe show -g rg-portal --gateway-name agw-portal -n probe-portal"
+      when_actions: [update-probe]
+      output: |
+        {
+          "name": "probe-portal",
+          "protocol": "Http",
+          "host": "127.0.0.1",
+          "path": "/healthz",
+          "interval": 30,
+          "timeout": 30,
+          "unhealthyThreshold": 3,
+          "match": { "statusCodes": [ "200-399" ] }
+        }
+    - match: "az network application-gateway probe show -g rg-portal --gateway-name agw-portal -n probe-portal"
+      evidence: probe-path
+      output: |
+        {
+          "name": "probe-portal",
+          "protocol": "Http",
+          "host": "127.0.0.1",
+          "path": "/health",
+          "interval": 30,
+          "timeout": 30,
+          "unhealthyThreshold": 3,
+          "match": { "statusCodes": [ "200-399" ] }
+        }
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' http://10.1.2.4/health"
+      evidence: health-404
+      output: |
+        404
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' http://10.1.2.4/healthz"
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' http://10.1.2.4/"
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://portal.example.com/"
+      when_actions: [update-probe]
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://portal.example.com/"
+      output: |
+        502
+
+files:
+  - path: "RELEASE_NOTES.md (portal v3.8)"
+    evidence: endpoint-renamed
+    content: |
+      ## v3.8 (2026-09-30)
+      - Health check moved from /health to /healthz to match our other services.
+        /health has been removed.
+      - Faster invoice PDF generation.
+
+hypotheses:
+  - id: probe-path
+    text: "The gateway's health probe still checks /health, which v3.8 removed, so both VMs look unhealthy."
+    correct: true
+  - id: vms-down
+    text: "The v3.8 deploy broke the app on both VMs."
+    feedback: "The VMs answer / and /healthz with 200. Only /health returns 404."
+  - id: nsg
+    text: "A network security group is blocking the gateway from the VMs."
+    feedback: "The probe log shows the backend answered with an HTTP 404. A blocked connection would fail before any status code came back."
+  - id: tls
+    text: "A certificate problem between the gateway and the VMs."
+    feedback: "The probe and backend settings use plain HTTP on port 80, so there's no backend certificate involved."
+
+actions:
+  - id: update-probe
+    label: "az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path /healthz"
+    kind: fix
+    feedback: "The next probes get 200 from /healthz. Both servers turn Healthy and the gateway starts forwarding traffic again."
+  - id: probe-in-iac
+    label: "Move the gateway config (including the probe) into the same Bicep repo and pipeline as the app"
+    kind: fix
+    feedback: "Now a change to the health endpoint and the probe that depends on it ship together, in one reviewed pull request."
+  - id: restart-vms
+    label: "Restart both VMs"
+    kind: wrong
+    feedback: "The VMs come back running v3.8, still without /health, and the probe still fails."
+  - id: raise-timeout
+    label: "Raise the backend request timeout to 120 s"
+    kind: wrong
+    feedback: "Timeouts aren't the problem; the probe gets a fast 404. Microsoft's guide notes that a longer timeout only masks a slow backend anyway."
+  - id: min-servers
+    label: "Set the probe's MinServers to 2 so both VMs are always treated as healthy"
+    kind: destructive
+    feedback: "Microsoft warns that MinServers forces traffic to servers even when their probes fail. It would 'work' today, and silently send customers to a genuinely broken server next time."
+  - id: recreate-gateway
+    label: "Delete and recreate the Application Gateway"
+    kind: destructive
+    feedback: "You rebuilt a hand-made gateway from memory during an outage, with a new IP, and the same probe mistake is likely to come back with it."
+
+solution_paths:
+  - [update-probe, probe-in-iac]
+
+key_evidence: [all-unhealthy, probe-path, endpoint-renamed]
+
+hints:
+  nudge: "A 502 from a gateway usually means it doesn't think any backend is usable. How does it decide?"
+  direction: "Look at backend health and the probe configuration, then compare them with what changed in v3.8."
+  answer: "Backend health shows both VMs Unhealthy: Expected 200-399, Received 404. The probe checks /health, but v3.8 moved it to /healthz. Update the probe path, then manage the probe alongside the app."
+
+analogy:
+  title: "A receptionist phoning the wrong extension"
+  text: |
+    Before sending visitors upstairs, the receptionist phones each office to
+    check someone's in. Over the weekend the offices got new extension numbers.
+    Nobody told reception, so every call rings a dead line, and the receptionist
+    turns every visitor away even though everyone is at their desk.
+
+debrief:
+  root_cause: |
+    Release v3.8 renamed the app's health endpoint from /health to /healthz.
+    The gateway's custom probe still requested /health and got 404, outside the
+    healthy range of 200–399. After the unhealthy threshold, both servers were
+    marked Unhealthy. With no healthy backend left, Application Gateway returns
+    502 Bad Gateway to every client. Microsoft calls an incorrect custom probe
+    path a common cause of exactly this.
+  ideal_path:
+    - "A gateway 502 with healthy VMs points at the gateway's view of backend health."
+    - "az network application-gateway show-backend-health: both Unhealthy, Expected 200-399, Received 404."
+    - "probe show: the path is /health."
+    - "curl the VM directly: /health is 404, /healthz is 200. Release notes confirm the rename."
+    - "Update the probe path, then put the probe in version control next to the app."
+    - "Verify backend health is Healthy and the public URL returns 200."
+  real_world: |
+    Health checks are a contract between an app and its load balancer. When
+    they're owned by different teams or tools, a harmless-looking rename can
+    take the whole service down while every server reports that it's fine.
+
+sources:
+  - title: "Azure Application Gateway: Troubleshoot bad gateway (502) errors"
+    url: "https://learn.microsoft.com/en-us/troubleshoot/azure/application-gateway/application-gateway-troubleshooting-502"
+    retrieved: 2026-09-30
+  - title: "Azure Application Gateway: Health monitoring overview"
+    url: "https://learn.microsoft.com/en-us/azure/application-gateway/application-gateway-probe-overview"
+    retrieved: 2026-09-30
+  - title: "Azure Application Gateway: Troubleshoot backend health issues"
+    url: "https://learn.microsoft.com/en-us/troubleshoot/azure/application-gateway/application-gateway-backend-health-troubleshooting"
+    retrieved: 2026-09-30
+  - title: "Azure CLI: az network application-gateway probe"
+    url: "https://learn.microsoft.com/en-us/cli/azure/network/application-gateway/probe?view=azure-cli-latest"
+    retrieved: 2026-09-30
+  - title: "Azure CLI: az network application-gateway (show-backend-health)"
+    url: "https://learn.microsoft.com/en-us/cli/azure/network/application-gateway?view=azure-cli-latest"
+    retrieved: 2026-09-30

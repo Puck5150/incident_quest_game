@@ -150,6 +150,27 @@ function layout(tracks: Track[], scenarios: Scenario[], progress: Progress, unlo
     while (taken()) row += 1
     rowOf.set(t.id, row)
   })
+
+  // An edge that skips a column (Networking -> Microservices) must not run
+  // behind a node in the column it skips, or it reads as a dependency on that
+  // node. Move any such node down to the next clear row.
+  const byTrack = new Map(withContent.map((t) => [t.id, t]))
+  const skipping = withContent.flatMap((t) =>
+    t.requires.filter((r) => byTrack.has(r)).map((r) => ({ from: r, to: t.id })),
+  )
+  const blocked = (id: string, row: number) =>
+    skipping.some(({ from, to }) => {
+      const [a, b, c] = [depthOf(byTrack.get(from)!), depthOf(byTrack.get(to)!), depthOf(byTrack.get(id)!)]
+      if (!(a < c && c < b)) return false
+      const y = rowOf.get(from)! + ((rowOf.get(to)! - rowOf.get(from)!) * (c - a)) / (b - a)
+      return Math.abs(y - row) < 0.75
+    })
+  sorted.forEach((t) => {
+    let row = rowOf.get(t.id)!
+    const clash = (r: number) => sorted.some((o) => o !== t && rowOf.get(o.id) === r && depthOf(o) === depthOf(t))
+    while (blocked(t.id, row) || clash(row)) row += 1
+    rowOf.set(t.id, row)
+  })
   return withContent.map((t) => {
     const col = depthOf(t)
     const row = rowOf.get(t.id)!

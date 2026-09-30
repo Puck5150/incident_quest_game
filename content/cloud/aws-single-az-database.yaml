@@ -1,0 +1,236 @@
+id: aws-single-az-database
+track: cloud
+difficulty: 2
+title: "Store is down, but every web server is healthy"
+par_minutes: 15
+
+ticket:
+  from: "PagerDuty"
+  priority: P1
+  body: |
+    CRITICAL: shop.example.com /api/* 5xx rate 94% since 09:41 UTC.
+    AWS Health also shows an open event for us-east-1a.
+
+environment: |
+  AWS us-east-1. An Application Load Balancer sends traffic to an EC2 Auto
+  Scaling group spread across us-east-1a and us-east-1b. Orders live in an
+  Amazon RDS for PostgreSQL instance, shop-db. The analytics team also has a
+  read replica, shop-db-reports, which feeds their dashboards.
+
+diagram:
+  nodes:
+    - { id: alb, label: "ALB", col: 0, row: 1, status: ok }
+    - { id: weba, label: "web (us-east-1a)", col: 1, row: 0, status: degraded }
+    - { id: webb, label: "web (us-east-1b)", col: 1, row: 2, status: ok }
+    - { id: db, label: "shop-db", col: 2, row: 0, status: down }
+    - { id: replica, label: "shop-db-reports", col: 2, row: 2, status: ok }
+  edges:
+    - { from: alb, to: weba }
+    - { from: alb, to: webb }
+    - { from: weba, to: db }
+    - { from: webb, to: db }
+    - { from: db, to: replica }
+
+terminal:
+  prompt: "you@bastion:~$"
+  commands:
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db$"
+      evidence: single-az
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db",
+                    "Engine": "postgres",
+                    "DBInstanceStatus": "available",
+                    "Endpoint": { "Address": "shop-db.c9x7k2example.us-east-1.rds.amazonaws.com", "Port": 5432 },
+                    "AvailabilityZone": "us-east-1a",
+                    "MultiAZ": false,
+                    "ReadReplicaDBInstanceIdentifiers": [ "shop-db-reports" ],
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      when_actions: [enable-multi-az]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "modifying",
+                    "AvailabilityZone": "us-east-1b",
+                    "MultiAZ": false,
+                    "PendingModifiedValues": { "MultiAZ": true },
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      when_actions: [promote-replica]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "available",
+                    "AvailabilityZone": "us-east-1b",
+                    "MultiAZ": false,
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      evidence: replica-in-b
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "available",
+                    "AvailabilityZone": "us-east-1b",
+                    "MultiAZ": false,
+                    "ReadReplicaSourceDBInstanceIdentifier": "shop-db",
+                    ...
+                }
+            ]
+        }
+    - match: "curl -s https://shop.example.com/api/health"
+      when_actions: [repoint-app]
+      output: |
+        {"status":"ok","db":"ok"}
+    - match: "curl -s https://shop.example.com/api/health"
+      output: |
+        {"status":"degraded","db":"timeout connecting to shop-db.c9x7k2example.us-east-1.rds.amazonaws.com:5432"}
+
+logs:
+  - name: "AWS Health Dashboard: open events"
+    evidence: az-event
+    lines: |
+      09:38 UTC  [Open] Increased connectivity issues: some instances and network
+                 interfaces in a single Availability Zone (us-east-1a) are experiencing
+                 connectivity issues. Other Availability Zones are not affected.
+  - name: "app (CloudWatch Logs, web-1b-7)"
+    lines: |
+      09:41:12 ERROR db: connection to shop-db.c9x7k2example.us-east-1.rds.amazonaws.com:5432 timed out after 5s
+      09:41:12 ERROR POST /api/orders -> 500
+      09:41:13 ERROR db: connection to shop-db.c9x7k2example.us-east-1.rds.amazonaws.com:5432 timed out after 5s
+  - name: "ALB target health"
+    lines: |
+      i-0a1b...(us-east-1a)  unhealthy   Health checks failed
+      i-0a2c...(us-east-1a)  unhealthy   Health checks failed
+      i-0b3d...(us-east-1b)  healthy
+      i-0b4e...(us-east-1b)  healthy
+
+metrics:
+  - name: "shop-db DatabaseConnections"
+    unit: connections
+    series:
+      - label: "shop-db"
+        points: [["09:30", 142], ["09:33", 139], ["09:36", 144], ["09:39", 131], ["09:42", 0], ["09:45", 0], ["09:48", 0], ["09:51", 0]]
+  - name: "shop-db-reports ReplicaLag"
+    unit: s
+    evidence: replica-lag
+    series:
+      - label: "replica lag"
+        points: [["09:30", 1.1], ["09:33", 0.9], ["09:36", 1.2], ["09:39", 1.4], ["09:42", 1.4], ["09:45", 1.4], ["09:48", 1.4], ["09:51", 1.4]]
+
+hypotheses:
+  - id: single-az-db
+    text: "shop-db runs in a single Availability Zone, and that zone is impaired."
+    correct: true
+  - id: web-tier
+    text: "The web servers crashed."
+    feedback: "The us-east-1b web servers are healthy and serving requests. They return 500s because they can't reach the database."
+  - id: bad-deploy
+    text: "A bad deploy broke the app."
+    feedback: "Nothing was deployed, and the errors are connection timeouts to one specific host in us-east-1a."
+  - id: storage-full
+    text: "The database ran out of storage."
+    feedback: "A full database still accepts connections and fails writes. Here nothing can connect at all, and the timing matches the AWS Health event."
+
+actions:
+  - id: promote-replica
+    label: "aws rds promote-read-replica --db-instance-identifier shop-db-reports"
+    kind: fix
+    feedback: "RDS stops replication, reboots the replica, and it becomes a standalone read-write instance in us-east-1b. Writes from the last ~1.4 s of replica lag may be lost; say so in the incident notes."
+  - id: repoint-app
+    label: "Point the app's DB endpoint at shop-db-reports and roll the web tier"
+    kind: fix
+    feedback: "The app now writes to the promoted instance in the healthy zone. Orders start succeeding."
+  - id: enable-multi-az
+    label: "aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az --apply-immediately"
+    kind: fix
+    feedback: "The new primary gets a synchronous standby in another zone, so the next zone failure is an automatic failover instead of an outage."
+  - id: reboot-db
+    label: "Reboot shop-db"
+    kind: wrong
+    feedback: "The instance lives in the impaired zone, and rebooting doesn't move it. 'Reboot with failover' only exists for Multi-AZ deployments, and this one isn't Multi-AZ."
+  - id: scale-web
+    label: "Double the web tier's Auto Scaling group"
+    kind: wrong
+    feedback: "The web tier isn't the bottleneck. More servers just means more connection timeouts to the same unreachable database."
+  - id: delete-primary
+    label: "Delete shop-db so the new primary can take its name"
+    kind: destructive
+    feedback: "You destroyed the only copy of the writes that hadn't replicated yet, while the zone might have recovered. Rename or repoint instead; never delete during an incident."
+
+solution_paths:
+  - [promote-replica, repoint-app, enable-multi-az]
+
+key_evidence: [az-event, single-az, replica-in-b]
+
+hints:
+  nudge: "The web servers in one zone are fine. What do they all depend on, and where does it live?"
+  direction: "Compare where the database runs with the zone named in the AWS Health event. Then look for any copy of the data somewhere else."
+  answer: "shop-db is MultiAZ: false in us-east-1a, the impaired zone. Promote the us-east-1b read replica, point the app at it, then enable Multi-AZ on it."
+
+analogy:
+  title: "One bridge to the island"
+  text: |
+    Two towns (zones) both send deliveries to a warehouse on an island, and
+    there's only one bridge. When the bridge closes, both towns' trucks are
+    fine but nothing gets delivered. Luckily a second, smaller warehouse on the
+    mainland kept a near-copy of the stock. You open it for business, and then
+    build a second bridge so this never stops you again.
+
+debrief:
+  root_cause: |
+    shop-db was a Single-AZ RDS instance in us-east-1a. When that zone had
+    connectivity issues, every web server, in both zones, lost its database.
+    The web tier was spread across zones; the data tier wasn't. That's the
+    Well-Architected anti-pattern "Your production workload exists only in a
+    single Availability Zone".
+  ideal_path:
+    - "Notice the web tier in us-east-1b is healthy but still returning 500s, so the shared dependency is the suspect."
+    - "Check the AWS Health event: us-east-1a is impaired."
+    - "Describe shop-db: us-east-1a, MultiAZ false."
+    - "Find a copy elsewhere: shop-db-reports in us-east-1b, ~1.4 s of lag."
+    - "Promote it, repoint the app, and record the possible data loss."
+    - "Enable Multi-AZ on the new primary, then verify /api/health."
+  real_world: |
+    With Multi-AZ, RDS keeps a synchronous standby in another zone and fails
+    over automatically, typically in 60–120 seconds, by switching the DNS
+    record. Apps should reconnect and not cache DNS forever. Promoting an
+    asynchronous read replica is a valid recovery plan too, but only if you
+    accept a small window of lost writes.
+
+sources:
+  - title: "Amazon RDS: Multi-AZ DB instance deployments"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Failing over a Multi-AZ DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Promoting a read replica to be a standalone DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.Promote.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS API: DBInstance (AvailabilityZone, MultiAZ fields)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DBInstance.html"
+    retrieved: 2026-09-30
+  - title: "AWS CLI: modify-db-instance (--multi-az, --apply-immediately)"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/rds/modify-db-instance.html"
+    retrieved: 2026-09-30
+  - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"
+    url: "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html"
+    retrieved: 2026-09-30

@@ -1,0 +1,190 @@
+id: gcp-cloud-run-connection-exhaustion
+track: cloud
+difficulty: 3
+title: "Sign-ups failing the moment the launch goes live"
+par_minutes: 15
+
+ticket:
+  from: "Growth team"
+  priority: P1
+  body: |
+    Launch email went out at 10:00. About half of sign-ups are failing with
+    "Something went wrong". Cloud Run is supposed to scale automatically, so
+    what's going on?
+
+environment: |
+  Google Cloud, us-central1. signup-api runs on Cloud Run (max instances left
+  at the default). It uses Cloud SQL for PostgreSQL (users-db) with the
+  max_connections flag set to 500. The app uses SQLAlchemy's connection pool.
+
+diagram:
+  nodes:
+    - { id: lb, label: "HTTPS load balancer", col: 0, row: 0, status: ok }
+    - { id: run, label: "signup-api (Cloud Run)", col: 1, row: 0, status: degraded }
+    - { id: sql, label: "users-db (Cloud SQL)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: lb, to: run }
+    - { from: run, to: sql }
+
+metrics:
+  - name: "signup-api container instance count"
+    unit: instances
+    evidence: scaled-out
+    series:
+      - label: "instances"
+        points: [["09:50", 4], ["09:55", 4], ["10:00", 9], ["10:02", 27], ["10:04", 48], ["10:06", 61], ["10:08", 64], ["10:10", 64], ["10:12", 63]]
+  - name: "users-db connections"
+    unit: connections
+    evidence: connections-capped
+    threshold: { value: 500, label: "max_connections: 500" }
+    series:
+      - label: "connections"
+        points: [["09:50", 78], ["09:55", 81], ["10:00", 176], ["10:02", 471], ["10:04", 497], ["10:06", 497], ["10:08", 497], ["10:10", 497], ["10:12", 497]]
+  - name: "users-db CPU utilization"
+    unit: "%"
+    series:
+      - label: "CPU"
+        points: [["09:50", 12], ["09:55", 12], ["10:00", 22], ["10:02", 34], ["10:04", 36], ["10:06", 35], ["10:08", 35], ["10:10", 36], ["10:12", 35]]
+
+logs:
+  - name: "Cloud Logging: signup-api (severity>=ERROR)"
+    evidence: too-many-clients
+    lines: |
+      10:03:17 ERROR sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) FATAL:  sorry, too many clients already
+      10:03:17 ERROR POST /v1/signup -> 500
+      10:03:18 ERROR sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) FATAL:  sorry, too many clients already
+      10:03:18 ERROR POST /v1/signup -> 500
+
+files:
+  - path: "signup-api/app/db.py"
+    evidence: pool-size
+    content: |
+      from sqlalchemy import create_engine
+
+      # Each Cloud Run instance keeps its own pool:
+      # up to pool_size + max_overflow connections.
+      engine = create_engine(
+          DATABASE_URL,
+          pool_size=10,
+          max_overflow=10,
+          pool_pre_ping=True,
+      )
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "gcloud run services describe signup-api --region us-central1"
+      when_actions: [cap-instances]
+      output: |
+        ✔ Service signup-api in region us-central1
+        ...
+        Max instances:     20
+        Concurrency:       80
+    - match: "gcloud run services describe signup-api --region us-central1"
+      evidence: default-max
+      output: |
+        ✔ Service signup-api in region us-central1
+        ...
+        Max instances:     100 (default)
+        Concurrency:       80
+    - match: "gcloud sql instances describe users-db --format='value(settings.databaseFlags)'"
+      output: |
+        {'name': 'max_connections', 'value': '500'}
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://example.com/v1/signup"
+      when_actions: [cap-instances, right-size-pool]
+      output: |
+        201
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://example.com/v1/signup"
+      output: |
+        500
+
+hypotheses:
+  - id: connection-budget
+    text: "Cloud Run scaled out and every instance's connection pool together exceeded the database's max_connections."
+    correct: true
+  - id: db-overloaded
+    text: "The database is overloaded and too slow."
+    feedback: "users-db CPU is around 35%. It's refusing new connections, not struggling to run queries."
+  - id: max-instances-hit
+    text: "Cloud Run hit its max instances limit and is rejecting requests."
+    feedback: "That would show up as HTTP 429 'no available instance'. Instances peaked at 64 of 100, and the errors are 500s from the database driver."
+  - id: bad-code
+    text: "The sign-up code has a bug that only shows under load."
+    feedback: "The failure is the database refusing new clients. The code works whenever it can get a connection."
+
+actions:
+  - id: cap-instances
+    label: "gcloud run services update signup-api --region us-central1 --max 20"
+    kind: fix
+    feedback: "At most 20 instances × 20 connections = 400, under the 500 limit with room for admin and migrations. Cloud Run's docs list limiting database connections as a reason to set max instances."
+  - id: right-size-pool
+    label: "Lower the pool to pool_size=5, max_overflow=5 and document the budget: max instances × per-instance max < max_connections"
+    kind: fix
+    feedback: "Each instance now needs at most 10 connections, so the fleet can scale further before hitting the database, and the budget is written down for the next launch."
+  - id: raise-max
+    label: "Raise max instances to 300 so there's more capacity"
+    kind: wrong
+    feedback: "More instances means more pools and even more connection attempts against the same 500-connection limit. Capacity was never the problem."
+  - id: lower-concurrency
+    label: "Lower concurrency to 10 so Cloud Run scales faster"
+    kind: wrong
+    feedback: "That's the fix for a 429 max-instances error, not this one. Fewer requests per instance means many more instances, and more connections."
+  - id: restart-sql
+    label: "Restart the Cloud SQL instance to clear the connections"
+    kind: destructive
+    feedback: "Every user of the database lost their connection, and 64 instances reconnected straight back into the same limit within seconds."
+
+solution_paths:
+  - [cap-instances, right-size-pool]
+
+key_evidence: [too-many-clients, connections-capped, scaled-out]
+
+hints:
+  nudge: "The database's CPU is calm, so what is it actually saying no to?"
+  direction: "Compare how many instances Cloud Run started with how many connections each one can open, and with the database's limit."
+  answer: "64 instances × up to 20 pooled connections = 1,280, against max_connections 500. Cap max instances and right-size the pool so the math fits."
+
+analogy:
+  title: "A restaurant with 50 seats and unlimited hosts"
+  text: |
+    The restaurant hires a new host for every crowd that shows up, and each
+    host tries to hold 20 tables. Past a point there are more held tables than
+    chairs, and the kitchen is barely busy while guests are turned away at the
+    door. Limit the number of hosts, or how many tables each can hold, so the
+    promises add up to the chairs you really have.
+
+debrief:
+  root_cause: |
+    The launch traffic made Cloud Run scale signup-api from 4 to 64 instances,
+    which is exactly what it's designed to do. But each instance keeps its own
+    SQLAlchemy pool of up to 20 connections, so the fleet wanted up to 1,280
+    connections against users-db's max_connections of 500. Once the database
+    was full it refused new clients, and those sign-ups failed with 500s. The
+    serverless tier scaled; the stateful tier behind it couldn't.
+  ideal_path:
+    - "Read the errors: the database is refusing clients, not timing out."
+    - "Check the database: connections pinned at the 500 limit, CPU calm."
+    - "Check Cloud Run: instances jumped from 4 to 64 with no max set (default 100)."
+    - "Do the math: instances × pool per instance vs. max_connections."
+    - "Cap max instances and shrink the per-instance pool so the total fits, with headroom."
+    - "Verify: sign-ups return 201 and connections stay under the limit."
+  real_world: |
+    Google's Cloud Run and Cloud SQL docs spell out the math: each Cloud Run
+    instance can open up to 100 connections, so total connections grow as the
+    service scales. Use a pool, cap instances, and consider Cloud SQL's managed
+    connection pooling for spiky traffic. Capping instances trades database
+    overload for 429s at the edge, so size it deliberately.
+
+sources:
+  - title: "Cloud Run: Set maximum instances for services"
+    url: "https://docs.cloud.google.com/run/docs/configuring/max-instances"
+    retrieved: 2026-09-30
+  - title: "Cloud SQL for PostgreSQL: Connect from Cloud Run (connection limits, pooling)"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/connect-run"
+    retrieved: 2026-09-30
+  - title: "Cloud Run: Troubleshooting (HTTP 429 no available instance)"
+    url: "https://docs.cloud.google.com/run/docs/troubleshooting"
+    retrieved: 2026-09-30
+  - title: "SQLAlchemy: Connection Pooling (pool_size + max_overflow)"
+    url: "https://docs.sqlalchemy.org/en/20/core/pooling.html"
+    retrieved: 2026-09-30

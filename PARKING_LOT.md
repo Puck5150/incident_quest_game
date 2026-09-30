@@ -23,16 +23,13 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - Human-readable labels for evidence tags in the debrief (currently shows the tag id plus where it lives)
 
 ## Content
-- **Cloud system design (AWS, Azure, GCP)** (requested 2026-09-30). Two possible shapes:
-  1. *Incident-style:* troubleshoot a flawed architecture (single-AZ database outage,
-     missing autoscaling, public S3 bucket, cross-region latency). Fits the current
-     engine and schema as-is.
-  2. *Design challenges:* a new game mode where the player builds an architecture from
-     requirements (SLOs, traffic, budget) and is scored on trade-offs. Needs new
-     schema, UI and scoring. Would lean on the AWS Well-Architected Framework, the
-     Azure Well-Architected Framework / Architecture Center, and the Google Cloud
-     Architecture Framework.
-  Note: the plan's track 6 covers AWS/Azure core services but not GCP.
+- **Cloud system design, part 2: design-challenge mode** (requested 2026-09-30).
+  Part 1 (incident-style cloud scenarios) shipped in Milestone 7. Part 2 is a new
+  game mode: build an architecture from requirements (SLOs, traffic, budget) and
+  get scored on trade-offs. Needs new schema, UI and scoring; would draw on the
+  AWS and Azure Well-Architected Frameworks and the Google Cloud Architecture Framework.
+- More cloud incidents: public storage bucket, missing autoscaling, cross-region
+  latency, IAM least privilege, DNS failover TTLs.
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - Tracks beyond the six MVP scenarios: Fundamentals, Windows/identity, Scripting and code, Cloud (AWS/Azure), Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
 - More scenarios per track and difficulty levels 3–5
