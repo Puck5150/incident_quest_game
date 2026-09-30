@@ -17,7 +17,14 @@ const ProgressSchema = z.object({
   xp: z.int().check(z.minimum(0)),
   completed: z.record(
     z.string(),
-    z.object({ bestScore: z.number(), completedAt: z.string(), hintsUsed: z.number(), clean: z.boolean() }),
+    z.object({
+      bestScore: z.number(),
+      completedAt: z.string(),
+      hintsUsed: z.number(),
+      clean: z.boolean(),
+      // "Pick your cloud" challenges: which clouds it's been completed on. Optional so old saves stay valid.
+      providers: z.optional(z.array(z.string())),
+    }),
   ),
   // Consecutive incidents resolved "clean": no hints, no destructive actions.
   streak: z.object({ current: z.number(), best: z.number() }),
@@ -65,6 +72,7 @@ export function recordResult(
   scenarioId: string,
   s: { total: number; clean: boolean; hintsUsed: number }, // incident or challenge score
   now: Date,
+  provider?: string, // for "pick your cloud" challenges
 ): { progress: Progress; gained: number } {
   const prev = p.completed[scenarioId]
   const gained = Math.max(0, s.total - (prev?.bestScore ?? 0))
@@ -81,6 +89,9 @@ export function recordResult(
           completedAt: now.toISOString(),
           hintsUsed: s.hintsUsed,
           clean: s.clean || !!prev?.clean,
+          ...(provider || prev?.providers
+            ? { providers: [...new Set([...(prev?.providers ?? []), ...(provider ? [provider] : [])])] }
+            : {}),
         },
       },
       streak: { current, best: Math.max(current, p.streak.best) },

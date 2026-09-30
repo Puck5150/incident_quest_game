@@ -11,7 +11,10 @@ export type QueueItem = {
   difficulty: number
   kind: 'incident' | 'challenge'
   tag: string // incident priority (P1..P4) or "Design"
+  providers?: string[] // "pick your cloud": the clouds it can be played on
 }
+
+const CLOUD: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' }
 
 // The incident queue: tracks that have content, in tracks.yaml order,
 // incidents easiest first. Locked tracks say what unlocks them.
@@ -82,6 +85,23 @@ export default function HomeScreen({
                         </span>
                       </span>
                       <span className="mt-2 block font-medium">{s.title}</span>
+                      {s.providers && (
+                        <span className="mt-2 flex flex-wrap gap-1.5" aria-label="Clouds">
+                          {s.providers.map((p) => {
+                            const doneOn = done?.providers?.includes(p)
+                            return (
+                              <span
+                                key={p}
+                                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${doneOn ? 'border-ok text-ok' : 'border-line text-muted'}`}
+                              >
+                                {doneOn && <Icon name="check" className="h-3 w-3" />}
+                                {CLOUD[p]}
+                                {doneOn && <span className="sr-only"> completed</span>}
+                              </span>
+                            )
+                          })}
+                        </span>
+                      )}
                       <span className="mt-2 block text-sm text-muted">
                         {done ? (
                           <>

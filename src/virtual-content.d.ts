@@ -3,6 +3,21 @@ declare module 'virtual:content' {
   import type { Scenario, Track } from './schema/scenario.ts'
   import type { Challenge } from './schema/challenge.ts'
   import type { CanvasChallenge } from './schema/canvas.ts'
-  const content: { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[]; canvases: CanvasChallenge[] }
+  import type { Provider } from './schema/multi.ts'
+  const content: {
+    tracks: Track[]
+    scenarios: Scenario[]
+    challenges: Challenge[]
+    canvases: CanvasChallenge[]
+    multis: {
+      id: string
+      track: string
+      title: string
+      difficulty: number
+      providers: Provider[]
+      variants: Partial<Record<Provider, CanvasChallenge>>
+      differences: Record<string, string>
+    }[]
+  }
   export default content
 }

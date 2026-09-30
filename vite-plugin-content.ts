@@ -16,8 +16,27 @@ import { ChallengeSchema, type Challenge } from './src/schema/challenge.ts'
 import { evaluate } from './src/game/challenge.ts'
 import { CanvasChallengeSchema, type CanvasChallenge } from './src/schema/canvas.ts'
 import { evaluateCanvas } from './src/game/canvas.ts'
+import { MultiCanvasSchema, resolveProvider, unresolvedTokens, type Provider } from './src/schema/multi.ts'
 
-export type Content = { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[]; canvases: CanvasChallenge[] }
+// A "pick your cloud" challenge after resolving: one ordinary canvas
+// challenge per provider, plus what the debrief needs to compare them.
+export type MultiChallenge = {
+  id: string
+  track: string
+  title: string
+  difficulty: number
+  providers: Provider[]
+  variants: Partial<Record<Provider, CanvasChallenge>>
+  differences: Record<string, string> // palette id -> what isn't equivalent
+}
+
+export type Content = {
+  tracks: Track[]
+  scenarios: Scenario[]
+  challenges: Challenge[]
+  canvases: CanvasChallenge[]
+  multis: MultiChallenge[]
+}
 
 export function loadContent(dir: string): Content {
   const errors: string[] = []
@@ -26,9 +45,37 @@ export function loadContent(dir: string): Content {
   const tracks = check(tracksFile, z.array(TrackSchema), errors) ?? []
   const trackIds = new Set(tracks.map((t) => t.id))
 
+  const seen = new Set<string>()
+  // Progress is saved by id, so ids must be stable and unique across every
+  // kind of content. Tying id to filename and track to folder makes both obvious.
+  const commonChecks = (rel: string, file: string, id: string, track: string) => {
+    const fileId = path.basename(file).replace(/\.ya?ml$/, '')
+    const folder = path.dirname(rel)
+    if (id !== fileId) errors.push(`${rel}: id "${id}" must match the filename ("${fileId}")`)
+    if (track !== folder) errors.push(`${rel}: track "${track}" must match the folder ("${folder}")`)
+    if (!trackIds.has(track)) errors.push(`${rel}: track "${track}" is not defined in tracks.yaml`)
+    if (seen.has(id)) errors.push(`${rel}: duplicate id "${id}"`)
+    seen.add(id)
+  }
+  // Reference designs must pass; counter-examples must fail exactly the tests
+  // they name, proving each test catches the mistake it's meant to.
+  const canvasChecks = (where: string, c: CanvasChallenge) => {
+    c.reference_designs.forEach((d) => {
+      const e = evaluateCanvas(c, d.design)
+      if (!e.pass) errors.push(`${where}: reference design "${d.name}" fails: ${failedIds(e).join(', ')}`)
+    })
+    c.counter_examples.forEach((x) => {
+      const got = failedIds(evaluateCanvas(c, x.design)).sort()
+      const want = [...x.fails].sort()
+      if (JSON.stringify(got) !== JSON.stringify(want))
+        errors.push(`${where}: counter-example "${x.name}" should fail [${want.join(', ')}] but fails [${got.join(', ')}]`)
+    })
+  }
+
   const scenarios: Scenario[] = []
   const challenges: Challenge[] = []
   const canvases: CanvasChallenge[] = []
+  const multis: MultiChallenge[] = []
   for (const file of scenarioFiles(dir)) {
     const rel = path.relative(dir, file)
     // `type: challenge` files are design challenges (`mode: canvas` for the
@@ -37,35 +84,44 @@ export function loadContent(dir: string): Content {
     const raw = fs.readFileSync(file, 'utf8')
     const isChallenge = /^type:\s*challenge\s*$/m.test(raw)
     const isCanvas = isChallenge && /^mode:\s*canvas\s*$/m.test(raw)
+    if (isCanvas && /^providers:/m.test(raw)) {
+      const m = check(file, MultiCanvasSchema, errors)
+      if (!m) continue
+      commonChecks(rel, file, m.id, m.track)
+      const variants: MultiChallenge['variants'] = {}
+      for (const p of m.providers) {
+        // Re-validate each resolved variant exactly like a hand-written canvas challenge.
+        const parsed = CanvasChallengeSchema.safeParse(resolveProvider(m, p))
+        if (!parsed.success) {
+          errors.push(`${rel} [${p}]:\n${z.prettifyError(parsed.error)}`)
+          continue
+        }
+        const tokens = unresolvedTokens(parsed.data)
+        if (tokens.length) errors.push(`${rel} [${p}]: unresolved ${tokens.join(', ')}`)
+        canvasChecks(`${rel} [${p}]`, parsed.data)
+        variants[p] = parsed.data
+      }
+      multis.push({
+        id: m.id,
+        track: m.track,
+        title: m.title,
+        difficulty: m.difficulty,
+        providers: m.providers,
+        variants,
+        differences: Object.fromEntries(m.palette.map((x) => [x.id, x.differences])),
+      })
+      continue
+    }
     const s = isCanvas
       ? check(file, CanvasChallengeSchema, errors)
       : isChallenge
         ? check(file, ChallengeSchema, errors)
         : check(file, ScenarioSchema, errors)
     if (!s) continue
-    const fileId = path.basename(file).replace(/\.ya?ml$/, '')
-    const folder = path.dirname(rel)
-
-    // Progress is saved by id, so ids must be stable and unique across both
-    // kinds. Tying id to filename and track to folder makes both obvious.
-    if (s.id !== fileId) errors.push(`${rel}: id "${s.id}" must match the filename ("${fileId}")`)
-    if (s.track !== folder) errors.push(`${rel}: track "${s.track}" must match the folder ("${folder}")`)
-    if (!trackIds.has(s.track)) errors.push(`${rel}: track "${s.track}" is not defined in tracks.yaml`)
-    if ([...scenarios, ...challenges, ...canvases].some((o) => o.id === s.id)) errors.push(`${rel}: duplicate id "${s.id}"`)
+    commonChecks(rel, file, s.id, s.track)
 
     if ('mode' in s) {
-      // Reference designs must pass; counter-examples must fail exactly the
-      // tests they name, proving each test catches the mistake it's meant to.
-      s.reference_designs.forEach((d) => {
-        const e = evaluateCanvas(s, d.design)
-        if (!e.pass) errors.push(`${rel}: reference design "${d.name}" fails: ${failedIds(e).join(', ')}`)
-      })
-      s.counter_examples.forEach((x) => {
-        const got = failedIds(evaluateCanvas(s, x.design)).sort()
-        const want = [...x.fails].sort()
-        if (JSON.stringify(got) !== JSON.stringify(want))
-          errors.push(`${rel}: counter-example "${x.name}" should fail [${want.join(', ')}] but fails [${got.join(', ')}]`)
-      })
+      canvasChecks(rel, s)
       canvases.push(s)
     } else if (s.type === 'challenge') {
       // Every reference design must actually pass, or the debrief would teach a wrong answer.
@@ -88,7 +144,7 @@ export function loadContent(dir: string): Content {
   )
 
   if (errors.length) throw new Error(`Invalid content:\n\n${errors.join('\n\n')}`)
-  return { tracks, scenarios, challenges, canvases }
+  return { tracks, scenarios, challenges, canvases, multis }
 }
 
 const failedIds = (e: ReturnType<typeof evaluateCanvas>) => [

@@ -120,3 +120,11 @@ from your own experience and tick them off.
 - [ ] The GCP "regional load balancer" palette item's fact is paraphrased from
       the Compute Engine regions/zones guidance (move traffic to another zone),
       not from a load-balancing product page.
+
+## cloud-design/zone-resilient-checkout ("pick your cloud")
+- [ ] The GCP load balancer's "spread backends across zones" fact is paraphrased
+      from the Compute Engine regions/zones guidance; the load-balancing overview
+      only states that regional load balancers support backends in one region.
+- [ ] Web server capacity (1× each) and all costs are scenario numbers.
+- [ ] The `differences` notes are the author's comparison of sourced facts;
+      review them for anything you'd phrase differently from experience.

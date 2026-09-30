@@ -13,6 +13,8 @@ import { scoreChallenge, scoreRuns, type ChallengeScore, type Run } from './game
 import CanvasScreen, { type CanvasRun } from './screens/CanvasScreen.tsx'
 import CanvasDebrief from './screens/CanvasDebrief.tsx'
 import { evaluateCanvas } from './game/canvas.ts'
+import PickCloudScreen from './screens/PickCloudScreen.tsx'
+import type { Provider } from './schema/multi.ts'
 import type { QueueItem } from './screens/HomeScreen.tsx'
 import Icon from './components/Icon.tsx'
 
@@ -25,8 +27,9 @@ type Screen =
   | ({ name: 'debrief'; id: string; log: GameEvent[]; score: Score } & Outcome)
   | { name: 'challenge'; id: string; run: number }
   | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore } & Outcome)
-  | { name: 'canvas'; id: string; run: number }
-  | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore } & Outcome)
+  | { name: 'pick-cloud'; id: string }
+  | { name: 'canvas'; id: string; run: number; provider?: Provider }
+  | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore; provider?: Provider } & Outcome)
 
 // What finishing something changed, shown in the debrief header.
 type Outcome = { gained: number; rankUp?: string; unlocked: string[] }
@@ -36,6 +39,15 @@ const items: QueueItem[] = [
   ...content.scenarios.map((s) => ({ id: s.id, track: s.track, title: s.title, difficulty: s.difficulty, kind: 'incident' as const, tag: s.ticket.priority })),
   ...content.challenges.map((c) => ({ id: c.id, track: c.track, title: c.title, difficulty: c.difficulty, kind: 'challenge' as const, tag: 'Design' })),
   ...content.canvases.map((c) => ({ id: c.id, track: c.track, title: c.title, difficulty: c.difficulty, kind: 'challenge' as const, tag: 'Design · canvas' })),
+  ...content.multis.map((m) => ({
+    id: m.id,
+    track: m.track,
+    title: m.title,
+    difficulty: m.difficulty,
+    kind: 'challenge' as const,
+    tag: 'Design · pick your cloud',
+    providers: m.providers,
+  })),
 ]
 const unlocks = (p: Progress) => unlockedTracks(content.tracks, items, p.completed)
 
@@ -44,7 +56,14 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   const scenario = 'id' in screen ? content.scenarios.find((s) => s.id === screen.id) : undefined
   const challenge = 'id' in screen ? content.challenges.find((c) => c.id === screen.id) : undefined
-  const canvas = 'id' in screen ? content.canvases.find((c) => c.id === screen.id) : undefined
+  const multi = 'id' in screen ? content.multis.find((m) => m.id === screen.id) : undefined
+  // A "pick your cloud" challenge plays as the chosen provider's ordinary canvas challenge.
+  const canvas =
+    'provider' in screen && screen.provider && multi
+      ? multi.variants[screen.provider]
+      : 'id' in screen
+        ? content.canvases.find((c) => c.id === screen.id)
+        : undefined
   const { rank, next } = rankFor(progress.xp)
   const { theme, motion = 'system' } = progress.settings
 
@@ -68,7 +87,9 @@ export default function App() {
 
   const play = (id: string) =>
     setScreen(
-      content.canvases.some((c) => c.id === id)
+      content.multis.some((m) => m.id === id)
+        ? { name: 'pick-cloud', id }
+        : content.canvases.some((c) => c.id === id)
         ? { name: 'canvas', id, run: Date.now() }
         : content.challenges.some((c) => c.id === id)
           ? { name: 'challenge', id, run: Date.now() }
@@ -76,8 +97,8 @@ export default function App() {
     )
 
   // Save a finished incident or challenge and work out what it changed.
-  function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }): Outcome {
-    const result = recordResult(progress, id, s, new Date())
+  function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }, provider?: Provider): Outcome {
+    const result = recordResult(progress, id, s, new Date(), provider)
     const newRank = rankFor(result.progress.xp).rank
     const before = unlocks(progress)
     const after = unlocks(result.progress)
@@ -96,9 +117,9 @@ export default function App() {
     setScreen({ name: 'debrief', id, log, score: s, ...record(id, s) })
   }
 
-  function canvasFinished(id: string, runs: CanvasRun[], hintsUsed: number) {
+  function canvasFinished(id: string, runs: CanvasRun[], hintsUsed: number, provider?: Provider) {
     const s = scoreRuns(canvas!.difficulty, runs.map((r) => evaluateCanvas(canvas!, r.design)), hintsUsed)
-    setScreen({ name: 'canvas-debrief', id, runs, score: s, ...record(id, s) })
+    setScreen({ name: 'canvas-debrief', id, runs, score: s, provider, ...record(id, s, provider) })
   }
 
   function challengeFinished(id: string, runs: Run[], hintsUsed: number) {
@@ -193,8 +214,20 @@ export default function App() {
         {screen.name === 'challenge' && (
           <ChallengeScreen key={screen.run} challenge={challenge!} onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints)} />
         )}
+        {screen.name === 'pick-cloud' && multi && (
+          <PickCloudScreen
+            title={multi.title}
+            variants={multi.variants}
+            completedOn={progress.completed[multi.id]?.providers ?? []}
+            onPick={(provider) => setScreen({ name: 'canvas', id: multi.id, run: Date.now(), provider })}
+          />
+        )}
         {screen.name === 'canvas' && (
-          <CanvasScreen key={screen.run} challenge={canvas!} onFinished={(runs, hints) => canvasFinished(screen.id, runs, hints)} />
+          <CanvasScreen
+            key={screen.run}
+            challenge={canvas!}
+            onFinished={(runs, hints) => canvasFinished(screen.id, runs, hints, screen.provider)}
+          />
         )}
         {screen.name === 'canvas-debrief' && (
           <CanvasDebrief

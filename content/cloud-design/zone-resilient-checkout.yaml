@@ -1,0 +1,265 @@
+type: challenge
+mode: canvas
+providers: [aws, azure, gcp]
+id: zone-resilient-checkout
+track: cloud-design
+difficulty: 2
+title: "Zone-resilient checkout, on the cloud of your choice"
+par_minutes: 12
+
+brief: |
+  Build the same small checkout on {provider}: a load balancer, web servers on
+  virtual machines, and a PostgreSQL database, in {region}. It must keep taking
+  orders at 2× normal traffic if either zone fails, without losing a committed
+  order. Play it again on another cloud and compare the names: the shape of
+  the answer doesn't change.
+
+requirements:
+  - "Serve 2× normal traffic, even with either zone down"
+  - "Survive any single web server failing"
+  - "Keep accepting orders if a zone or the database server fails, losing none"
+  - "Stay within 9 cost units per month"
+budget: 9
+
+layout:
+  regions:
+    - id: r1
+      zones: [r1-a, r1-b]
+labels:
+  aws: { r1: "us-east-1", r1-a: "us-east-1a", r1-b: "us-east-1b" }
+  azure: { r1: "East US 2", r1-a: "Zone 1", r1-b: "Zone 2" }
+  gcp: { r1: "us-central1", r1-a: "us-central1-a", r1-b: "us-central1-b" }
+
+palette:
+  - id: lb
+    scope: regional
+    roles: [route]
+    cost: 1
+    as:
+      aws:
+        label: "Application Load Balancer"
+        short: "ALB"
+        facts: ["A regional load balancer; AWS load balancers reroute traffic to targets in healthy Availability Zones."]
+      azure:
+        label: "Application Gateway v2"
+        short: "App Gateway"
+        facts: ["A regional layer-7 load balancer with autoscaling and zone redundancy.", "A zone-resilient load balancer with health checks can route traffic to VMs in healthy zones."]
+      gcp:
+        label: "Regional external Application Load Balancer"
+        short: "Regional ALB"
+        facts: ["Regional external Application Load Balancers support backends in a single region.", "Spread backends across zones so traffic can move to another zone if one fails."]
+    differences: |
+      All three are regional here. Google Cloud also offers a global external
+      Application Load Balancer with backends in multiple regions, which none of
+      the other two regional services do on their own.
+  - id: vm
+    scope: zonal
+    roles: [serve]
+    capacity: 1
+    cost: 1
+    as:
+      aws:
+        label: "EC2 instance (web)"
+        short: "web"
+        facts: ["Runs in one Availability Zone.", "Each server handles 1× normal traffic (scenario number)."]
+      azure:
+        label: "Azure virtual machine (web, zonal)"
+        short: "web"
+        facts: ["A zonal VM is pinned to a single availability zone and isn't resilient to zone outages by itself.", "Each server handles 1× normal traffic (scenario number)."]
+      gcp:
+        label: "Compute Engine VM (web)"
+        short: "web"
+        facts: ["VM instances are zonal resources.", "Each server handles 1× normal traffic (scenario number)."]
+    differences: |
+      None that matter here: on all three, a single VM lives in one zone and you
+      place several across zones yourself (or use a scaling group that does it).
+  - id: db
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    as:
+      aws:
+        label: "RDS for PostgreSQL instance"
+        short: "RDS"
+        facts: ["A DB instance runs in one Availability Zone.", "Multi-AZ adds a synchronous standby in a different zone."]
+      azure:
+        label: "Azure Database for PostgreSQL flexible server"
+        short: "PostgreSQL"
+        facts: ["A server runs in one availability zone.", "High availability adds a standby in the same zone (zonal HA) or another zone (zone-redundant HA)."]
+      gcp:
+        label: "Cloud SQL for PostgreSQL instance"
+        short: "Cloud SQL"
+        facts: ["An instance runs in one zone.", "High availability pairs a primary with a standby in a different zone."]
+    differences: |
+      Azure also offers same-zone HA, which survives a server failure but not a
+      zone outage; RDS Multi-AZ and Cloud SQL HA always put the standby in
+      another zone. Failover times differ a little: typically 60–120 seconds on
+      RDS and Azure, about 60 seconds of unavailability on Cloud SQL.
+
+link_facts:
+  aws:
+    sync: ["Like RDS Multi-AZ: a synchronous standby in another zone.", "Failover is automatic, typically 60–120 seconds; the DNS name moves to the standby."]
+    async: ["Like an RDS read replica: asynchronous, so it can lag.", "Promotion to a standalone instance is a manual step."]
+  azure:
+    sync: ["Like PostgreSQL high availability: a transaction isn't complete until both primary and standby acknowledge the write.", "Failover is automatic, typically within 60-120 seconds."]
+    async: ["Like a read replica: updated asynchronously, so it can lag the primary.", "Azure doesn't promote read replicas automatically."]
+  gcp:
+    sync: ["Like Cloud SQL high availability: writes reach both zones before they're confirmed.", "On failover, expect about 60 seconds of unavailability."]
+    async: ["Like a read replica: replicated asynchronously.", "It doesn't take over writes automatically."]
+
+stress_tests:
+  - id: zone-a
+    label: "{zone:r1-a} fails"
+    event: { zone_outage: r1-a }
+    check: { reach: [serve, write-store], capacity: 2 }
+  - id: zone-b
+    label: "{zone:r1-b} fails"
+    event: { zone_outage: r1-b }
+    check: { reach: [serve, write-store], capacity: 2 }
+  - id: vm-failure
+    label: "Any one web server fails"
+    event: { single_failure: vm }
+    check: { reach: [serve], capacity: 2 }
+  - id: db-host
+    label: "A database server fails"
+    event: { single_failure: db }
+    check: { reach: [write-store] }
+
+reference_designs:
+  - name: "Recommended"
+    why: "Two web servers per zone behind the regional load balancer keep 2× capacity after losing a zone or a server; the {service:db} standby sits in the other zone with synchronous replication."
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+
+counter_examples:
+  - name: "One web server per zone"
+    fails: [zone-a, zone-b, vm-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "Standby in the same zone"
+    fails: [zone-a]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-a }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "An async replica instead of a standby"
+    fails: [zone-a, db-host]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: async }
+
+hints:
+  nudge: "Every requirement is about losing one thing. Which of your parts only exist once, or only in one zone?"
+  direction: "After losing a zone, count the web servers left, and ask which {service:db} takes over writes."
+  answer: "Two web servers in each zone behind the {service:lb}, and a {service:db} primary with a sync standby in the other zone."
+
+analogy:
+  title: "The same recipe in three kitchens"
+  text: |
+    Three restaurants call their equipment by different brand names, but a
+    good kitchen layout is the same in all of them: two stations that can each
+    carry the rush, and a second copy of the recipe book kept in step, in a
+    different room.
+
+debrief:
+  summary: |
+    The pattern for surviving a zone is provider-neutral: spread stateless
+    servers across zones with enough spare capacity, and keep a synchronous
+    standby of the database in a different zone. The services have different
+    names, and a few real differences (like Azure's same-zone HA option), but
+    the shape of the answer is the same on every major cloud.
+
+sources:
+  aws:
+    - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"
+      url: "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html"
+      retrieved: 2026-09-30
+    - title: "Amazon RDS: Multi-AZ DB instance deployments"
+      url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
+      retrieved: 2026-09-30
+    - title: "Amazon RDS: Failing over a Multi-AZ DB instance"
+      url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html"
+      retrieved: 2026-09-30
+  azure:
+    - title: "Reliability in Azure Virtual Machines"
+      url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-virtual-machines"
+      retrieved: 2026-09-30
+    - title: "Reliability in Azure Database for PostgreSQL"
+      url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql"
+      retrieved: 2026-09-30
+    - title: "What is Azure Application Gateway"
+      url: "https://learn.microsoft.com/en-us/azure/application-gateway/overview"
+      retrieved: 2026-09-30
+  gcp:
+    - title: "Compute Engine: Regions and zones"
+      url: "https://docs.cloud.google.com/compute/docs/regions-zones"
+      retrieved: 2026-09-30
+    - title: "Cloud Load Balancing overview"
+      url: "https://docs.cloud.google.com/load-balancing/docs/load-balancing-overview"
+      retrieved: 2026-09-30
+    - title: "Cloud SQL for PostgreSQL: High availability"
+      url: "https://docs.cloud.google.com/sql/docs/postgres/high-availability"
+      retrieved: 2026-09-30
