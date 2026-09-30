@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { USERS, type CanvasChallenge, type Design } from '../../schema/canvas.ts'
 import { laneLabel, lanesFor, targets } from '../../game/canvasEdit.ts'
 
@@ -19,6 +19,7 @@ export default function Inspector({
   onPickTarget,
   onDisconnect,
   onRemove,
+  autoFocus,
 }: {
   c: CanvasChallenge
   design: Design
@@ -28,8 +29,14 @@ export default function Inspector({
   onPickTarget: (from: string, kind: Kind) => void // enter click-to-connect mode
   onDisconnect: (edgeIndex: number) => void
   onRemove: (id: string) => void
+  autoFocus?: boolean
 }) {
   const uid = useId()
+  const heading = useRef<HTMLHeadingElement>(null)
+  // Remounted per selection (keyed by the parent), so this runs once per pick.
+  useEffect(() => {
+    if (autoFocus && selected) heading.current?.focus()
+  }, [autoFocus, selected])
   const node = design.nodes.find((n) => n.id === selected)
   const item = node && c.palette.find((p) => p.id === node.type)
   const isStore = !!item?.roles.includes('write-store')
@@ -63,7 +70,7 @@ export default function Inspector({
   return (
     <section aria-label={`Inspector: ${selected}`} className="space-y-4 rounded-lg border border-line bg-panel p-4">
       <div>
-        <h2 id={`${uid}-h`} tabIndex={-1} className="font-mono font-semibold focus:outline-none">
+        <h2 ref={heading} id={`${uid}-h`} tabIndex={-1} className="font-mono font-semibold focus:outline-none">
           {selected}
         </h2>
         <p className="text-sm text-muted">

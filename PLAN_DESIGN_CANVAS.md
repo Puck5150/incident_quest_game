@@ -1,6 +1,6 @@
 # Plan: Design canvas (free-form architecture building)
 
-Status: **approved** with the defaults in §8. Building from C2.
+Status: **approved**; C2–C4 built. WCAG 2.2 SC 2.5.7 (verified wording): "All functionality that uses a dragging movement for operation can be achieved by a single pointer without dragging, unless dragging is essential…" Met by the palette's Add buttons, the inspector, and click-to-connect.
 
 ---
 

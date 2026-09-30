@@ -23,6 +23,7 @@ export default function CanvasScreen({
   const uid = useId()
   const [design, setDesign] = useState<Design>(emptyDesign)
   const [selected, setSelected] = useState<string>()
+  const [selections, setSelections] = useState(0) // re-selecting the same component still refocuses the inspector
   const [connecting, setConnecting] = useState<{ from: string; kind: Kind }>()
   const [drag, setDrag] = useState<{ payload: DragPayload; x: number; y: number }>()
   const [message, setMessage] = useState('') // announced to screen readers
@@ -58,7 +59,9 @@ export default function CanvasScreen({
   // release, whatever lane is under the pointer receives the component. A plain
   // click still selects (the click handler checks justDragged).
   function beginDrag(e: ReactPointerEvent, payload: DragPayload) {
-    if (e.button !== 0 || connecting) return
+    // Touch never starts a drag: on phones a swipe must scroll the page, and
+    // the Add buttons and inspector do everything dragging does.
+    if (e.button !== 0 || connecting || e.pointerType === 'touch') return
     const sx = e.clientX
     const sy = e.clientY
     let active = false
@@ -107,6 +110,7 @@ export default function CanvasScreen({
       return
     }
     setSelected(id)
+    setSelections((n) => n + 1)
   }
 
   useEffect(() => {
@@ -167,6 +171,15 @@ export default function CanvasScreen({
         </section>
 
         <div className="min-w-0 space-y-4">
+          <details className="rounded-lg border border-line bg-panel px-4 py-2 text-sm">
+            <summary className="cursor-pointer font-medium">How to build</summary>
+            <ul className="mt-2 mb-1 list-disc space-y-1 pl-5 text-muted">
+              <li>Add components with a palette card's lane menu and Add button, or drag a card into a lane (mouse or pen).</li>
+              <li>Select a component to move it, link it, or remove it in the inspector. "Pick on design" lets you click the target instead.</li>
+              <li>Keyboard: Tab between controls; in a menu, type the first letters of a choice to pick it. Escape cancels picking or dragging.</li>
+              <li>Traffic links carry requests. Replication links copy a database: sync fails over by itself, async doesn't.</li>
+            </ul>
+          </details>
           {connecting && (
             <p className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent bg-accent/5 px-3 py-2 text-sm">
               <span>
@@ -204,13 +217,17 @@ export default function CanvasScreen({
 
         <div className="space-y-4 self-start lg:col-span-2 xl:col-span-1">
           <Inspector
-            key={selected}
+            key={`${selected}-${selections}`}
             c={c}
             design={design}
             selected={selected === USERS || design.nodes.some((n) => n.id === selected) ? selected : undefined}
             onMove={(id, lane) => apply(moveNode(c, design, id, lane), `${id} moved to ${laneLabel(c, lane)}.`)}
             onConnect={(from, to, kind) => apply(connect(c, design, from, to, kind), `Linked ${from} to ${to} (${kind}).`)}
-            onPickTarget={(from, kind) => setConnecting({ from, kind })}
+            onPickTarget={(from, kind) => {
+              setConnecting({ from, kind })
+              setMessage(`Choose where ${from} ${kind === 'traffic' ? 'sends traffic' : `replicates (${kind})`}. Select a component on the design, or press Escape.`)
+            }}
+            autoFocus={narrow()}
             onDisconnect={(i) => apply(disconnect(design, i), 'Link removed.')}
             onRemove={(id) => {
               apply(removeNode(design, id), `${id} removed.`)
@@ -269,7 +286,7 @@ function PaletteCard({
     <div className="rounded-md border border-line bg-panel p-3">
       <div
         onPointerDown={onPointerDown}
-        className="flex cursor-grab touch-none items-baseline justify-between gap-2 select-none active:cursor-grabbing"
+        className="flex cursor-grab items-baseline justify-between gap-2 select-none active:cursor-grabbing"
         title="Drag into a lane"
       >
         <span className="text-sm font-medium">{item.label}</span>
@@ -335,3 +352,7 @@ function DesignList({ c, design }: { c: CanvasChallenge; design: Design }) {
 
 const ghostLabel = (c: CanvasChallenge, p: DragPayload) =>
   p.kind === 'new' ? (c.palette.find((x) => x.id === p.type)?.short ?? p.type) : p.id
+
+// Below the xl breakpoint the inspector sits under the board, so selecting a
+// component moves focus (and the screen) to it.
+const narrow = () => !window.matchMedia?.('(min-width: 1280px)').matches

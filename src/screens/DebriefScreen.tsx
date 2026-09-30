@@ -147,9 +147,9 @@ export default function DebriefScreen({
         <ul className="space-y-1 text-sm">
           {scenario.sources.map((s) => (
             <li key={s.url}>
-              <a href={s.url} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
+              <a href={s.url} target="_blank" rel="noreferrer" aria-label={`${s.title} (opens in a new tab)`} className="text-accent underline underline-offset-2">
                 {s.title}
-                {' '}<span className="sr-only">(opens in a new tab)</span>
+                
               </a>
               <span className="text-muted"> (retrieved {s.retrieved})</span>
             </li>

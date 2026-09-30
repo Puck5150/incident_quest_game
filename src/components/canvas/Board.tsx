@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { USERS, type CanvasChallenge, type Design } from '../../schema/canvas.ts'
 import { lanes, type Lane } from '../../game/canvasEdit.ts'
 
@@ -19,6 +19,7 @@ export default function Board({
   dragging,
   onSelect,
   onPointerDownChip,
+  readOnly,
 }: {
   c: CanvasChallenge
   design: Design
@@ -27,9 +28,11 @@ export default function Board({
   connectFrom?: string // in connect mode: the source component
   validTargets: Set<string>
   dragging?: DragPayload
-  onSelect: (id: string) => void
-  onPointerDownChip: (e: ReactPointerEvent, id: string) => void
+  onSelect?: (id: string) => void
+  onPointerDownChip?: (e: ReactPointerEvent, id: string) => void
+  readOnly?: boolean // debrief: a picture of a design, no interaction
 }) {
+  const arrowId = useId() // unique per board: the debrief shows two
   const box = useRef<HTMLDivElement>(null)
   const chips = useRef(new Map<string, HTMLElement>())
   const [lines, setLines] = useState<Line[]>([])
@@ -70,25 +73,41 @@ export default function Board({
     const isDown = down.has(id)
     const target = connectFrom && validTargets.has(id)
     const dim = connectFrom && connectFrom !== id && !target
+    const look = `relative z-10 min-w-24 rounded-md border bg-panel px-2.5 py-1.5 text-left text-sm select-none ${
+      isDown ? 'border-crit text-crit' : selected === id ? 'border-accent ring-2 ring-accent/40' : 'border-line'
+    }`
+    const body = (
+      <>
+        <span className="block font-mono font-medium">{label}</span>
+        {sub && <span className="block text-xs text-muted">{isDown ? 'down' : sub}</span>}
+      </>
+    )
+    const register = (el: HTMLElement | null) => {
+      if (el) chips.current.set(id, el)
+      else chips.current.delete(id)
+    }
+    if (readOnly) {
+      return (
+        <div key={id} ref={register} className={look}>
+          {body}
+        </div>
+      )
+    }
     return (
       <button
         key={id}
-        ref={(el) => {
-          if (el) chips.current.set(id, el)
-          else chips.current.delete(id)
-        }}
+        ref={register}
         type="button"
         data-node={id}
-        onClick={() => onSelect(id)}
-        onPointerDown={id === USERS ? undefined : (e) => onPointerDownChip(e, id)}
+        onClick={() => onSelect?.(id)}
+        onPointerDown={id === USERS ? undefined : (e) => onPointerDownChip?.(e, id)}
         aria-pressed={selected === id}
         aria-label={`${label}${sub ? `, ${sub}` : ''}${isDown ? ', down in this test' : ''}${target ? ', can be linked' : ''}`}
-        className={`relative z-10 min-w-24 touch-none rounded-md border bg-panel px-2.5 py-1.5 text-left text-sm select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-          isDown ? 'border-crit text-crit' : selected === id ? 'border-accent ring-2 ring-accent/40' : 'border-line hover:border-accent/60'
-        } ${target ? 'border-dashed border-accent' : ''} ${dim ? 'opacity-40' : ''}`}
+        className={`${look} hover:border-accent/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+          target ? 'border-dashed border-accent' : ''
+        } ${dim ? 'opacity-40' : ''}`}
       >
-        <span className="block font-mono font-medium">{label}</span>
-        {sub && <span className="block text-xs text-muted">{isDown ? 'down' : sub}</span>}
+        {body}
       </button>
     )
   }
@@ -114,10 +133,11 @@ export default function Board({
   }
 
   return (
-    <div ref={box} className="relative rounded-lg border border-line bg-panel p-4">
+    // Read-only boards are pictures; the debrief pairs each with a text version.
+    <div ref={box} aria-hidden={readOnly || undefined} className="relative rounded-lg border border-line bg-panel p-4">
       <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
         <defs>
-          <marker id="canvas-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <marker id={arrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
             <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)" />
           </marker>
         </defs>
@@ -131,7 +151,7 @@ export default function Board({
               stroke={l.kind === 'traffic' ? 'var(--muted)' : 'var(--accent)'}
               strokeWidth={l.kind === 'traffic' ? 1.5 : 2.5}
               strokeDasharray={l.kind === 'async' ? '6 4' : undefined}
-              markerEnd={l.kind === 'traffic' ? 'url(#canvas-arrow)' : undefined}
+              markerEnd={l.kind === 'traffic' ? `url(#${CSS.escape(arrowId)})` : undefined}
             />
             {l.kind !== 'traffic' && (
               <text

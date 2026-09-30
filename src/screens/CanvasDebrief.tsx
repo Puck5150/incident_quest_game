@@ -8,8 +8,8 @@ import Icon from '../components/Icon.tsx'
 import Card from '../components/Card.tsx'
 import ScoreTable from '../components/ScoreTable.tsx'
 import ResultHeader from '../components/ResultHeader.tsx'
+import Board from '../components/canvas/Board.tsx'
 
-// Milestone C3: text version. C4 draws your topology next to the reference.
 export default function CanvasDebrief({
   challenge: c,
   runs,
@@ -46,12 +46,17 @@ export default function CanvasDebrief({
         onTree={onTree}
       />
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
-        <Card title="Score breakdown">
-          <ScoreTable lines={score.lines} total={score.total} />
-        </Card>
+      <Card title="Score breakdown">
+        <ScoreTable lines={score.lines} total={score.total} />
+      </Card>
+
+      {/* Side by side on wide screens: the shape you built vs. the reference shape. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-2">
         <Card title={`Your design (${final.cost} units)`}>
-          <DesignText c={c} d={mine} />
+          <Board c={c} design={mine} down={none} validTargets={none} readOnly />
+          <div className="mt-3">
+            <DesignText c={c} d={mine} />
+          </div>
           {final.overkill.length > 0 && (
             <div className="mt-3 text-sm">
               <h3 className="flex items-center gap-1.5 text-warn">
@@ -65,14 +70,16 @@ export default function CanvasDebrief({
             </div>
           )}
         </Card>
+        {c.reference_designs.map((r) => (
+          <Card key={r.name} title={`${r.name} (${evaluateCanvas(c, r.design).cost} units)`}>
+            <Board c={c} design={r.design} down={none} validTargets={none} readOnly />
+            <p className="mt-3 text-sm text-muted">{r.why}</p>
+            <div className="mt-2">
+              <DesignText c={c} d={r.design} />
+            </div>
+          </Card>
+        ))}
       </div>
-
-      {c.reference_designs.map((r) => (
-        <Card key={r.name} title={`${r.name} (${evaluateCanvas(c, r.design).cost} units)`}>
-          <p className="mb-2 text-sm text-muted">{r.why}</p>
-          <DesignText c={c} d={r.design} />
-        </Card>
-      ))}
 
       {earlier.length > 0 && (
         <Card title="What failed along the way">
@@ -115,9 +122,9 @@ export default function CanvasDebrief({
         <ul className="space-y-1 text-sm">
           {c.sources.map((s) => (
             <li key={s.url}>
-              <a href={s.url} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
+              <a href={s.url} target="_blank" rel="noreferrer" aria-label={`${s.title} (opens in a new tab)`} className="text-accent underline underline-offset-2">
                 {s.title}
-                {' '}<span className="sr-only">(opens in a new tab)</span>
+                
               </a>
               <span className="text-muted"> (retrieved {s.retrieved})</span>
             </li>
@@ -152,6 +159,17 @@ function DesignText({ c, d }: { c: CanvasChallenge; d: Design }) {
           </span>
         </li>
       ))}
+      {[...new Set(d.edges.filter((e) => e.kind === 'traffic').map((e) => e.from))].map((from) => (
+        <li key={`t-${from}`} className="text-muted">
+          <span className="font-mono">{from}</span> sends traffic to{' '}
+          <span className="font-mono">
+            {d.edges
+              .filter((e) => e.kind === 'traffic' && e.from === from)
+              .map((e) => e.to)
+              .join(', ')}
+          </span>
+        </li>
+      ))}
       {d.edges
         .filter((e) => e.kind !== 'traffic')
         .map((e) => (
@@ -162,3 +180,5 @@ function DesignText({ c, d }: { c: CanvasChallenge; d: Design }) {
     </ul>
   )
 }
+
+const none = new Set<string>()
