@@ -10,9 +10,9 @@ const H = 56
 // Status is what monitoring currently shows, never color alone: each box
 // also says ok / degraded / down in text.
 const STATUS = {
-  ok: { text: '● ok', stroke: 'var(--ok)' },
-  degraded: { text: '▲ degraded', stroke: 'var(--warn)' },
-  down: { text: '✕ down', stroke: 'var(--crit)' },
+  ok: { text: 'ok', stroke: 'var(--ok)', mark: <circle r="3.5" fill="var(--ok)" /> },
+  degraded: { text: 'degraded', stroke: 'var(--warn)', mark: <path d="M0,-4 L4,3.5 L-4,3.5 z" fill="var(--warn)" /> },
+  down: { text: 'down', stroke: 'var(--crit)', mark: <path d="M-3,-3 L3,3 M3,-3 L-3,3" stroke="var(--crit)" strokeWidth="1.8" strokeLinecap="round" /> },
 }
 
 // Boxes on a grid, arrows between them. Positions come from the scenario
@@ -49,7 +49,9 @@ export default function Diagram({ diagram }: { diagram: D }) {
               <text x={x} y={y - 4} textAnchor="middle" fill="var(--fg)" fontSize="14">
                 {n.label}
               </text>
-              <text x={x} y={y + 16} textAnchor="middle" fill={s.stroke} fontSize="12">
+              {/* status mark + word, centred together */}
+              <g transform={`translate(${x - s.text.length * 3.4 - 6}, ${y + 12})`}>{s.mark}</g>
+              <text x={x + 6} y={y + 16} textAnchor="middle" fill={s.stroke} fontSize="12">
                 {s.text}
               </text>
             </g>

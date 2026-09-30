@@ -22,7 +22,8 @@ const ProgressSchema = z.object({
   ),
   // Consecutive incidents resolved "clean": no hints, no destructive actions.
   streak: z.object({ current: z.number(), best: z.number() }),
-  settings: z.object({ theme: z.enum(['dark', 'light']) }),
+  // `motion` was added after v1 shipped, so it's optional: old saves stay valid.
+  settings: z.object({ theme: z.enum(['dark', 'light']), motion: z.optional(z.enum(['system', 'reduce'])) }),
 })
 
 export type Progress = z.infer<typeof ProgressSchema>

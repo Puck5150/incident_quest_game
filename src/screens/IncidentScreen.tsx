@@ -11,19 +11,21 @@ import PipelineView from '../components/PipelineView.tsx'
 import HintPanel from '../components/HintPanel.tsx'
 import Tabs from '../components/Tabs.tsx'
 import Prose from '../components/Prose.tsx'
+import Icon, { type IconName } from '../components/Icon.tsx'
 
 // Status is never shown by color alone: every tone also has a text label.
-const TONE: Record<Feedback['tone'], { label: string; className: string }> = {
-  good: { label: 'Correct', className: 'border-ok text-ok' },
-  bad: { label: 'Not quite', className: 'border-warn text-warn' },
-  danger: { label: 'Harmful', className: 'border-crit text-crit' },
+const TONE: Record<Feedback['tone'], { label: string; className: string; icon: IconName }> = {
+  good: { label: 'Correct', className: 'border-ok/60 text-ok', icon: 'check' },
+  bad: { label: 'Not quite', className: 'border-warn/60 text-warn', icon: 'alert' },
+  danger: { label: 'Harmful', className: 'border-crit/60 text-crit', icon: 'x' },
 }
 
-const PHASE_LABEL: Record<Session['phase'], string> = {
-  briefing: 'New',
-  investigating: 'Investigating',
-  acting: 'Mitigating',
-  resolved: 'Resolved',
+// The phase pill doubles as the incident's status light.
+const PHASE: Record<Session['phase'], { label: string; dot: string }> = {
+  briefing: { label: 'New', dot: 'bg-crit' },
+  investigating: { label: 'Investigating', dot: 'bg-warn' },
+  acting: { label: 'Mitigating', dot: 'bg-accent' },
+  resolved: { label: 'Resolved', dot: 'bg-ok' },
 }
 
 const button =
@@ -117,11 +119,16 @@ export default function IncidentScreen({
   return (
     <div className="space-y-4">
       <header className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold">{scenario.title}</h1>
+        <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
+          {scenario.title}
+        </h1>
         <span className="rounded border border-crit px-2 py-0.5 font-mono text-sm text-crit">
           {scenario.ticket.priority}
         </span>
-        <span className="rounded border border-line px-2 py-0.5 text-sm text-muted">{PHASE_LABEL[phase]}</span>
+        <span className="flex items-center gap-2 rounded border border-line px-2 py-0.5 text-sm text-muted">
+          <span aria-hidden className={`h-2 w-2 rounded-full ${PHASE[phase].dot}`} />
+          {PHASE[phase].label}
+        </span>
       </header>
 
       <section aria-labelledby="ticket-h" className="rounded-lg border border-line bg-panel p-4">
@@ -129,14 +136,20 @@ export default function IncidentScreen({
           Ticket from {scenario.ticket.from}
         </h2>
         <Prose className="mt-2" text={scenario.ticket.body} />
-        <h3 className="mt-4 text-sm text-muted">Environment</h3>
-        <Prose className="mt-1" text={scenario.environment} />
-        {scenario.diagram && (
-          <div className="mt-4">
-            <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
-            <Diagram diagram={scenario.diagram} />
-          </div>
-        )}
+        {/* Full context while briefing; tucked away once work starts so the
+            tools sit near the top of the screen. */}
+        <details open={phase === 'briefing'} className="group mt-3">
+          <summary className="cursor-pointer text-sm text-muted hover:text-fg">
+            Environment{scenario.diagram && ' and system diagram'}
+          </summary>
+          <Prose className="mt-2" text={scenario.environment} />
+          {scenario.diagram && (
+            <div className="mt-4">
+              <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
+              <Diagram diagram={scenario.diagram} />
+            </div>
+          )}
+        </details>
       </section>
 
       {phase === 'briefing' ? (
@@ -193,8 +206,10 @@ export default function IncidentScreen({
                           onClick={() => send({ type: 'TAKE_ACTION', id: a.id })}
                           className={`${button} w-full border border-line text-left font-mono text-sm hover:border-accent`}
                         >
-                          {done ? '✓ ' : ''}
-                          {a.label}
+                          <span className="flex items-start gap-2">
+                            {done && <Icon name="check" className="mt-0.5 h-4 w-4 text-ok" />}
+                            {a.label}
+                          </span>
                         </button>
                       </li>
                     )
@@ -211,9 +226,15 @@ export default function IncidentScreen({
             {/* aria-live so screen readers announce the result of each choice. */}
             <div role="status" aria-live="polite">
               {feedback && (
-                <p className={`rounded-lg border-l-4 bg-panel p-4 ${TONE[feedback.tone].className}`}>
-                  <strong>{TONE[feedback.tone].label}: </strong>
-                  <span className="text-fg">{feedback.text}</span>
+                <p
+                  key={session.log.length}
+                  className={`anim-rise flex gap-2.5 rounded-lg border bg-panel p-4 ${TONE[feedback.tone].className}`}
+                >
+                  <Icon name={TONE[feedback.tone].icon} className="mt-0.5 h-4 w-4" />
+                  <span>
+                    <strong>{TONE[feedback.tone].label}: </strong>
+                    <span className="text-fg">{feedback.text}</span>
+                  </span>
                 </p>
               )}
             </div>

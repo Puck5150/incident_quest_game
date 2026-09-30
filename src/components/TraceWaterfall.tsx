@@ -40,7 +40,7 @@ export default function TraceWaterfall({ spans }: { spans: Span[] }) {
                   />
                   {/* Label goes inside a wide bar, else after it, else before it near the right edge. */}
                   <span
-                    className={`absolute top-0.5 px-1 font-mono whitespace-nowrap ${wide ? 'text-bg' : ''}`}
+                    className={`absolute top-0.5 px-1 font-mono whitespace-nowrap tabular-nums ${wide ? 'text-bg' : ''}`}
                     style={
                       wide
                         ? { left: `${(s.start_ms / total) * 100}%` }
@@ -50,7 +50,7 @@ export default function TraceWaterfall({ spans }: { spans: Span[] }) {
                     }
                   >
                     {fmt(s.duration_ms)}
-                    {err && <span className={wide ? '' : 'text-crit'}> ✕ error</span>}
+                    {err && <span className={wide ? '' : 'text-crit'}> · error</span>}
                   </span>
                 </div>
               </li>

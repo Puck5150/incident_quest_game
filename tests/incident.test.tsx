@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Click-through of the incident loop, through the real UI.
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../src/App.tsx'
 
@@ -53,14 +53,17 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   fireEvent.click(screen.getByRole('button', { name: 'Close incident' }))
 
   // Debrief: 100 base + 20 time + 20 methodical + 10 verified - 10 wrong hyp - 25 destructive = 115
-  expect(screen.getByText('+115 XP')).toBeTruthy()
+  // The XP counts up visually; screen readers (and this test) get the final value.
+  expect(screen.getByText('115', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Root cause' })).toBeTruthy()
   expect(screen.getByText(/Promoted to Support Engineer/)).toBeTruthy()
+  // Linux was Containers' only prerequisite.
+  expect(screen.getByRole('button', { name: /Track unlocked: Containers & Kubernetes/ })).toBeTruthy()
 
   // "Reload": a fresh App reads progress back from localStorage.
   unmount()
   render(<App />)
-  expect(screen.getByText(/best 115 XP/)).toBeTruthy()
+  expect(screen.getByRole('button', { name: /best 115 XP/ })).toBeTruthy()
   expect(screen.getByText('Support Engineer')).toBeTruthy()
 })
 
@@ -93,4 +96,29 @@ it('shuffles hypotheses so the right answer is not always first', () => {
   const first = screen.getAllByRole('radio')[0].closest('label')!.textContent
   expect(first).not.toMatch(/filesystem is full/) // listed first in the YAML
   spy.mockRestore()
+})
+
+it('skill tree shows only tracks with content, with lock state and requirements', () => {
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Skill tree' }))
+  expect(document.activeElement?.id).toBe('screen-title') // focus follows the screen change
+  // (The phone layout renders the same nodes; jsdom doesn't apply the CSS that hides it.)
+  const tracks = within(screen.getByRole('list', { name: 'Tracks' }))
+  expect(tracks.getAllByRole('listitem')).toHaveLength(6)
+  const micro = tracks.getByRole('button', { name: /Microservices/ })
+  expect(micro.textContent).toMatch(/Needs Networking \+ Containers & Kubernetes/)
+  expect(micro.textContent).toMatch(/Locked/)
+  // Selecting a track opens the queue at that track.
+  fireEvent.click(tracks.getByRole('button', { name: /^Linux Admin/ }))
+  expect(document.activeElement?.id).toBe('track-linux')
+})
+
+it('reduce motion setting persists and marks the document', () => {
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Reduce motion' }))
+  expect(document.documentElement.classList.contains('reduce-motion')).toBe(true)
+  cleanup()
+  render(<App />)
+  expect(screen.getByRole('button', { name: 'Reduce motion' }).getAttribute('aria-pressed')).toBe('true')
+  fireEvent.click(screen.getByRole('button', { name: 'Reduce motion' }))
 })

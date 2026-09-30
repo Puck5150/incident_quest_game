@@ -1,7 +1,9 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { artifacts, type Scenario } from '../schema/scenario.ts'
 import { evidenceSeen, type GameEvent } from '../game/engine.ts'
 import Prose from '../components/Prose.tsx'
+import Icon from '../components/Icon.tsx'
+import CountUp from '../components/CountUp.tsx'
 import type { Score } from '../game/scoring.ts'
 
 export default function DebriefScreen({
@@ -10,8 +12,10 @@ export default function DebriefScreen({
   score,
   gained,
   rankUp,
+  unlocked,
   streak,
   onHome,
+  onTree,
   onReplay,
 }: {
   scenario: Scenario
@@ -19,8 +23,10 @@ export default function DebriefScreen({
   score: Score
   gained: number
   rankUp?: string
+  unlocked: string[]
   streak: number
   onHome: () => void
+  onTree: () => void
   onReplay: () => void
 }) {
   const seen = evidenceSeen(scenario, log)
@@ -43,29 +49,58 @@ export default function DebriefScreen({
 
   return (
     <div className="space-y-6">
-      <header className="rounded-lg border border-ok bg-panel p-6">
-        <p className="text-sm text-ok">✓ Incident resolved in {mmss(score.elapsedMs)}</p>
-        <h1 className="mt-1 text-2xl font-semibold">{scenario.title}</h1>
-        <p className="mt-4 font-mono text-4xl font-semibold text-accent">+{gained} XP</p>
+      {/* The resolve moment: an all-clear scan crosses the header, XP counts
+          up, then promotion and unlocks land once the count finishes. */}
+      <header className="relative overflow-hidden rounded-lg border border-ok bg-panel p-6">
+        <div aria-hidden className="anim-sweep pointer-events-none absolute inset-0 bg-ok/10 opacity-0" />
+        <p className="flex items-center gap-1.5 text-sm text-ok">
+          <Icon name="check" /> Incident resolved in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
+        </p>
+        <h1 id="screen-title" tabIndex={-1} className="mt-1 text-2xl font-semibold focus:outline-none">
+          {scenario.title}
+        </h1>
+        <p className="mt-4 font-mono text-4xl font-semibold text-accent">
+          +<CountUp value={gained} /> XP
+        </p>
         {gained < score.total && (
           <p className="mt-1 text-sm text-muted">
-            Scored {score.total}. Replays only earn the improvement over your best.
+            Scored <span className="tabular-nums">{score.total}</span>. Replays only earn the improvement over your best.
           </p>
         )}
-        <p className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
-          {rankUp && <strong className="text-warn">★ Promoted to {rankUp}</strong>}
-          <span className="text-muted">Clean streak: {streak}</span>
-        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+          {rankUp && (
+            <strong className="anim-rise flex items-center gap-1.5 rounded-md border border-warn px-2.5 py-1 text-warn" style={{ '--delay': '1150ms' } as CSSProperties}>
+              <Icon name="star" /> Promoted to {rankUp}
+            </strong>
+          )}
+          {unlocked.map((t, i) => (
+            <button
+              key={t}
+              onClick={onTree}
+              className="anim-rise anim-power-on flex items-center gap-1.5 rounded-md border border-ok px-2.5 py-1 font-medium text-ok focus-visible:outline-2 focus-visible:outline-accent"
+              style={{ '--delay': `${1300 + i * 150}ms` } as CSSProperties}
+            >
+              <Icon name="unlock" /> Track unlocked: {t}
+            </button>
+          ))}
+          <span className="text-muted">
+            Clean streak: <span className="tabular-nums">{streak}</span>
+          </span>
+        </div>
       </header>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
         <Card title="Score breakdown">
           <table className="w-full text-sm">
             <tbody>
-              {score.lines.map((l) => (
-                <tr key={l.label} className="border-b border-line last:border-0">
+              {score.lines.map((l, i) => (
+                <tr
+                  key={l.label}
+                  className="anim-rise border-b border-line last:border-0"
+                  style={{ '--delay': `${300 + Math.min(i, 8) * 60}ms` } as CSSProperties}
+                >
                   <td className="py-1.5">{l.label}</td>
-                  <td className={`py-1.5 text-right font-mono ${l.xp < 0 ? 'text-crit' : 'text-ok'}`}>
+                  <td className={`py-1.5 text-right font-mono tabular-nums ${l.xp < 0 ? 'text-crit' : 'text-ok'}`}>
                     {l.xp > 0 ? '+' : ''}
                     {l.xp}
                   </td>
@@ -75,7 +110,7 @@ export default function DebriefScreen({
             <tfoot>
               <tr>
                 <th className="pt-2 text-left">Total</th>
-                <td className="pt-2 text-right font-mono font-semibold">{score.total}</td>
+                <td className="pt-2 text-right font-mono font-semibold tabular-nums">{score.total}</td>
               </tr>
             </tfoot>
           </table>
@@ -115,7 +150,7 @@ export default function DebriefScreen({
           <ol className="max-h-80 space-y-1 overflow-auto font-mono text-xs">
             {steps.map((s, i) => (
               <li key={i} className="flex gap-3">
-                <span className="text-muted">{mmss(s.at)}</span>
+                <span className="text-muted tabular-nums">{mmss(s.at)}</span>
                 <span>{s.text}</span>
               </li>
             ))}
@@ -127,7 +162,15 @@ export default function DebriefScreen({
         <ul className="space-y-1.5 text-sm">
           {scenario.key_evidence.map((tag) => (
             <li key={tag}>
-              {seen.has(tag) ? <span className="text-ok">✓ Found</span> : <span className="text-warn">✗ Missed</span>}{' '}
+              {seen.has(tag) ? (
+                <span className="inline-flex items-center gap-1 text-ok">
+                  <Icon name="check" className="h-3.5 w-3.5" /> Found
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-warn">
+                  <Icon name="x" className="h-3.5 w-3.5" /> Missed
+                </span>
+              )}{' '}
               <span className="font-mono">{tag}</span>
               <span className="text-muted"> in </span>
               <span className="font-mono text-muted">{whereIs(scenario, tag).join(', ')}</span>
@@ -152,6 +195,7 @@ export default function DebriefScreen({
             <li key={s.url}>
               <a href={s.url} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
                 {s.title}
+                <span className="sr-only"> (opens in a new tab)</span>
               </a>
               <span className="text-muted"> (retrieved {s.retrieved})</span>
             </li>
@@ -197,7 +241,7 @@ function describe(scenario: Scenario, e: GameEvent): string {
       return 'Asked for a hint'
     case 'DECLARE_HYPOTHESIS': {
       const h = scenario.hypotheses.find((x) => x.id === e.id)
-      return `Hypothesis: ${h?.text} ${h?.correct ? '✓' : '✗'}`
+      return `Hypothesis: ${h?.text} (${h?.correct ? 'correct' : 'wrong'})`
     }
     case 'TAKE_ACTION': {
       const a = scenario.actions.find((x) => x.id === e.id)
