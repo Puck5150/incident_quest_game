@@ -28,16 +28,19 @@ tiers:
     label: "Web / app tier"
     options:
       - id: ec2-single
+        short: "EC2 ×1"
         label: "One EC2 instance"
         cost: 1
         facts: ["A single virtual machine, which lives in one Availability Zone."]
         capabilities: { survives: [], scales: 1 }
       - id: asg-single-az
+        short: "ASG (1 AZ)"
         label: "EC2 Auto Scaling group in one AZ, behind an ALB"
         cost: 3
         facts: ["Auto Scaling replaces unhealthy instances and adds more under load, but only in the subnets you give it."]
         capabilities: { survives: [instance-failure], scales: 10 }
       - id: asg-multi-az
+        short: "ASG (2 AZs)"
         label: "EC2 Auto Scaling group across two AZs, behind an ALB"
         cost: 3
         facts:
@@ -48,11 +51,13 @@ tiers:
     label: "Orders database"
     options:
       - id: rds-single-az
+        short: "RDS Single-AZ"
         label: "RDS for PostgreSQL, Single-AZ"
         cost: 2
         facts: ["One DB instance in one Availability Zone.", "Point-in-time restore from backups is available."]
         capabilities: { survives: [], rpo: minutes }
       - id: rds-multi-az
+        short: "RDS Multi-AZ"
         label: "RDS for PostgreSQL, Multi-AZ"
         cost: 4
         facts:
@@ -60,6 +65,7 @@ tiers:
           - "Failover is automatic and typically takes 60–120 seconds."
         capabilities: { survives: [instance-failure, az-outage], rpo: zero }
       - id: rds-cross-region
+        short: "RDS + cross-Region"
         label: "RDS Multi-AZ plus a cross-Region read replica"
         cost: 9
         facts:

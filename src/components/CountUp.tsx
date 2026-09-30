@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react'
-
-const motionReduced = () =>
-  document.documentElement.classList.contains('reduce-motion') ||
-  !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+import { motionReduced } from '../motion.ts'
 
 // Counts from 0 to `value` with an ease-out curve. Screen readers get the
 // final number straight away; with reduced motion everyone does.

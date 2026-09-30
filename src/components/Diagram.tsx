@@ -1,6 +1,11 @@
 import type { Scenario } from '../schema/scenario.ts'
 
-type D = NonNullable<Scenario['diagram']>
+// `idle` is for design challenges: a box that hasn't been tested yet.
+type Status = NonNullable<Scenario['diagram']>['nodes'][number]['status'] | 'idle'
+type D = {
+  nodes: { id: string; label: string; col: number; row: number; status: Status }[]
+  edges: { from: string; to: string }[]
+}
 
 const COL = 190
 const ROW = 96
@@ -13,19 +18,20 @@ const STATUS = {
   ok: { text: 'ok', stroke: 'var(--ok)', mark: <circle r="3.5" fill="var(--ok)" /> },
   degraded: { text: 'degraded', stroke: 'var(--warn)', mark: <path d="M0,-4 L4,3.5 L-4,3.5 z" fill="var(--warn)" /> },
   down: { text: 'down', stroke: 'var(--crit)', mark: <path d="M-3,-3 L3,3 M3,-3 L-3,3" stroke="var(--crit)" strokeWidth="1.8" strokeLinecap="round" /> },
+  idle: { text: '', stroke: 'var(--line)', mark: null },
 }
 
 // Boxes on a grid, arrows between them. Positions come from the scenario
 // (col/row), so there's no layout engine to reason about.
-export default function Diagram({ diagram }: { diagram: D }) {
+export default function Diagram({ diagram, label = 'System diagram' }: { diagram: D; label?: string }) {
   const pos = new Map(diagram.nodes.map((n) => [n.id, { x: n.col * COL + W / 2 + 4, y: n.row * ROW + H / 2 + 4 }]))
   const width = Math.max(...diagram.nodes.map((n) => n.col)) * COL + W + 8
   const height = Math.max(...diagram.nodes.map((n) => n.row)) * ROW + H + 8
-  const summary = diagram.nodes.map((n) => `${n.label}: ${n.status}`).join('; ')
+  const summary = diagram.nodes.map((n) => (n.status === 'idle' ? n.label : `${n.label}: ${n.status}`)).join('; ')
 
   return (
     <figure className="overflow-x-auto">
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full max-w-3xl min-w-[32rem]" role="img" aria-label={`System diagram. ${summary}`}>
+      <svg viewBox={`0 0 ${width} ${height}`} className={`h-auto w-full max-w-3xl ${width > 400 ? 'min-w-[32rem]' : 'mx-auto max-w-[13rem]'}`} role="img" aria-label={`${label}. ${summary}`}>
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
             <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)" />
@@ -45,8 +51,18 @@ export default function Diagram({ diagram }: { diagram: D }) {
           const s = STATUS[n.status]
           return (
             <g key={n.id}>
-              <rect x={x - W / 2} y={y - H / 2} width={W} height={H} rx="8" fill="var(--panel)" stroke={s.stroke} strokeWidth={n.status === 'ok' ? 1 : 2} />
-              <text x={x} y={y - 4} textAnchor="middle" fill="var(--fg)" fontSize="14">
+              <rect
+                x={x - W / 2}
+                y={y - H / 2}
+                width={W}
+                height={H}
+                rx="8"
+                fill="var(--panel)"
+                stroke={s.stroke}
+                strokeWidth={n.status === 'ok' || n.status === 'idle' ? 1 : 2}
+                style={{ transition: 'stroke 200ms' }}
+              />
+              <text x={x} y={n.status === 'idle' ? y + 5 : y - 4} textAnchor="middle" fill="var(--fg)" fontSize="14">
                 {n.label}
               </text>
               {/* status mark + word, centred together */}

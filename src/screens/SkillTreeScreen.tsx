@@ -1,6 +1,6 @@
 import type { Track } from '../schema/scenario.ts'
 
-type Item = { id: string; track: string } // an incident or a design challenge
+type Item = { id: string; track: string; kind?: 'incident' | 'challenge' }
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
 
@@ -9,7 +9,7 @@ const H = 88 // node height
 const COL = 260
 const ROW = 116
 
-type Node = { track: Track; col: number; row: number; done: number; total: number; open: boolean }
+type Node = { track: Track; col: number; row: number; done: number; total: number; open: boolean; design: boolean }
 
 // Tracks laid out left to right by how deep their prerequisites go. Only
 // tracks with content appear (PLAN.md milestone 6).
@@ -42,7 +42,10 @@ export default function SkillTreeScreen({
         }`}
       >
         <span className="flex items-start justify-between gap-2 font-medium">
-          {n.track.name}
+          <span>
+            {n.track.name}
+            {n.design && <span className="ml-2 align-middle text-xs font-normal text-accent">Design</span>}
+          </span>
           {state === 'locked' && <Icon name="lock" />}
           {state === 'mastered' && <Icon name="check" className="h-4 w-4 text-ok" />}
         </span>
@@ -184,6 +187,7 @@ function layout(tracks: Track[], scenarios: Item[], progress: Progress, unlocked
       done: inTrack.filter((s) => progress.completed[s.id]).length,
       total: inTrack.length,
       open: unlocked.has(t.id),
+      design: inTrack.every((s) => s.kind === 'challenge'),
     }
   })
 }

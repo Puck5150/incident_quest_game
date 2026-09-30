@@ -11,6 +11,7 @@ export const RPO_LEVELS = ['zero', 'seconds', 'minutes', 'hours'] as const
 const OptionSchema = z.strictObject({
   id,
   label: z.string().min(1),
+  short: z.string().min(1).max(22).optional(), // label for the live diagram box
   cost: z.number().min(0), // illustrative units per month, not real prices
   facts: z.array(z.string().min(1)).min(1), // shown to the player; each should be sourced
   // Hidden from the player. Stress tests check these.

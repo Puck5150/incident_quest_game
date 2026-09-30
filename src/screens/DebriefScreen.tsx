@@ -1,9 +1,10 @@
-import type { CSSProperties, ReactNode } from 'react'
 import { artifacts, type Scenario } from '../schema/scenario.ts'
 import { evidenceSeen, type GameEvent } from '../game/engine.ts'
 import Prose from '../components/Prose.tsx'
 import Icon from '../components/Icon.tsx'
-import CountUp from '../components/CountUp.tsx'
+import Card from '../components/Card.tsx'
+import ScoreTable from '../components/ScoreTable.tsx'
+import ResultHeader from '../components/ResultHeader.tsx'
 import type { Score } from '../game/scoring.ts'
 
 export default function DebriefScreen({
@@ -49,71 +50,24 @@ export default function DebriefScreen({
 
   return (
     <div className="space-y-6">
-      {/* The resolve moment: an all-clear scan crosses the header, XP counts
-          up, then promotion and unlocks land once the count finishes. */}
-      <header className="relative overflow-hidden rounded-lg border border-ok bg-panel p-6">
-        <div aria-hidden className="anim-sweep pointer-events-none absolute inset-0 bg-ok/10 opacity-0" />
-        <p className="flex items-center gap-1.5 text-sm text-ok">
-          <Icon name="check" /> Incident resolved in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
-        </p>
-        <h1 id="screen-title" tabIndex={-1} className="mt-1 text-2xl font-semibold focus:outline-none">
-          {scenario.title}
-        </h1>
-        <p className="mt-4 font-mono text-4xl font-semibold text-accent">
-          +<CountUp value={gained} /> XP
-        </p>
-        {gained < score.total && (
-          <p className="mt-1 text-sm text-muted">
-            Scored <span className="tabular-nums">{score.total}</span>. Replays only earn the improvement over your best.
-          </p>
-        )}
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-          {rankUp && (
-            <strong className="anim-rise flex items-center gap-1.5 rounded-md border border-warn px-2.5 py-1 text-warn" style={{ '--delay': '1150ms' } as CSSProperties}>
-              <Icon name="star" /> Promoted to {rankUp}
-            </strong>
-          )}
-          {unlocked.map((t, i) => (
-            <button
-              key={t}
-              onClick={onTree}
-              className="anim-rise anim-power-on flex items-center gap-1.5 rounded-md border border-ok px-2.5 py-1 font-medium text-ok focus-visible:outline-2 focus-visible:outline-accent"
-              style={{ '--delay': `${1300 + i * 150}ms` } as CSSProperties}
-            >
-              <Icon name="unlock" /> Track unlocked: {t}
-            </button>
-          ))}
-          <span className="text-muted">
-            Clean streak: <span className="tabular-nums">{streak}</span>
-          </span>
-        </div>
-      </header>
+      <ResultHeader
+        status={
+          <>
+            Incident resolved in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
+          </>
+        }
+        title={scenario.title}
+        gained={gained}
+        total={score.total}
+        rankUp={rankUp}
+        unlocked={unlocked}
+        streak={streak}
+        onTree={onTree}
+      />
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
         <Card title="Score breakdown">
-          <table className="w-full text-sm">
-            <tbody>
-              {score.lines.map((l, i) => (
-                <tr
-                  key={l.label}
-                  className="anim-rise border-b border-line last:border-0"
-                  style={{ '--delay': `${300 + Math.min(i, 8) * 60}ms` } as CSSProperties}
-                >
-                  <td className="py-1.5">{l.label}</td>
-                  <td className={`py-1.5 text-right font-mono tabular-nums ${l.xp < 0 ? 'text-crit' : 'text-ok'}`}>
-                    {l.xp > 0 ? '+' : ''}
-                    {l.xp}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th className="pt-2 text-left">Total</th>
-                <td className="pt-2 text-right font-mono font-semibold tabular-nums">{score.total}</td>
-              </tr>
-            </tfoot>
-          </table>
+          <ScoreTable lines={score.lines} total={score.total} />
         </Card>
 
         <Card title="How you did">
@@ -215,14 +169,6 @@ export default function DebriefScreen({
   )
 }
 
-function Card({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-line bg-panel p-4">
-      <h2 className="mb-3 font-semibold">{title}</h2>
-      {children}
-    </section>
-  )
-}
 
 const mmss = (ms: number) => {
   const s = Math.round(ms / 1000)

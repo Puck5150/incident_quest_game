@@ -10,7 +10,6 @@ import SkillTreeScreen from './screens/SkillTreeScreen.tsx'
 import ChallengeScreen from './screens/ChallengeScreen.tsx'
 import ChallengeDebrief from './screens/ChallengeDebrief.tsx'
 import { scoreChallenge, type ChallengeScore, type Run } from './game/challenge.ts'
-import type { Picks } from './schema/challenge.ts'
 import type { QueueItem } from './screens/HomeScreen.tsx'
 import Icon from './components/Icon.tsx'
 
@@ -20,9 +19,12 @@ type Screen =
   | { name: 'home'; track?: string }
   | { name: 'tree' }
   | { name: 'incident'; id: string; run: number }
-  | { name: 'debrief'; id: string; log: GameEvent[]; score: Score; gained: number; rankUp?: string; unlocked: string[] }
+  | ({ name: 'debrief'; id: string; log: GameEvent[]; score: Score } & Outcome)
   | { name: 'challenge'; id: string; run: number }
-  | { name: 'challenge-debrief'; id: string; picks: Picks; score: ChallengeScore; gained: number }
+  | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore } & Outcome)
+
+// What finishing something changed, shown in the debrief header.
+type Outcome = { gained: number; rankUp?: string; unlocked: string[] }
 
 // Everything playable, for the queue, the skill tree and unlocks.
 const items: QueueItem[] = [
@@ -64,31 +66,30 @@ export default function App() {
         : { name: 'incident', id, run: Date.now() },
     )
 
-  function challengeFinished(id: string, runs: Run[], hintsUsed: number) {
-    const s = scoreChallenge(challenge!, runs, hintsUsed)
+  // Save a finished incident or challenge and work out what it changed.
+  function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }): Outcome {
     const result = recordResult(progress, id, s, new Date())
+    const newRank = rankFor(result.progress.xp).rank
+    const before = unlocks(progress)
+    const after = unlocks(result.progress)
     setProgress(result.progress)
-    setScreen({ name: 'challenge-debrief', id, picks: runs.at(-1)!.picks, score: s, gained: result.gained })
+    return {
+      gained: result.gained,
+      rankUp: newRank !== rank ? newRank.name : undefined,
+      unlocked: content.tracks
+        .filter((t) => !before.has(t.id) && after.has(t.id) && items.some((x) => x.track === t.id))
+        .map((t) => t.name),
+    }
   }
 
   function resolved(id: string, log: GameEvent[]) {
     const s = score(scenario!, log)
-    const result = recordResult(progress, id, s, new Date())
-    const newRank = rankFor(result.progress.xp).rank
-    const before = unlocks(progress)
-    const newlyUnlocked = content.tracks
-      .filter((t) => !before.has(t.id) && unlocks(result.progress).has(t.id) && items.some((x) => x.track === t.id))
-      .map((t) => t.name)
-    setProgress(result.progress)
-    setScreen({
-      name: 'debrief',
-      id,
-      log,
-      score: s,
-      gained: result.gained,
-      rankUp: newRank !== rank ? newRank.name : undefined,
-      unlocked: newlyUnlocked,
-    })
+    setScreen({ name: 'debrief', id, log, score: s, ...record(id, s) })
+  }
+
+  function challengeFinished(id: string, runs: Run[], hintsUsed: number) {
+    const s = scoreChallenge(challenge!, runs, hintsUsed)
+    setScreen({ name: 'challenge-debrief', id, runs, score: s, ...record(id, s) })
   }
 
   const setting = (patch: Partial<Progress['settings']>) =>
@@ -181,10 +182,12 @@ export default function App() {
         {screen.name === 'challenge-debrief' && (
           <ChallengeDebrief
             challenge={challenge!}
-            picks={screen.picks}
+            runs={screen.runs}
             score={screen.score}
-            gained={screen.gained}
+            outcome={screen}
+            streak={progress.streak.current}
             onHome={() => setScreen({ name: 'home' })}
+            onTree={() => setScreen({ name: 'tree' })}
             onReplay={() => play(screen.id)}
           />
         )}

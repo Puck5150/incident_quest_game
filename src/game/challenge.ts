@@ -5,7 +5,7 @@
 import { RPO_LEVELS, type Challenge, type Picks } from '../schema/challenge.ts'
 import { HINT_TIERS } from './engine.ts'
 
-export type TestResult = { id: string; label: string; pass: boolean; reasons: string[] }
+export type TestResult = { id: string; label: string; pass: boolean; failing: string[]; reasons: string[] }
 export type Evaluation = {
   tests: TestResult[]
   cost: number
@@ -52,6 +52,7 @@ export function evaluate(c: Challenge, picks: Picks): Evaluation {
       id: t.id,
       label: t.label,
       pass: failing.length === 0,
+      failing: failing.map((f) => f.option.id), // option ids that broke this test
       reasons: failing.map((f) => reason(f.option.id, t.id, f.text)),
     }
   })
