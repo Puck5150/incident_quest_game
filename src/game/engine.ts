@@ -98,7 +98,7 @@ export function runCommand(
   scenario: Scenario,
   input: string,
   taken: Set<string>,
-): { output: string; evidence?: string } {
+): { output: string; evidence?: string; scripted?: boolean } {
   const cmd = normalize(input)
   const t = scenario.terminal
   if (!t) return { output: '' }
@@ -115,7 +115,7 @@ export function runCommand(
       (c.match !== undefined ? normalize(c.match) === cmd : new RegExp(c.match_regex!).test(cmd)) &&
       (c.when_actions ?? []).every((a) => taken.has(a)),
   )
-  if (hit) return { output: hit.output.replace(/\n$/, ''), evidence: hit.evidence }
+  if (hit) return { output: hit.output.replace(/\n$/, ''), evidence: hit.evidence, scripted: true }
 
   const name = cmd.split(' ')[0]
   return { output: (t.unknown_output ?? 'bash: {cmd}: command not found').replaceAll('{cmd}', name) }

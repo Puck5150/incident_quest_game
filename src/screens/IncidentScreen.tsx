@@ -28,12 +28,25 @@ const button =
 type WithoutAt<E> = E extends GameEvent ? Omit<E, 'at'> : never
 type Intent = WithoutAt<GameEvent>
 
-export default function IncidentScreen({ scenario }: { scenario: Scenario }) {
+export default function IncidentScreen({
+  scenario,
+  onResolved,
+}: {
+  scenario: Scenario
+  onResolved: (log: GameEvent[]) => void
+}) {
   const [session, dispatch] = useReducer((s: Session, e: GameEvent) => step(scenario, s, e), undefined, newSession)
   const send = (e: Intent) => dispatch({ ...e, at: Date.now() } as GameEvent)
   const [picked, setPicked] = useState<string>()
   const taken = actionsTaken(session.log)
   const { phase, feedback } = session
+
+  // Closing hands the finished log to App for scoring. `step` is pure, so
+  // running it here too gives exactly the log the reducer will store.
+  function close() {
+    const next = step(scenario, session, { type: 'CLOSE_INCIDENT', at: Date.now() })
+    if (next.phase === 'resolved') onResolved(next.log)
+  }
 
   const tools = [
     scenario.terminal && {
@@ -66,7 +79,7 @@ export default function IncidentScreen({ scenario }: { scenario: Scenario }) {
   ].filter((t) => !!t)
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 p-4 lg:p-6">
+    <div className="space-y-4">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold">{scenario.title}</h1>
         <span className="rounded border border-crit px-2 py-0.5 font-mono text-sm text-crit">
@@ -146,7 +159,7 @@ export default function IncidentScreen({ scenario }: { scenario: Scenario }) {
                   })}
                 </ul>
                 {fixComplete(scenario, session.log) && (
-                  <button className={`${button} mt-4 w-full bg-ok text-bg`} onClick={() => send({ type: 'CLOSE_INCIDENT' })}>
+                  <button className={`${button} mt-4 w-full bg-ok text-bg`} onClick={close}>
                     Close incident
                   </button>
                 )}
@@ -163,17 +176,10 @@ export default function IncidentScreen({ scenario }: { scenario: Scenario }) {
               )}
             </div>
 
-            {phase === 'resolved' ? (
-              <section className="rounded-lg border border-ok bg-panel p-4">
-                <h2 className="text-xl font-semibold text-ok">✓ Incident resolved</h2>
-                <p className="mt-2 text-muted">Debrief and scoring arrive in Milestone 4.</p>
-              </section>
-            ) : (
-              <HintPanel scenario={scenario} used={hintsUsed(session.log)} onRequest={() => send({ type: 'REQUEST_HINT' })} />
-            )}
+            <HintPanel scenario={scenario} used={hintsUsed(session.log)} onRequest={() => send({ type: 'REQUEST_HINT' })} />
           </div>
         </div>
       )}
-    </main>
+    </div>
   )
 }

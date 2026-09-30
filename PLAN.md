@@ -234,8 +234,8 @@ All 14 tracks are defined here eventually. **The skill tree only renders tracks 
   version: 1,
   xp: number,
   completed: { [scenarioId]: { bestScore, completedAt, hintsUsed, clean: boolean } },
-  streak: { current, best, lastDay },   // see open question 3
-  settings: { theme: "dark" | "light", reducedMotion: "system" | "on" | "off" }
+  streak: { current, best },            // clean-resolution streak (open question 3)
+  settings: { theme: "dark" | "light" } // reducedMotion setting added in M6
 }
 ```
 
@@ -273,9 +273,10 @@ Everything is computed from the session log by one pure function. The debrief sh
 | Line item | Value (starting point, tuned in M4) |
 |---|---|
 | Base | 100 × difficulty |
-| Time bonus | up to +20% of base, linear down to 0 at 2× `par_minutes` |
+| Time bonus | +20% of base at or under `par_minutes`, then linear down to 0 at 2× par |
 | Methodical bonus | +20% of base if you saw all `key_evidence` *before* declaring your hypothesis |
-| Verification bonus | +10% of base if you re-checked after fixing |
+| Verification bonus | +10% of base if you ran a scripted command after the fix was complete, before closing |
+| Replays | earn only the improvement over your best score for that incident |
 | Hints | nudge −10%, direction −25%, answer −50% (cumulative) |
 | Wrong hypothesis | −10% each |
 | Wrong action | −10% each |
