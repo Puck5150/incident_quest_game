@@ -35,7 +35,8 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
   AWS and Azure Well-Architected Frameworks and the Google Cloud Architecture Framework.
   **Shipped: see PLAN_DESIGN_CHALLENGES.md.** Drag-and-drop canvas planned in
   PLAN_DESIGN_CANVAS.md (approved). Still parked:
-  provider-agnostic "pick your cloud" challenges, more challenges.
+  more challenges. "Pick your cloud" challenges planned in PLAN_PICK_YOUR_CLOUD.md
+  (approved).
 - More cloud incidents: public storage bucket, missing autoscaling, cross-region
   latency, IAM least privilege, DNS failover TTLs.
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
