@@ -1,4 +1,6 @@
-import type { Scenario, Track } from '../schema/scenario.ts'
+import type { Track } from '../schema/scenario.ts'
+
+type Item = { id: string; track: string } // an incident or a design challenge
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
 
@@ -19,7 +21,7 @@ export default function SkillTreeScreen({
   onOpenTrack,
 }: {
   tracks: Track[]
-  scenarios: Scenario[]
+  scenarios: Item[]
   progress: Progress
   unlocked: Set<string>
   onOpenTrack: (trackId: string) => void
@@ -66,7 +68,7 @@ export default function SkillTreeScreen({
         Skill tree
       </h1>
       <p className="max-w-prose text-muted">
-        Resolve an incident in a track to unlock the tracks that build on it. Select a track to see its incidents.
+        Finish an incident or challenge in a track to unlock the tracks that build on it. Select a track to see its incidents.
       </p>
 
       {/* Phones: the same nodes as a list, one tier after another. */}
@@ -127,7 +129,7 @@ export default function SkillTreeScreen({
   )
 }
 
-function layout(tracks: Track[], scenarios: Scenario[], progress: Progress, unlocked: Set<string>): Node[] {
+function layout(tracks: Track[], scenarios: Item[], progress: Progress, unlocked: Set<string>): Node[] {
   const withContent = tracks.filter((t) => scenarios.some((s) => s.track === t.id))
   const ids = new Set(withContent.map((t) => t.id))
   const depth = new Map<string, number>()

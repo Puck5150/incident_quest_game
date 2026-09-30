@@ -1,0 +1,130 @@
+# PLACEHOLDER (design-challenge milestone D2). Exercises the engine end to end.
+# Option facts reuse sources already fetched in Milestone 7; the full,
+# doc-verified version is written in D4. Costs are illustrative units.
+
+type: challenge
+id: aws-checkout-az-resilience
+track: cloud-design
+difficulty: 2
+title: "A checkout that survives losing a data center"
+provider: aws
+par_minutes: 10
+
+brief: |
+  Last month one Availability Zone in us-east-1 had problems and the shop lost
+  40 minutes of sales, because everything important lived in that one zone.
+  Leadership wants checkout to keep working through the loss of any single
+  zone, without paying for more than that.
+
+requirements:
+  - "Keep checkout available if one Availability Zone fails"
+  - "Lose no more than a few seconds of orders"
+  - "Handle 3× normal traffic during sales"
+  - "Stay within 12 cost units per month"
+budget: 12
+
+tiers:
+  - id: compute
+    label: "Web / app tier"
+    options:
+      - id: ec2-single
+        label: "One EC2 instance"
+        cost: 1
+        facts: ["A single virtual machine, which lives in one Availability Zone."]
+        capabilities: { survives: [], scales: 1 }
+      - id: asg-single-az
+        label: "EC2 Auto Scaling group in one AZ, behind an ALB"
+        cost: 3
+        facts: ["Auto Scaling replaces unhealthy instances and adds more under load, but only in the subnets you give it."]
+        capabilities: { survives: [instance-failure], scales: 10 }
+      - id: asg-multi-az
+        label: "EC2 Auto Scaling group across two AZs, behind an ALB"
+        cost: 3
+        facts:
+          - "Auto Scaling launches and replaces instances across the Availability Zones you give it."
+          - "Load balancers reroute traffic to targets in healthy zones."
+        capabilities: { survives: [instance-failure, az-outage], scales: 10 }
+  - id: database
+    label: "Orders database"
+    options:
+      - id: rds-single-az
+        label: "RDS for PostgreSQL, Single-AZ"
+        cost: 2
+        facts: ["One DB instance in one Availability Zone.", "Point-in-time restore from backups is available."]
+        capabilities: { survives: [], rpo: minutes }
+      - id: rds-multi-az
+        label: "RDS for PostgreSQL, Multi-AZ"
+        cost: 4
+        facts:
+          - "RDS keeps a synchronous standby replica in a different Availability Zone."
+          - "Failover is automatic and typically takes 60–120 seconds."
+        capabilities: { survives: [instance-failure, az-outage], rpo: zero }
+      - id: rds-cross-region
+        label: "RDS Multi-AZ plus a cross-Region read replica"
+        cost: 9
+        facts:
+          - "Adds an asynchronous read replica in another AWS Region, on top of Multi-AZ."
+          - "A replica can be promoted to a standalone instance for disaster recovery."
+        capabilities: { survives: [instance-failure, az-outage, region-outage], rpo: zero }
+        overkill: "Region-level recovery wasn't in the brief. Multi-AZ alone meets it for less than half the cost."
+
+stress_tests:
+  - id: az-outage
+    label: "us-east-1a becomes unreachable"
+    requires: { every_tier_survives: az-outage }
+  - id: sale-traffic
+    label: "Traffic triples during a flash sale"
+    requires: { tier: compute, min_scales: 3 }
+  - id: db-host-failure
+    label: "The database host fails mid-transaction"
+    requires: { tier: database, rpo_at_most: seconds }
+
+failure_feedback:
+  ec2-single:
+    az-outage: "The only web server was in the failed zone."
+  asg-single-az:
+    az-outage: "The group can replace instances, but only inside the zone that just failed."
+  rds-single-az:
+    az-outage: "The only copy of the database was in the failed zone."
+    db-host-failure: "Restoring from backups loses everything since the last restorable point, often minutes of orders."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { compute: asg-multi-az, database: rds-multi-az }
+    why: "Both tiers span two Availability Zones; the synchronous standby means no committed orders are lost on failover."
+
+hints:
+  nudge: "Which parts of the design live in exactly one zone?"
+  direction: "A failure test only passes if every tier keeps working without the failed zone."
+  answer: "Spread compute across two AZs with an Auto Scaling group, and use RDS Multi-AZ. The cross-Region replica is more than the brief asks for."
+
+analogy:
+  title: "Two kitchens, one building"
+  text: |
+    A restaurant with two kitchens in separate wings keeps serving if one wing
+    floods, as long as both kitchens can reach the recipes and the pantry. A
+    second restaurant in another city also survives a citywide blackout, but
+    nobody asked for that, and you'd pay rent twice.
+
+debrief:
+  summary: |
+    The brief asked for surviving one Availability Zone with near-zero data
+    loss. That means every tier needs a copy outside any single zone: an Auto
+    Scaling group across two zones for compute, and RDS Multi-AZ for the
+    database. Going multi-Region is valid engineering, but it wasn't asked for.
+  real_world: |
+    AWS's Well-Architected Reliability Pillar lists both mistakes as
+    anti-patterns: a production workload in a single Availability Zone, and a
+    multi-Region architecture when multi-AZ would satisfy the business
+    requirements.
+
+sources:
+  - title: "Amazon RDS: Multi-AZ DB instance deployments"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Failing over a Multi-AZ DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html"
+    retrieved: 2026-09-30
+  - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"
+    url: "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html"
+    retrieved: 2026-09-30

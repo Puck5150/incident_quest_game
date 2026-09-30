@@ -1,15 +1,15 @@
-import type { Scenario } from '../schema/scenario.ts'
 import { HINT_TIERS } from '../game/engine.ts'
 import Prose from './Prose.tsx'
 
 // Hints unlock one tier at a time. The analogy arrives with the "direction"
 // tier: it explains the concept, which is a big clue on its own.
+// Takes just what it shows, so incidents and design challenges can share it.
 export default function HintPanel({
   scenario,
   used,
   onRequest,
 }: {
-  scenario: Scenario
+  scenario: { hints: Record<'nudge' | 'direction' | 'answer', string>; analogy: { title: string; text: string } }
   used: number
   onRequest: () => void
 }) {

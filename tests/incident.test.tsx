@@ -105,7 +105,8 @@ it('skill tree shows only tracks with content, with lock state and requirements'
   expect(document.activeElement?.id).toBe('screen-title') // focus follows the screen change
   // (The phone layout renders the same nodes; jsdom doesn't apply the CSS that hides it.)
   const tracks = within(screen.getByRole('list', { name: 'Tracks' }))
-  const withContent = content.tracks.filter((t) => content.scenarios.some((s) => s.track === t.id))
+  const all = [...content.scenarios, ...content.challenges]
+  const withContent = content.tracks.filter((t) => all.some((s) => s.track === t.id))
   expect(tracks.getAllByRole('listitem')).toHaveLength(withContent.length)
   const micro = tracks.getByRole('button', { name: /Microservices/ })
   expect(micro.textContent).toMatch(/Needs Networking \+ Containers & Kubernetes/)

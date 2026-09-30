@@ -12,8 +12,10 @@ import { parse } from 'yaml'
 import { z } from 'zod'
 import type { Plugin } from 'vite'
 import { ScenarioSchema, TrackSchema, type Scenario, type Track } from './src/schema/scenario.ts'
+import { ChallengeSchema, type Challenge } from './src/schema/challenge.ts'
+import { evaluate } from './src/game/challenge.ts'
 
-export type Content = { tracks: Track[]; scenarios: Scenario[] }
+export type Content = { tracks: Track[]; scenarios: Scenario[]; challenges: Challenge[] }
 
 export function loadContent(dir: string): Content {
   const errors: string[] = []
@@ -23,20 +25,35 @@ export function loadContent(dir: string): Content {
   const trackIds = new Set(tracks.map((t) => t.id))
 
   const scenarios: Scenario[] = []
+  const challenges: Challenge[] = []
   for (const file of scenarioFiles(dir)) {
-    const s = check(file, ScenarioSchema, errors)
-    if (!s) continue
     const rel = path.relative(dir, file)
+    // `type: challenge` files are design challenges; everything else is an incident.
+    const isChallenge = /^type:\s*challenge\s*$/m.test(fs.readFileSync(file, 'utf8'))
+    const s = isChallenge ? check(file, ChallengeSchema, errors) : check(file, ScenarioSchema, errors)
+    if (!s) continue
     const fileId = path.basename(file).replace(/\.ya?ml$/, '')
     const folder = path.dirname(rel)
 
-    // Progress is saved by scenario id, so ids must be stable and unique.
-    // Tying id to filename and track to folder makes both obvious at a glance.
+    // Progress is saved by id, so ids must be stable and unique across both
+    // kinds. Tying id to filename and track to folder makes both obvious.
     if (s.id !== fileId) errors.push(`${rel}: id "${s.id}" must match the filename ("${fileId}")`)
     if (s.track !== folder) errors.push(`${rel}: track "${s.track}" must match the folder ("${folder}")`)
     if (!trackIds.has(s.track)) errors.push(`${rel}: track "${s.track}" is not defined in tracks.yaml`)
-    if (scenarios.some((o) => o.id === s.id)) errors.push(`${rel}: duplicate scenario id "${s.id}"`)
-    scenarios.push(s)
+    if ([...scenarios, ...challenges].some((o) => o.id === s.id)) errors.push(`${rel}: duplicate id "${s.id}"`)
+
+    if (s.type === 'challenge') {
+      // Every reference design must actually pass, or the debrief would teach a wrong answer.
+      s.reference_designs.forEach((d) => {
+        const e = evaluate(s, d.picks)
+        if (!e.pass) {
+          const failed = e.tests.filter((t) => !t.pass).map((t) => t.id)
+          if (!e.withinBudget) failed.push(`budget (${e.cost} > ${s.budget})`)
+          errors.push(`${rel}: reference design "${d.name}" fails: ${failed.join(', ')}`)
+        }
+      })
+      challenges.push(s)
+    } else scenarios.push(s)
   }
 
   tracks.forEach((t) =>
@@ -46,7 +63,7 @@ export function loadContent(dir: string): Content {
   )
 
   if (errors.length) throw new Error(`Invalid content:\n\n${errors.join('\n\n')}`)
-  return { tracks, scenarios }
+  return { tracks, scenarios, challenges }
 }
 
 // Parse + validate one file. Returns undefined (and records errors) on failure

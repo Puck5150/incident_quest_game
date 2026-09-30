@@ -1,20 +1,30 @@
 import { useEffect } from 'react'
-import type { Scenario, Track } from '../schema/scenario.ts'
+import type { Track } from '../schema/scenario.ts'
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
+
+// Incidents and design challenges share the queue.
+export type QueueItem = {
+  id: string
+  track: string
+  title: string
+  difficulty: number
+  kind: 'incident' | 'challenge'
+  tag: string // incident priority (P1..P4) or "Design"
+}
 
 // The incident queue: tracks that have content, in tracks.yaml order,
 // incidents easiest first. Locked tracks say what unlocks them.
 export default function HomeScreen({
   tracks,
-  scenarios,
+  items: allItems,
   progress,
   unlocked,
   focusTrack,
   onPlay,
 }: {
   tracks: Track[]
-  scenarios: Scenario[]
+  items: QueueItem[]
   progress: Progress
   unlocked: Set<string>
   focusTrack?: string
@@ -35,7 +45,7 @@ export default function HomeScreen({
         Incident queue
       </h1>
       {tracks.map((track) => {
-        const items = scenarios.filter((s) => s.track === track.id).sort((a, b) => a.difficulty - b.difficulty)
+        const items = allItems.filter((s) => s.track === track.id).sort((a, b) => a.difficulty - b.difficulty)
         if (!items.length) return null
         const open = unlocked.has(track.id)
         return (
@@ -49,7 +59,7 @@ export default function HomeScreen({
               {!open && (
                 <span className="flex items-center gap-1.5 text-sm font-normal text-muted">
                   <Icon name="lock" className="h-3.5 w-3.5" />
-                  Locked: resolve an incident in {track.requires.map(name).join(' and ')}
+                  Locked: finish something in {track.requires.map(name).join(' and ')}
                 </span>
               )}
             </h2>
@@ -64,7 +74,7 @@ export default function HomeScreen({
                       className="h-full w-full rounded-lg border border-line bg-panel p-4 text-left hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="flex items-center justify-between gap-2 text-xs text-muted">
-                        <span className="font-mono">{s.ticket.priority}</span>
+                        <span className={s.kind === 'challenge' ? 'text-accent' : 'font-mono'}>{s.tag}</span>
                         <span className="flex gap-1" role="img" aria-label={`Difficulty ${s.difficulty} of 5`}>
                           {[1, 2, 3, 4, 5].map((n) => (
                             <span key={n} className={`h-1.5 w-3 rounded-full ${n <= s.difficulty ? 'bg-accent' : 'bg-line'}`} />
@@ -76,7 +86,7 @@ export default function HomeScreen({
                         {done ? (
                           <>
                             <span className="inline-flex items-center gap-1 text-ok">
-                              <Icon name="check" className="h-3.5 w-3.5" /> Resolved
+                              <Icon name="check" className="h-3.5 w-3.5" /> {s.kind === 'challenge' ? 'Completed' : 'Resolved'}
                             </span>{' '}
                             · best <span className="tabular-nums">{done.bestScore}</span> XP
                             {done.clean && ' · clean'}

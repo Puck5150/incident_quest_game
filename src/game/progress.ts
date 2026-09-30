@@ -5,8 +5,7 @@
 // zod/mini: same validation, a fraction of the bundle size. This is the only
 // Zod code that ships to the browser (content is validated at build time).
 import * as z from 'zod/mini'
-import type { Scenario, Track } from '../schema/scenario.ts'
-import type { Score } from './scoring.ts'
+import type { Track } from '../schema/scenario.ts'
 
 const KEY = 'incident-quest:v1'
 
@@ -64,7 +63,7 @@ export function saveProgress(p: Progress, storage: Storage = localStorage) {
 export function recordResult(
   p: Progress,
   scenarioId: string,
-  s: Score,
+  s: { total: number; clean: boolean; hintsUsed: number }, // incident or challenge score
   now: Date,
 ): { progress: Progress; gained: number } {
   const prev = p.completed[scenarioId]
@@ -107,9 +106,14 @@ export function rankFor(xp: number) {
 
 // A track unlocks once every track it requires has at least one completed
 // incident. A required track with no content yet can't block anything.
-export function unlockedTracks(tracks: Track[], scenarios: Scenario[], completed: Progress['completed']): Set<string> {
+// `items` is every playable thing (incidents and challenges); only id and track matter.
+export function unlockedTracks(
+  tracks: Track[],
+  items: { id: string; track: string }[],
+  completed: Progress['completed'],
+): Set<string> {
   const done = (trackId: string) => {
-    const inTrack = scenarios.filter((s) => s.track === trackId)
+    const inTrack = items.filter((s) => s.track === trackId)
     return inTrack.length === 0 || inTrack.some((s) => completed[s.id])
   }
   return new Set(tracks.filter((t) => t.requires.every(done)).map((t) => t.id))

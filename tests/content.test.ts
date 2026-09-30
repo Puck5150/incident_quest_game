@@ -65,6 +65,18 @@ describe('validator rejects', () => {
     expect(loadMutated((y) => y, 'renamed.yaml')).toThrow(/must match the filename/)
   })
 
+  it('a challenge whose reference design fails its own stress tests', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iq-content-'))
+    fs.copyFileSync(path.join(CONTENT, 'tracks.yaml'), path.join(dir, 'tracks.yaml'))
+    fs.mkdirSync(path.join(dir, 'cloud-design'))
+    const original = fs.readFileSync(path.join(CONTENT, 'cloud-design/aws-checkout-az-resilience.yaml'), 'utf8')
+    fs.writeFileSync(
+      path.join(dir, 'cloud-design/aws-checkout-az-resilience.yaml'),
+      original.replace('picks: { compute: asg-multi-az, database: rds-multi-az }', 'picks: { compute: ec2-single, database: rds-multi-az }'),
+    )
+    expect(() => loadContent(dir)).toThrow(/reference design "Recommended" fails: az-outage, sale-traffic/)
+  })
+
   it('missing sources', () => {
     expect(loadMutated((y) => y.slice(0, y.indexOf('sources:')))).toThrow(/sources/)
   })

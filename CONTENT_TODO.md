@@ -80,3 +80,11 @@ from your own experience and tick them off.
       representative.
 - [ ] `--max` flag: taken from the current Cloud Run docs (older docs and
       scripts use `--max-instances`).
+
+## cloud-design/aws-checkout-az-resilience (design-challenge D2 placeholder)
+- [ ] Placeholder written to exercise the challenge engine. Full doc-verified
+      version (and Azure/GCP challenges) comes in D4.
+- [ ] EC2 Auto Scaling facts ("launches and replaces instances across the
+      Availability Zones you give it"): paraphrased from Well-Architected REL10;
+      cite the EC2 Auto Scaling docs directly in D4.
+- [ ] Cost units are illustrative by design (see PLAN_DESIGN_CHALLENGES.md §2).

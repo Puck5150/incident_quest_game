@@ -7,6 +7,11 @@ import HomeScreen from './screens/HomeScreen.tsx'
 import IncidentScreen from './screens/IncidentScreen.tsx'
 import DebriefScreen from './screens/DebriefScreen.tsx'
 import SkillTreeScreen from './screens/SkillTreeScreen.tsx'
+import ChallengeScreen from './screens/ChallengeScreen.tsx'
+import ChallengeDebrief from './screens/ChallengeDebrief.tsx'
+import { scoreChallenge, type ChallengeScore, type Run } from './game/challenge.ts'
+import type { Picks } from './schema/challenge.ts'
+import type { QueueItem } from './screens/HomeScreen.tsx'
 import Icon from './components/Icon.tsx'
 
 // A handful of screens don't need a router (see PARKING_LOT.md). `run`
@@ -16,13 +21,21 @@ type Screen =
   | { name: 'tree' }
   | { name: 'incident'; id: string; run: number }
   | { name: 'debrief'; id: string; log: GameEvent[]; score: Score; gained: number; rankUp?: string; unlocked: string[] }
+  | { name: 'challenge'; id: string; run: number }
+  | { name: 'challenge-debrief'; id: string; picks: Picks; score: ChallengeScore; gained: number }
 
-const unlocks = (p: Progress) => unlockedTracks(content.tracks, content.scenarios, p.completed)
+// Everything playable, for the queue, the skill tree and unlocks.
+const items: QueueItem[] = [
+  ...content.scenarios.map((s) => ({ id: s.id, track: s.track, title: s.title, difficulty: s.difficulty, kind: 'incident' as const, tag: s.ticket.priority })),
+  ...content.challenges.map((c) => ({ id: c.id, track: c.track, title: c.title, difficulty: c.difficulty, kind: 'challenge' as const, tag: 'Design' })),
+]
+const unlocks = (p: Progress) => unlockedTracks(content.tracks, items, p.completed)
 
 export default function App() {
   const [progress, setProgress] = useState(loadProgress)
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   const scenario = 'id' in screen ? content.scenarios.find((s) => s.id === screen.id) : undefined
+  const challenge = 'id' in screen ? content.challenges.find((c) => c.id === screen.id) : undefined
   const { rank, next } = rankFor(progress.xp)
   const { theme, motion = 'system' } = progress.settings
 
@@ -44,7 +57,19 @@ export default function App() {
     document.getElementById('screen-title')?.focus()
   }, [screen])
 
-  const play = (id: string) => setScreen({ name: 'incident', id, run: Date.now() })
+  const play = (id: string) =>
+    setScreen(
+      content.challenges.some((c) => c.id === id)
+        ? { name: 'challenge', id, run: Date.now() }
+        : { name: 'incident', id, run: Date.now() },
+    )
+
+  function challengeFinished(id: string, runs: Run[], hintsUsed: number) {
+    const s = scoreChallenge(challenge!, runs, hintsUsed)
+    const result = recordResult(progress, id, s, new Date())
+    setProgress(result.progress)
+    setScreen({ name: 'challenge-debrief', id, picks: runs.at(-1)!.picks, score: s, gained: result.gained })
+  }
 
   function resolved(id: string, log: GameEvent[]) {
     const s = score(scenario!, log)
@@ -52,7 +77,7 @@ export default function App() {
     const newRank = rankFor(result.progress.xp).rank
     const before = unlocks(progress)
     const newlyUnlocked = content.tracks
-      .filter((t) => !before.has(t.id) && unlocks(result.progress).has(t.id) && content.scenarios.some((x) => x.track === t.id))
+      .filter((t) => !before.has(t.id) && unlocks(result.progress).has(t.id) && items.some((x) => x.track === t.id))
       .map((t) => t.name)
     setProgress(result.progress)
     setScreen({
@@ -131,7 +156,7 @@ export default function App() {
         {screen.name === 'home' && (
           <HomeScreen
             tracks={content.tracks}
-            scenarios={content.scenarios}
+            items={items}
             progress={progress}
             unlocked={unlocks(progress)}
             focusTrack={screen.track}
@@ -141,7 +166,7 @@ export default function App() {
         {screen.name === 'tree' && (
           <SkillTreeScreen
             tracks={content.tracks}
-            scenarios={content.scenarios}
+            scenarios={items}
             progress={progress}
             unlocked={unlocks(progress)}
             onOpenTrack={(track) => setScreen({ name: 'home', track })}
@@ -149,6 +174,19 @@ export default function App() {
         )}
         {screen.name === 'incident' && (
           <IncidentScreen key={screen.run} scenario={scenario!} onResolved={(log) => resolved(screen.id, log)} />
+        )}
+        {screen.name === 'challenge' && (
+          <ChallengeScreen key={screen.run} challenge={challenge!} onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints)} />
+        )}
+        {screen.name === 'challenge-debrief' && (
+          <ChallengeDebrief
+            challenge={challenge!}
+            picks={screen.picks}
+            score={screen.score}
+            gained={screen.gained}
+            onHome={() => setScreen({ name: 'home' })}
+            onReplay={() => play(screen.id)}
+          />
         )}
         {screen.name === 'debrief' && (
           <DebriefScreen

@@ -8,7 +8,7 @@
 
 import { z } from 'zod'
 
-const id = z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'must be kebab-case (a-z, 0-9, dashes)')
+export const id = z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'must be kebab-case (a-z, 0-9, dashes)')
 
 // `evidence` tags mark artifacts that matter for the diagnosis. Scoring and
 // the debrief use them to show what the player found vs. missed.
@@ -26,6 +26,24 @@ const terminalCommand = z
     message: 'set exactly one of `match` or `match_regex`',
   })
 
+// Shared by incidents and design challenges.
+export const HintsSchema = z.strictObject({
+  nudge: z.string().min(1),
+  direction: z.string().min(1),
+  answer: z.string().min(1),
+})
+export const AnalogySchema = z.strictObject({ title: z.string().min(1), text: z.string().min(1) })
+export const SourcesSchema = z
+  .array(
+    z.strictObject({
+      title: z.string().min(1),
+      url: z.url(),
+      // YAML 1.2 parses 2026-09-30 as a string, so validate the string.
+      retrieved: z.iso.date(),
+    }),
+  )
+  .min(1)
+
 export const TrackSchema = z.strictObject({
   id,
   name: z.string().min(1),
@@ -34,6 +52,7 @@ export const TrackSchema = z.strictObject({
 
 export const ScenarioSchema = z
   .strictObject({
+    type: z.literal('incident').optional(), // the default; challenges say `type: challenge`
     id,
     track: id,
     difficulty: z.int().min(1).max(5),
@@ -167,27 +186,14 @@ export const ScenarioSchema = z
     solution_paths: z.array(z.array(id).min(1)).min(1),
     key_evidence: z.array(id).min(1),
 
-    hints: z.strictObject({
-      nudge: z.string().min(1),
-      direction: z.string().min(1),
-      answer: z.string().min(1),
-    }),
-    analogy: z.strictObject({ title: z.string().min(1), text: z.string().min(1) }),
+    hints: HintsSchema,
+    analogy: AnalogySchema,
     debrief: z.strictObject({
       root_cause: z.string().min(1),
       ideal_path: z.array(z.string().min(1)).min(1),
       real_world: z.string().optional(),
     }),
-    sources: z
-      .array(
-        z.strictObject({
-          title: z.string().min(1),
-          url: z.url(),
-          // YAML 1.2 parses 2026-09-30 as a string, so validate the string.
-          retrieved: z.iso.date(),
-        }),
-      )
-      .min(1),
+    sources: SourcesSchema,
   })
   // Cross-references inside one file. These catch typos that would otherwise
   // produce an incident nobody can finish.

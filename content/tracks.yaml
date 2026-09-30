@@ -8,3 +8,4 @@
 - { id: cicd,          name: "CI/CD",                  requires: [] }
 - { id: microservices, name: "Microservices",          requires: [networking, containers] }
 - { id: cloud,         name: "Cloud Platforms",        requires: [networking] }
+- { id: cloud-design,  name: "Cloud System Design",    requires: [cloud] }
