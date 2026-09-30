@@ -4,7 +4,12 @@ import { loadContent } from '../vite-plugin-content.ts'
 import { evaluate, scoreChallenge } from '../src/game/challenge.ts'
 import type { Challenge, Picks } from '../src/schema/challenge.ts'
 
-const { challenges } = loadContent(path.resolve(import.meta.dirname, '../content'))
+const { challenges, multis } = loadContent(path.resolve(import.meta.dirname, '../content'))
+// Slot challenges on the cloud of your choice: every provider's variant gets the same guarantees.
+const allSlot: Challenge[] = [
+  ...challenges,
+  ...multis.flatMap((m) => (m.kind === 'slot' ? (Object.values(m.variants) as Challenge[]) : [])),
+]
 const c = challenges.find((x) => x.id === 'aws-checkout-az-resilience')!
 const failed = (picks: Picks) => evaluate(c, picks).tests.filter((t) => !t.pass).map((t) => t.id)
 const run = (picks: Picks) => ({ picks, at: 0 })
@@ -56,7 +61,7 @@ describe('scoreChallenge (difficulty 2, base 200)', () => {
 })
 
 // Content-level guarantees for every challenge, not just the placeholder.
-describe.each(challenges.map((x) => [x.id, x] as const))('%s', (_id, ch: Challenge) => {
+describe.each(allSlot.map((x) => [`${x.id} (${x.provider})`, x] as const))('%s', (_id, ch: Challenge) => {
   const all = ch.tiers.reduce<Picks[]>(
     (designs, t) => designs.flatMap((d) => t.options.map((o) => ({ ...d, [t.id]: o.id }))),
     [{}],

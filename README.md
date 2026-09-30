@@ -16,7 +16,9 @@ spike, and get scored on meeting the requirements without over-engineering.
 Current challenges cover AWS, Azure and Google Cloud, in two forms: pick an
 option per tier, or build the whole shape on a **design canvas** (components in
 zones, traffic links, sync or async replication), by drag and drop or entirely
-by keyboard or touch.
+by keyboard or touch. Some challenges let you **pick your cloud**: the same
+brief on AWS, Azure or Google Cloud, with a debrief that names the equivalent
+services side by side and says where they genuinely differ.
 
 ## Run it
 

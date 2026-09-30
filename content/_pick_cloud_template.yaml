@@ -1,0 +1,119 @@
+# ============================================================================
+# Incident Quest "pick your cloud" template (canvas mode)
+#
+# One brief, one set of stress tests; names, facts and sources per provider.
+# `providers:` is what makes a challenge "pick your cloud". For a slot
+# challenge, see content/cloud-design/traffic-spike-any-cloud.yaml.
+# `npm test` resolves the file once per provider and runs every canvas check
+# on each (errors are tagged [aws] / [azure] / [gcp]). See AUTHORING.md.
+# ============================================================================
+
+type: challenge
+mode: canvas
+providers: [aws, azure, gcp]
+id: example-pick-cloud
+track: cloud-design
+difficulty: 2
+title: "Short title"
+par_minutes: 10
+
+# Tokens: {provider}, {region} (first region's label), {zone:<lane id>},
+# {service:<palette id>}. Any token left unfilled fails the build.
+brief: |
+  Build it on {provider} in {region}.
+requirements:
+  - "Survive {zone:r1-a} failing"
+budget: 6
+
+layout:
+  regions:
+    - id: r1
+      zones: [r1-a, r1-b]
+labels:                       # every lane needs a name on every provider
+  aws: { r1: "us-east-1", r1-a: "us-east-1a", r1-b: "us-east-1b" }
+  azure: { r1: "East US 2", r1-a: "Zone 1", r1-b: "Zone 2" }
+  gcp: { r1: "us-central1", r1-a: "us-central1-a", r1-b: "us-central1-b" }
+
+palette:                      # behavior once; names and facts per provider
+  - id: vm
+    scope: zonal
+    roles: [serve]
+    capacity: 1
+    cost: 1
+    as:
+      aws: { label: "EC2 instance", short: "web", facts: ["Sourced fact."] }
+      azure: { label: "Azure virtual machine", short: "web", facts: ["Sourced fact."] }
+      gcp: { label: "Compute Engine VM", short: "web", facts: ["Sourced fact."] }
+    differences: "Required. What isn't equivalent, or 'None that matter here'."
+  - id: db
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    as:
+      aws: { label: "RDS for PostgreSQL", short: "RDS", facts: ["Sourced fact."] }
+      azure: { label: "Azure Database for PostgreSQL", short: "PostgreSQL", facts: ["Sourced fact."] }
+      gcp: { label: "Cloud SQL for PostgreSQL", short: "Cloud SQL", facts: ["Sourced fact."] }
+    differences: "Required."
+
+link_facts:
+  aws: { sync: ["Sourced."], async: ["Sourced."] }
+  azure: { sync: ["Sourced."], async: ["Sourced."] }
+  gcp: { sync: ["Sourced."], async: ["Sourced."] }
+
+stress_tests:
+  - id: zone-a
+    label: "{zone:r1-a} fails"
+    event: { zone_outage: r1-a }
+    check: { reach: [serve, write-store], capacity: 1 }
+
+reference_designs:            # shared by all providers (or override per provider)
+  - name: "Recommended"
+    why: "Why, using {service:db} if helpful."
+    design:
+      nodes:
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: web-1, kind: traffic }
+        - { from: users, to: web-2, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+
+counter_examples:
+  - name: "All in zone a"
+    fails: [zone-a]
+    design:
+      nodes:
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: db-1, type: db, lane: r1-a }
+      edges:
+        - { from: users, to: web-1, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+
+# overrides:                  # only for real, sourced differences in behavior
+#   gcp:
+#     palette:
+#       vm: { capacity: 2 }
+
+hints:
+  nudge: "A question."
+  direction: "Where to look."
+  answer: "The answer."
+analogy:
+  title: "Non-IT comparison"
+  text: |
+    Everyday explanation.
+debrief:
+  summary: |
+    The provider-neutral pattern, and the differences that matter.
+
+sources:                      # each provider fully sourced
+  aws:
+    - { title: "Official doc", url: "https://example.com/aws", retrieved: 2026-01-01 }
+  azure:
+    - { title: "Official doc", url: "https://example.com/azure", retrieved: 2026-01-01 }
+  gcp:
+    - { title: "Official doc", url: "https://example.com/gcp", retrieved: 2026-01-01 }

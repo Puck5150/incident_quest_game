@@ -1,0 +1,193 @@
+type: challenge
+providers: [aws, azure, gcp]
+id: traffic-spike-any-cloud
+track: cloud-design
+difficulty: 2
+title: "A launch-day spike, on the cloud of your choice"
+par_minutes: 10
+
+brief: |
+  A product launch will send about 20× normal traffic to the landing pages for
+  an hour, almost all of it the same static pages. The site runs on virtual
+  machines on {provider} in {region}. It has to ride out the spike, and the
+  usual bad luck of a server or a zone failing.
+
+requirements:
+  - "Serve 20× normal traffic, mostly the same static pages"
+  - "Keep serving if a server fails"
+  - "Keep serving if one zone fails"
+  - "Stay within 10 cost units per month"
+budget: 10
+
+labels:
+  aws: { region: "us-east-1" }
+  azure: { region: "East US 2" }
+  gcp: { region: "us-central1" }
+
+tiers:
+  - id: edge
+    label: "In front of the servers"
+    options:
+      - id: edge-none
+        cost: 0
+        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        as:
+          aws: { label: "Nothing: users go straight to the servers", short: "(no edge)", facts: ["Every request, including repeat views of the same page, reaches your servers."] }
+          azure: { label: "Nothing: users go straight to the servers", short: "(no edge)", facts: ["Every request, including repeat views of the same page, reaches your servers."] }
+          gcp: { label: "Nothing: users go straight to the servers", short: "(no edge)", facts: ["Every request, including repeat views of the same page, reaches your servers."] }
+        differences: "None: the same choice on every cloud."
+      - id: regional-lb
+        cost: 2
+        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        as:
+          aws: { label: "Application Load Balancer", short: "ALB", facts: ["A regional load balancer that reroutes traffic to targets in healthy Availability Zones.", "Every request is forwarded to a server."] }
+          azure: { label: "Application Gateway v2", short: "App Gateway", facts: ["A regional layer-7 load balancer with autoscaling and zone redundancy.", "Every request is forwarded to a server."] }
+          gcp: { label: "Regional external Application Load Balancer", short: "Regional ALB", facts: ["Supports backends in a single region.", "Every request is forwarded to a server."] }
+        differences: "All three spread load but don't cache pages here; each forwards every request to your servers."
+      - id: cdn
+        cost: 3
+        capabilities: { survives: [instance-failure, zone-outage], scales: 20 }
+        as:
+          aws: { label: "Amazon CloudFront with caching", short: "CloudFront", facts: ["Requests served directly from the CloudFront cache don't go to your origin servers.", "A longer Cache-Control max-age means fewer requests to the origin."] }
+          azure: { label: "Azure Front Door with caching", short: "Front Door", facts: ["Edge sites answer from cache when they can, reducing traffic sent to your origin.", "Static assets are ideal for caching; only GET requests are cached."] }
+          gcp: { label: "Cloud CDN on a global external Application Load Balancer", short: "Cloud CDN", facts: ["Uses Google's global edge network to serve content closer to users.", "On a cache hit, the origin server doesn't have to process the request."] }
+        differences: |
+          CloudFront and Front Door are services you put in front of your origin.
+          Cloud CDN is switched on for a global external Application Load
+          Balancer (or the classic Application Load Balancer), so on Google Cloud
+          the CDN and the load balancer come together.
+  - id: web
+    label: "Web servers"
+    options:
+      - id: single-vm
+        cost: 1
+        capabilities: { survives: [], scales: 1 }
+        as:
+          aws: { label: "One EC2 instance", short: "EC2 ×1", facts: ["A single virtual machine in one Availability Zone."] }
+          azure: { label: "One Azure virtual machine (zonal)", short: "VM ×1", facts: ["A zonal VM is pinned to one availability zone and isn't resilient to zone outages by itself."] }
+          gcp: { label: "One Compute Engine VM", short: "VM ×1", facts: ["VM instances are zonal resources."] }
+        differences: "None that matter here: one VM in one zone on every cloud."
+      - id: one-zone-group
+        cost: 3
+        capabilities: { survives: [instance-failure], scales: 3 }
+        as:
+          aws: { label: "Auto Scaling group in one Availability Zone", short: "ASG (1 AZ)", facts: ["Replaces unhealthy instances and adds capacity, but only in the zone you gave it."] }
+          azure: { label: "Zonal virtual machine scale set (one zone)", short: "Scale set (1 zone)", facts: ["Places all instances in one availability zone.", "By itself, a zonal resource doesn't provide resiliency to an availability zone outage."] }
+          gcp: { label: "Zonal managed instance group", short: "Zonal MIG", facts: ["A managed instance group confined to a single zone."] }
+        differences: "Equivalent here: a managed group of VMs, all in one zone."
+      - id: multi-zone-group
+        cost: 3
+        capabilities: { survives: [instance-failure, zone-outage], scales: 3 }
+        as:
+          aws:
+            label: "Auto Scaling group across two Availability Zones"
+            short: "ASG (2 AZs)"
+            facts: ["Keeps an equal number of instances across enabled zones; if launches fail in one zone, it launches in another healthy zone."]
+          azure:
+            label: "Zone-spanning virtual machine scale set"
+            short: "Scale set (zones)"
+            facts: ["Spreads instances across the zones you select; instances in the other zones are unaffected by a zone outage."]
+          gcp:
+            label: "Regional managed instance group"
+            short: "Regional MIG"
+            facts: ["Spreads its VMs across multiple zones in a region; VMs in the remaining zones keep serving if a zone fails."]
+        differences: |
+          All spread VMs across zones, but refill differently after a zone
+          fails: AWS Auto Scaling launches in another healthy zone; an Azure
+          scale set isn't guaranteed to add instances into healthy zones (autoscale
+          rules help); a Google regional MIG doesn't redistribute VMs unless
+          autoscaling is on.
+      - id: two-regions
+        cost: 7
+        capabilities: { survives: [instance-failure, zone-outage, region-outage], scales: 6 }
+        overkill: "A whole-region failure wasn't in the brief. One multi-zone group meets it for less than half the cost."
+        as:
+          aws: { label: "Auto Scaling groups in two AWS Regions", short: "ASG ×2 Regions", facts: ["Surviving a Region outage means running the workload in more than one Region."] }
+          azure: { label: "Zone-spanning scale sets in two regions", short: "Scale sets ×2 regions", facts: ["Scale sets are single-region resources; surviving a region outage needs scale sets in multiple regions."] }
+          gcp: { label: "Regional managed instance groups in two regions", short: "MIGs ×2 regions", facts: ["Distribute resources across multiple zones and regions to tolerate outages."] }
+        differences: "Equivalent: each needs your own traffic routing and failover between regions."
+
+stress_tests:
+  - id: spike
+    label: "The launch: 20× traffic on the landing pages"
+    requires: { tier: edge, min_scales: 20 }
+  - id: instance-failure
+    label: "A web server fails"
+    requires: { every_tier_survives: instance-failure }
+  - id: zone-outage
+    label: "One zone in {region} fails"
+    requires: { every_tier_survives: zone-outage }
+
+failure_feedback:
+  edge-none:
+    spike: "Every one of the 20× page views landed on the servers."
+  regional-lb:
+    spike: "The {service:regional-lb} spread the load, but every request still reached a server."
+  single-vm:
+    instance-failure: "The only server failed."
+    zone-outage: "The only server was in the failed zone."
+  one-zone-group:
+    zone-outage: "Every server in the group was in the failed zone."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { edge: cdn, web: multi-zone-group }
+    why: "{service:cdn} absorbs the repeat page views at the edge; the {service:multi-zone-group} keeps the origin up through a server or zone failure."
+
+hints:
+  nudge: "Twenty times the traffic, but mostly the same pages. Does every request need to reach a server?"
+  direction: "Solve the spike at the edge and the failures in the web tier: they're separate problems."
+  answer: "{service:cdn} in front, and a {service:multi-zone-group} behind it."
+
+analogy:
+  title: "Brochure racks at every door"
+  text: |
+    If most visitors want the same brochure, put racks at the doors instead of
+    making each one queue at the counter. Then staff the counter from two
+    rooms, so one flooded room doesn't close the shop.
+
+debrief:
+  summary: |
+    A spike of the same static pages is a caching problem, and every major
+    cloud's CDN solves it the same way: answer from the edge so the origin
+    never sees most requests. Surviving a server or a zone is a separate
+    problem, solved by a group of VMs spread across zones. The service names
+    change from cloud to cloud; the design doesn't.
+
+sources:
+  aws:
+    - title: "Amazon CloudFront: Increase the proportion of requests served from the cache"
+      url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cache-hit-ratio.html"
+      retrieved: 2026-09-30
+    - title: "Amazon EC2 Auto Scaling: Availability Zone distribution"
+      url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-availability-zone-balanced.html"
+      retrieved: 2026-09-30
+    - title: "AWS Well-Architected Reliability Pillar: REL10-BP01"
+      url: "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html"
+      retrieved: 2026-09-30
+  azure:
+    - title: "Azure Front Door: Caching"
+      url: "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-caching"
+      retrieved: 2026-09-30
+    - title: "Reliability in Azure Virtual Machine Scale Sets"
+      url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-virtual-machine-scale-sets"
+      retrieved: 2026-09-30
+    - title: "Reliability in Azure Virtual Machines"
+      url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-virtual-machines"
+      retrieved: 2026-09-30
+    - title: "What is Azure Application Gateway"
+      url: "https://learn.microsoft.com/en-us/azure/application-gateway/overview"
+      retrieved: 2026-09-30
+  gcp:
+    - title: "Cloud CDN overview"
+      url: "https://docs.cloud.google.com/cdn/docs/overview"
+      retrieved: 2026-09-30
+    - title: "Compute Engine: Regional managed instance groups"
+      url: "https://docs.cloud.google.com/compute/docs/instance-groups/regional-migs"
+      retrieved: 2026-09-30
+    - title: "Compute Engine: Regions and zones"
+      url: "https://docs.cloud.google.com/compute/docs/regions-zones"
+      retrieved: 2026-09-30
+    - title: "Cloud Load Balancing overview"
+      url: "https://docs.cloud.google.com/load-balancing/docs/load-balancing-overview"
+      retrieved: 2026-09-30

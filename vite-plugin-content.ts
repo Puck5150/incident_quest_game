@@ -16,19 +16,21 @@ import { ChallengeSchema, type Challenge } from './src/schema/challenge.ts'
 import { evaluate } from './src/game/challenge.ts'
 import { CanvasChallengeSchema, type CanvasChallenge } from './src/schema/canvas.ts'
 import { evaluateCanvas } from './src/game/canvas.ts'
-import { MultiCanvasSchema, resolveProvider, unresolvedTokens, type Provider } from './src/schema/multi.ts'
+import { MultiCanvasSchema, MultiSlotSchema, resolveProvider, resolveSlot, unresolvedTokens, type Provider } from './src/schema/multi.ts'
 
 // A "pick your cloud" challenge after resolving: one ordinary canvas
 // challenge per provider, plus what the debrief needs to compare them.
-export type MultiChallenge = {
+type MultiBase = {
   id: string
   track: string
   title: string
   difficulty: number
   providers: Provider[]
-  variants: Partial<Record<Provider, CanvasChallenge>>
-  differences: Record<string, string> // palette id -> what isn't equivalent
+  differences: Record<string, string> // palette or option id -> what isn't equivalent
 }
+export type MultiChallenge =
+  | (MultiBase & { kind: 'canvas'; variants: Partial<Record<Provider, CanvasChallenge>> })
+  | (MultiBase & { kind: 'slot'; variants: Partial<Record<Provider, Challenge>> })
 
 export type Content = {
   tracks: Track[]
@@ -72,6 +74,18 @@ export function loadContent(dir: string): Content {
     })
   }
 
+  // Every reference design must actually pass, or the debrief would teach a wrong answer.
+  const slotChecks = (where: string, c: Challenge) => {
+    c.reference_designs.forEach((d) => {
+      const e = evaluate(c, d.picks)
+      if (!e.pass) {
+        const failed = e.tests.filter((t) => !t.pass).map((t) => t.id)
+        if (!e.withinBudget) failed.push(`budget (${e.cost} > ${c.budget})`)
+        errors.push(`${where}: reference design "${d.name}" fails: ${failed.join(', ')}`)
+      }
+    })
+  }
+
   const scenarios: Scenario[] = []
   const challenges: Challenge[] = []
   const canvases: CanvasChallenge[] = []
@@ -88,7 +102,7 @@ export function loadContent(dir: string): Content {
       const m = check(file, MultiCanvasSchema, errors)
       if (!m) continue
       commonChecks(rel, file, m.id, m.track)
-      const variants: MultiChallenge['variants'] = {}
+      const variants: Partial<Record<Provider, CanvasChallenge>> = {}
       for (const p of m.providers) {
         // Re-validate each resolved variant exactly like a hand-written canvas challenge.
         const parsed = CanvasChallengeSchema.safeParse(resolveProvider(m, p))
@@ -102,6 +116,7 @@ export function loadContent(dir: string): Content {
         variants[p] = parsed.data
       }
       multis.push({
+        kind: 'canvas',
         id: m.id,
         track: m.track,
         title: m.title,
@@ -109,6 +124,34 @@ export function loadContent(dir: string): Content {
         providers: m.providers,
         variants,
         differences: Object.fromEntries(m.palette.map((x) => [x.id, x.differences])),
+      })
+      continue
+    }
+    if (isChallenge && /^providers:/m.test(raw)) {
+      const m = check(file, MultiSlotSchema, errors)
+      if (!m) continue
+      commonChecks(rel, file, m.id, m.track)
+      const variants: Partial<Record<Provider, Challenge>> = {}
+      for (const p of m.providers) {
+        const parsed = ChallengeSchema.safeParse(resolveSlot(m, p))
+        if (!parsed.success) {
+          errors.push(`${rel} [${p}]:\n${z.prettifyError(parsed.error)}`)
+          continue
+        }
+        const tokens = unresolvedTokens(parsed.data)
+        if (tokens.length) errors.push(`${rel} [${p}]: unresolved ${tokens.join(', ')}`)
+        slotChecks(`${rel} [${p}]`, parsed.data)
+        variants[p] = parsed.data
+      }
+      multis.push({
+        kind: 'slot',
+        id: m.id,
+        track: m.track,
+        title: m.title,
+        difficulty: m.difficulty,
+        providers: m.providers,
+        variants,
+        differences: Object.fromEntries(m.tiers.flatMap((t) => t.options.map((o) => [o.id, o.differences]))),
       })
       continue
     }
@@ -124,15 +167,7 @@ export function loadContent(dir: string): Content {
       canvasChecks(rel, s)
       canvases.push(s)
     } else if (s.type === 'challenge') {
-      // Every reference design must actually pass, or the debrief would teach a wrong answer.
-      s.reference_designs.forEach((d) => {
-        const e = evaluate(s, d.picks)
-        if (!e.pass) {
-          const failed = e.tests.filter((t) => !t.pass).map((t) => t.id)
-          if (!e.withinBudget) failed.push(`budget (${e.cost} > ${s.budget})`)
-          errors.push(`${rel}: reference design "${d.name}" fails: ${failed.join(', ')}`)
-        }
-      })
+      slotChecks(rel, s)
       challenges.push(s)
     } else scenarios.push(s)
   }

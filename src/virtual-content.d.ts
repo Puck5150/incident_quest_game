@@ -9,15 +9,28 @@ declare module 'virtual:content' {
     scenarios: Scenario[]
     challenges: Challenge[]
     canvases: CanvasChallenge[]
-    multis: {
-      id: string
-      track: string
-      title: string
-      difficulty: number
-      providers: Provider[]
-      variants: Partial<Record<Provider, CanvasChallenge>>
-      differences: Record<string, string>
-    }[]
+    multis: (
+      | {
+          kind: 'canvas'
+          id: string
+          track: string
+          title: string
+          difficulty: number
+          providers: Provider[]
+          variants: Partial<Record<Provider, CanvasChallenge>>
+          differences: Record<string, string>
+        }
+      | {
+          kind: 'slot'
+          id: string
+          track: string
+          title: string
+          difficulty: number
+          providers: Provider[]
+          variants: Partial<Record<Provider, Challenge>>
+          differences: Record<string, string>
+        }
+    )[]
   }
   export default content
 }

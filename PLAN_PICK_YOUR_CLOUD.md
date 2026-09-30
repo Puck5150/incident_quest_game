@@ -1,6 +1,6 @@
 # Plan: "Pick your cloud" challenges
 
-Status: **approved** with the defaults in §7. Building from P2.
+Status: **approved and built** (P2–P3), with the defaults in §7.
 
 ---
 

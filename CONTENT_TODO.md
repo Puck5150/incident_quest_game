@@ -128,3 +128,13 @@ from your own experience and tick them off.
 - [ ] Web server capacity (1× each) and all costs are scenario numbers.
 - [ ] The `differences` notes are the author's comparison of sourced facts;
       review them for anything you'd phrase differently from experience.
+
+## cloud-design/traffic-spike-any-cloud ("pick your cloud", slot)
+- [ ] CloudFront facts come from the cache-hit-ratio page ("served directly from
+      the CloudFront cache instead of going to your origin servers"); a general
+      "how CloudFront works" page would be a better second source.
+- [ ] The "scales: 20" judgment for CDNs and "scales: 1" for regional load
+      balancers is the same simplification as the Azure TV-ad challenge.
+- [ ] The Regional ALB option on Google Cloud: its "every request is forwarded"
+      fact is how the option is used here (no caching configured), not a
+      product limitation.

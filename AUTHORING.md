@@ -141,6 +141,29 @@ zone/region lanes, traffic links, and sync/async replication links. Start from
 - **Capacity numbers and costs are scenario values.** Label them "(scenario
   number)" in facts, and keep the relative costs believable.
 
+## "Pick your cloud" challenges
+
+Add `providers: [aws, azure, gcp]` to a canvas or slot challenge and the
+player chooses the cloud before starting. Start from
+`content/_pick_cloud_template.yaml` (canvas) or copy
+`content/cloud-design/traffic-spike-any-cloud.yaml` (slot).
+
+- **Behavior once, names per provider.** Scope, roles, capacity, cost and
+  capabilities are written once. Each part or option gets `as: { aws, azure,
+  gcp }` with its label, short label and sourced facts. Lanes get per-provider
+  names under `labels`, and `sources` and `link_facts` are per provider.
+- **`differences` is required** on every part and option. Say what isn't
+  equivalent (for example Azure's same-zone HA option), or "None that matter
+  here". The debrief shows it in the "Same design on other clouds" table.
+- **Tokens** keep the brief neutral: `{provider}`, `{region}`, `{zone:<id>}`,
+  `{service:<id>}`. Any token left unfilled fails the build.
+- **Checked per provider.** The build resolves the file into one ordinary
+  challenge per cloud and runs every check on each. Errors are tagged
+  `[aws]`, `[azure]` or `[gcp]`.
+- **Overrides** (`overrides: { gcp: { palette: { … } } }`, canvas only) are
+  for real, sourced differences in behavior. If one cloud needs its own
+  reference design, that's a sign the difference belongs in the debrief too.
+
 ## Accuracy rules (non-negotiable)
 
 - Commands, flags, output formats, and error messages must come from **official**

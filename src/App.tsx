@@ -15,6 +15,10 @@ import CanvasDebrief from './screens/CanvasDebrief.tsx'
 import { evaluateCanvas } from './game/canvas.ts'
 import PickCloudScreen from './screens/PickCloudScreen.tsx'
 import type { Provider } from './schema/multi.ts'
+import type { CanvasChallenge } from './schema/canvas.ts'
+import type { Challenge, Picks } from './schema/challenge.ts'
+import type { Design } from './schema/canvas.ts'
+import type { CrossCloud } from './components/CrossCloud.tsx'
 import type { QueueItem } from './screens/HomeScreen.tsx'
 import Icon from './components/Icon.tsx'
 
@@ -25,8 +29,8 @@ type Screen =
   | { name: 'tree' }
   | { name: 'incident'; id: string; run: number }
   | ({ name: 'debrief'; id: string; log: GameEvent[]; score: Score } & Outcome)
-  | { name: 'challenge'; id: string; run: number }
-  | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore } & Outcome)
+  | { name: 'challenge'; id: string; run: number; provider?: Provider }
+  | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore; provider?: Provider } & Outcome)
   | { name: 'pick-cloud'; id: string }
   | { name: 'canvas'; id: string; run: number; provider?: Provider }
   | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore; provider?: Provider } & Outcome)
@@ -55,12 +59,19 @@ export default function App() {
   const [progress, setProgress] = useState(loadProgress)
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   const scenario = 'id' in screen ? content.scenarios.find((s) => s.id === screen.id) : undefined
-  const challenge = 'id' in screen ? content.challenges.find((c) => c.id === screen.id) : undefined
   const multi = 'id' in screen ? content.multis.find((m) => m.id === screen.id) : undefined
-  // A "pick your cloud" challenge plays as the chosen provider's ordinary canvas challenge.
+  const provider = 'provider' in screen ? screen.provider : undefined
+  // A "pick your cloud" challenge plays as the chosen provider's ordinary
+  // canvas or slot challenge; everything downstream is unchanged.
+  const challenge =
+    multi?.kind === 'slot' && provider
+      ? multi.variants[provider]
+      : 'id' in screen
+        ? content.challenges.find((c) => c.id === screen.id)
+        : undefined
   const canvas =
-    'provider' in screen && screen.provider && multi
-      ? multi.variants[screen.provider]
+    multi?.kind === 'canvas' && provider
+      ? multi.variants[provider]
       : 'id' in screen
         ? content.canvases.find((c) => c.id === screen.id)
         : undefined
@@ -122,9 +133,9 @@ export default function App() {
     setScreen({ name: 'canvas-debrief', id, runs, score: s, provider, ...record(id, s, provider) })
   }
 
-  function challengeFinished(id: string, runs: Run[], hintsUsed: number) {
+  function challengeFinished(id: string, runs: Run[], hintsUsed: number, provider?: Provider) {
     const s = scoreChallenge(challenge!, runs, hintsUsed)
-    setScreen({ name: 'challenge-debrief', id, runs, score: s, ...record(id, s) })
+    setScreen({ name: 'challenge-debrief', id, runs, score: s, provider, ...record(id, s, provider) })
   }
 
   const setting = (patch: Partial<Progress['settings']>) =>
@@ -212,14 +223,25 @@ export default function App() {
           <IncidentScreen key={screen.run} scenario={scenario!} onResolved={(log) => resolved(screen.id, log)} />
         )}
         {screen.name === 'challenge' && (
-          <ChallengeScreen key={screen.run} challenge={challenge!} onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints)} />
+          <ChallengeScreen
+            key={screen.run}
+            challenge={challenge!}
+            onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints, screen.provider)}
+          />
         )}
         {screen.name === 'pick-cloud' && multi && (
           <PickCloudScreen
             title={multi.title}
-            variants={multi.variants}
+            providers={multi.providers}
+            summary={(p) => cloudSummary(multi, p)}
             completedOn={progress.completed[multi.id]?.providers ?? []}
-            onPick={(provider) => setScreen({ name: 'canvas', id: multi.id, run: Date.now(), provider })}
+            onPick={(provider) =>
+              setScreen(
+                multi.kind === 'canvas'
+                  ? { name: 'canvas', id: multi.id, run: Date.now(), provider }
+                  : { name: 'challenge', id: multi.id, run: Date.now(), provider },
+              )
+            }
           />
         )}
         {screen.name === 'canvas' && (
@@ -239,6 +261,7 @@ export default function App() {
             onHome={() => setScreen({ name: 'home' })}
             onTree={() => setScreen({ name: 'tree' })}
             onReplay={() => play(screen.id)}
+            crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.design) : undefined}
           />
         )}
         {screen.name === 'challenge-debrief' && (
@@ -251,6 +274,7 @@ export default function App() {
             onHome={() => setScreen({ name: 'home' })}
             onTree={() => setScreen({ name: 'tree' })}
             onReplay={() => play(screen.id)}
+            crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.picks) : undefined}
           />
         )}
         {screen.name === 'debrief' && (
@@ -270,4 +294,54 @@ export default function App() {
       </main>
     </>
   )
+}
+
+// What the picker lists for each cloud: canvas parts, or each tier's options.
+function cloudSummary(m: (typeof content.multis)[number], p: Provider): string[] {
+  if (m.kind === 'canvas') {
+    const v: CanvasChallenge | undefined = m.variants[p]
+    return v?.palette.map((x) => x.label) ?? []
+  }
+  const v: Challenge | undefined = m.variants[p]
+  return v?.tiers.map((t) => `${t.label}: ${t.options.map((o) => o.short ?? o.label).join(' · ')}`) ?? []
+}
+
+// The debrief's cross-cloud table: parts used in the player's design or the
+// reference, named on every cloud the challenge supports.
+function crossCloud(m: (typeof content.multis)[number], p: Provider, mine: Design | Picks): CrossCloud {
+  const clouds: Provider[] = m.providers
+  const sources = Object.fromEntries(clouds.map((q) => [q, m.variants[q]?.sources ?? []]))
+  if (m.kind === 'canvas') {
+    const variants = m.variants as Partial<Record<Provider, CanvasChallenge>>
+    const d = mine as Design
+    const ref = variants[p]!.reference_designs.flatMap((r) => r.design.nodes.map((n) => n.type))
+    const ids = [...new Set([...d.nodes.map((n) => n.type), ...ref])]
+    return {
+      current: p,
+      providers: m.providers,
+      sources,
+      rows: ids.map((id) => ({
+        id,
+        names: Object.fromEntries(clouds.map((q) => [q, variants[q]?.palette.find((x) => x.id === id)?.label ?? ''])),
+        differences: m.differences[id] ?? '',
+      })),
+    }
+  }
+  const variants = m.variants as Partial<Record<Provider, Challenge>>
+  const picks = mine as Picks
+  const base = variants[p]!
+  const ids = [...new Set([...Object.values(picks), ...base.reference_designs.flatMap((r) => Object.values(r.picks))])]
+  return {
+    current: p,
+    providers: m.providers,
+    sources,
+    rows: ids.map((id) => ({
+      id,
+      tier: base.tiers.find((t) => t.options.some((o) => o.id === id))?.label,
+      names: Object.fromEntries(
+        clouds.map((q) => [q, variants[q]?.tiers.flatMap((t) => t.options).find((o) => o.id === id)?.label ?? '']),
+      ),
+      differences: m.differences[id] ?? '',
+    })),
+  }
 }

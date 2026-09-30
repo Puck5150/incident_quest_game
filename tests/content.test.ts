@@ -11,6 +11,7 @@ import { ChallengeSchema } from '../src/schema/challenge.ts'
 import { evaluate } from '../src/game/challenge.ts'
 import { CanvasChallengeSchema } from '../src/schema/canvas.ts'
 import { evaluateCanvas } from '../src/game/canvas.ts'
+import { MultiCanvasSchema, resolveProvider, unresolvedTokens } from '../src/schema/multi.ts'
 import { newSession, step, type GameEvent } from '../src/game/engine.ts'
 
 const CONTENT = path.resolve(import.meta.dirname, '../content')
@@ -51,6 +52,20 @@ describe('content', () => {
     c!.counter_examples.forEach((x) =>
       expect(evaluateCanvas(c!, x.design).tests.filter((t) => !t.pass).map((t) => t.id)).toEqual(x.fails),
     )
+  })
+
+  it('_pick_cloud_template.yaml resolves and passes on every provider', () => {
+    const errors: string[] = []
+    const m = check(path.join(CONTENT, '_pick_cloud_template.yaml'), MultiCanvasSchema, errors)
+    expect(errors).toEqual([])
+    m!.providers.forEach((p) => {
+      const c = CanvasChallengeSchema.parse(resolveProvider(m!, p))
+      expect(unresolvedTokens(c)).toEqual([])
+      c.reference_designs.forEach((d) => expect(evaluateCanvas(c, d.design).pass).toBe(true))
+      c.counter_examples.forEach((x) =>
+        expect(evaluateCanvas(c, x.design).tests.filter((t) => !t.pass).map((t) => t.id)).toEqual(x.fails),
+      )
+    })
   })
 
   it('_template.yaml is itself a valid scenario', () => {

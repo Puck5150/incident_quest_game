@@ -1,5 +1,4 @@
 import { useId, useState } from 'react'
-import type { CanvasChallenge } from '../schema/canvas.ts'
 import { PROVIDER_NAMES, type Provider } from '../schema/multi.ts'
 import Icon from '../components/Icon.tsx'
 
@@ -7,17 +6,18 @@ import Icon from '../components/Icon.tsx'
 // tests on every provider; only the services (and their facts) change.
 export default function PickCloudScreen({
   title,
-  variants,
+  providers,
+  summary,
   completedOn,
   onPick,
 }: {
   title: string
-  variants: Partial<Record<Provider, CanvasChallenge>>
+  providers: Provider[]
+  summary: (p: Provider) => string[] // what you'll build with on that cloud
   completedOn: string[]
   onPick: (p: Provider) => void
 }) {
   const uid = useId()
-  const providers = Object.keys(variants) as Provider[]
   const [choice, setChoice] = useState<Provider>(providers.find((p) => !completedOn.includes(p)) ?? providers[0])
 
   return (
@@ -41,7 +41,6 @@ export default function PickCloudScreen({
       <fieldset className="grid gap-3 sm:grid-cols-3">
         <legend className="sr-only">Cloud provider</legend>
         {providers.map((p) => {
-          const v = variants[p]!
           const done = completedOn.includes(p)
           return (
             <label
@@ -67,8 +66,8 @@ export default function PickCloudScreen({
               </span>
               <span className="text-xs text-muted">You'll build with:</span>
               <ul className="list-disc space-y-0.5 pl-5 text-sm">
-                {v.palette.map((x) => (
-                  <li key={x.id}>{x.label}</li>
+                {summary(p).map((line) => (
+                  <li key={line}>{line}</li>
                 ))}
               </ul>
             </label>

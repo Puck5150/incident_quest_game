@@ -5,6 +5,7 @@ import Icon from '../components/Icon.tsx'
 import Card from '../components/Card.tsx'
 import ScoreTable from '../components/ScoreTable.tsx'
 import ResultHeader from '../components/ResultHeader.tsx'
+import CrossCloudCard, { type CrossCloud } from '../components/CrossCloud.tsx'
 
 export default function ChallengeDebrief({
   challenge: c,
@@ -15,6 +16,7 @@ export default function ChallengeDebrief({
   onHome,
   onTree,
   onReplay,
+  crossCloud,
 }: {
   challenge: Challenge
   runs: Run[]
@@ -24,6 +26,7 @@ export default function ChallengeDebrief({
   onHome: () => void
   onTree: () => void
   onReplay: () => void
+  crossCloud?: CrossCloud // "pick your cloud" challenges only
 }) {
   const picks = runs.at(-1)!.picks
   const mine = evaluate(c, picks)
@@ -143,6 +146,8 @@ export default function ChallengeDebrief({
           </div>
         )}
       </Card>
+
+      {crossCloud && <CrossCloudCard data={crossCloud} />}
 
       {earlier.length > 0 && (
         <Card title="What failed along the way">
