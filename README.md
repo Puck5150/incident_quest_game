@@ -13,7 +13,10 @@ Gateway health probes) and Google Cloud (Cloud Run vs. Cloud SQL connections).
 **Design challenges** flip it around: you build an architecture from a brief
 (pick a service per tier), run stress tests like a zone outage or a 20× traffic
 spike, and get scored on meeting the requirements without over-engineering.
-Current challenges cover AWS, Azure and Google Cloud.
+Current challenges cover AWS, Azure and Google Cloud, in two forms: pick an
+option per tier, or build the whole shape on a **design canvas** (components in
+zones, traffic links, sync or async replication), by drag and drop or entirely
+by keyboard or touch.
 
 ## Run it
 

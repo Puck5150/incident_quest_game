@@ -1,0 +1,225 @@
+type: challenge
+mode: canvas
+id: gcp-signup-canvas
+track: cloud-design
+difficulty: 3
+title: "Build a sign-up service: VMs or serverless?"
+provider: gcp
+par_minutes: 15
+
+brief: |
+  A new sign-up service in us-central1 must handle 4× normal traffic, keep
+  working if either zone it uses fails, and never lose a completed sign-up.
+  Half the team wants Compute Engine VMs they can tune; the other half wants
+  Cloud Run so there are no servers to manage. Either can work, if the rest of
+  the design is right.
+
+requirements:
+  - "Serve 4× normal traffic, even with one zone down"
+  - "Survive any single VM failing"
+  - "Keep accepting sign-ups if a zone or the database server fails, losing none"
+  - "Stay within 9 cost units per month"
+budget: 9
+
+layout:
+  regions:
+    - id: usc1
+      label: "us-central1"
+      zones:
+        - { id: usc1-a, label: "us-central1-a" }
+        - { id: usc1-b, label: "us-central1-b" }
+
+palette:
+  - id: lb
+    label: "Regional load balancer (for VMs)"
+    short: "LB"
+    scope: regional
+    roles: [route]
+    cost: 1
+    facts:
+      - "Spreads requests across VMs in several zones of the region, so traffic can move away from a failed zone."
+  - id: vm
+    label: "Compute Engine VM (web)"
+    short: "vm"
+    scope: zonal
+    roles: [serve]
+    capacity: 2
+    cost: 1
+    facts:
+      - "VM instances are zonal resources."
+      - "Each VM handles 2× normal traffic (scenario number)."
+  - id: cloud-run
+    label: "Cloud Run service"
+    short: "Cloud Run"
+    scope: regional
+    roles: [serve]
+    capacity: 6
+    cost: 4
+    facts:
+      - "Traffic is automatically load balanced across zones within the region."
+      - "If a zone fails, traffic is routed to other zones."
+      - "Autoscales to 6× normal traffic here (scenario number)."
+  - id: cloud-sql
+    label: "Cloud SQL for PostgreSQL instance"
+    short: "Cloud SQL"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts:
+      - "An instance runs in one zone."
+      - "High availability pairs a primary with a standby in a different zone of the same region."
+
+link_facts:
+  sync:
+    - "Like Cloud SQL high availability: writes are replicated to both zones before they're confirmed."
+    - "On failover the standby becomes the primary; expect about 60 seconds of unavailability."
+  async:
+    - "Like a read replica: replicated asynchronously, so it can be behind."
+    - "It doesn't take over writes automatically."
+
+stress_tests:
+  - id: peak
+    label: "Launch day: 4× traffic"
+    event: { none: true }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: zone-a
+    label: "us-central1-a fails"
+    event: { zone_outage: usc1-a }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: zone-b
+    label: "us-central1-b fails"
+    event: { zone_outage: usc1-b }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: vm-failure
+    label: "Any one VM fails"
+    event: { single_failure: vm }
+    check: { reach: [serve], capacity: 4 }
+  - id: db-host
+    label: "A database server fails"
+    event: { single_failure: cloud-sql }
+    check: { reach: [write-store] }
+
+reference_designs:
+  - name: "Serverless"
+    why: "Cloud Run is already spread across zones, so one service covers the zone requirement; Cloud SQL HA puts the standby in the other zone."
+    design:
+      nodes:
+        - { id: run, type: cloud-run, lane: usc1 }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: run, kind: traffic }
+        - { from: run, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+  - name: "VMs"
+    why: "Two VMs in each zone behind a regional load balancer keep 4× capacity after losing a zone; same Cloud SQL HA pair. Same cost, more to operate."
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: usc1 }
+        - { id: vm-1, type: vm, lane: usc1-a }
+        - { id: vm-2, type: vm, lane: usc1-a }
+        - { id: vm-3, type: vm, lane: usc1-b }
+        - { id: vm-4, type: vm, lane: usc1-b }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: vm-1, kind: traffic }
+        - { from: lb, to: vm-2, kind: traffic }
+        - { from: lb, to: vm-3, kind: traffic }
+        - { from: lb, to: vm-4, kind: traffic }
+        - { from: vm-1, to: sql-1, kind: traffic }
+        - { from: vm-2, to: sql-1, kind: traffic }
+        - { from: vm-3, to: sql-1, kind: traffic }
+        - { from: vm-4, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+
+counter_examples:
+  - name: "All VMs in one zone"
+    fails: [zone-a, vm-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: usc1 }
+        - { id: vm-1, type: vm, lane: usc1-a }
+        - { id: vm-2, type: vm, lane: usc1-a }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: vm-1, kind: traffic }
+        - { from: lb, to: vm-2, kind: traffic }
+        - { from: vm-1, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+  - name: "Serverless, but a single-zone database"
+    fails: [zone-a, db-host]
+    design:
+      nodes:
+        - { id: run, type: cloud-run, lane: usc1 }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+      edges:
+        - { from: users, to: run, kind: traffic }
+        - { from: run, to: sql-1, kind: traffic }
+  - name: "A read replica instead of HA"
+    fails: [zone-a, db-host]
+    design:
+      nodes:
+        - { id: run, type: cloud-run, lane: usc1 }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: run, kind: traffic }
+        - { from: run, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: async }
+  - name: "Both camps at once"
+    fails: [budget]
+    design:
+      nodes:
+        - { id: run, type: cloud-run, lane: usc1 }
+        - { id: lb, type: lb, lane: usc1 }
+        - { id: vm-1, type: vm, lane: usc1-a }
+        - { id: vm-2, type: vm, lane: usc1-b }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: run, kind: traffic }
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: vm-1, kind: traffic }
+        - { from: lb, to: vm-2, kind: traffic }
+        - { from: run, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+
+hints:
+  nudge: "Which of the two compute options already lives in more than one zone?"
+  direction: "Whichever compute you choose, remove a zone and count what's left. Then check that the database's standby is in the other zone and replicates synchronously."
+  answer: "Either Cloud Run, or two VMs per zone behind the load balancer, plus a Cloud SQL primary with a sync standby in the other zone."
+
+analogy:
+  title: "Hiring a delivery service vs. buying your own vans"
+  text: |
+    Buy vans and you decide where each is parked, and if they're all in one
+    garage, one flood strands them all. Hire a delivery service that already
+    has depots across town, and that problem is theirs. Either way, the
+    warehouse still needs its own backup in another building.
+
+debrief:
+  summary: |
+    Zonal resources (VMs) survive a zone failure only if you spread them and
+    over-provision them yourself. Regional managed services like Cloud Run do
+    that spreading for you. Both designs pass here at the same cost; the
+    difference is how much you operate. The database is the same story either
+    way: a synchronous standby in the other zone.
+  real_world: |
+    Google's guidance is to distribute resources across multiple zones and
+    regions to tolerate outages, and to duplicate important systems in
+    multiple zones.
+
+sources:
+  - title: "Compute Engine: Regions and zones (zonal resources)"
+    url: "https://docs.cloud.google.com/compute/docs/regions-zones"
+    retrieved: 2026-09-30
+  - title: "Cloud Run: Zonal redundancy"
+    url: "https://docs.cloud.google.com/run/docs/zonal-redundancy"
+    retrieved: 2026-09-30
+  - title: "Cloud SQL for PostgreSQL: High availability"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/high-availability"
+    retrieved: 2026-09-30

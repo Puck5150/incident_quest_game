@@ -111,3 +111,12 @@ from your own experience and tick them off.
 - [ ] Apps reaching the database "through its endpoint" (so a traffic link to
       the primary also reaches its sync standby after failover) models the RDS
       DNS switch described in the failover docs.
+
+## cloud-design/azure-portal-canvas and gcp-signup-canvas
+- [ ] Capacities (App Service instance 2×, VM 2×, Cloud Run 6×) and costs are
+      scenario numbers.
+- [ ] Placing App Service instances in zone lanes models how a zone-redundant
+      plan spreads instances; in Azure you don't place instances yourself.
+- [ ] The GCP "regional load balancer" palette item's fact is paraphrased from
+      the Compute Engine regions/zones guidance (move traffic to another zone),
+      not from a load-balancing product page.

@@ -115,6 +115,32 @@ contain `type: challenge`.
 - Keep `requirements` and `stress_tests` in step: every requirement should be
   checked by a test or by the budget.
 
+## Canvas challenges
+
+The canvas mode lets players build the architecture's *shape*: components in
+zone/region lanes, traffic links, and sync/async replication links. Start from
+`content/_canvas_template.yaml` (`type: challenge` plus `mode: canvas`).
+
+- **Palette.** Each component has a `scope` (zonal, regional or global, which
+  decides the lanes it can go in), `roles` (`route`, `serve`, `write-store`), a
+  `capacity` for `serve`, a cost, and sourced `facts`. Keep it small: 3–5 parts.
+- **How the engine judges a design** (`src/game/canvas.ts`):
+  - A zone outage removes zonal parts in that zone. A region outage also removes
+    that region's regional parts. `single_failure` removes each part of a type,
+    one at a time.
+  - The database nothing replicates *into* is the primary. A **sync** standby
+    takes over automatically; an **async** replica does not.
+  - Traffic must reach a `serve` part from `users`, and a part users can reach
+    must link to the primary (or its sync standby, since apps connect to the
+    database's endpoint). `capacity` counts only what survives.
+- **Counter-examples replace enumeration.** Free-form designs can't all be
+  checked, so list the mistakes the challenge is about, each with the exact
+  tests it must fail. The validator runs them. If one fails for an *unintended*
+  reason (say, a web server you forgot to link), the build tells you, and that's
+  usually a sign the counter-example isn't isolating its lesson.
+- **Capacity numbers and costs are scenario values.** Label them "(scenario
+  number)" in facts, and keep the relative costs believable.
+
 ## Accuracy rules (non-negotiable)
 
 - Commands, flags, output formats, and error messages must come from **official**

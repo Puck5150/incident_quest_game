@@ -180,7 +180,7 @@ export default function Board({
             <section key={r.id} aria-label={r.label} className="space-y-2 rounded-lg border border-dashed border-line p-3">
               <h3 className="text-sm font-medium">{r.label}</h3>
               {lane(all.find((l) => l.id === r.id)!)}
-              <div className="grid gap-2 sm:grid-cols-2">{zones.map(lane)}</div>
+              <div className={`grid gap-2 sm:grid-cols-2 ${zones.length >= 3 ? 'xl:grid-cols-3' : ''}`}>{zones.map(lane)}</div>
             </section>
           )
         })}

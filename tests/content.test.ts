@@ -9,6 +9,8 @@ import { check, loadContent } from '../vite-plugin-content.ts'
 import { ScenarioSchema } from '../src/schema/scenario.ts'
 import { ChallengeSchema } from '../src/schema/challenge.ts'
 import { evaluate } from '../src/game/challenge.ts'
+import { CanvasChallengeSchema } from '../src/schema/canvas.ts'
+import { evaluateCanvas } from '../src/game/canvas.ts'
 import { newSession, step, type GameEvent } from '../src/game/engine.ts'
 
 const CONTENT = path.resolve(import.meta.dirname, '../content')
@@ -39,6 +41,16 @@ describe('content', () => {
     const c = check(path.join(CONTENT, '_challenge_template.yaml'), ChallengeSchema, errors)
     expect(errors).toEqual([])
     c!.reference_designs.forEach((d) => expect(evaluate(c!, d.picks).pass).toBe(true))
+  })
+
+  it('_canvas_template.yaml is valid: reference passes, counter-example fails exactly as listed', () => {
+    const errors: string[] = []
+    const c = check(path.join(CONTENT, '_canvas_template.yaml'), CanvasChallengeSchema, errors)
+    expect(errors).toEqual([])
+    c!.reference_designs.forEach((d) => expect(evaluateCanvas(c!, d.design).pass).toBe(true))
+    c!.counter_examples.forEach((x) =>
+      expect(evaluateCanvas(c!, x.design).tests.filter((t) => !t.pass).map((t) => t.id)).toEqual(x.fails),
+    )
   })
 
   it('_template.yaml is itself a valid scenario', () => {

@@ -1,0 +1,130 @@
+# ============================================================================
+# Incident Quest canvas design-challenge template
+#
+# Copy to content/<track>/<id>.yaml (id = filename, track = folder).
+# `type: challenge` + `mode: canvas` make this a canvas challenge.
+# `npm test` checks that every reference design passes and that every
+# counter-example fails EXACTLY the tests it lists. See AUTHORING.md,
+# "Canvas challenges".
+# ============================================================================
+
+type: challenge
+mode: canvas
+id: example-canvas
+track: cloud-design
+difficulty: 3
+title: "Build something that survives losing a zone"
+provider: aws                 # aws | azure | gcp
+par_minutes: 15
+
+brief: |
+  The business situation, and what must keep working.
+
+requirements:                 # each should map to a stress test or the budget
+  - "Serve 2× traffic with one zone down"
+  - "Stay within 8 cost units per month"
+budget: 8
+
+layout:
+  global: false               # true adds a lane for global services (CDNs, global LBs)
+  regions:
+    - id: r1
+      label: "region-1"
+      zones:
+        - { id: r1-a, label: "zone a" }
+        - { id: r1-b, label: "zone b" }
+
+palette:                      # the components players can place
+  - id: lb
+    label: "Load balancer"
+    short: "LB"               # chip label, max 22 characters; ids become lb-1, lb-2…
+    scope: regional           # zonal | regional | global: which lanes accept it
+    roles: [route]            # route | serve | write-store
+    cost: 1
+    facts: ["A sourced fact about it."]
+  - id: web
+    label: "Web server"
+    short: "web"
+    scope: zonal
+    roles: [serve]
+    capacity: 1               # multiples of normal traffic it serves
+    cost: 1
+    facts: ["Runs in one zone."]
+  - id: db
+    label: "Database"
+    short: "db"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts: ["Runs in one zone."]
+
+link_facts:                   # shown next to the replication controls
+  sync: ["What synchronous replication means for this provider (sourced)."]
+  async: ["What asynchronous replication means (sourced)."]
+
+stress_tests:
+  # events: { none: true } | { zone_outage: <zone> } | { region_outage: <region> }
+  #         | { single_failure: <palette id> }  (each such component, one at a time)
+  # checks: reach [serve, write-store], optional capacity (surviving serve capacity)
+  - id: zone-a
+    label: "zone a fails"
+    event: { zone_outage: r1-a }
+    check: { reach: [serve, write-store], capacity: 2 }
+
+reference_designs:            # must pass everything within budget
+  - name: "Recommended"
+    why: "Why this shape."
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: web, lane: r1-a }
+        - { id: web-2, type: web, lane: r1-b }
+        - { id: web-3, type: web, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+
+counter_examples:             # each must fail EXACTLY `fails` ("budget" counts)
+  - name: "Everything in zone a"
+    fails: [zone-a]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: web, lane: r1-a }
+        - { id: web-2, type: web, lane: r1-a }
+        - { id: db-1, type: db, lane: r1-a }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+
+hints:
+  nudge: "A question."
+  direction: "Where to look."
+  answer: "The answer."
+
+analogy:
+  title: "Non-IT comparison"
+  text: |
+    Explain the shape with everyday things.
+
+debrief:
+  summary: |
+    The principle.
+  real_world: |
+    Optional vendor guidance.
+
+sources:
+  - title: "Official doc page"
+    url: "https://example.com/doc"
+    retrieved: 2026-01-01

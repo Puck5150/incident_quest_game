@@ -1,0 +1,245 @@
+type: challenge
+mode: canvas
+id: azure-portal-canvas
+track: cloud-design
+difficulty: 3
+title: "Build a customer portal that shrugs off a zone failure"
+provider: azure
+par_minutes: 15
+
+brief: |
+  The customer portal runs in East US 2, a region with three availability
+  zones. It needs to serve 4× normal traffic at month-end, even if a zone
+  fails then, and account changes can't be lost. Your team lead mentions that
+  "the database already has high availability turned on." Check what kind.
+
+requirements:
+  - "Serve 4× normal traffic, even with any one availability zone down"
+  - "Keep accepting account changes if any one zone fails, losing none"
+  - "Keep accepting changes if the database server itself fails"
+  - "Stay within 11 cost units per month"
+budget: 11
+
+layout:
+  global: true
+  regions:
+    - id: eus2
+      label: "East US 2"
+      zones:
+        - { id: eus2-z1, label: "Zone 1" }
+        - { id: eus2-z2, label: "Zone 2" }
+        - { id: eus2-z3, label: "Zone 3" }
+    - id: wus2
+      label: "West US 2"
+      zones:
+        - { id: wus2-z1, label: "Zone 1 (West US 2)" }
+
+palette:
+  - id: front-door
+    label: "Azure Front Door"
+    short: "Front Door"
+    scope: global
+    roles: [route]
+    cost: 2
+    facts:
+      - "A global entry point: a content delivery network with load balancing capabilities."
+  - id: app-gateway
+    label: "Application Gateway v2"
+    short: "App Gateway"
+    scope: regional
+    roles: [route]
+    cost: 2
+    facts:
+      - "A regional layer-7 load balancer with autoscaling and zone redundancy."
+  - id: app-instance
+    label: "App Service instance (Premium v3)"
+    short: "app"
+    scope: zonal
+    roles: [serve]
+    capacity: 2
+    cost: 1
+    facts:
+      - "A zone-redundant App Service plan spreads its instances across availability zones; place them to show where they run."
+      - "Each instance handles 2× normal traffic (scenario number)."
+  - id: pg
+    label: "Azure Database for PostgreSQL flexible server"
+    short: "PostgreSQL"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts:
+      - "A server runs in one availability zone."
+      - "High availability adds a standby server, billed like the primary, in the same zone (zonal HA) or another zone (zone-redundant HA)."
+  - id: pg-geo
+    label: "Cross-region read replica"
+    short: "PG replica (DR)"
+    scope: zonal
+    roles: [write-store]
+    cost: 3
+    facts:
+      - "A separate server in another region, updated asynchronously; replication lag is typically at least several minutes."
+      - "Azure doesn't promote read replicas automatically, even if a region fails."
+    overkill: "Region-level recovery wasn't in the brief; zone-redundant HA meets the zone requirements for less."
+
+link_facts:
+  sync:
+    - "Like PostgreSQL high availability: a transaction isn't complete until both primary and standby acknowledge the write."
+    - "Failover to the standby is automatic, typically within 60-120 seconds."
+  async:
+    - "Like a read replica: updated asynchronously, so it can lag the primary."
+    - "Promotion is something you trigger; unreplicated data is lost in a forced promotion."
+
+stress_tests:
+  - id: month-end
+    label: "Month-end: 4× traffic"
+    event: { none: true }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: zone-1
+    label: "Zone 1 fails at month-end"
+    event: { zone_outage: eus2-z1 }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: zone-2
+    label: "Zone 2 fails at month-end"
+    event: { zone_outage: eus2-z2 }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: zone-3
+    label: "Zone 3 fails at month-end"
+    event: { zone_outage: eus2-z3 }
+    check: { reach: [serve, write-store], capacity: 4 }
+  - id: db-host
+    label: "A database server fails"
+    event: { single_failure: pg }
+    check: { reach: [write-store] }
+
+reference_designs:
+  - name: "Recommended"
+    why: "One instance in each of three zones: losing any zone still leaves 4× capacity, with one fewer instance than a two-zone design needs. The standby sits in a different zone (zone-redundant HA)."
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z2 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+
+counter_examples:
+  - name: "High availability, but in the same zone"
+    fails: [zone-1]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z1 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+  - name: "Only two instances"
+    fails: [zone-1, zone-2]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z2 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+  - name: "No high availability"
+    fails: [zone-1, db-host]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+  - name: "Plus a cross-region replica"
+    fails: [budget]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z2 }
+        - { id: pg-dr, type: pg-geo, lane: wus2-z1 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+        - { from: pg-1, to: pg-dr, kind: async }
+
+hints:
+  nudge: "\"High availability is on\" doesn't say where the standby lives."
+  direction: "Take away each zone in turn. What's left must still reach a database that accepts writes, and add up to 4×."
+  answer: "One app instance in each of the three zones, and a PostgreSQL primary with a sync standby in a different zone."
+
+analogy:
+  title: "A spare key kept on the same keyring"
+  text: |
+    Keeping a spare house key is smart, unless it's on the same keyring as the
+    original. Lose the keyring and you've lost both. A spare in a different
+    place is what actually protects you. And with three friends each holding a
+    key, losing one friend still leaves two.
+
+debrief:
+  summary: |
+    "High availability" has a scope. Same-zone HA protects against a server
+    failing, but not against its zone failing, because the standby is in the
+    same place. Zone-redundant HA puts the standby in another zone. Spreading
+    the app across three zones also means each zone carries a smaller share,
+    so you need less spare capacity to survive losing one.
+  real_world: |
+    Microsoft recommends zone-redundant deployments for production PostgreSQL
+    servers. Zonal HA is mainly for regions without zones, and it's also offered
+    when a region lacks capacity for a zone-redundant deployment.
+
+sources:
+  - title: "Reliability in Azure Database for PostgreSQL"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql"
+    retrieved: 2026-09-30
+  - title: "Reliability in Azure App Service (zone redundancy)"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-app-service"
+    retrieved: 2026-09-30
+  - title: "Azure Front Door: Caching (CDN and load balancing)"
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-caching"
+    retrieved: 2026-09-30
+  - title: "What is Azure Application Gateway"
+    url: "https://learn.microsoft.com/en-us/azure/application-gateway/overview"
+    retrieved: 2026-09-30
