@@ -28,7 +28,8 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
   game mode: build an architecture from requirements (SLOs, traffic, budget) and
   get scored on trade-offs. Needs new schema, UI and scoring; would draw on the
   AWS and Azure Well-Architected Frameworks and the Google Cloud Architecture Framework.
-  **Planned in PLAN_DESIGN_CHALLENGES.md (awaiting approval).**
+  **Shipped: see PLAN_DESIGN_CHALLENGES.md.** Still parked: drag-and-drop canvas,
+  provider-agnostic "pick your cloud" challenges, more challenges.
 - More cloud incidents: public storage bucket, missing autoscaling, cross-region
   latency, IAM least privilege, DNS failover TTLs.
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)

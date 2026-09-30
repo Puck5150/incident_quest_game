@@ -81,10 +81,23 @@ from your own experience and tick them off.
 - [ ] `--max` flag: taken from the current Cloud Run docs (older docs and
       scripts use `--max-instances`).
 
-## cloud-design/aws-checkout-az-resilience (design-challenge D2 placeholder)
-- [ ] Placeholder written to exercise the challenge engine. Full doc-verified
-      version (and Azure/GCP challenges) comes in D4.
-- [ ] EC2 Auto Scaling facts ("launches and replaces instances across the
-      Availability Zones you give it"): paraphrased from Well-Architected REL10;
-      cite the EC2 Auto Scaling docs directly in D4.
-- [ ] Cost units are illustrative by design (see PLAN_DESIGN_CHALLENGES.md §2).
+## cloud-design (design challenges, all three)
+- [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
+      that the relative ordering feels right to you.
+- [ ] Hidden capabilities (`scales`, `survives`) are judgment calls, not doc
+      facts. For example: Front Door caching absorbs a 20× static-page spike
+      (`scales: 20`), and Application Gateway doesn't (`scales: 1`). Review these
+      against your experience.
+
+## cloud-design/aws-checkout-az-resilience
+- [ ] "Every instance launches in the one Availability Zone you gave the group"
+      is inferred from how Auto Scaling groups use subnets; not quoted.
+
+## cloud-design/azure-tv-ad-marketing-site
+- [ ] Standard plan facts are from "Reliability in Azure App Service" (fault
+      domains; nonzonal plans can go down in a zone outage). Cost of Standard vs.
+      Premium v3 is illustrative.
+
+## cloud-design/gcp-launch-day-signups
+- [ ] "About 60 Cloud Run instances at peak" and the 500-connection limit are
+      scenario numbers, not Google figures.

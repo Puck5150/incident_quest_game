@@ -1,0 +1,158 @@
+type: challenge
+id: gcp-launch-day-signups
+track: cloud-design
+difficulty: 3
+title: "Launch-day sign-ups without melting the database"
+provider: gcp
+par_minutes: 15
+
+brief: |
+  Last launch, sign-ups failed when Cloud Run scaled out and the fleet opened
+  more database connections than Cloud SQL allowed. This time: handle 15×
+  normal sign-up traffic, never exceed the database's 500-connection limit, and
+  don't lose a single sign-up if the database's zone goes down. The app uses
+  SQLAlchemy, whose pool allows up to pool_size + max_overflow connections per
+  instance.
+
+requirements:
+  - "Absorb 15× normal sign-up traffic (about 60 Cloud Run instances at peak)"
+  - "Never exceed the database's 500-connection limit"
+  - "Survive the loss of one zone"
+  - "Lose no committed sign-ups if the database fails over"
+  - "Stay within 14 cost units per month"
+budget: 14
+
+tiers:
+  - id: app
+    label: "signup-api on Cloud Run"
+    options:
+      - id: default-scaling
+        label: "Max instances left at default (100), pool 10 + overflow 10"
+        short: "≤100 × 20 conns"
+        cost: 4
+        facts:
+          - "Cloud Run's default is 100 instances per revision."
+          - "Each instance's pool allows up to 20 connections."
+          - "Cloud Run balances traffic across the zones of the region and routes around a failed zone."
+        capabilities: { survives: [zone-outage], scales: 25 }
+      - id: capped-low
+        label: "Max instances 20, pool 10 + overflow 10"
+        short: "≤20 × 20 conns"
+        cost: 3
+        facts:
+          - "At the cap, Cloud Run answers extra requests with HTTP 429 (no available instance)."
+          - "Each instance's pool allows up to 20 connections."
+          - "Cloud Run balances traffic across the zones of the region and routes around a failed zone."
+        capabilities: { survives: [zone-outage, connection-surge], scales: 5 }
+      - id: capped-right
+        label: "Max instances 60, pool 4 + overflow 3"
+        short: "≤60 × 7 conns"
+        cost: 4
+        facts:
+          - "Setting max instances limits the number of connections to a backing service such as a database."
+          - "Each instance's pool allows up to 7 connections."
+          - "Cloud Run balances traffic across the zones of the region and routes around a failed zone."
+        capabilities: { survives: [zone-outage, connection-surge], scales: 15 }
+  - id: database
+    label: "Cloud SQL for PostgreSQL (max_connections 500)"
+    options:
+      - id: zonal
+        label: "Single-zone instance"
+        short: "Cloud SQL (1 zone)"
+        cost: 3
+        facts: ["One instance in one zone."]
+        capabilities: { survives: [connection-surge], rpo: minutes }
+      - id: regional-ha
+        label: "High availability (regional) instance"
+        short: "Cloud SQL HA"
+        cost: 6
+        facts:
+          - "A primary and a standby in different zones of the same region."
+          - "Writes are synchronously replicated to both zones before they're confirmed."
+          - "On failover, expect about 60 seconds of unavailability; apps reconnect with the same connection string."
+        capabilities: { survives: [zone-outage, connection-surge], rpo: zero }
+      - id: ha-plus-dr
+        label: "HA instance plus a cross-region read replica"
+        short: "Cloud SQL HA + DR"
+        cost: 10
+        facts:
+          - "Adds a read replica in another region on top of regional HA."
+        capabilities: { survives: [zone-outage, region-outage, connection-surge], rpo: zero }
+        overkill: "A region-level copy wasn't in the brief. Regional HA meets every requirement for less."
+
+stress_tests:
+  - id: launch-spike
+    label: "Launch email lands: 15× sign-up traffic"
+    requires: { tier: app, min_scales: 15 }
+  - id: connection-surge
+    label: "Every instance opens its full pool at once"
+    requires: { every_tier_survives: connection-surge }
+  - id: zone-outage
+    label: "The database's zone goes down"
+    requires: { every_tier_survives: zone-outage }
+  - id: failover-data
+    label: "The database fails over mid-sign-up"
+    requires: { tier: database, rpo_at_most: zero }
+
+failure_feedback:
+  default-scaling:
+    connection-surge: "Up to 100 instances × 20 connections = 2,000, four times the 500-connection limit."
+  capped-low:
+    launch-spike: "20 instances weren't enough for launch traffic; the rest got 429s."
+  zonal:
+    zone-outage: "The only database instance was in the failed zone."
+    failover-data: "There's no synchronous standby, so recovery means restoring from backups, and recent sign-ups are at risk."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { app: capped-right, database: regional-ha }
+    why: "60 instances × 7 connections = 420, under the 500 limit with headroom, and enough instances for launch traffic. Regional HA covers the zone outage with synchronous replication."
+
+hints:
+  nudge: "Multiply. How many connections can the whole fleet open at its biggest?"
+  direction: "You need enough instances for the spike and a small enough pool per instance that instances × pool stays under 500. Then look at which database survives a zone loss without losing writes."
+  answer: "Max 60 instances with a pool of 4 + 3 (420 connections), on a regional HA Cloud SQL instance."
+
+analogy:
+  title: "Hiring for a sale without overbooking the fitting rooms"
+  text: |
+    A store hires extra staff for a big sale, and each one reserves fitting
+    rooms for customers. Hire too many, or let each reserve too many rooms, and
+    you've promised more rooms than exist. The fix is arithmetic: enough staff
+    for the crowd, each holding only a few rooms, so the total fits the building.
+
+debrief:
+  summary: |
+    Serverless compute scales out by adding instances, and each instance brings
+    its own connection pool. The total a database sees is max instances ×
+    connections per instance. Capping instances alone can starve the launch;
+    shrinking the pool alone can still overflow at 100 instances. The design
+    that works sizes both together. For the zone requirement, regional HA
+    replicates writes synchronously to a standby in another zone.
+  real_world: |
+    Google's docs spell out the connection math for Cloud Run and Cloud SQL,
+    and recommend connection pools and max instances. Cloud SQL Enterprise Plus
+    also offers Managed Connection Pooling for connection surges.
+
+sources:
+  - title: "Cloud Run: Set maximum instances for services"
+    url: "https://docs.cloud.google.com/run/docs/configuring/max-instances"
+    retrieved: 2026-09-30
+  - title: "Cloud Run: Zonal redundancy"
+    url: "https://docs.cloud.google.com/run/docs/zonal-redundancy"
+    retrieved: 2026-09-30
+  - title: "Cloud Run: Troubleshooting (HTTP 429 no available instance)"
+    url: "https://docs.cloud.google.com/run/docs/troubleshooting"
+    retrieved: 2026-09-30
+  - title: "Cloud SQL for PostgreSQL: Connect from Cloud Run (connection limits)"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/connect-run"
+    retrieved: 2026-09-30
+  - title: "Cloud SQL for PostgreSQL: High availability"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/high-availability"
+    retrieved: 2026-09-30
+  - title: "Cloud SQL for PostgreSQL: Managed Connection Pooling"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/managed-connection-pooling"
+    retrieved: 2026-09-30
+  - title: "SQLAlchemy: Connection Pooling (pool_size + max_overflow)"
+    url: "https://docs.sqlalchemy.org/en/20/core/pooling.html"
+    retrieved: 2026-09-30

@@ -1,6 +1,6 @@
 # Plan: Design-challenge mode (cloud system design, part 2)
 
-Status: **draft, awaiting your approval.** No code has been written.
+Status: **approved and built** (D2–D4 shipped). Defaults from §8 were accepted.
 
 ---
 

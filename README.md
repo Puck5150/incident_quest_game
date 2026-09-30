@@ -10,6 +10,11 @@ Terraform state locking, GitHub Actions, a microservices cascading failure, and
 cloud architecture failures on AWS (single-AZ database), Azure (Application
 Gateway health probes) and Google Cloud (Cloud Run vs. Cloud SQL connections).
 
+**Design challenges** flip it around: you build an architecture from a brief
+(pick a service per tier), run stress tests like a zone outage or a 20× traffic
+spike, and get scored on meeting the requirements without over-engineering.
+Current challenges cover AWS, Azure and Google Cloud.
+
 ## Run it
 
 ```sh
@@ -22,6 +27,7 @@ npm run build   # also fails on any invalid scenario
 ## Docs
 
 - [PLAN.md](PLAN.md): architecture, data model, game loop, scoring
-- [AUTHORING.md](AUTHORING.md): write your own incidents (they're YAML, no code)
+- [AUTHORING.md](AUTHORING.md): write your own incidents and design challenges (they're YAML, no code)
+- [PLAN_DESIGN_CHALLENGES.md](PLAN_DESIGN_CHALLENGES.md): how design challenges work
 - [CONTENT_TODO.md](CONTENT_TODO.md): output formats still to verify against real systems
 - [PARKING_LOT.md](PARKING_LOT.md): ideas for later

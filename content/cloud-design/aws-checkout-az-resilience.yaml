@@ -1,7 +1,3 @@
-# PLACEHOLDER (design-challenge milestone D2). Exercises the engine end to end.
-# Option facts reuse sources already fetched in Milestone 7; the full,
-# doc-verified version is written in D4. Costs are illustrative units.
-
 type: challenge
 id: aws-checkout-az-resilience
 track: cloud-design
@@ -37,14 +33,16 @@ tiers:
         short: "ASG (1 AZ)"
         label: "EC2 Auto Scaling group in one AZ, behind an ALB"
         cost: 3
-        facts: ["Auto Scaling replaces unhealthy instances and adds more under load, but only in the subnets you give it."]
+        facts:
+          - "Auto Scaling replaces unhealthy instances and adds capacity under load."
+          - "Every instance launches in the one Availability Zone you gave the group."
         capabilities: { survives: [instance-failure], scales: 10 }
       - id: asg-multi-az
         short: "ASG (2 AZs)"
         label: "EC2 Auto Scaling group across two AZs, behind an ALB"
         cost: 3
         facts:
-          - "Auto Scaling launches and replaces instances across the Availability Zones you give it."
+          - "Auto Scaling keeps an equal number of instances across the enabled Availability Zones; if launches fail in one zone, it launches in another healthy zone."
           - "Load balancers reroute traffic to targets in healthy zones."
         capabilities: { survives: [instance-failure, az-outage], scales: 10 }
   - id: database
@@ -125,6 +123,12 @@ debrief:
     requirements.
 
 sources:
+  - title: "Amazon EC2 Auto Scaling: Availability Zone distribution"
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-availability-zone-balanced.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Promoting a read replica (disaster recovery)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.Promote.html"
+    retrieved: 2026-09-30
   - title: "Amazon RDS: Multi-AZ DB instance deployments"
     url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
     retrieved: 2026-09-30

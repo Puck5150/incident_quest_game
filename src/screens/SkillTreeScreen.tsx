@@ -1,6 +1,5 @@
 import type { Track } from '../schema/scenario.ts'
-
-type Item = { id: string; track: string; kind?: 'incident' | 'challenge' }
+import { layout, type Item, type Node } from './skillTreeLayout.ts'
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
 
@@ -9,7 +8,6 @@ const H = 88 // node height
 const COL = 260
 const ROW = 116
 
-type Node = { track: Track; col: number; row: number; done: number; total: number; open: boolean; design: boolean }
 
 // Tracks laid out left to right by how deep their prerequisites go. Only
 // tracks with content appear (PLAN.md milestone 6).
@@ -130,64 +128,4 @@ export default function SkillTreeScreen({
       </div>
     </div>
   )
-}
-
-function layout(tracks: Track[], scenarios: Item[], progress: Progress, unlocked: Set<string>): Node[] {
-  const withContent = tracks.filter((t) => scenarios.some((s) => s.track === t.id))
-  const ids = new Set(withContent.map((t) => t.id))
-  const depth = new Map<string, number>()
-  const depthOf = (t: Track): number => {
-    if (!depth.has(t.id)) {
-      const reqs = t.requires.filter((r) => ids.has(r)).map((r) => depthOf(withContent.find((x) => x.id === r)!))
-      depth.set(t.id, reqs.length ? Math.max(...reqs) + 1 : 0)
-    }
-    return depth.get(t.id)!
-  }
-  // Roots stack top to bottom; a dependent track sits level with the average
-  // of its prerequisites, so edges stay short and mostly horizontal.
-  const rowOf = new Map<string, number>()
-  const nextRoot = { row: 0 }
-  const sorted = [...withContent].sort((a, b) => depthOf(a) - depthOf(b))
-  sorted.forEach((t) => {
-    const reqRows = t.requires.filter((r) => rowOf.has(r)).map((r) => rowOf.get(r)!)
-    let row = reqRows.length ? reqRows.reduce((a, b) => a + b, 0) / reqRows.length : nextRoot.row++
-    const taken = () => sorted.some((o) => o !== t && rowOf.get(o.id) === row && depthOf(o) === depthOf(t))
-    while (taken()) row += 1
-    rowOf.set(t.id, row)
-  })
-
-  // An edge that skips a column (Networking -> Microservices) must not run
-  // behind a node in the column it skips, or it reads as a dependency on that
-  // node. Move any such node down to the next clear row.
-  const byTrack = new Map(withContent.map((t) => [t.id, t]))
-  const skipping = withContent.flatMap((t) =>
-    t.requires.filter((r) => byTrack.has(r)).map((r) => ({ from: r, to: t.id })),
-  )
-  const blocked = (id: string, row: number) =>
-    skipping.some(({ from, to }) => {
-      const [a, b, c] = [depthOf(byTrack.get(from)!), depthOf(byTrack.get(to)!), depthOf(byTrack.get(id)!)]
-      if (!(a < c && c < b)) return false
-      const y = rowOf.get(from)! + ((rowOf.get(to)! - rowOf.get(from)!) * (c - a)) / (b - a)
-      return Math.abs(y - row) < 0.75
-    })
-  sorted.forEach((t) => {
-    let row = rowOf.get(t.id)!
-    const clash = (r: number) => sorted.some((o) => o !== t && rowOf.get(o.id) === r && depthOf(o) === depthOf(t))
-    while (blocked(t.id, row) || clash(row)) row += 1
-    rowOf.set(t.id, row)
-  })
-  return withContent.map((t) => {
-    const col = depthOf(t)
-    const row = rowOf.get(t.id)!
-    const inTrack = scenarios.filter((s) => s.track === t.id)
-    return {
-      track: t,
-      col,
-      row,
-      done: inTrack.filter((s) => progress.completed[s.id]).length,
-      total: inTrack.length,
-      open: unlocked.has(t.id),
-      design: inTrack.every((s) => s.kind === 'challenge'),
-    }
-  })
 }

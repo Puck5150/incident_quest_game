@@ -1,0 +1,151 @@
+type: challenge
+id: azure-tv-ad-marketing-site
+track: cloud-design
+difficulty: 2
+title: "A marketing site ready for a TV ad"
+provider: azure
+par_minutes: 10
+
+brief: |
+  The company's first national TV ad airs Sunday night. Marketing expects
+  about 20× normal traffic for the hour after it runs, almost all of it people
+  viewing the same few mostly-static pages. The site runs on Azure App Service
+  in one region today. It needs to stay up through that spike, and through the
+  normal bad luck of an instance or an availability zone failing.
+
+requirements:
+  - "Serve 20× normal traffic, mostly the same static pages"
+  - "Keep serving if an app instance fails"
+  - "Keep serving if one availability zone fails"
+  - "Stay within 14 cost units per month"
+budget: 14
+
+tiers:
+  - id: edge
+    label: "Front door / edge"
+    options:
+      - id: edge-none
+        label: "Nothing in front: users go straight to App Service"
+        short: "(no edge)"
+        cost: 0
+        facts: ["Every request, including repeat views of the same page, reaches your app."]
+        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+      - id: app-gateway
+        label: "Azure Application Gateway v2"
+        short: "App Gateway v2"
+        cost: 3
+        facts:
+          - "A regional layer-7 load balancer that routes on URL paths and host headers."
+          - "Supports autoscaling, zone redundancy and a Web Application Firewall."
+          - "Load-balances requests across your backends."
+        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+      - id: front-door
+        label: "Azure Front Door with caching on the static-page route"
+        short: "Front Door + cache"
+        cost: 4
+        facts:
+          - "A content delivery network with global load balancing."
+          - "Edge sites answer from cache when they can, which reduces the traffic sent to your origin."
+          - "Static assets are ideal for caching; only GET requests are cached."
+        capabilities: { survives: [instance-failure, zone-outage], scales: 20 }
+  - id: web
+    label: "App Service plan"
+    options:
+      - id: single-instance
+        label: "Standard plan, 1 instance"
+        short: "App Service ×1"
+        cost: 2
+        facts: ["Microsoft recommends multiple instances: while an unhealthy instance is replaced, there can be a short period with no instance ready to serve."]
+        capabilities: { survives: [], scales: 1 }
+      - id: three-instances
+        label: "Standard plan, 3 instances (not zone redundant)"
+        short: "App Service ×3"
+        cost: 4
+        facts:
+          - "Three instances share the load; instances are spread across fault domains in the region."
+          - "A plan that isn't zone redundant can go down during an outage in any zone of the region."
+        capabilities: { survives: [instance-failure], scales: 3 }
+      - id: zone-redundant
+        label: "Premium v3 plan, zone redundant (at least 2 instances)"
+        short: "App Service ZR"
+        cost: 5
+        facts:
+          - "Instances are spread across availability zones; a zone-redundant plan needs at least two instances."
+          - "Zone redundancy has no separate charge, but the two-instance minimum can raise the bill."
+        capabilities: { survives: [instance-failure, zone-outage], scales: 3 }
+      - id: two-regions
+        label: "Two zone-redundant Premium v3 plans in two regions"
+        short: "App Service ×2 regions"
+        cost: 10
+        facts:
+          - "App Service is a single-region service; surviving a region outage means deploying to more than one region."
+          - "You also need load balancing and failover between the regions."
+        capabilities: { survives: [instance-failure, zone-outage, region-outage], scales: 6 }
+        overkill: "The brief asked to survive an instance or zone failure, not a whole region. One zone-redundant plan meets it for half the cost."
+
+stress_tests:
+  - id: tv-spike
+    label: "The ad airs: 20× traffic on the landing pages"
+    requires: { tier: edge, min_scales: 20 }
+  - id: instance-failure
+    label: "An App Service instance becomes unhealthy"
+    requires: { every_tier_survives: instance-failure }
+  - id: zone-outage
+    label: "One availability zone in the region goes down"
+    requires: { every_tier_survives: zone-outage }
+
+failure_feedback:
+  edge-none:
+    tv-spike: "Every one of the 20× page views landed on the app servers."
+  app-gateway:
+    tv-spike: "Application Gateway spread the load, but every request still reached the app servers."
+  single-instance:
+    instance-failure: "With one instance, there was nothing to serve traffic while it was replaced."
+    zone-outage: "The only instance was in the failed zone."
+  three-instances:
+    zone-outage: "The plan isn't zone redundant, so its instances weren't guaranteed to be outside the failed zone."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { edge: front-door, web: zone-redundant }
+    why: "Front Door absorbs the repeat page views at the edge; a zone-redundant plan keeps the origin up through an instance or zone failure."
+
+hints:
+  nudge: "Twenty times the traffic, but mostly the same pages. Does every request need to reach your app?"
+  direction: "One requirement is about traffic (solve it at the edge), two are about failures (solve them in the App Service plan)."
+  answer: "Front Door with caching for the static pages, plus a zone-redundant Premium plan. Two regions is more than the brief asked for."
+
+analogy:
+  title: "Handing out flyers instead of taking every question at the desk"
+  text: |
+    A shop expects a crowd after its ad. Most people just want the same
+    brochure. Put stacks of brochures at the doors (the cache) and the counter
+    staff only deal with real questions. Keep two people on the counter in
+    different rooms, so one sick day or one flooded room doesn't close the shop.
+
+debrief:
+  summary: |
+    The spike is a caching problem: the same static pages, requested over and
+    over. A CDN like Front Door serves them from edge caches, so only a small
+    share reaches the app. Application Gateway is a great regional load
+    balancer, but it forwards every request to your backends. The failure
+    requirements are about the App Service plan: multiple instances ride out an
+    instance failure, and only a zone-redundant plan rides out a zone failure.
+  real_world: |
+    Separate static and dynamic routes so you never cache user-specific
+    responses. Microsoft warns that misconfigured caching can leak one user's
+    data to another.
+
+sources:
+  - title: "Azure Front Door: Caching"
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-caching"
+    retrieved: 2026-09-30
+  - title: "What is Azure Application Gateway"
+    url: "https://learn.microsoft.com/en-us/azure/application-gateway/overview"
+    retrieved: 2026-09-30
+  - title: "Reliability in Azure App Service (multiple instances, zone redundancy, regions)"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-app-service"
+    retrieved: 2026-09-30
+  - title: "Azure App Service: Scale up (scale-out instance limits per tier)"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/manage-scale-up"
+    retrieved: 2026-09-30

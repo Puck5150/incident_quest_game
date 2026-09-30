@@ -7,6 +7,8 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { check, loadContent } from '../vite-plugin-content.ts'
 import { ScenarioSchema } from '../src/schema/scenario.ts'
+import { ChallengeSchema } from '../src/schema/challenge.ts'
+import { evaluate } from '../src/game/challenge.ts'
 import { newSession, step, type GameEvent } from '../src/game/engine.ts'
 
 const CONTENT = path.resolve(import.meta.dirname, '../content')
@@ -31,6 +33,13 @@ describe('content', () => {
       expect(events.reduce((sess, e) => step(s, sess, e), newSession()).phase).toBe('resolved')
     },
   )
+
+  it('_challenge_template.yaml is itself a valid challenge whose reference design passes', () => {
+    const errors: string[] = []
+    const c = check(path.join(CONTENT, '_challenge_template.yaml'), ChallengeSchema, errors)
+    expect(errors).toEqual([])
+    c!.reference_designs.forEach((d) => expect(evaluate(c!, d.picks).pass).toBe(true))
+  })
 
   it('_template.yaml is itself a valid scenario', () => {
     const errors: string[] = []

@@ -1,0 +1,86 @@
+# ============================================================================
+# Incident Quest design-challenge template
+#
+# Copy to content/<track>/<id>.yaml (id = filename, track = folder).
+# `type: challenge` is what makes this a design challenge instead of an incident.
+# Run `npm test`. It also checks that every reference design passes its own
+# stress tests, and that every stress test can be failed by some design.
+# See AUTHORING.md, "Design challenges".
+# ============================================================================
+
+type: challenge
+id: example-challenge
+track: cloud-design
+difficulty: 2                 # 1-5
+title: "Short title that names the goal"
+provider: aws                 # aws | azure | gcp
+par_minutes: 10
+
+brief: |
+  A business situation, not a tech spec. What happened, what's coming, what
+  leadership wants.
+
+requirements:                 # shown as a checklist; each should map to a stress test or the budget
+  - "Survive the loss of one Availability Zone"
+  - "Stay within 10 cost units per month"
+budget: 10                    # illustrative cost units, never real prices
+
+tiers:                        # one radio group per tier; the player picks one option each
+  - id: compute
+    label: "Compute"
+    options:
+      - id: single
+        label: "Full name shown on the option card"
+        short: "Short diagram label"   # optional, max 22 characters
+        cost: 1
+        facts:                # shown to the player: sourced facts, NOT outcomes
+          - "A fact from the official docs."
+        capabilities:         # hidden: what the stress tests check
+          survives: []        # failure events this option rides out
+          scales: 1           # multiple of normal traffic it absorbs
+      - id: spread
+        label: "Spread across two zones"
+        cost: 3
+        facts: ["Another sourced fact."]
+        capabilities: { survives: [az-outage], scales: 5 }
+      - id: gold-plated
+        label: "Something more than the brief needs"
+        cost: 8
+        facts: ["Sourced fact."]
+        capabilities: { survives: [az-outage, region-outage], scales: 5 }
+        overkill: "Why this is more than the brief asked for."   # forfeits the lean bonus
+
+stress_tests:                 # rule types: every_tier_survives | tier + min_scales | tier + rpo_at_most
+  - id: az-outage
+    label: "Plain-English description of what happens"
+    requires: { every_tier_survives: az-outage }
+
+failure_feedback:             # optional hand-written reasons: option -> test -> text
+  single:
+    az-outage: "The only instance was in the failed zone."
+
+reference_designs:            # each must pass every test and fit the budget
+  - name: "Recommended"
+    picks: { compute: spread }
+    why: "Why this is the right trade-off."
+
+hints:
+  nudge: "A question."
+  direction: "Where to look."
+  answer: "The answer."
+
+analogy:
+  title: "Non-IT comparison"
+  text: |
+    Explain the trade-off with everyday things.
+
+debrief:
+  summary: |
+    The principle the challenge teaches.
+  real_world: |
+    Optional: how this plays out in production, with vendor guidance.
+
+sources:
+  - title: "Official doc page"
+    url: "https://example.com/doc"
+    retrieved: 2026-01-01

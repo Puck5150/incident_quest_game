@@ -86,6 +86,35 @@ Optional, and each item can carry `evidence:` like logs and files:
 - Hypotheses and actions are **shuffled** in the game, so list them in whatever
   order is easiest to write.
 
+## Design challenges
+
+A second kind of content: instead of diagnosing a broken system, the player
+**builds** one. Start from `content/_challenge_template.yaml`; the file must
+contain `type: challenge`.
+
+- **Tiers and options.** Each tier is one decision (compute, database, edge…),
+  with 2–5 options. The player picks exactly one per tier.
+- **Facts vs. capabilities.** `facts` are shown to the player and must come from
+  official docs. `capabilities` are hidden and decide the stress tests. Write the
+  facts so a careful reader *can* infer the capabilities; that inference is the
+  skill being practiced. Never put "survives an AZ outage" in a fact.
+- **Stress tests** use one of three rules:
+  - `every_tier_survives: <event>`: every picked option must list the event in
+    `capabilities.survives`. Options that don't really take part (like "no edge
+    service") should list the event so they don't fail it.
+  - `tier: <id>, min_scales: <n>`: that tier's pick needs `scales >= n`.
+  - `tier: <id>, rpo_at_most: zero | seconds | minutes | hours`: data-loss limit.
+- **Cost units are illustrative.** Keep relative ordering sensible; never quote
+  real prices, which vary by region and change often.
+- **Over-engineering.** Give options that exceed the brief an `overkill` note and
+  a budget that still lets them pass. Players can win with them but lose the
+  lean bonus, and the debrief explains why.
+- **The validator enforces:** every reference design passes all tests within
+  budget, and every stress test is failed by at least one combination (no
+  decorative tests).
+- Keep `requirements` and `stress_tests` in step: every requirement should be
+  checked by a test or by the budget.
+
 ## Accuracy rules (non-negotiable)
 
 - Commands, flags, output formats, and error messages must come from **official**
