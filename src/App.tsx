@@ -9,7 +9,10 @@ import DebriefScreen from './screens/DebriefScreen.tsx'
 import SkillTreeScreen from './screens/SkillTreeScreen.tsx'
 import ChallengeScreen from './screens/ChallengeScreen.tsx'
 import ChallengeDebrief from './screens/ChallengeDebrief.tsx'
-import { scoreChallenge, type ChallengeScore, type Run } from './game/challenge.ts'
+import { scoreChallenge, scoreRuns, type ChallengeScore, type Run } from './game/challenge.ts'
+import CanvasScreen, { type CanvasRun } from './screens/CanvasScreen.tsx'
+import CanvasDebrief from './screens/CanvasDebrief.tsx'
+import { evaluateCanvas } from './game/canvas.ts'
 import type { QueueItem } from './screens/HomeScreen.tsx'
 import Icon from './components/Icon.tsx'
 
@@ -22,6 +25,8 @@ type Screen =
   | ({ name: 'debrief'; id: string; log: GameEvent[]; score: Score } & Outcome)
   | { name: 'challenge'; id: string; run: number }
   | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore } & Outcome)
+  | { name: 'canvas'; id: string; run: number }
+  | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore } & Outcome)
 
 // What finishing something changed, shown in the debrief header.
 type Outcome = { gained: number; rankUp?: string; unlocked: string[] }
@@ -30,6 +35,7 @@ type Outcome = { gained: number; rankUp?: string; unlocked: string[] }
 const items: QueueItem[] = [
   ...content.scenarios.map((s) => ({ id: s.id, track: s.track, title: s.title, difficulty: s.difficulty, kind: 'incident' as const, tag: s.ticket.priority })),
   ...content.challenges.map((c) => ({ id: c.id, track: c.track, title: c.title, difficulty: c.difficulty, kind: 'challenge' as const, tag: 'Design' })),
+  ...content.canvases.map((c) => ({ id: c.id, track: c.track, title: c.title, difficulty: c.difficulty, kind: 'challenge' as const, tag: 'Design · canvas' })),
 ]
 const unlocks = (p: Progress) => unlockedTracks(content.tracks, items, p.completed)
 
@@ -38,6 +44,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   const scenario = 'id' in screen ? content.scenarios.find((s) => s.id === screen.id) : undefined
   const challenge = 'id' in screen ? content.challenges.find((c) => c.id === screen.id) : undefined
+  const canvas = 'id' in screen ? content.canvases.find((c) => c.id === screen.id) : undefined
   const { rank, next } = rankFor(progress.xp)
   const { theme, motion = 'system' } = progress.settings
 
@@ -61,9 +68,11 @@ export default function App() {
 
   const play = (id: string) =>
     setScreen(
-      content.challenges.some((c) => c.id === id)
-        ? { name: 'challenge', id, run: Date.now() }
-        : { name: 'incident', id, run: Date.now() },
+      content.canvases.some((c) => c.id === id)
+        ? { name: 'canvas', id, run: Date.now() }
+        : content.challenges.some((c) => c.id === id)
+          ? { name: 'challenge', id, run: Date.now() }
+          : { name: 'incident', id, run: Date.now() },
     )
 
   // Save a finished incident or challenge and work out what it changed.
@@ -85,6 +94,11 @@ export default function App() {
   function resolved(id: string, log: GameEvent[]) {
     const s = score(scenario!, log)
     setScreen({ name: 'debrief', id, log, score: s, ...record(id, s) })
+  }
+
+  function canvasFinished(id: string, runs: CanvasRun[], hintsUsed: number) {
+    const s = scoreRuns(canvas!.difficulty, runs.map((r) => evaluateCanvas(canvas!, r.design)), hintsUsed)
+    setScreen({ name: 'canvas-debrief', id, runs, score: s, ...record(id, s) })
   }
 
   function challengeFinished(id: string, runs: Run[], hintsUsed: number) {
@@ -178,6 +192,21 @@ export default function App() {
         )}
         {screen.name === 'challenge' && (
           <ChallengeScreen key={screen.run} challenge={challenge!} onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints)} />
+        )}
+        {screen.name === 'canvas' && (
+          <CanvasScreen key={screen.run} challenge={canvas!} onFinished={(runs, hints) => canvasFinished(screen.id, runs, hints)} />
+        )}
+        {screen.name === 'canvas-debrief' && (
+          <CanvasDebrief
+            challenge={canvas!}
+            runs={screen.runs}
+            score={screen.score}
+            outcome={screen}
+            streak={progress.streak.current}
+            onHome={() => setScreen({ name: 'home' })}
+            onTree={() => setScreen({ name: 'tree' })}
+            onReplay={() => play(screen.id)}
+          />
         )}
         {screen.name === 'challenge-debrief' && (
           <ChallengeDebrief

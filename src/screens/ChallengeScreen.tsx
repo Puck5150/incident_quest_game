@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { Challenge, Picks } from '../schema/challenge.ts'
 import { evaluate, isComplete, type Run } from '../game/challenge.ts'
-import { motionReduced } from '../motion.ts'
+import StressResults from '../components/StressResults.tsx'
+import CostMeter from '../components/CostMeter.tsx'
+import { useStressRun } from '../components/useStressRun.ts'
 import HintPanel from '../components/HintPanel.tsx'
 import Prose from '../components/Prose.tsx'
-import Icon from '../components/Icon.tsx'
 import Diagram from '../components/Diagram.tsx'
-
-const STEP_MS = 700 // time per stress test in the run sequence
 
 export default function ChallengeScreen({
   challenge: c,
@@ -19,31 +18,18 @@ export default function ChallengeScreen({
   const [picks, setPicks] = useState<Picks>({})
   const [runs, setRuns] = useState<Run[]>([])
   const [hints, setHints] = useState(0)
-  // How many stress tests of the latest run have been revealed so far.
-  const [revealed, setRevealed] = useState(0)
-  const resultsTitle = useRef<HTMLHeadingElement>(null)
 
   const last = runs.at(-1)
   const result = last && evaluate(c, last.picks)
   const current = evaluate(c, picks)
-  const running = !!result && revealed < result.tests.length
+  const { revealed, running, titleRef, start, skip } = useStressRun(result?.tests.length ?? 0)
   // Results describe the design that was tested; once a pick changes they're stale.
   const stale = !!last && JSON.stringify(last.picks) !== JSON.stringify(picks)
-
-  // Play the run one stress test at a time. Reduced motion shows everything at once.
-  useEffect(() => {
-    if (!running) return
-    const t = setTimeout(() => setRevealed((n) => n + 1), STEP_MS)
-    return () => clearTimeout(t)
-  }, [running, revealed])
 
   function run() {
     if (!isComplete(c, picks)) return
     setRuns((r) => [...r, { picks, at: Date.now() }])
-    setRevealed(motionReduced() ? c.stress_tests.length : 0)
-    // Move focus to the results so keyboard and screen-reader users (and phone
-    // users, where results sit below the form) land on the outcome.
-    requestAnimationFrame(() => resultsTitle.current?.focus())
+    start(c.stress_tests.length)
   }
 
   // Diagram: users -> one box per tier, showing the current pick. While a run
@@ -68,8 +54,6 @@ export default function ChallengeScreen({
     edges: c.tiers.map((t, i) => ({ from: i === 0 ? 'users' : c.tiers[i - 1].id, to: t.id })),
   }
 
-  const over = current.cost > c.budget
-  const fill = Math.min(100, (current.cost / c.budget) * 100)
 
   return (
     <div className="space-y-4">
@@ -139,32 +123,7 @@ export default function ChallengeScreen({
           ))}
 
           <div className="flex flex-wrap items-center gap-4 rounded-lg border border-line bg-panel p-4">
-            <div className="min-w-48 flex-1">
-              <div className="mb-1 flex justify-between text-sm">
-                <span id="cost-label" className="text-muted">
-                  Monthly cost
-                </span>
-                <span className={`font-mono tabular-nums ${over ? 'text-crit' : ''}`}>
-                  {current.cost} / {c.budget} units{over && ' · over budget'}
-                </span>
-              </div>
-              {/* Illustrative units, not real prices (PLAN_DESIGN_CHALLENGES.md §2). */}
-              <div
-                role="meter"
-                aria-labelledby="cost-label"
-                aria-valuemin={0}
-                aria-valuemax={c.budget}
-                aria-valuenow={current.cost}
-                aria-valuetext={`${current.cost} of ${c.budget} units${over ? ', over budget' : ''}`}
-                className="h-2 overflow-hidden rounded-full bg-line"
-              >
-                {/* scaleX instead of width: animates on the compositor, no layout work. The track's rounding clips it. */}
-                <div
-                  className={`h-full origin-left ${over ? 'bg-crit' : fill > 85 ? 'bg-warn' : 'bg-accent'}`}
-                  style={{ transform: `scaleX(${fill / 100})`, transition: 'transform 200ms' }}
-                />
-              </div>
-            </div>
+            <CostMeter cost={current.cost} budget={c.budget} />
             <button
               type="submit"
               disabled={!isComplete(c, picks) || running}
@@ -183,68 +142,18 @@ export default function ChallengeScreen({
             </h2>
             <Diagram diagram={diagram} label="Your design" />
           </section>
-          <section aria-labelledby="results-h" className="rounded-lg border border-line bg-panel p-4">
-            <div className="flex items-baseline justify-between gap-2">
-              <h2 id="results-h" ref={resultsTitle} tabIndex={-1} className="font-semibold focus:outline-none">
-                Stress tests{runs.length > 0 && <span className="font-normal text-muted"> · run {runs.length}</span>}
-              </h2>
-              {running && (
-                <button onClick={() => setRevealed(result!.tests.length)} className="text-sm text-muted underline underline-offset-2 hover:text-fg">
-                  Skip
-                </button>
-              )}
-            </div>
-            {!result ? (
-              <p className="mt-2 text-sm text-muted">Pick an option for every tier, then run the tests.</p>
-            ) : (
-              <>
-                {stale && <p className="mt-2 text-sm text-warn">You've changed the design since this run.</p>}
-                <ul className="mt-3 space-y-3 text-sm">
-                  {result.tests.map((t, i) =>
-                    i < revealed ? (
-                      <li key={t.id} className="anim-rise">
-                        <span className={`flex items-center gap-1.5 font-medium ${t.pass ? 'text-ok' : 'text-crit'}`}>
-                          <Icon name={t.pass ? 'check' : 'x'} />
-                          {t.pass ? 'Survived' : 'Failed'}: <span className="text-fg">{t.label}</span>
-                        </span>
-                        {t.reasons.map((r) => (
-                          <p key={r} className="mt-0.5 pl-5.5 text-muted">
-                            {r}
-                          </p>
-                        ))}
-                      </li>
-                    ) : (
-                      <li key={t.id} className="flex items-center gap-1.5 text-muted">
-                        <span aria-hidden className={`h-2 w-2 rounded-full ${i === revealed ? 'animate-pulse bg-accent' : 'bg-line'}`} />
-                        {i === revealed ? 'Running' : 'Queued'}: {t.label}
-                      </li>
-                    ),
-                  )}
-                  {!running && (
-                    <li className="anim-rise">
-                      <span className={`flex items-center gap-1.5 font-medium ${result.withinBudget ? 'text-ok' : 'text-crit'}`}>
-                        <Icon name={result.withinBudget ? 'check' : 'x'} />
-                        Budget: <span className="text-fg tabular-nums">{result.cost} / {c.budget} units</span>
-                      </span>
-                    </li>
-                  )}
-                </ul>
-                {/* One announcement per run, when it's finished, instead of a live play-by-play. */}
-                <p role="status" className="sr-only">
-                  {!running &&
-                    `Run ${runs.length}: ${result.tests.filter((t) => t.pass).length} of ${result.tests.length} stress tests passed, ${result.withinBudget ? 'within' : 'over'} budget.`}
-                </p>
-                {!running && result.pass && !stale && (
-                  <button
-                    onClick={() => onFinished(runs, hints)}
-                    className="anim-rise mt-4 w-full rounded-md bg-ok px-4 py-2 font-medium text-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                  >
-                    Submit design
-                  </button>
-                )}
-              </>
-            )}
-          </section>
+          <StressResults
+            result={result}
+            budget={c.budget}
+            runNumber={runs.length}
+            revealed={revealed}
+            running={running}
+            stale={stale}
+            emptyText="Pick an option for every tier, then run the tests."
+            titleRef={titleRef}
+            onSkip={skip}
+            onSubmit={() => onFinished(runs, hints)}
+          />
           <HintPanel scenario={c} used={hints} onRequest={() => setHints((h) => Math.min(3, h + 1))} />
         </div>
       </div>

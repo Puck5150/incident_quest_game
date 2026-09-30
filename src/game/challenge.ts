@@ -83,18 +83,29 @@ export type ChallengeScore = {
 // in both modes. `runs` are every design the player tested, in order; the
 // last one is the passing design.
 export function scoreChallenge(c: Challenge, runs: Run[], hintsUsed: number): ChallengeScore {
-  const base = 100 * c.difficulty
+  return scoreRuns(c.difficulty, runs.map((r) => evaluate(c, r.picks)), hintsUsed)
+}
+
+// Shared by slot and canvas challenges: `results` are the evaluations of every
+// design the player tested, in order; the last one is the passing design.
+export function scoreRuns(
+  difficulty: number,
+  results: { pass: boolean; overkill: string[] }[],
+  hintsUsed: number,
+): ChallengeScore {
+  const base = 100 * difficulty
   const pct = (p: number) => Math.round((base * p) / 100)
-  const lines = [{ label: `Base (difficulty ${c.difficulty})`, xp: base }]
+  const lines = [{ label: `Base (difficulty ${difficulty})`, xp: base }]
   const add = (label: string, xp: number) => xp !== 0 && lines.push({ label, xp })
 
-  const firstRunPass = runs.length === 1 && evaluate(c, runs[0].picks).pass
-  const final = runs.at(-1) ? evaluate(c, runs.at(-1)!.picks) : undefined
+  const firstRunPass = results.length === 1 && results[0].pass
+  const final = results.at(-1)
   const lean = !!final?.pass && final.overkill.length === 0
+  const extra = Math.max(0, results.length - 1)
 
   if (firstRunPass) add('Passed every stress test on the first run', pct(20))
   if (lean) add('Met the brief without over-engineering', pct(20))
-  add(`Extra test runs ×${Math.max(0, runs.length - 1)}`, -pct(10) * Math.max(0, runs.length - 1))
+  add(`Extra test runs ×${extra}`, -pct(10) * extra)
   HINT_TIERS.slice(0, hintsUsed).forEach((t) => add(`Hint: ${t.label.toLowerCase()}`, -pct(t.cost)))
 
   const sum = lines.reduce((t, l) => t + l.xp, 0)
