@@ -1,0 +1,9 @@
+# Learning tracks. `requires` lists tracks that must have at least one
+# completed incident before this track unlocks (used by the skill tree).
+# Only tracks with at least one scenario are shown in the game.
+- { id: networking,    name: "Networking",             requires: [] }
+- { id: linux,         name: "Linux Admin",            requires: [] }
+- { id: containers,    name: "Containers & Kubernetes", requires: [linux] }
+- { id: iac,           name: "Infrastructure as Code", requires: [] }
+- { id: cicd,          name: "CI/CD",                  requires: [] }
+- { id: microservices, name: "Microservices",          requires: [networking, containers] }

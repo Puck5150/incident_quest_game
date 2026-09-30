@@ -1,0 +1,118 @@
+# ============================================================================
+# Incident Quest scenario template
+#
+# Copy this file to content/<track>/<id>.yaml, then:
+#   - `id` must equal the filename (without .yaml)
+#   - `track` must equal the folder name and exist in content/tracks.yaml
+# Files starting with "_" (like this one) are never loaded as playable
+# scenarios, but this template is kept valid by the test suite.
+#
+# Run `npm test` to validate. Errors name the file and the field path.
+# See AUTHORING.md for the full guide.
+# ============================================================================
+
+id: example-incident          # kebab-case, never change once published (progress is saved by id)
+track: linux                  # networking | linux | containers | iac | cicd | microservices
+difficulty: 1                 # 1 (basics) to 5 (expert)
+title: "Short, symptom-first title"
+par_minutes: 10               # a methodical player's time; drives the time bonus
+
+# ---------------------------------------------------------------------------
+# What the player sees first
+# ---------------------------------------------------------------------------
+ticket:
+  from: "Who filed it (user, monitoring bot, teammate)"
+  priority: P3                # P1 | P2 | P3 | P4
+  body: |
+    Describe SYMPTOMS, not causes. Real tickets are vague.
+
+environment: |
+  Plain-English description of the system: hosts, services, how they connect.
+
+# ---------------------------------------------------------------------------
+# Investigation artifacts. Tag the ones that matter with `evidence: <tag>`.
+# ---------------------------------------------------------------------------
+terminal:                     # optional
+  prompt: "user@host:~$"
+  commands:                   # first match wins, so put `when_actions` variants FIRST
+    - match: "systemctl status example"   # exact match (extra spaces are ignored)
+      when_actions: [fix-it]              # only matches after these actions were taken
+      output: |
+        (output after the fix: used to VERIFY)
+    - match: "systemctl status example"
+      evidence: service-failed
+      output: |
+        (output before the fix)
+    - match_regex: "^journalctl -u example"  # regex alternative to `match`
+      output: |
+        (output)
+  unknown_output: "bash: {cmd}: command not found"   # optional
+
+logs:                         # optional
+  - name: "/var/log/example.log"
+    evidence: key-log-line
+    lines: |
+      2026-01-01T00:00:00Z ERROR something specific
+
+files:                        # optional: configs the player can read
+  - path: "/etc/example.conf"
+    language: text
+    content: |
+      setting = value
+
+diagram:                      # optional: boxes on a grid, arrows between them
+  nodes:
+    - { id: client, label: "client", col: 0, row: 0, status: ok }   # ok | degraded | down
+    - { id: server, label: "server", col: 1, row: 0, status: down }
+  edges:
+    - { from: client, to: server }
+
+# ---------------------------------------------------------------------------
+# Reasoning and resolution
+# ---------------------------------------------------------------------------
+hypotheses:                   # at least 2; exactly one `correct: true`
+  - id: right-cause
+    text: "The actual root cause"
+    correct: true
+  - id: plausible-wrong
+    text: "Something a reasonable person might suspect"
+    feedback: "Why the evidence rules this out"
+
+actions:                      # kind: fix | wrong | destructive
+  - id: fix-it
+    label: "The correct fix"
+    kind: fix
+    feedback: "Why this works"
+  - id: shotgun
+    label: "Restart everything"
+    kind: destructive         # big penalty: the "shotgun" approach
+    feedback: "What this broke or why it didn't help"
+
+solution_paths:               # resolved when ALL actions in ANY one path are taken (any order)
+  - [fix-it]
+
+key_evidence: [service-failed, key-log-line]   # tags a methodical player should find
+
+hints:                        # each tier costs more XP
+  nudge: "A question that points the right way"
+  direction: "Which tool or artifact to look at"
+  answer: "The full answer"
+
+analogy:
+  title: "Non-IT comparison"
+  text: |
+    Explain the concept with something from everyday life.
+
+debrief:
+  root_cause: |
+    What actually happened, and why.
+  ideal_path:
+    - "Step 1 of the methodical path"
+    - "Step 2"
+  real_world: |
+    Optional: how this shows up in production.
+
+sources:                      # required: official docs only (see AUTHORING.md)
+  - title: "Page title"
+    url: "https://example.com/official-doc"
+    retrieved: 2026-01-01     # YYYY-MM-DD

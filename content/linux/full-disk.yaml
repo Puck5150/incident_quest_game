@@ -1,0 +1,149 @@
+# PLACEHOLDER (Milestone 2). Written to exercise the engine end to end.
+# Command output and logrotate behavior are NOT yet doc-verified.
+# Rewritten with full sources in Milestone 5. See CONTENT_TODO.md.
+
+id: full-disk
+track: linux
+difficulty: 1
+title: "Checkout returning 500s"
+par_minutes: 8
+
+ticket:
+  from: "Monitoring bot"
+  priority: P2
+  body: |
+    ALERT: checkout.example.internal HTTP 5xx rate > 20% since 02:14 UTC.
+    No deploys in the last 24h. On-call, please investigate.
+
+environment: |
+  One Ubuntu VM (web-01) running nginx in front of a Python checkout app.
+  The app writes its logs to /var/log/app/. logrotate runs nightly.
+
+terminal:
+  prompt: "ops@web-01:~$"
+  commands:
+    - match: "df -h"
+      when_actions: [truncate-log]
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/sda1        40G   11G   29G  28% /
+    - match: "df -h"
+      evidence: disk-full
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/sda1        40G   40G     0 100% /
+    - match_regex: "^du -sh /var/log/?\\*?$"
+      output: |
+        29G     /var/log/app
+        112M    /var/log/journal
+        4.0K    /var/log/nginx
+    - match: "ls -lh /var/log/app"
+      evidence: huge-log
+      output: |
+        total 29G
+        -rw-r--r-- 1 app app 29G Sep 30 02:14 app.log
+    - match: "cat /etc/logrotate.d/app"
+      evidence: rotate-typo
+      output: |
+        /var/log/ap/*.log {
+            daily
+            rotate 7
+            compress
+            missingok
+        }
+
+logs:
+  - name: "/var/log/nginx/error.log"
+    lines: |
+      2026/09/30 02:14:07 [error] 812#812: *4411 upstream prematurely closed connection while reading response header from upstream
+  - name: "app stderr (journalctl -u checkout)"
+    evidence: write-failure
+    lines: |
+      Sep 30 02:14:03 web-01 checkout[1190]: OSError: [Errno 28] No space left on device
+
+files:
+  - path: "/etc/logrotate.d/app"
+    evidence: rotate-typo
+    content: |
+      /var/log/ap/*.log {
+          daily
+          rotate 7
+          compress
+          missingok
+      }
+
+diagram:
+  nodes:
+    - { id: nginx, label: "nginx", col: 0, row: 0, status: ok }
+    - { id: app, label: "checkout app", col: 1, row: 0, status: down }
+    - { id: disk, label: "/dev/sda1", col: 2, row: 0, status: down }
+  edges:
+    - { from: nginx, to: app }
+    - { from: app, to: disk }
+
+hypotheses:
+  - id: disk-full
+    text: "The root filesystem is full, so the app can't write."
+    correct: true
+  - id: db-down
+    text: "The database is unreachable."
+    feedback: "Errno 28 is a local write failure, not a network or connection error."
+  - id: bad-deploy
+    text: "A recent deploy introduced a bug."
+    feedback: "The ticket says there were no deploys in 24h. Look at what the errors actually say."
+
+actions:
+  - id: truncate-log
+    label: "Truncate app.log in place (: > /var/log/app/app.log)"
+    kind: fix
+    feedback: "Space is freed immediately, and the app keeps its open file handle."
+  - id: fix-logrotate
+    label: "Fix the path typo in /etc/logrotate.d/app"
+    kind: fix
+    feedback: "The log will rotate nightly again, so this won't recur."
+  - id: rm-log
+    label: "rm /var/log/app/app.log"
+    kind: wrong
+    feedback: "The app still holds the file open, so the space isn't released until the process closes it."
+  - id: reboot
+    label: "Reboot web-01"
+    kind: destructive
+    feedback: "The disk is still full after the reboot. You caused extra downtime and fixed nothing."
+
+solution_paths:
+  - [truncate-log, fix-logrotate]
+
+key_evidence: [write-failure, disk-full]
+
+hints:
+  nudge: "What does Errno 28 mean?"
+  direction: "Check how much free space each filesystem has."
+  answer: "Run df -h, then find what's filling / with du and ls. Then check why logrotate didn't catch it."
+
+analogy:
+  title: "A full filing cabinet"
+  text: |
+    The clerk isn't broken and the forms are fine. There's just no drawer space
+    left to file anything new. Shredding old paperwork makes room today;
+    fixing the archiving schedule stops it from filling up again.
+
+debrief:
+  root_cause: |
+    A typo in the logrotate config (/var/log/ap instead of /var/log/app) meant
+    app.log was never rotated. `missingok` hid the problem. The log grew until
+    / hit 100%, and every write the app made failed with ENOSPC.
+  ideal_path:
+    - "Read the app error: Errno 28 (ENOSPC) points at storage, not the network."
+    - "Confirm with df -h: / is at 100%."
+    - "Find the culprit with du and ls: one 29G app.log."
+    - "Free space safely by truncating, not deleting, a file the app holds open."
+    - "Fix the root cause: the logrotate path typo."
+    - "Verify: df -h shows free space and checkout errors stop."
+
+sources:
+  - title: "df(1) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man1/df.1.html"
+    retrieved: 2026-09-30
+  - title: "errno(3) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man3/errno.3.html"
+    retrieved: 2026-09-30

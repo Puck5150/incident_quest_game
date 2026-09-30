@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* Dark mode is class-based (a `dark` class on <html>) so the in-app toggle
+   (Milestone 4) can override the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic color tokens. Components use these names (bg-panel, text-muted,
+   text-crit...) instead of raw palette colors, so light/dark is one swap here. */
+:root {
+  --bg: oklch(0.98 0.005 250);
+  --panel: oklch(1 0 0);
+  --line: oklch(0.88 0.01 250);
+  --fg: oklch(0.22 0.02 250);
+  --muted: oklch(0.45 0.02 250);
+  --accent: oklch(0.5 0.15 245);
+  --ok: oklch(0.5 0.13 150);
+  --warn: oklch(0.55 0.13 75);
+  --crit: oklch(0.52 0.19 25);
+}
+.dark {
+  --bg: oklch(0.16 0.015 250);
+  --panel: oklch(0.21 0.02 250);
+  --line: oklch(0.32 0.02 250);
+  --fg: oklch(0.93 0.01 250);
+  --muted: oklch(0.72 0.02 250);
+  --accent: oklch(0.75 0.13 230);
+  --ok: oklch(0.78 0.16 150);
+  --warn: oklch(0.82 0.14 80);
+  --crit: oklch(0.72 0.17 25);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-crit: var(--crit);
+}
+
+body {
+  @apply bg-bg text-fg antialiased;
+}
