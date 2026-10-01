@@ -1,0 +1,253 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-route53-failover
+track: cloud
+difficulty: 4
+title: "us-east-1 is down and DNS failover didn't fail over"
+par_minutes: 16
+
+ticket:
+  from: "Incident commander"
+  priority: P1
+  body: |
+    The API in us-east-1 has been returning 503s since 13:05 (a bad
+    dependency; that team is on it). We have a warm standby in us-west-2 and
+    Route 53 failover exactly for this. It's 13:30 and api.shop.example.com
+    still points at us-east-1 for everyone. Why didn't failover happen, and
+    how fast can we get users onto us-west-2?
+
+environment: |
+  api.shop.example.com uses Route 53 failover routing: a PRIMARY CNAME to the
+  us-east-1 load balancer and a SECONDARY CNAME to the us-west-2 load
+  balancer, each with its own Route 53 HTTPS health check on /healthz. The
+  us-west-2 stack runs the same build and serves no users unless failover
+  happens. Networking changes go through the infra change log.
+
+diagram:
+  nodes:
+    - { id: users, label: "users", col: 0, row: 0, status: degraded }
+    - { id: r53, label: "Route 53 api.shop.example.com", col: 1, row: 0, status: ok }
+    - { id: use1, label: "us-east-1 (PRIMARY)", col: 2, row: 0, status: down }
+    - { id: usw2, label: "us-west-2 (SECONDARY)", col: 2, row: 1, status: ok }
+  edges:
+    - { from: users, to: r53 }
+    - { from: r53, to: use1 }
+    - { from: r53, to: usw2 }
+
+metrics:
+  - name: "Route 53 HealthCheckStatus (1 = healthy, 0 = unhealthy)"
+    unit: status
+    evidence: both-unhealthy
+    series:
+      - label: "hc-use1 (PRIMARY)"
+        points: [["13:00", 1], ["13:05", 1], ["13:10", 0], ["13:15", 0], ["13:20", 0], ["13:25", 0], ["13:30", 0]]
+      - label: "hc-usw2 (SECONDARY)"
+        points: [["13:00", 0], ["13:05", 0], ["13:10", 0], ["13:15", 0], ["13:20", 0], ["13:25", 0], ["13:30", 0]]
+  - name: "API 5xx rate (us-east-1 load balancer)"
+    unit: "%"
+    series:
+      - label: "5xx"
+        points: [["13:00", 0.2], ["13:05", 61], ["13:10", 97], ["13:15", 98], ["13:20", 97], ["13:25", 98], ["13:30", 97]]
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "dig api.shop.example.com"
+      when_actions: [allow-health-checkers, lower-ttl]
+      output: |
+        ;; ANSWER SECTION:
+        api.shop.example.com.   60   IN   CNAME   shop-usw2-alb-4521.us-west-2.elb.amazonaws.com.
+    - match: "dig api.shop.example.com"
+      when_actions: [allow-health-checkers]
+      output: |
+        ;; ANSWER SECTION:
+        api.shop.example.com.   3600   IN   CNAME   shop-usw2-alb-4521.us-west-2.elb.amazonaws.com.
+    - match: "dig api.shop.example.com"
+      evidence: still-primary
+      output: |
+        ;; ANSWER SECTION:
+        api.shop.example.com.   2884   IN   CNAME   shop-use1-alb-1187.us-east-1.elb.amazonaws.com.
+    - match: "aws route53 get-health-check-status --health-check-id hc-usw2"
+      when_actions: [allow-health-checkers]
+      output: |
+        {
+            "HealthCheckObservations": [
+                { "Region": "us-west-1", "StatusReport": { "Status": "Success: HTTP Status Code 200, OK" } },
+                { "Region": "eu-west-1", "StatusReport": { "Status": "Success: HTTP Status Code 200, OK" } },
+                { "Region": "ap-southeast-1", "StatusReport": { "Status": "Success: HTTP Status Code 200, OK" } }
+            ]
+        }
+    - match: "aws route53 get-health-check-status --health-check-id hc-usw2"
+      evidence: checker-timeouts
+      output: |
+        {
+            "HealthCheckObservations": [
+                { "Region": "us-west-1", "StatusReport": { "Status": "Failure: Connection timed out. The endpoint or the internet connection is down, or requests are being blocked by your firewall." } },
+                { "Region": "eu-west-1", "StatusReport": { "Status": "Failure: Connection timed out. The endpoint or the internet connection is down, or requests are being blocked by your firewall." } },
+                { "Region": "ap-southeast-1", "StatusReport": { "Status": "Failure: Connection timed out. The endpoint or the internet connection is down, or requests are being blocked by your firewall." } }
+            ]
+        }
+    - match: "aws route53 get-health-check-status --health-check-id hc-use1"
+      output: |
+        {
+            "HealthCheckObservations": [
+                { "Region": "us-west-1", "StatusReport": { "Status": "Failure: HTTP Status Code 503, Service Unavailable" } },
+                { "Region": "eu-west-1", "StatusReport": { "Status": "Failure: HTTP Status Code 503, Service Unavailable" } },
+                { "Region": "ap-southeast-1", "StatusReport": { "Status": "Failure: HTTP Status Code 503, Service Unavailable" } }
+            ]
+        }
+    - match_regex: "^curl (-s )?(-o /dev/null )?(-w '%\\{http_code\\}\\\\n' )?https://shop-usw2-alb-4521\\.us-west-2\\.elb\\.amazonaws\\.com/healthz$"
+      output: |
+        200
+    - match: "aws ec2 describe-security-groups --group-ids sg-0usw2alb --query SecurityGroups[0].IpPermissions"
+      when_actions: [allow-health-checkers]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+              "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ],
+              "PrefixListIds": [ { "PrefixListId": "pl-0r53hc", "Description": "Route 53 health checkers" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0usw2alb --query SecurityGroups[0].IpPermissions"
+      evidence: sg-office-only
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+              "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] }
+        ]
+    - match: "aws route53 list-resource-record-sets --hosted-zone-id Z04SHOPEXAMPLE"
+      when_actions: [lower-ttl]
+      output: |
+        { "Name": "api.shop.example.com.", "Type": "CNAME", "SetIdentifier": "use1", "Failover": "PRIMARY", "TTL": 60,
+          "ResourceRecords": [ { "Value": "shop-use1-alb-1187.us-east-1.elb.amazonaws.com" } ], "HealthCheckId": "hc-use1" }
+        { "Name": "api.shop.example.com.", "Type": "CNAME", "SetIdentifier": "usw2", "Failover": "SECONDARY", "TTL": 60,
+          "ResourceRecords": [ { "Value": "shop-usw2-alb-4521.us-west-2.elb.amazonaws.com" } ], "HealthCheckId": "hc-usw2" }
+    - match: "aws route53 list-resource-record-sets --hosted-zone-id Z04SHOPEXAMPLE"
+      evidence: ttl-3600
+      output: |
+        { "Name": "api.shop.example.com.", "Type": "CNAME", "SetIdentifier": "use1", "Failover": "PRIMARY", "TTL": 3600,
+          "ResourceRecords": [ { "Value": "shop-use1-alb-1187.us-east-1.elb.amazonaws.com" } ], "HealthCheckId": "hc-use1" }
+        { "Name": "api.shop.example.com.", "Type": "CNAME", "SetIdentifier": "usw2", "Failover": "SECONDARY", "TTL": 3600,
+          "ResourceRecords": [ { "Value": "shop-usw2-alb-4521.us-west-2.elb.amazonaws.com" } ], "HealthCheckId": "hc-usw2" }
+
+logs:
+  - name: "infra change log"
+    evidence: sg-change
+    lines: |
+      2026-08-02  CHG-1980  Raise TTLs on api/www records 300 -> 3600 to cut Route 53 query volume (Sam)
+      2026-09-17  CHG-2310  us-west-2 standby ALB: restrict 443 to office VPN only, "standby serves no users" (Dana)
+      2026-09-30  CHG-2366  orders DB minor version upgrade, us-east-1 (Ana)
+  - name: "alarms configured on Route 53 health checks"
+    lines: |
+      hc-use1: alarm "api-primary-unhealthy" -> pager (fired 13:06)
+      hc-usw2: (no alarm)
+
+hypotheses:
+  - id: standby-unhealthy-last-resort
+    text: "The standby's health check has been failing too, so with every record unhealthy Route 53 falls back to answering with the primary."
+    correct: true
+  - id: route53-outage
+    text: "Route 53 itself is having problems."
+    feedback: "Route 53 is answering and its health checkers are reporting: the primary fails with 503s and the standby with connection timeouts. It's doing exactly what it's configured to do."
+  - id: just-ttl
+    text: "Failover happened; users just have the old answer cached for up to an hour."
+    feedback: "A fresh dig still gets the us-east-1 answer from Route 53, with plenty of TTL left. If failover had happened, new lookups would get us-west-2. The long TTL makes recovery slower, but it isn't why failover didn't happen."
+  - id: standby-app-broken
+    text: "The us-west-2 app is broken, so it's correctly marked unhealthy."
+    feedback: "From the office VPN, /healthz on the us-west-2 load balancer returns 200. The health checkers' connections time out instead: they never reach the app."
+  - id: partition
+    text: "An internet partition is isolating the standby from some health checkers."
+    feedback: "Route 53 only marks an endpoint unhealthy when 18% or fewer of its checkers report it healthy, which protects against partial isolation. Here every checker region times out, and has since 09-17."
+
+actions:
+  - id: allow-health-checkers
+    label: "Allow inbound 443 from the Route 53 health checker IP ranges (ROUTE53_HEALTHCHECKS) in the us-west-2 load balancer's security group"
+    kind: fix
+    feedback: "The checkers reach /healthz, the standby turns healthy after its failure threshold, and with only the primary unhealthy Route 53 starts answering with us-west-2. Resolvers that already cached the old answer keep it until their TTL runs out."
+  - id: lower-ttl
+    label: "Set the TTL on both failover records to 60 seconds"
+    kind: fix
+    feedback: "Route 53 recommends a TTL of 60 seconds or less for records with health checks, so clients follow changes in health quickly. Answers already cached with the old 3600 TTL still expire on their own schedule, so this mostly protects the next failover, and the recovery back to us-east-1."
+  - id: restart-standby
+    label: "Restart the us-west-2 app servers"
+    kind: wrong
+    feedback: "The app was never the problem: /healthz answers 200 from the office. The health checkers can't connect to it at all."
+  - id: flush-caches
+    label: "Flush DNS caches: ask the ISP-facing team to tell customers to restart their routers"
+    kind: wrong
+    feedback: "Route 53 is still answering with us-east-1, so a fresh lookup gets the dead region again. Caches are the second problem, not the first."
+  - id: delete-health-checks
+    label: "Remove the health checks from both records so Route 53 stops \"misbehaving\""
+    kind: destructive
+    feedback: "A record with no health check is always treated as healthy, so Route 53 sends everyone to the PRIMARY: us-east-1, which is down. You've turned a slow failover into no failover, now and next time."
+
+solution_paths:
+  - [allow-health-checkers, lower-ttl]
+
+key_evidence: [still-primary, both-unhealthy, checker-timeouts, sg-office-only]
+
+evidence_labels:
+  still-primary: "A fresh lookup still returns the us-east-1 load balancer"
+  both-unhealthy: "Both health checks are unhealthy; the standby's has been since before the outage"
+  checker-timeouts: "Every health checker region times out connecting to the standby"
+  sg-office-only: "The standby's security group only allows the office VPN, not Route 53's health checkers"
+
+hints:
+  nudge: "Failover only works if Route 53 thinks the secondary is healthy. Does it?"
+  direction: "Check both health checks' status, then why the standby's checks fail even though the app answers from the office. What does Route 53 do when every record is unhealthy?"
+  answer: "CHG-2310 restricted the standby's security group to the office VPN, so Route 53's checkers time out and hc-usw2 has been unhealthy since 09-17. With both records unhealthy, Route 53 treats all of them as healthy and returns the primary. Allow the health checker ranges, then cut the TTL to 60."
+
+analogy:
+  title: "The spare key nobody could reach"
+  text: |
+    The building has a backup entrance for when the main door jams, and a
+    caretaker checks every day that it opens. Someone fenced it off "because
+    nobody uses it", so the caretaker's checks kept failing and he stopped
+    trusting either door. When the main door jammed, his rule for "both doors
+    look broken" was to keep sending everyone to the main one. Unfence the
+    backup, then make the signs update faster next time.
+
+debrief:
+  root_cause: |
+    On 09-17, CHG-2310 restricted the us-west-2 load balancer's security
+    group to the office VPN because "the standby serves no users". Route 53
+    health checkers come from their own IP ranges, so every check timed out
+    and the SECONDARY was unhealthy from then on, with no alarm. When
+    us-east-1 started failing at 13:05, both records were unhealthy. To avoid
+    making failures worse, Route 53 then treats every record as healthy (its
+    mode of last resort), so it kept answering with the primary. On top of
+    that, CHG-1980 had raised the records' TTL to 3600 seconds, so even once
+    failover works, resolvers that already have the old answer can keep it
+    for up to an hour.
+  ideal_path:
+    - "Check what Route 53 answers right now (dig): still us-east-1, with a long TTL."
+    - "Check both health checks: the primary fails with 503s, and the standby has been failing too."
+    - "Ask why the standby fails when its app answers: every checker region times out, so it's network, not app."
+    - "Find the block: the security group allows only the office VPN (CHG-2310)."
+    - "Remember Route 53's last-resort rule: all unhealthy means all treated as healthy, so the primary wins."
+    - "Allow the health checker ranges, watch the standby turn healthy and dig switch to us-west-2."
+    - "Set the TTL to 60 seconds, and add an alarm on the standby's health check."
+  real_world: |
+    A standby that's never exercised quietly stops working: a firewall rule,
+    an expired certificate or a stale config, and nobody notices because it
+    "serves no users". Alarm on the standby's health check as loudly as the
+    primary's, keep TTLs on failover records short, and run failover drills
+    so the first real failover isn't the test.
+
+sources:
+  - title: "Route 53: Values specific for failover records (TTL of 60 seconds or less with health checks)"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-values-failover.html"
+    retrieved: 2026-10-01
+  - title: "Route 53: How Amazon Route 53 chooses records when health checking is configured (both unhealthy returns the primary; records without health checks are always healthy)"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/health-checks-how-route-53-chooses-records.html"
+    retrieved: 2026-10-01
+  - title: "Route 53: How Amazon Route 53 averts failover problems (mode of last resort)"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-problems.html"
+    retrieved: 2026-10-01
+  - title: "Route 53: How Amazon Route 53 determines whether a health check is healthy (18% rule)"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-determining-health-of-endpoints.html"
+    retrieved: 2026-10-01
+  - title: "Route 53: IP address ranges of Amazon Route 53 servers (ROUTE53_HEALTHCHECKS)"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/route-53-ip-addresses.html"
+    retrieved: 2026-10-01
+  - title: "Route 53: Values that you specify when you create or update health checks (failure threshold)"
+    url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/health-checks-creating-values.html"
+    retrieved: 2026-10-01

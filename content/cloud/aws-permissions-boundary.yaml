@@ -1,0 +1,255 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-permissions-boundary
+track: cloud
+difficulty: 3
+title: "orders-api deploy stuck: new tasks die at startup"
+par_minutes: 14
+
+ticket:
+  from: "Orders team"
+  priority: P2
+  body: |
+    We're trying to ship orders-api 4.2 (a fix for duplicate refund emails).
+    The ECS deployment has been going for 40 minutes: every new task stops a
+    few seconds after it starts. The old 4.1 tasks are still serving, so the
+    shop is fine for now. We already added secretsmanager:GetSecretValue to
+    the task role again, and even tried attaching AdministratorAccess to it.
+    Still failing. Nothing changed in our code around secrets.
+
+environment: |
+  orders-api runs on Amazon ECS (cluster "prod", account 111122223333). At
+  startup each task reads its database password from AWS Secrets Manager
+  (secret prod/orders/db) using its task role, orders-api-task-role, then
+  keeps the connection; running tasks don't read the secret again. The
+  platform team manages shared IAM guardrails in its own repository.
+
+diagram:
+  nodes:
+    - { id: old, label: "orders-api 4.1 tasks (4)", col: 0, row: 0, status: ok }
+    - { id: new, label: "orders-api 4.2 tasks", col: 0, row: 1, status: down }
+    - { id: secrets, label: "Secrets Manager", col: 1, row: 1, status: ok }
+    - { id: db, label: "orders DB", col: 1, row: 0, status: ok }
+  edges:
+    - { from: old, to: db }
+    - { from: new, to: secrets }
+
+terminal:
+  prompt: "you@bastion:~$"
+  commands:
+    - match: "aws logs tail /ecs/orders-api --since 30m"
+      evidence: boundary-denied
+      output: |
+        2026-10-01T10:41:07 orders-api 4.2.0 starting
+        2026-10-01T10:41:08 FATAL could not load database credentials: AccessDeniedException: User: arn:aws:sts::111122223333:assumed-role/orders-api-task-role/5f1c0e2a9b7d4c1e8a3f is not authorized to perform: secretsmanager:GetSecretValue on resource: arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/db-Ab12Cd because no permissions boundary allows the secretsmanager:GetSecretValue action
+        2026-10-01T10:41:08 orders-api exiting with code 1
+    - match: "aws ecs describe-services --cluster prod --services orders-api --query services[0].deployments"
+      when_actions: [boundary-allows, redeploy]
+      output: |
+        [
+          { "status": "PRIMARY", "taskDefinition": "orders-api:42", "rolloutState": "COMPLETED", "runningCount": 4, "failedTasks": 0 }
+        ]
+    - match: "aws ecs describe-services --cluster prod --services orders-api --query services[0].deployments"
+      output: |
+        [
+          { "status": "PRIMARY", "taskDefinition": "orders-api:42", "rolloutState": "IN_PROGRESS", "runningCount": 0, "failedTasks": 14 },
+          { "status": "ACTIVE", "taskDefinition": "orders-api:41", "runningCount": 4 }
+        ]
+    - match: "aws iam get-role --role-name orders-api-task-role --query Role.PermissionsBoundary"
+      evidence: has-boundary
+      output: |
+        {
+            "PermissionsBoundaryType": "Policy",
+            "PermissionsBoundaryArn": "arn:aws:iam::111122223333:policy/AppWorkloadBoundary"
+        }
+    - match: "aws iam list-attached-role-policies --role-name orders-api-task-role"
+      output: |
+        {
+            "AttachedPolicies": [
+                { "PolicyName": "AdministratorAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess" }
+            ]
+        }
+    - match: "aws iam get-role-policy --role-name orders-api-task-role --policy-name orders-api"
+      output: |
+        {
+            "RoleName": "orders-api-task-role",
+            "PolicyName": "orders-api",
+            "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/db-*" },
+                    { "Effect": "Allow", "Action": ["sqs:SendMessage"], "Resource": "arn:aws:sqs:us-east-1:111122223333:order-events" },
+                    { "Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": "*" }
+                ]
+            }
+        }
+    - match_regex: "^aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::111122223333:role/orders-api-task-role --action-names secretsmanager:GetSecretValue( .*)?$"
+      when_actions: [boundary-allows]
+      output: |
+        {
+            "EvaluationResults": [
+                {
+                    "EvalActionName": "secretsmanager:GetSecretValue",
+                    "EvalDecision": "allowed",
+                    "PermissionsBoundaryDecisionDetail": { "AllowedByPermissionsBoundary": true }
+                }
+            ]
+        }
+    - match_regex: "^aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::111122223333:role/orders-api-task-role --action-names secretsmanager:GetSecretValue( .*)?$"
+      evidence: simulator
+      output: |
+        {
+            "EvaluationResults": [
+                {
+                    "EvalActionName": "secretsmanager:GetSecretValue",
+                    "EvalDecision": "implicitDeny",
+                    "PermissionsBoundaryDecisionDetail": { "AllowedByPermissionsBoundary": false }
+                }
+            ]
+        }
+
+logs:
+  - name: "platform-infra: merged pull requests"
+    evidence: boundary-rollout
+    lines: |
+      2026-09-29 16:02  #219 "Attach AppWorkloadBoundary to all workload roles" (Priya): caps every app role at the services apps use
+      2026-09-24 11:40  #214 "Tag policy for cost centres" (Sam)
+  - name: "orders-api deploys"
+    lines: |
+      2026-09-26 4.1.0 deployed (tasks started 09-26 14:10, still running)
+      2026-10-01 4.2.0 deploying (no changes to config or secrets handling)
+
+files:
+  - path: "platform-infra/iam/app-workload-boundary.json (policy AppWorkloadBoundary, default version v3)"
+    language: json
+    evidence: boundary-policy
+    content: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "AppWorkloadServices",
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject", "s3:PutObject",
+              "dynamodb:*",
+              "sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage",
+              "logs:CreateLogStream", "logs:PutLogEvents",
+              "kms:Decrypt"
+            ],
+            "Resource": "*"
+          }
+        ]
+      }
+
+hypotheses:
+  - id: boundary
+    text: "A new permissions boundary on the task role doesn't allow secretsmanager:GetSecretValue, so the role's own policy can't grant it."
+    correct: true
+  - id: role-policy
+    text: "The task role's own policy is missing the permission."
+    feedback: "The role policy allows secretsmanager:GetSecretValue on this secret, and AdministratorAccess is attached too. The error says why it still fails: \"because no permissions boundary allows\" the action."
+  - id: scp
+    text: "An organization service control policy (SCP) blocks Secrets Manager."
+    feedback: "AWS names the policy type in access denied messages. This one says permissions boundary, not service control policy."
+  - id: secret-changed
+    text: "The secret was deleted or rotated to a new name."
+    feedback: "A missing secret gives a resource-not-found error, not AccessDenied. The message is about being allowed to read it."
+  - id: bad-release
+    text: "4.2 changed how the app reads its secrets."
+    feedback: "The release didn't touch secrets handling, and the failure is an IAM decision, not an app error. A 4.1 task started today would fail the same way: the old tasks only work because they read the secret on 09-26, before the boundary existed."
+
+actions:
+  - id: boundary-allows
+    label: "Ask the platform team to add secretsmanager:GetSecretValue (scoped to prod/* secrets) to AppWorkloadBoundary, as a new default policy version"
+    kind: fix
+    feedback: "Effective permissions are the intersection of the role's policy and its boundary. With the action in both, the request is allowed; the simulator now says allowed. Fixing it in the platform repo means every app that reads secrets at startup is covered, not just orders-api."
+  - id: redeploy
+    label: "aws ecs update-service --cluster prod --service orders-api --force-new-deployment"
+    kind: fix
+    match_regex: "^aws ecs update-service --cluster prod --service orders-api --force-new-deployment$"
+    feedback: "New tasks start, read the secret and pass their health checks, and the deployment completes."
+  - id: add-to-role-again
+    label: "Add secretsmanager:* to the task role's inline policy"
+    kind: wrong
+    feedback: "The role policy already allows the action. A boundary sets the maximum: whatever the role's policies say, only what the boundary also allows gets through."
+  - id: remove-boundary
+    label: "aws iam delete-role-permissions-boundary --role-name orders-api-task-role"
+    kind: wrong
+    match_regex: "^aws iam delete-role-permissions-boundary --role-name orders-api-task-role$"
+    feedback: "The deploy would go through, with AdministratorAccess still attached and no cap at all: this app's role could do anything in the account. And platform-infra re-attaches the boundary on its next apply, so it breaks again."
+  - id: rollback
+    label: "Roll back the service to orders-api 4.1"
+    kind: wrong
+    feedback: "New 4.1 tasks read the secret at startup too, so they fail the same way. Only the 4.1 tasks started on 09-26, before the boundary, are working."
+  - id: password-in-env
+    label: "Put the database password directly in the task definition's environment variables"
+    kind: destructive
+    feedback: "That writes the production database password in plain text into the task definition, where anyone who can describe task definitions can read it, and into every revision from now on. Fix the permission instead."
+
+solution_paths:
+  - [boundary-allows, redeploy]
+
+key_evidence: [boundary-denied, has-boundary, boundary-policy, boundary-rollout]
+
+evidence_labels:
+  boundary-denied: "The new tasks are denied GetSecretValue \"because no permissions boundary allows\" it"
+  has-boundary: "The task role has AppWorkloadBoundary as its permissions boundary"
+  boundary-policy: "AppWorkloadBoundary allows S3, DynamoDB, SQS, logs and KMS, but no Secrets Manager"
+  boundary-rollout: "The boundary was attached to every workload role on 09-29, after the running tasks started"
+
+hints:
+  nudge: "Read the whole error message: AWS says which kind of policy refused the request."
+  direction: "Look at the role's permissions boundary and what that policy allows. Then ask why the old tasks still work."
+  answer: "AppWorkloadBoundary, attached on 09-29, doesn't allow secretsmanager:GetSecretValue. Effective permissions are the intersection of policy and boundary, so nothing added to the role helps. Add the action to the boundary in platform-infra, then force a new deployment."
+
+analogy:
+  title: "The spending limit on the company card"
+  text: |
+    Your manager approved the purchase, and even gave you permission to buy
+    anything at all. The card still gets declined, because finance put a
+    limit on every card that only covers office supplies and travel. More
+    approvals from your manager change nothing; the limit is set somewhere
+    else. Old orders that went through before the limit existed are fine.
+
+debrief:
+  root_cause: |
+    On 09-29 the platform team attached AppWorkloadBoundary as the permissions
+    boundary of every workload role. A boundary sets the maximum permissions a
+    role can have: effective permissions are the intersection of its
+    identity-based policies and the boundary. AppWorkloadBoundary didn't
+    include secretsmanager:GetSecretValue, so every orders-api task started
+    after 09-29 was denied its database password and exited. The 4.1 tasks
+    kept working only because they had read the secret on 09-26. Adding
+    permissions to the role, even AdministratorAccess, couldn't help: the
+    boundary caps them all.
+  ideal_path:
+    - "Read the error: \"because no permissions boundary allows\" names the policy type that refused it."
+    - "Confirm the role has a boundary (get-role) and the simulator says AllowedByPermissionsBoundary: false."
+    - "Read the boundary policy: no Secrets Manager actions. The 09-29 rollout explains why old tasks still work."
+    - "Fix it where it lives: add the action, scoped to prod secrets, to the boundary in the platform repo."
+    - "Force a new deployment and check it completes."
+    - "Remove AdministratorAccess from the task role: it never should have been there."
+  real_world: |
+    Guardrails like permissions boundaries and SCPs are good practice, and a
+    rollout that misses one permission shows up exactly like this: everything
+    already running is fine, and the next deploy or scale-out fails. Read the
+    policy type in the error before granting anything, test guardrails with
+    the policy simulator against real workload roles, and never "fix" access
+    denied by attaching AdministratorAccess.
+
+sources:
+  - title: "IAM: Troubleshoot access denied error messages (message formats by policy type)"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html"
+    retrieved: 2026-10-01
+  - title: "IAM: Permissions boundaries for IAM entities"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html"
+    retrieved: 2026-10-01
+  - title: "IAM API: PermissionsBoundaryDecisionDetail (policy simulator)"
+    url: "https://docs.aws.amazon.com/IAM/latest/APIReference/API_PermissionsBoundaryDecisionDetail.html"
+    retrieved: 2026-10-01
+  - title: "IAM API: AttachedPermissionsBoundary"
+    url: "https://docs.aws.amazon.com/IAM/latest/APIReference/API_AttachedPermissionsBoundary.html"
+    retrieved: 2026-10-01
+  - title: "Amazon ECS API: Deployment (rolloutState, failedTasks)"
+    url: "https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html"
+    retrieved: 2026-10-01

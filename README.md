@@ -9,8 +9,10 @@ Current incidents cover DNS, an expired TLS certificate, Linux disk space and
 a systemd memory limit, Kubernetes CrashLoopBackOff and a stuck image pull,
 Terraform state locking and an unsafe refactor, GitHub Actions (a stale lock
 file and token permissions), a microservices cascading failure and a message
-queue poison-message loop, and cloud architecture failures on AWS (single-AZ database), Azure (Application
-Gateway health probes) and Google Cloud (Cloud Run vs. Cloud SQL connections).
+queue poison-message loop, and cloud failures on AWS (a single-AZ database, an IAM permissions boundary,
+Route 53 failover that never failed over), Azure (Application Gateway health
+probes, a publicly readable blob container) and Google Cloud (Cloud Run vs.
+Cloud SQL connections).
 
 **Design challenges** flip it around: you build an architecture from a brief
 (pick a service per tier), run stress tests like a zone outage or a 20× traffic

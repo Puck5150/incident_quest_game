@@ -131,6 +131,29 @@ from your own experience and tick them off.
 - [ ] `--max` flag: taken from the current Cloud Run docs (older docs and
       scripts use `--max-instances`).
 
+## cloud/azure-public-blob-container
+- [ ] `az storage container show-permission` output (`{"publicAccess": "container"}` / `"off"`):
+      the docs show the command, not its output.
+- [ ] Anonymous List Blobs on a private container returning `ResourceNotFound`: from
+      experience (Azure doesn't confirm a private container exists); not in the docs.
+- [ ] StorageBlobLogs rows (columns, OperationName values) and the IPs: representative;
+      the documented query filters on AuthenticationType == "Anonymous".
+
+## cloud/aws-permissions-boundary
+- [ ] The AccessDeniedException text follows the documented permissions-boundary
+      format; the assumed-role ARN and the app's log framing are representative.
+- [ ] `get-role --query Role.PermissionsBoundary`, `get-role-policy`, `simulate-principal-policy`
+      and `ecs describe-services` output layouts: field names are from the API references,
+      the JSON shapes are trimmed and representative.
+
+## cloud/aws-route53-failover
+- [ ] `get-health-check-status` status strings ("Failure: Connection timed out. The endpoint
+      or the internet connection is down, or requests are being blocked by your firewall.",
+      "Failure: HTTP Status Code 503, ...", "Success: HTTP Status Code 200, OK"): from experience.
+- [ ] `list-resource-record-sets` and `describe-security-groups` output: trimmed and representative.
+- [ ] The pl-0r53hc prefix list id is invented; the docs say AWS-managed prefix lists exist for
+      the health checker ranges but this page doesn't name the list.
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.

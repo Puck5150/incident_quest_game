@@ -1,0 +1,219 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-public-blob-container
+track: cloud
+difficulty: 2
+title: "A stranger can list our customers' invoices"
+par_minutes: 10
+
+ticket:
+  from: "security@ inbox"
+  priority: P1
+  body: |
+    From an independent security researcher, 07:52 UTC:
+
+    "Hi, while looking at your shop I found that this URL lists what look like
+    customer invoice PDFs, and I could download one without logging in:
+    https://shopdocsprod.blob.core.windows.net/invoices?restype=container&comp=list
+    I haven't kept anything. Please fix it."
+
+environment: |
+  The shop keeps two kinds of files in one Azure Storage account,
+  shopdocsprod (resource group rg-shop-prod): product images that the public
+  website loads directly from the "product-images" container, and customer
+  invoices in the "invoices" container, which the account area serves through
+  short-lived links. The invoices were moved into this account on 09-22 from an
+  older one. Containers are created by a shared Bicep module. Resource logs go to
+  a Log Analytics workspace.
+
+diagram:
+  nodes:
+    - { id: web, label: "public website", col: 0, row: 0, status: ok }
+    - { id: images, label: "container: product-images", col: 1, row: 0, status: ok }
+    - { id: invoices, label: "container: invoices", col: 1, row: 1, status: ok }
+    - { id: internet, label: "anyone on the internet", col: 0, row: 1, status: ok }
+  edges:
+    - { from: web, to: images }
+    - { from: internet, to: invoices }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az storage container show-permission --name invoices --account-name shopdocsprod"
+      when_actions: [private-container]
+      output: |
+        {
+          "publicAccess": "off"
+        }
+    - match: "az storage container show-permission --name invoices --account-name shopdocsprod"
+      evidence: container-public
+      output: |
+        {
+          "publicAccess": "container"
+        }
+    - match: "az storage container show-permission --name product-images --account-name shopdocsprod"
+      output: |
+        {
+          "publicAccess": "blob"
+        }
+    - match: "az storage account show -n shopdocsprod -g rg-shop-prod --query allowBlobPublicAccess"
+      evidence: account-allows
+      output: |
+        true
+    - match_regex: "^curl (-s )?\"?https://shopdocsprod\\.blob\\.core\\.windows\\.net/invoices\\?restype=container&comp=list\"?( \\| head.*)?$"
+      when_actions: [private-container]
+      output: |
+        <?xml version="1.0" encoding="utf-8"?><Error><Code>ResourceNotFound</Code><Message>The specified resource does not exist.</Message></Error>
+    - match_regex: "^curl (-s )?\"?https://shopdocsprod\\.blob\\.core\\.windows\\.net/invoices\\?restype=container&comp=list\"?( \\| head.*)?$"
+      evidence: anonymous-list
+      output: |
+        <?xml version="1.0" encoding="utf-8"?><EnumerationResults ServiceEndpoint="https://shopdocsprod.blob.core.windows.net/" ContainerName="invoices"><Blobs>
+        <Blob><Name>2026/09/INV-2026-0918-04411.pdf</Name>...</Blob>
+        <Blob><Name>2026/09/INV-2026-0918-04412.pdf</Name>...</Blob>
+        <Blob><Name>2026/09/INV-2026-0918-04413.pdf</Name>...</Blob>
+        ... (31,207 more)
+    - match_regex: "^git log --oneline( -\\d+)?( infra/)?$"
+      output: |
+        5e1c2d9 infra: move invoices container into shopdocsprod (#412)
+        b07a3f1 infra: storage-container module for product-images (#388)
+        41c9e0a infra: shopdocsprod account
+
+logs:
+  - name: "Log Analytics: StorageBlobLogs, AuthenticationType == \"Anonymous\", last 14 days"
+    evidence: anonymous-reads
+    lines: |
+      TimeGenerated         OperationName  Uri                                                                 CallerIpAddress
+      2026-09-30 21:14:03   ListBlobs      https://shopdocsprod.blob.core.windows.net/invoices?restype=container&comp=list   198.51.100.23
+      2026-09-30 21:14:41   GetBlob        https://shopdocsprod.blob.core.windows.net/invoices/2026/09/INV-2026-0918-04411.pdf  198.51.100.23
+      2026-10-01 03:02:17   ListBlobs      https://shopdocsprod.blob.core.windows.net/invoices?restype=container&comp=list   203.0.113.77
+      2026-10-01 03:02:19   GetBlob        https://shopdocsprod.blob.core.windows.net/invoices/2026/09/INV-2026-0917-03980.pdf  203.0.113.77
+      2026-10-01 03:02:20   GetBlob        https://shopdocsprod.blob.core.windows.net/invoices/2026/09/INV-2026-0917-03981.pdf  203.0.113.77
+      (product-images GetBlob rows from website visitors omitted: 412,880)
+
+files:
+  - path: "infra/modules/storage-container.bicep"
+    language: bicep
+    evidence: module-default
+    content: |
+      param accountName string
+      param containerName string
+      @allowed([ 'None', 'Blob', 'Container' ])
+      param publicAccess string = 'Container'   // default from the product-images work (#388)
+
+      resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+        name: '${accountName}/default/${containerName}'
+        properties: {
+          publicAccess: publicAccess
+        }
+      }
+  - path: "infra/main.bicep (excerpt)"
+    language: bicep
+    content: |
+      module productImages 'modules/storage-container.bicep' = {
+        name: 'product-images'
+        params: { accountName: 'shopdocsprod', containerName: 'product-images', publicAccess: 'Blob' }
+      }
+
+      module invoices 'modules/storage-container.bicep' = {
+        name: 'invoices'
+        params: { accountName: 'shopdocsprod', containerName: 'invoices' }   // added in #412
+      }
+
+hypotheses:
+  - id: container-anonymous
+    text: "The invoices container's access level allows anonymous listing and reading, inherited from a module default when it was moved."
+    correct: true
+  - id: sas-leaked
+    text: "A shared access signature (SAS) link for the container leaked."
+    feedback: "The researcher's URL has no SAS token, and the logs record these requests as Anonymous: no credentials at all. The container is open to everyone."
+  - id: key-leaked
+    text: "The storage account key leaked."
+    feedback: "Requests made with an account key are authorized, not anonymous. These requests carry no Authorization header, so no key was involved."
+  - id: account-public
+    text: "The whole storage account was made public."
+    feedback: "Allowing anonymous access on the account only makes it possible; a container is still private unless its own access level is set. product-images is deliberately set to blob-level access; invoices is set to container-level."
+
+actions:
+  - id: private-container
+    label: "az storage container set-permission --name invoices --account-name shopdocsprod --public-access off"
+    kind: fix
+    match_regex: "^az storage container set-permission --name invoices --account-name shopdocsprod --public-access off( .*)?$"
+    feedback: "Anonymous requests to invoices are refused from now on, and the product images the website needs keep working. That stops the leak in seconds."
+  - id: fix-module
+    label: "Change the Bicep module's default to publicAccess 'None', so containers are private unless a caller asks otherwise, and redeploy"
+    kind: fix
+    feedback: "Without this, the next infrastructure deploy sets invoices back to 'Container' and reopens the leak. Private by default means only product-images, which asks for 'Blob' explicitly, is public."
+  - id: rotate-keys
+    label: "Rotate both storage account keys"
+    kind: wrong
+    feedback: "Anonymous requests don't use keys at all, so the container stays open. Rotating also breaks anything legitimately using the keys until it's updated."
+  - id: account-off-now
+    label: "az storage account update -n shopdocsprod -g rg-shop-prod --allow-blob-public-access false"
+    kind: wrong
+    match_regex: "^az storage account update -n shopdocsprod -g rg-shop-prod --allow-blob-public-access false$"
+    feedback: "It stops the leak, and also every anonymous request to the account: every product image on the website breaks. The container-level change is just as fast and breaks nothing. Making the account private is the right end state, after the images move to their own account."
+  - id: delete-container
+    label: "Delete the invoices container to remove the exposure"
+    kind: destructive
+    feedback: "That deletes every customer invoice the account area serves, and the evidence you need to work out exactly what was exposed and to whom. Close the door; don't burn the files."
+
+solution_paths:
+  - [private-container, fix-module]
+
+key_evidence: [container-public, anonymous-reads, module-default]
+
+evidence_labels:
+  container-public: "The invoices container's access level is \"container\": anyone can list and read it"
+  anonymous-reads: "Anonymous listing and downloads of invoices from unknown IPs since 09-30"
+  module-default: "The container module defaults to public access, and the invoices move used the default"
+
+hints:
+  nudge: "The researcher didn't log in. What does Azure need before it serves a blob to someone who sends no credentials?"
+  direction: "Check the container's anonymous access level and the account setting, then the logs for anonymous requests, then how the container was created."
+  answer: "invoices has publicAccess 'container', from the Bicep module's default when it was moved in #412. Set it to off now, change the module default to 'None', and use the logs to see what was downloaded."
+
+analogy:
+  title: "The filing cabinet in the shop window"
+  text: |
+    The shop keeps posters in the front window on purpose, so passers-by can
+    see them. When the old office closed, someone carried its filing cabinet
+    over and put it in the window too, because that's where things went last
+    time. Changing the locks on the back door doesn't help: nobody needed a
+    key. Move the cabinet out of the window first, then fix the habit.
+
+debrief:
+  root_cause: |
+    Anonymous access needs two settings: the account must allow it, and the
+    container's own access level must permit it. shopdocsprod allows it,
+    because product-images is deliberately public. When the invoices
+    container was moved into the same account on 09-22, it was created with
+    the shared Bicep module, whose publicAccess parameter defaulted to
+    'Container' from the product-images work. 'Container' lets anyone list
+    the container and read every blob in it, with no credentials. The logs
+    show anonymous listing and downloads from at least two outside addresses.
+  ideal_path:
+    - "Take the report seriously and reproduce it: the URL lists invoices with no credentials."
+    - "Check the container's access level (container) and the account setting (allowed)."
+    - "Close it surgically: set invoices to private. Product images keep working."
+    - "Find why: the module's default, used by the move in #412. Make private the default and redeploy."
+    - "Query StorageBlobLogs for AuthenticationType Anonymous to see what was listed and downloaded, and hand that to whoever handles data-breach notification."
+    - "Plan the end state: public images in their own account, and anonymous access disallowed on the account that holds private data."
+  real_world: |
+    Publicly readable storage is one of the most common causes of data leaks
+    on every cloud. Microsoft recommends disallowing anonymous access on every
+    account, and keeping anything that must be public in a separate account
+    reserved for it. Make secure the default in your modules, alert on
+    anonymous requests, and audit containers across accounts regularly.
+
+sources:
+  - title: "Azure Storage: Configure anonymous read access for containers and blobs"
+    url: "https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-configure"
+    retrieved: 2026-10-01
+  - title: "Azure Storage: Remediate anonymous read access to blob data (detecting anonymous requests in logs)"
+    url: "https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-prevent"
+    retrieved: 2026-10-01
+  - title: "Azure Storage: Overview of remediating anonymous read access"
+    url: "https://learn.microsoft.com/en-us/azure/storage/blobs/anonymous-read-access-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Storage REST API: List Blobs"
+    url: "https://learn.microsoft.com/en-us/rest/api/storageservices/list-blobs"
+    retrieved: 2026-10-01
