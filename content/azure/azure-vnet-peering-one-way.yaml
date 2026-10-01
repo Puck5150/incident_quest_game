@@ -1,0 +1,192 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-vnet-peering-one-way
+track: azure
+difficulty: 1
+title: "The new app can't reach the database in the other network"
+par_minutes: 8
+
+ticket:
+  from: "App team"
+  priority: P2
+  body: |
+    Our new orders app (vnet-app) needs the PostgreSQL VM in the data team's
+    network (vnet-data). We set up VNet peering yesterday, but connections to
+    10.20.1.5:5432 still time out. The data team says the database is up and
+    they can connect to it from their side.
+
+environment: |
+  vnet-app (10.10.0.0/16, resource group rg-app) belongs to the app team.
+  vnet-data (10.20.0.0/16, resource group rg-data) belongs to the data team,
+  who manage it themselves; the app team has no permissions on rg-data. Both
+  are in the same region and subscription. The database VM, vm-pg-01, is
+  10.20.1.5.
+
+diagram:
+  nodes:
+    - { id: app, label: "vm-app-01 (vnet-app, 10.10.1.4)", col: 0, row: 0, status: degraded }
+    - { id: peer, label: "VNet peering", col: 1, row: 0, status: degraded }
+    - { id: db, label: "vm-pg-01 (vnet-data, 10.20.1.5)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: app, to: peer }
+    - { from: peer, to: db }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az network vnet peering list -g rg-app --vnet-name vnet-app --out table"
+      when_actions: [create-other-side]
+      output: |
+        Name         PeeringState    AllowVirtualNetworkAccess
+        -----------  --------------  ---------------------------
+        app-to-data  Connected       True
+    - match: "az network vnet peering list -g rg-app --vnet-name vnet-app --out table"
+      evidence: initiated
+      output: |
+        Name         PeeringState    AllowVirtualNetworkAccess
+        -----------  --------------  ---------------------------
+        app-to-data  Initiated       True
+    - match: "az network vnet peering list -g rg-data --vnet-name vnet-data --out table"
+      when_actions: [create-other-side]
+      output: |
+        Name         PeeringState    AllowVirtualNetworkAccess
+        -----------  --------------  ---------------------------
+        data-to-app  Connected       True
+    - match: "az network vnet peering list -g rg-data --vnet-name vnet-data --out table"
+      evidence: no-return-peering
+      output: |
+        (no peerings)
+    - match: "az network nic show-effective-route-table -g rg-app -n vm-app-01-nic --out table"
+      when_actions: [create-other-side]
+      output: |
+        Source    State    Address Prefix    Next Hop Type    Next Hop IP
+        --------  -------  ----------------  ---------------  -------------
+        Default   Active   10.10.0.0/16      VnetLocal
+        Default   Active   10.20.0.0/16      VNetPeering
+        Default   Active   0.0.0.0/0         Internet
+    - match: "az network nic show-effective-route-table -g rg-app -n vm-app-01-nic --out table"
+      evidence: no-peering-route
+      output: |
+        Source    State    Address Prefix    Next Hop Type    Next Hop IP
+        --------  -------  ----------------  ---------------  -------------
+        Default   Active   10.10.0.0/16      VnetLocal
+        Default   Active   0.0.0.0/0         Internet
+    - match_regex: "^(nc -zv(w ?\\d+)?|nc -z -v -w ?\\d+) 10\\.20\\.1\\.5 5432$"
+      when_actions: [create-other-side]
+      output: |
+        Connection to 10.20.1.5 5432 port [tcp/postgresql] succeeded!
+    - match_regex: "^(nc -zv(w ?\\d+)?|nc -z -v -w ?\\d+) 10\\.20\\.1\\.5 5432$"
+      output: |
+        nc: connect to 10.20.1.5 port 5432 (tcp) timed out: Operation now in progress
+
+logs:
+  - name: "#app-team (chat), yesterday"
+    lines: |
+      16:10 priya: created the peering app-to-data from vnet-app to vnet-data, done!
+      16:12 priya: (it says Initiated, guess it'll finish on its own?)
+
+hypotheses:
+  - id: one-way
+    text: "Only the app side of the peering exists. Azure needs a peering created in each virtual network before they're connected."
+    correct: true
+  - id: nsg
+    text: "A network security group on the database blocks the app."
+    feedback: "The app VM doesn't even have a route to 10.20.0.0/16, so packets never get as far as any NSG. NSGs' default rules also allow traffic between connected virtual networks."
+  - id: overlap
+    text: "The two networks' address spaces overlap."
+    feedback: "10.10.0.0/16 and 10.20.0.0/16 don't overlap. Overlapping address spaces would stop the peering from being created at all."
+  - id: db-down
+    text: "The database is down."
+    feedback: "The data team connects to it fine from inside vnet-data. The app side has no path to it."
+
+actions:
+  - id: create-other-side
+    label: "Ask the data team to run: az network vnet peering create -g rg-data --vnet-name vnet-data -n data-to-app --remote-vnet <vnet-app's resource ID> --allow-vnet-access"
+    kind: fix
+    match_regex: "^az network vnet peering create (-g|--resource-group) rg-data --vnet-name vnet-data (-n|--name) data-to-app --remote-vnet \\S+ --allow-vnet-access$"
+    feedback: "With a peering in each virtual network, both show Connected, a route for the other network appears on each side, and the app reaches 10.20.1.5:5432."
+  - id: recreate-app-side
+    label: "Delete app-to-data and create it again"
+    kind: wrong
+    feedback: "You'd get another one-sided peering, also Initiated. The missing piece is in vnet-data, which only the data team can change."
+  - id: open-nsg
+    label: "Add an NSG rule on the database allowing 5432 from 10.10.0.0/16"
+    kind: wrong
+    feedback: "There's no route between the networks yet, so traffic never reaches the NSG. Once the peering is connected, the default AllowVnetInBound rule already covers it."
+  - id: vpn-gateway
+    label: "Connect the two networks with VPN gateways instead"
+    kind: wrong
+    feedback: "That's slow and expensive to set up for two networks in the same region. Peering is the right tool; it's just half done."
+  - id: public-db
+    label: "Give vm-pg-01 a public IP address and allow 5432 from the internet"
+    kind: destructive
+    feedback: "That puts the company database on the internet to work around a missing peering. The data team's half of the peering is one command."
+
+solution_paths:
+  - [create-other-side]
+
+key_evidence: [initiated, no-return-peering, no-peering-route]
+
+evidence_labels:
+  initiated: "The app side's peering is stuck at Initiated, not Connected"
+  no-return-peering: "vnet-data has no peering back to vnet-app"
+  no-peering-route: "The app VM has no route to 10.20.0.0/16"
+
+hints:
+  nudge: "The peering says Initiated. Is that the same as connected?"
+  direction: "Look at the peerings in both virtual networks, and at the app VM's effective routes."
+  answer: "A peering is needed in each virtual network. Only app-to-data exists, so it's Initiated and no route exists. The data team needs to create data-to-app in vnet-data."
+
+analogy:
+  title: "The door that's only unlocked from one side"
+  text: |
+    Two neighbouring offices agree to put a door between them. One office
+    fitted its half and unlocked it; the other office never fitted theirs.
+    There's a frame in the wall and a note saying "door requested", but
+    nobody can walk through until both sides have done their part.
+
+debrief:
+  root_cause: |
+    In Azure, peering two virtual networks takes two peerings: one created in
+    each network, pointing at the other. The app team created app-to-data in
+    vnet-app, which left it in the Initiated state. Nobody created the
+    matching peering in vnet-data, which only the data team can change. A
+    peering isn't established until both are Connected, so no routes were
+    added and the app's traffic to 10.20.0.0/16 had nowhere to go.
+  ideal_path:
+    - "Read the peering state: Initiated, not Connected."
+    - "Check the other network: vnet-data has no peering back."
+    - "Confirm the effect: the app VM's effective routes have nothing for 10.20.0.0/16."
+    - "Get the data team to create data-to-app in vnet-data."
+    - "Verify: both peerings Connected, the route appears, and port 5432 answers."
+  real_world: |
+    One-sided peerings are a classic when two teams own the two networks. Put
+    both sides of a peering in the same change (or the same infrastructure
+    code), and treat Initiated as "half done", not "in progress".
+
+concepts:
+  - term: "Virtual network (VNet)"
+    text: "Your private network in Azure, with its own address space, split into subnets. Resources in different VNets can't talk to each other unless you connect the networks."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview"
+  - term: "VNet peering"
+    text: "Connects two virtual networks so their resources talk over Microsoft's backbone using private IPs. It needs a peering created in each of the two networks."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-peering-overview"
+  - term: "Peering status"
+    text: "Initiated means only one side exists; Connected (on both peerings) means the networks are joined."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-manage-peering"
+  - term: "Effective routes"
+    text: "The routes actually applied to a network interface, combining Azure's defaults, peerings and your own route tables. They show where each destination's traffic goes, if anywhere."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview"
+
+sources:
+  - title: "Azure: Create, change, or delete a virtual network peering (Initiated and Connected, a peering in each network)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-manage-peering"
+    retrieved: 2026-10-01
+  - title: "Azure: Virtual network peering overview"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-peering-overview"
+    retrieved: 2026-10-01
+  - title: "Azure: Virtual network traffic routing (system routes, VNet peering routes)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview"
+    retrieved: 2026-10-01
+  - title: "Azure: Network security groups overview (AllowVnetInBound default rule)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview"
+    retrieved: 2026-10-01

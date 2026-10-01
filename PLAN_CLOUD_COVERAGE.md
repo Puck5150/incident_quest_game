@@ -1,6 +1,6 @@
 # Plan: Cloud coverage on AWS, Azure and Google Cloud
 
-Status: **approved 2026-10-01** (all four defaults in §4). Phase A done (6 AWS basics incidents); Phase B (Azure basics) next. Requested 2026-10-01: a comprehensive suite of
+Status: **approved 2026-10-01** (all four defaults in §4). Phases A (6 AWS basics) and B (6 Azure basics) done; Phase C (AWS and Azure depth) next. Requested 2026-10-01: a comprehensive suite of
 incidents and design challenges on all three platforms, with each platform's basics
 covered. Priority: **AWS, then Azure, then Google Cloud**.
 
@@ -67,9 +67,9 @@ the debrief only when present.
 **Phase B: Azure basics** (6 incidents, difficulty 1–2)
 1. VM unreachable over SSH: NSG rule priority (NSGs)
 2. Two VNets can't talk: peering missing in one direction (VNets, peering)
-3. Function app can't read Key Vault: no role assignment for its managed identity (RBAC, managed identities)
+3. Function app can't read Key Vault: its managed identity has Key Vault Reader, which can't read values (RBAC, managed identities)
 4. Deployment fails in a resource group: role assigned at the wrong scope (subscriptions, resource groups, scopes)
-5. Azure Monitor alert never fired: action group with no receivers (Azure Monitor)
+5. Alert fired but nobody was told: a maintenance alert processing rule left suppressing everything (Azure Monitor)
 6. Surprise bill: VMs "stopped" in the OS but not deallocated (cost)
 
 **Phase C: AWS and Azure depth** (4 incidents, difficulty 2–4)

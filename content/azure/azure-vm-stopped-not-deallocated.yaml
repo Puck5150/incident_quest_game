@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-vm-stopped-not-deallocated
+track: azure
+difficulty: 1
+title: "We switch the test VMs off every night, and pay for them all day"
+par_minutes: 8
+
+ticket:
+  from: "Finance"
+  priority: P4
+  body: |
+    The test environment's 12 VMs are supposed to be off from 19:00 to 07:00
+    and all weekend, which should cut their compute cost by about two
+    thirds. Cost analysis shows them billed for every hour of the month, as
+    if they never stopped. The team insists they're shut down every night.
+
+environment: |
+  The test VMs live in the resource group rg-test. Two years ago the team
+  added a cron job inside each VM that runs "sudo shutdown -h now" at 19:00
+  on weekdays and Friday night. A pipeline starts them again at 07:00 on
+  weekday mornings.
+
+diagram:
+  nodes:
+    - { id: cron, label: "cron in each VM (19:00)", col: 0, row: 0, status: ok }
+    - { id: vms, label: "12 test VMs (rg-test)", col: 1, row: 0, status: ok }
+    - { id: billing, label: "compute billing", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: cron, to: vms }
+    - { from: vms, to: billing }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az vm list -d -g rg-test --query \"[].{name:name, power:powerState}\" --out table"
+      when_actions: [deallocate-now]
+      output: |
+        Name        Power
+        ----------  --------------
+        vm-test-01  VM deallocated
+        vm-test-02  VM deallocated
+        ...         (12 VMs, all deallocated)
+    - match: "az vm list -d -g rg-test --query \"[].{name:name, power:powerState}\" --out table"
+      evidence: stopped-state
+      output: |
+        Name        Power
+        ----------  ----------
+        vm-test-01  VM stopped
+        vm-test-02  VM stopped
+        ...         (12 VMs, all stopped)
+
+files:
+  - path: "/etc/cron.d/nightly-off (on each test VM)"
+    evidence: in-os-shutdown
+    content: |
+      # Save money: turn the VM off out of hours
+      0 19 * * 1-5 root /sbin/shutdown -h now
+
+logs:
+  - name: "Cost analysis: rg-test virtual machines, September, by meter"
+    evidence: billed-all-hours
+    lines: |
+      Virtual Machines  D4s v5   compute hours: 8,640   (12 VMs x 720 hours: every hour of the month)
+      Storage           Premium SSD managed disks  (12 disks)
+      Bandwidth         ...
+
+hypotheses:
+  - id: stopped-not-deallocated
+    text: "Shutting down from inside the VM leaves it Stopped but still allocated to its host, which is still billed. Only Deallocated stops compute charges."
+    correct: true
+  - id: cron-not-running
+    text: "The cron job isn't running, so the VMs never shut down."
+    feedback: "They do shut down: Azure shows them as \"VM stopped\" every evening. The question is what that state costs."
+  - id: start-pipeline-early
+    text: "The start pipeline runs too early or too often."
+    feedback: "Even if it did, compute is billed for all 720 hours a month, nights and weekends included, not just a few extra hours."
+  - id: disks-cost
+    text: "The cost is the disks, not compute."
+    feedback: "Disks are a separate meter and are billed whatever the VM's state. The line that's too high is compute hours: 8,640, every hour of the month."
+
+actions:
+  - id: deallocate-now
+    label: "az vm deallocate --ids $(az vm list -g rg-test --query \"[].id\" -o tsv)"
+    kind: fix
+    match_regex: "^az vm deallocate --ids \\$\\(az vm list (-g|--resource-group) rg-test --query \"?\\[\\]\\.id\"? (-o|--output) tsv\\)$"
+    feedback: "Deallocated VMs release their hardware, and compute charges stop. Disks (and any static public IPs) are still billed, as the docs warn."
+  - id: replace-cron
+    label: "Replace the in-VM cron with a scheduled job that runs az vm deallocate at 19:00 (and remove the shutdown cron)"
+    kind: fix
+    feedback: "Deallocation is something only Azure can do: the VM's own operating system can only switch itself off, which leaves the VM allocated and billed. Scheduling it from outside makes the nightly saving real."
+  - id: az-vm-stop
+    label: "az vm stop --ids $(az vm list -g rg-test --query \"[].id\" -o tsv)"
+    kind: wrong
+    match_regex: "^az vm stop --ids \\$\\(az vm list (-g|--resource-group) rg-test --query \"?\\[\\]\\.id\"? (-o|--output) tsv\\)$"
+    feedback: "az vm stop powers the VMs off but keeps them allocated: the CLI's own help says the VM will continue to be billed. You've rebuilt the same problem from outside."
+  - id: smaller-size
+    label: "Resize the test VMs to a smaller size"
+    kind: wrong
+    feedback: "It lowers the hourly rate, but they're still billed for every hour, including all the nights and weekends you meant to save."
+  - id: delete-disks
+    label: "Delete the VMs' disks overnight to stop all charges"
+    kind: destructive
+    feedback: "That deletes the test environment's operating systems and data every night. Deallocating stops compute charges and keeps everything intact."
+
+solution_paths:
+  - [deallocate-now, replace-cron]
+
+key_evidence: [billed-all-hours, stopped-state, in-os-shutdown]
+
+evidence_labels:
+  billed-all-hours: "Compute was billed for all 720 hours of September, on all 12 VMs"
+  stopped-state: "Overnight the VMs show \"VM stopped\", not \"VM deallocated\""
+  in-os-shutdown: "The nightly shutdown runs inside each VM's operating system"
+
+hints:
+  nudge: "Azure has two kinds of \"off\". Which one are these VMs in overnight?"
+  direction: "Check the VMs' power state after 19:00, and how they're being shut down."
+  answer: "A shutdown from inside the OS leaves the VM \"Stopped\" (still allocated, still billed). Deallocate them with az vm deallocate, and schedule that instead of the in-VM shutdown."
+
+analogy:
+  title: "Switching off the lights in a hotel room you still have booked"
+  text: |
+    Every evening the team switches off the lights and the TV in their hotel
+    rooms to save money. But they never check out, so the hotel charges for
+    every night. Turning things off inside the room doesn't matter to the
+    bill; giving the room back does.
+
+debrief:
+  root_cause: |
+    An Azure VM can be off in two different ways. Shutting it down from
+    inside the guest operating system (or with az vm stop) leaves it in the
+    Stopped state: powered off but still allocated on a host, and still
+    billed for compute. Only a deallocated VM releases the hardware and
+    stops compute charges. The test VMs' nightly cron ran "shutdown -h now"
+    inside each VM, so they were Stopped every night and billed for every
+    hour of the month.
+  ideal_path:
+    - "Read the bill: compute hours equal every hour of the month."
+    - "Check the VMs at night: \"VM stopped\", not \"VM deallocated\"."
+    - "Find how they're turned off: a shutdown inside the guest OS."
+    - "Deallocate them, and replace the in-VM cron with a scheduled az vm deallocate."
+    - "Next month, check compute hours dropped; disks are still billed, as expected."
+  real_world: |
+    "Stopped but not deallocated" is one of the most common Azure cost
+    surprises, especially for dev and test machines. Turn VMs off from
+    Azure (deallocate), not from inside, and remember that disks and static
+    IP addresses keep costing money even when a VM is deallocated.
+
+concepts:
+  - term: "VM power states"
+    text: "Running, Stopped and Deallocated are different states. Stopped means powered off but still holding its spot on a host; Deallocated means the hardware has been released."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing"
+  - term: "Billing by state"
+    text: "Running and Stopped VMs are billed for compute. Deallocated VMs aren't, but their disks and some networking resources still are."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing"
+  - term: "az vm deallocate vs az vm stop"
+    text: "az vm stop powers a VM off and keeps it billed; az vm deallocate releases it so compute charges stop."
+    url: "https://learn.microsoft.com/en-us/cli/azure/vm"
+  - term: "Resource group"
+    text: "A container for related Azure resources, like all of one environment's VMs, so you can manage, secure and track their cost together."
+    url: "https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-portal"
+
+sources:
+  - title: "Azure Virtual Machines: States and billing status (shutdown from within the guest OS is Stopped and billed)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing"
+    retrieved: 2026-10-01
+  - title: "Azure CLI: az vm (stop continues to be billed; deallocate stops charges)"
+    url: "https://learn.microsoft.com/en-us/cli/azure/vm"
+    retrieved: 2026-10-01

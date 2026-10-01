@@ -183,6 +183,15 @@ from your own experience and tick them off.
 - [ ] Error texts from experience, not printed in docs: `curl: (28) ...`, `aws s3 cp` "HeadObject ... Forbidden",
       S3 `InvalidAccessKeyId` for a deactivated key, Cost Explorer usage-type rows (USE1-NatGateway-Bytes).
 
+## azure basics (Phase B: nsg-rule-priority, vnet-peering-one-way, key-vault-wrong-role, rbac-wrong-scope, alert-suppressed, vm-stopped-not-deallocated)
+- [ ] `az ... --out table` layouts and trimmed JSON: representative (column and field names from the docs where shown).
+- [ ] Key Vault 403 text (ForbiddenByRbac, "Caller is not authorized to perform action on resource") and the
+      AuthorizationFailed suffix "If access was recently granted, please refresh your credentials.": from experience.
+- [ ] Deploy action name `Microsoft.Web/sites/publishxml/action` in the AuthorizationFailed example: representative.
+- [ ] Fired-alert history wording "(suppressed by <rule>)" and the processing rule's `actionType: RemoveAllActionGroups`:
+      representative; the docs describe the behaviour, not this output.
+- [ ] `az network nic show-effective-route-table` table and `nc` output: representative.
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.

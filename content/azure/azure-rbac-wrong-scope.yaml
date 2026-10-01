@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-rbac-wrong-scope
+track: azure
+difficulty: 1
+title: "Staging deploys work; the first production deploy is refused"
+par_minutes: 8
+
+ticket:
+  from: "Web team"
+  priority: P2
+  body: |
+    Our new pipeline has deployed to staging all week. Today's first
+    production deploy failed with "AuthorizationFailed". Same pipeline, same
+    service principal, same app code. Release is blocked.
+
+environment: |
+  The web app runs on Azure App Service: web-staging in resource group
+  rg-web-staging, and web-prod in rg-web-prod, both in the subscription
+  sub-shop. The pipeline signs in as the service principal sp-deploy-web
+  (app ID 3f9c...). Its access was set up last week, while building the
+  staging environment.
+
+diagram:
+  nodes:
+    - { id: pipeline, label: "pipeline (sp-deploy-web)", col: 0, row: 0, status: ok }
+    - { id: staging, label: "rg-web-staging / web-staging", col: 1, row: 0, status: ok }
+    - { id: prod, label: "rg-web-prod / web-prod", col: 1, row: 1, status: degraded }
+  edges:
+    - { from: pipeline, to: staging }
+    - { from: pipeline, to: prod }
+
+pipeline:
+  name: "deploy-web · run #58 (production)"
+  trigger: "manual · release 2026.10.1 · Tomas"
+  stages:
+    - name: "Sign in (sp-deploy-web)"
+      status: success
+      duration_s: 3
+      log: |
+        Login successful: service principal 3f9c... in tenant acme.example
+    - name: "Deploy to web-prod"
+      status: failure
+      duration_s: 4
+      evidence: authz-failed
+      log: |
+        ERROR: (AuthorizationFailed) The client '3f9c...' with object id 'a71d...' does not have authorization to perform action 'Microsoft.Web/sites/publishxml/action' over scope '/subscriptions/2222.../resourceGroups/rg-web-prod/providers/Microsoft.Web/sites/web-prod' or the scope is invalid. If access was recently granted, please refresh your credentials.
+    - name: "Smoke test"
+      status: skipped
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az role assignment list --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --all --out table"
+      when_actions: [assign-prod]
+      output: |
+        Principal                             Role         Scope
+        ------------------------------------  -----------  --------------------------------------------------
+        3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b  Contributor  /subscriptions/2222.../resourceGroups/rg-web-staging
+        3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b  Contributor  /subscriptions/2222.../resourceGroups/rg-web-prod
+    - match: "az role assignment list --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --all --out table"
+      evidence: staging-only
+      output: |
+        Principal                             Role         Scope
+        ------------------------------------  -----------  --------------------------------------------------
+        3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b  Contributor  /subscriptions/2222.../resourceGroups/rg-web-staging
+    - match: "az webapp show -n web-prod -g rg-web-prod --query state"
+      output: |
+        "Running"
+
+hypotheses:
+  - id: wrong-scope
+    text: "The service principal's role is assigned on the staging resource group only, so it has no permissions on production."
+    correct: true
+  - id: secret-expired
+    text: "The service principal's secret expired."
+    feedback: "The sign-in step succeeded. An expired secret would fail there, before Azure ever checked what the principal may do."
+  - id: app-missing
+    text: "web-prod doesn't exist, so the scope is invalid."
+    feedback: "web-prod is there and running. The message covers both cases, but the role assignments show the real one: no access at that scope."
+  - id: bad-release
+    text: "Something in this release needs a new permission."
+    feedback: "The action is an ordinary deploy action the pipeline performs on staging every day. What differs is the scope: rg-web-prod."
+
+actions:
+  - id: assign-prod
+    label: "az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --role Contributor --scope /subscriptions/2222.../resourceGroups/rg-web-prod"
+    kind: fix
+    match_regex: "^az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --role \"?Contributor\"? --scope /subscriptions/\\S+/resourceGroups/rg-web-prod$"
+    feedback: "The pipeline now has the same role on production as on staging, scoped to that one resource group. Re-run the deploy (new assignments can take a few minutes to apply)."
+  - id: subscription-contributor
+    label: "Assign Contributor to the service principal on the whole subscription"
+    kind: wrong
+    feedback: "Lower levels inherit from higher ones, so this grants Contributor on every resource group in sub-shop, including other teams' databases. The pipeline only needs rg-web-prod."
+  - id: rerun
+    label: "Re-run the pipeline"
+    kind: wrong
+    feedback: "Same principal, same roles, same refusal."
+  - id: personal-account
+    label: "Deploy production from your own account, which has access"
+    kind: wrong
+    feedback: "It ships today's release, and leaves the pipeline broken and production deployed by hand. The next release hits the same wall."
+  - id: owner-subscription
+    label: "Make the service principal Owner of the subscription so this never happens again"
+    kind: destructive
+    feedback: "Owner can also grant roles to anyone, so a pipeline credential now controls the whole subscription, including who else gets in. One leaked secret and it's all gone."
+
+solution_paths:
+  - [assign-prod]
+
+key_evidence: [authz-failed, staging-only]
+
+evidence_labels:
+  authz-failed: "Azure refused the deploy action for the pipeline's principal over the rg-web-prod scope"
+  staging-only: "The principal's only role assignment is Contributor on rg-web-staging"
+
+hints:
+  nudge: "Sign-in worked, then a specific action at a specific scope was refused. Which scope?"
+  direction: "List the service principal's role assignments and compare their scopes with the one in the error."
+  answer: "sp-deploy-web has Contributor on rg-web-staging only. Assign the same role at the rg-web-prod scope."
+
+analogy:
+  title: "The badge for the wrong building"
+  text: |
+    The new contractor's badge was set up while they worked in the test
+    lab, and opens every door there. Today they went to the main building
+    and the first door stayed shut. Their badge works, it's just not valid
+    here. Add the main building to the badge, not a master key for the
+    whole campus.
+
+debrief:
+  root_cause: |
+    Azure role assignments apply at a scope: a management group,
+    subscription, resource group or single resource, and everything below it
+    inherits. sp-deploy-web was given Contributor on rg-web-staging while
+    staging was built, and nobody added production. It could sign in and do
+    anything in staging, but in rg-web-prod it had no role at all, so its
+    first production deploy was refused with AuthorizationFailed.
+  ideal_path:
+    - "Read the error: who (the pipeline's principal), what (a deploy action) and where (rg-web-prod)."
+    - "Note that sign-in succeeded, so it's authorization, not authentication."
+    - "List the principal's role assignments: Contributor on rg-web-staging only."
+    - "Assign the same role, scoped to rg-web-prod."
+    - "Re-run the deploy."
+  real_world: |
+    Pipelines usually get access per environment, and the production grant
+    is the one most often forgotten. Grant at the narrowest scope that
+    works, keep the assignments in infrastructure code next to the
+    environments, and never fix a scope error by going broader than needed.
+
+concepts:
+  - term: "Scope"
+    text: "Where a role assignment applies. Azure has four levels: management group, subscription, resource group and resource."
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview"
+  - term: "Inheritance"
+    text: "A role assigned at a level applies to everything below it: a role on a subscription covers all its resource groups and resources."
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview"
+  - term: "Service principal"
+    text: "An identity for an application or pipeline (not a person) that signs in to Azure and gets roles like a user does."
+    url: "https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals"
+  - term: "Authentication vs authorization"
+    text: "Authentication proves who you are (signing in). Authorization decides what you may do, at which scope. This pipeline passed the first and failed the second."
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/overview"
+
+sources:
+  - title: "Azure RBAC: Understand scope for Azure RBAC (four levels, inheritance)"
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview"
+    retrieved: 2026-10-01
+  - title: "Azure RBAC: Troubleshoot Azure RBAC (AuthorizationFailed message)"
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/troubleshooting"
+    retrieved: 2026-10-01
+  - title: "Azure RBAC: Built-in roles (Owner can assign roles; Contributor can't)"
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles"
+    retrieved: 2026-10-01
+  - title: "Microsoft Entra: Application and service principal objects"
+    url: "https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals"
+    retrieved: 2026-10-01

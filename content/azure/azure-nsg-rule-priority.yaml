@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-nsg-rule-priority
+track: azure
+difficulty: 1
+title: "We can't SSH into the batch server any more"
+par_minutes: 8
+
+ticket:
+  from: "Data team"
+  priority: P3
+  body: |
+    Since this morning nobody can SSH into vm-batch-01 from the office VPN:
+    the connection just hangs. The nightly jobs themselves still run fine.
+    We haven't changed anything on the VM.
+
+environment: |
+  vm-batch-01 is a Linux VM in the resource group rg-batch, with private IP
+  10.1.0.4. Its network interface has the network security group nsg-batch,
+  which the data team manages. The office VPN reaches Azure from
+  203.0.113.0/24. The security team rolls out baseline rules to every NSG
+  with automation.
+
+diagram:
+  nodes:
+    - { id: office, label: "office VPN (203.0.113.0/24)", col: 0, row: 0, status: ok }
+    - { id: nsg, label: "nsg-batch", col: 1, row: 0, status: ok }
+    - { id: vm, label: "vm-batch-01 (10.1.0.4)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: office, to: nsg }
+    - { from: nsg, to: vm }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az network watcher test-ip-flow --direction inbound --protocol TCP --local 10.1.0.4:22 --remote 203.0.113.25:50000 --vm vm-batch-01 --resource-group rg-batch --out table"
+      when_actions: [reprioritize]
+      output: |
+        Access    RuleName
+        --------  ----------------------------
+        Allow     securityRules/Allow-SSH-Office
+    - match: "az network watcher test-ip-flow --direction inbound --protocol TCP --local 10.1.0.4:22 --remote 203.0.113.25:50000 --vm vm-batch-01 --resource-group rg-batch --out table"
+      evidence: flow-denied
+      output: |
+        Access    RuleName
+        --------  ----------------------------------------
+        Deny      securityRules/Baseline-Deny-Inbound
+    - match: "az network nsg rule list -g rg-batch --nsg-name nsg-batch --out table"
+      when_actions: [reprioritize]
+      output: |
+        Name                  Priority  Access  Direction  SourceAddressPrefix  DestinationPortRange
+        --------------------  --------  ------  ---------  -------------------  --------------------
+        Allow-SSH-Office      150       Allow   Inbound    203.0.113.0/24       22
+        Baseline-Deny-Inbound 200       Deny    Inbound    *                    *
+    - match: "az network nsg rule list -g rg-batch --nsg-name nsg-batch --out table"
+      evidence: rule-order
+      output: |
+        Name                  Priority  Access  Direction  SourceAddressPrefix  DestinationPortRange
+        --------------------  --------  ------  ---------  -------------------  --------------------
+        Baseline-Deny-Inbound 200       Deny    Inbound    *                    *
+        Allow-SSH-Office      300       Allow   Inbound    203.0.113.0/24       22
+
+logs:
+  - name: "Activity log: nsg-batch, last 24 hours"
+    evidence: baseline-added
+    lines: |
+      2026-10-01 07:02  Create or Update Security Rule  Baseline-Deny-Inbound  caller: security-baseline-automation
+  - name: "#security (chat)"
+    lines: |
+      07:15 omar: baseline rollout done. Every NSG now has Baseline-Deny-Inbound at priority 200. Teams: your allows need priorities below 200.
+
+hypotheses:
+  - id: priority-order
+    text: "A new deny rule has a lower priority number than our SSH allow rule, so it's evaluated first and wins."
+    correct: true
+  - id: vm-sshd
+    text: "The SSH service on the VM has stopped."
+    feedback: "IP flow verify says the NSG denies the connection before it reaches the VM, and names the rule that does it. The VM never sees the attempt."
+  - id: allow-removed
+    text: "Someone deleted the Allow-SSH-Office rule."
+    feedback: "The rule is still there, unchanged, at priority 300. It just never gets a turn."
+  - id: vpn-down
+    text: "The office VPN is down."
+    feedback: "IP flow verify tested a connection from an office address and got a Deny from a named NSG rule. The problem is the rule, not the path to Azure."
+
+actions:
+  - id: reprioritize
+    label: "az network nsg rule update -g rg-batch --nsg-name nsg-batch -n Allow-SSH-Office --priority 150"
+    kind: fix
+    match_regex: "^az network nsg rule update (-g|--resource-group) rg-batch --nsg-name nsg-batch (-n|--name) Allow-SSH-Office --priority (1[0-9][0-9])$"
+    feedback: "Rules are processed lowest number first and processing stops at the first match. At 150 the office SSH allow is checked before the baseline deny at 200, so SSH from the VPN works and everything else is still denied."
+  - id: allow-at-400
+    label: "Add a new rule allowing SSH from the office at priority 400"
+    kind: wrong
+    feedback: "400 is checked after the deny at 200, which already matched and stopped processing. A second allow below the deny never gets a turn either."
+  - id: restart-vm
+    label: "Restart vm-batch-01"
+    kind: wrong
+    feedback: "NSG rules apply outside the VM. It restarts behind the same rules, and SSH still hangs."
+  - id: delete-baseline
+    label: "Delete Baseline-Deny-Inbound from nsg-batch"
+    kind: wrong
+    feedback: "It's the security team's control, and their automation recreates it on the next run. The baseline expects team allows to sit below priority 200; work with it rather than against it."
+  - id: ssh-from-anywhere
+    label: "Add an allow rule for port 22 from any source (*) at priority 100"
+    kind: destructive
+    feedback: "SSH works again, for the whole internet if this VM is ever reachable from it. Scope the allow to the office range, and just give it a lower number than the deny."
+
+solution_paths:
+  - [reprioritize]
+
+key_evidence: [flow-denied, rule-order, baseline-added]
+
+evidence_labels:
+  flow-denied: "IP flow verify: SSH from the office is denied by Baseline-Deny-Inbound"
+  rule-order: "The baseline deny is at priority 200; the office SSH allow is at 300"
+  baseline-added: "Security automation added the baseline deny at 07:02 this morning"
+
+hints:
+  nudge: "Azure can tell you exactly which rule blocks a given connection. Ask it."
+  direction: "Run IP flow verify for SSH from an office address, then look at the priorities of the rules in nsg-batch."
+  answer: "Baseline-Deny-Inbound (priority 200) is evaluated before Allow-SSH-Office (300), and processing stops at the first match. Change the SSH rule's priority to something below 200, like 150."
+
+analogy:
+  title: "Two notes on the door"
+  text: |
+    The guard reads the notes on the door from the top and acts on the first
+    one that fits. "Let in staff from the office" used to be the top note.
+    This morning someone pinned "let nobody in" above it. Staff haven't
+    changed, and the old note is still there: it's just never read. Move the
+    staff note above the new one.
+
+debrief:
+  root_cause: |
+    Network security group rules are processed in priority order, lowest
+    number first, and processing stops at the first rule that matches. This
+    morning the security team's automation added Baseline-Deny-Inbound at
+    priority 200 to every NSG. The data team's Allow-SSH-Office rule was at
+    300, so SSH from the office now matched the deny first and was dropped.
+    Nothing about the VM or the allow rule changed.
+  ideal_path:
+    - "Ask Azure which rule decides: IP flow verify names Baseline-Deny-Inbound."
+    - "List the NSG's rules: the deny at 200 sits above the SSH allow at 300."
+    - "Find out why it's new: added by security automation this morning."
+    - "Give the office SSH allow a priority below 200, keeping its source scoped to the office."
+    - "Verify with IP flow verify, then over SSH."
+  real_world: |
+    When rules from different teams share an NSG, agree a priority layout:
+    for example, team allows from 100 to 199, baseline denies from 200, and
+    leave gaps between numbers so rules can be slotted in later. IP flow
+    verify answers "which rule is blocking this?" in seconds.
+
+concepts:
+  - term: "Network security group (NSG)"
+    text: "A list of allow and deny rules for traffic in and out of Azure resources. You attach one to a subnet, a network interface, or both."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview"
+  - term: "Rule priority"
+    text: "A number from 100 to 4096. Lower numbers are processed first, and processing stops at the first rule that matches, so a deny above an allow wins."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview"
+  - term: "Default security rules"
+    text: "Every NSG has built-in rules at priorities 65000 and above, ending with DenyAllInbound: anything you don't allow is denied."
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview"
+  - term: "IP flow verify"
+    text: "A Network Watcher tool that tests whether a specific connection to or from a VM is allowed, and tells you which rule decides."
+    url: "https://learn.microsoft.com/en-us/azure/network-watcher/ip-flow-verify-overview"
+
+sources:
+  - title: "Azure: Network security groups overview (priority, default rules, first match stops processing)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Network Watcher: IP flow verify overview"
+    url: "https://learn.microsoft.com/en-us/azure/network-watcher/ip-flow-verify-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Network Watcher: Diagnose a VM traffic filter problem with the Azure CLI (test-ip-flow output)"
+    url: "https://learn.microsoft.com/en-us/azure/network-watcher/diagnose-vm-network-traffic-filtering-problem-cli"
+    retrieved: 2026-10-01
+  - title: "Azure: How network security groups filter network traffic"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/network-security-group-how-it-works"
+    retrieved: 2026-10-01

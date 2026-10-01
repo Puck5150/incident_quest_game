@@ -1,0 +1,186 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-key-vault-wrong-role
+track: azure
+difficulty: 1
+title: "The new function can see the secret but can't read it"
+par_minutes: 9
+
+ticket:
+  from: "Integrations team"
+  priority: P3
+  body: |
+    Our new Azure Function, func-orders-sync, fails at startup with a 403
+    from Key Vault when it reads the partner API key. We turned on its
+    managed identity and gave it the "Key Vault Reader" role on the vault.
+    It can even list the secrets! Why can't it read one?
+
+environment: |
+  func-orders-sync (resource group rg-orders) uses a system-assigned managed
+  identity, so no credentials are stored anywhere. At startup it reads the
+  secret partner-api-key from the key vault kv-orders-prod, which uses the
+  Azure role-based access control (RBAC) permission model.
+
+diagram:
+  nodes:
+    - { id: func, label: "func-orders-sync (managed identity)", col: 0, row: 0, status: down }
+    - { id: kv, label: "kv-orders-prod", col: 1, row: 0, status: ok }
+  edges:
+    - { from: func, to: kv }
+
+logs:
+  - name: "func-orders-sync: Application Insights exceptions"
+    evidence: forbidden
+    lines: |
+      10:14:02 Startup failed: Azure.RequestFailedException: Caller is not authorized to perform action on resource.
+        Action: 'Microsoft.KeyVault/vaults/secrets/getSecret/action'
+        Resource: '/subscriptions/1111.../resourcegroups/rg-orders/providers/microsoft.keyvault/vaults/kv-orders-prod/secrets/partner-api-key'
+        Caller: oid=7b3e9a1c-...   Status: 403 (Forbidden)   ErrorCode: Forbidden   InnerError: ForbiddenByRbac
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az functionapp identity show -n func-orders-sync -g rg-orders"
+      output: |
+        {
+          "principalId": "7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17",
+          "type": "SystemAssigned"
+        }
+    - match: "az role assignment list --assignee 7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17 --all --out table"
+      when_actions: [secrets-user]
+      output: |
+        Principal                             Role                    Scope
+        ------------------------------------  ----------------------  ------------------------------------------------------------------------------
+        7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17  Key Vault Reader        /subscriptions/1111.../resourceGroups/rg-orders/providers/Microsoft.KeyVault/vaults/kv-orders-prod
+        7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17  Key Vault Secrets User  /subscriptions/1111.../resourceGroups/rg-orders/providers/Microsoft.KeyVault/vaults/kv-orders-prod
+    - match: "az role assignment list --assignee 7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17 --all --out table"
+      evidence: reader-only
+      output: |
+        Principal                             Role              Scope
+        ------------------------------------  ----------------  ------------------------------------------------------------------------------
+        7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17  Key Vault Reader  /subscriptions/1111.../resourceGroups/rg-orders/providers/Microsoft.KeyVault/vaults/kv-orders-prod
+    - match: "az role definition list --name \"Key Vault Reader\" --query [0].permissions[0].dataActions"
+      evidence: reader-data-actions
+      output: |
+        [
+          "Microsoft.KeyVault/vaults/*/read",
+          "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+        ]
+    - match: "az role definition list --name \"Key Vault Secrets User\" --query [0].permissions[0].dataActions"
+      output: |
+        [
+          "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+          "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+        ]
+    - match: "az keyvault show -n kv-orders-prod --query properties.enableRbacAuthorization"
+      output: |
+        true
+
+hypotheses:
+  - id: reader-no-values
+    text: "Key Vault Reader only allows reading metadata. Reading a secret's value needs a role with getSecret, like Key Vault Secrets User."
+    correct: true
+  - id: identity-off
+    text: "The function's managed identity isn't turned on."
+    feedback: "It has a principal ID, and Key Vault's error names that identity as the caller. It authenticated fine; it just isn't allowed to read secret values."
+  - id: secret-missing
+    text: "The secret partner-api-key doesn't exist."
+    feedback: "Listing secrets shows it, and a missing secret would be a not-found error, not 403 Forbidden on getSecret."
+  - id: access-policies
+    text: "The vault needs an access policy for the function."
+    feedback: "This vault uses the Azure RBAC permission model, where access policies don't apply. Permissions come from role assignments."
+
+actions:
+  - id: secrets-user
+    label: "az role assignment create --role \"Key Vault Secrets User\" --assignee 7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17 --scope <kv-orders-prod's resource ID>"
+    kind: fix
+    match_regex: "^az role assignment create --role \"?Key Vault Secrets User\"? --assignee 7b3e9a1c-0d4f-4c2a-9e51-3a8b6f0c2d17 --scope \\S+kv-orders-prod\\S*$"
+    feedback: "Key Vault Secrets User includes getSecret, scoped to just this vault. Role assignments can take a few minutes to take effect; restart the function and it reads the key. (You can remove Key Vault Reader now: it adds nothing.)"
+  - id: contributor
+    label: "Give the identity the Key Vault Contributor role instead"
+    kind: wrong
+    feedback: "Key Vault Contributor manages the vault itself (control plane) and doesn't allow access to keys, secrets or certificates. It also lets the function change the vault's settings."
+  - id: administrator
+    label: "Give the identity Key Vault Administrator"
+    kind: wrong
+    feedback: "It would work, and let this function create, change and delete every secret, key and certificate in the vault. It only needs to read secrets."
+  - id: switch-model
+    label: "Switch the vault to the access policy permission model and add a policy for the function"
+    kind: wrong
+    feedback: "That changes how access works for everyone using the vault, and Microsoft calls access policies the legacy model. One role assignment does it within the current model."
+  - id: plaintext-setting
+    label: "Put the API key directly in the function's app settings"
+    kind: destructive
+    feedback: "The secret is now readable by anyone who can read the app's configuration, and in every copy of it. The managed identity plus the right role is exactly what avoids that."
+
+solution_paths:
+  - [secrets-user]
+
+key_evidence: [forbidden, reader-only, reader-data-actions]
+
+evidence_labels:
+  forbidden: "Key Vault refuses getSecret for the function's identity with 403 ForbiddenByRbac"
+  reader-only: "The identity's only role on the vault is Key Vault Reader"
+  reader-data-actions: "Key Vault Reader can read secret metadata, but has no getSecret action"
+
+hints:
+  nudge: "Listing secrets works and reading one doesn't. Are those the same permission?"
+  direction: "Compare the action named in the error with what the Key Vault Reader role allows."
+  answer: "The error is about Microsoft.KeyVault/vaults/secrets/getSecret/action. Key Vault Reader only has readMetadata. Assign Key Vault Secrets User on kv-orders-prod to the function's identity."
+
+analogy:
+  title: "The library card that only lets you read the catalogue"
+  text: |
+    The new member got a "catalogue" card: they can look up every book and
+    see where it's shelved, but the desk won't lend them one. They have a
+    card, so they're recognised; it's just the wrong kind. Ask for a
+    borrowing card, for this library only, not a librarian's keys.
+
+debrief:
+  root_cause: |
+    Azure separates managing a vault (control plane) from using what's in it
+    (data plane), and its built-in roles are narrow on purpose. Key Vault
+    Reader can read metadata, including listing secrets and their
+    properties, but its description says it can't read sensitive values like
+    secret contents. Reading a secret's value needs the getSecret data
+    action, which Key Vault Secrets User includes. The function's identity
+    only had Reader, so the listing worked and the read was refused with
+    403 ForbiddenByRbac.
+  ideal_path:
+    - "Read the error: who was refused (the function's identity) and which action (getSecret)."
+    - "List the identity's role assignments: only Key Vault Reader."
+    - "Compare with the role definition: Reader has readMetadata, not getSecret."
+    - "Assign Key Vault Secrets User, scoped to this vault."
+    - "Allow a few minutes for the assignment, restart, and remove the unneeded Reader role."
+  real_world: |
+    "Reader" sounds like it should read secrets, and that confusion is
+    common. Look up a role's actions before assigning it, scope assignments
+    to the single vault, and prefer managed identities over storing any
+    credential in app settings.
+
+concepts:
+  - term: "Managed identity"
+    text: "An identity Azure creates and manages for a resource, like a function app. The app gets tokens automatically, so there's no password or key to store."
+    url: "https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview"
+  - term: "Role assignment"
+    text: "Azure RBAC grants access by assigning a role (a set of allowed actions) to an identity at a scope, such as one key vault."
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/overview"
+  - term: "Control plane vs data plane"
+    text: "The control plane manages the vault itself (create it, change settings); the data plane is using what's inside (read or write secrets). Roles grant one or the other."
+    url: "https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide"
+  - term: "Key Vault Secrets User"
+    text: "The built-in role for apps that need to read secret values. Key Vault Reader only reads metadata, never values."
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/security"
+
+sources:
+  - title: "Azure Key Vault: Provide access with Azure role-based access control (built-in roles, control and data planes)"
+    url: "https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide"
+    retrieved: 2026-10-01
+  - title: "Azure built-in roles for Security (Key Vault Reader, Key Vault Secrets User data actions)"
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/security"
+    retrieved: 2026-10-01
+  - title: "Microsoft Entra: What are managed identities for Azure resources?"
+    url: "https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview"
+    retrieved: 2026-10-01
+  - title: "Azure Key Vault: Troubleshooting access issues"
+    url: "https://learn.microsoft.com/en-us/azure/key-vault/general/troubleshooting-access-issues"
+    retrieved: 2026-10-01

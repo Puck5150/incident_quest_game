@@ -1,0 +1,183 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-alert-suppressed
+track: azure
+difficulty: 1
+title: "The alert fired, but nobody was told"
+par_minutes: 8
+
+ticket:
+  from: "On-call lead"
+  priority: P2
+  body: |
+    The shop API returned errors for 30 minutes yesterday afternoon. Azure
+    Monitor shows our "api-5xx-high" alert fired at 14:03, but nobody got an
+    email, SMS or page. The action group's test notification works fine.
+    What's swallowing our alerts?
+
+environment: |
+  Alert rules in the subscription sub-shop send to the action group
+  ag-oncall (email, SMS and a pager webhook). The database team did planned
+  maintenance last weekend (09-27/28) and muted alerts for it. The ops team
+  keeps shared monitoring settings in the resource group rg-ops.
+
+diagram:
+  nodes:
+    - { id: rule, label: "alert rule api-5xx-high", col: 0, row: 0, status: ok }
+    - { id: apr, label: "alert processing rules", col: 1, row: 0, status: ok }
+    - { id: ag, label: "action group ag-oncall", col: 2, row: 0, status: ok }
+  edges:
+    - { from: rule, to: apr }
+    - { from: apr, to: ag }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az monitor alert-processing-rule list --out table"
+      when_actions: [disable-rule]
+      output: |
+        Name              ResourceGroup  Enabled  Action
+        ----------------  -------------  -------  ----------------------
+        maint-weekend-db  rg-ops         False    RemoveAllActionGroups
+    - match: "az monitor alert-processing-rule list --out table"
+      evidence: rule-enabled
+      output: |
+        Name              ResourceGroup  Enabled  Action
+        ----------------  -------------  -------  ----------------------
+        maint-weekend-db  rg-ops         True     RemoveAllActionGroups
+    - match: "az monitor alert-processing-rule show -g rg-ops -n maint-weekend-db"
+      evidence: no-schedule
+      output: |
+        {
+          "name": "maint-weekend-db",
+          "properties": {
+            "actions": [ { "actionType": "RemoveAllActionGroups" } ],
+            "description": "Mute alerts for DB maintenance this weekend",
+            "enabled": true,
+            "schedule": null,
+            "scopes": [ "/subscriptions/2222..." ]
+          }
+        }
+    - match: "az monitor action-group show -g rg-ops -n ag-oncall --query \"[emailReceivers[].emailAddress, smsReceivers[].phoneNumber]\""
+      output: |
+        [
+          [ "oncall@acme.example" ],
+          [ "5550100" ]
+        ]
+
+logs:
+  - name: "Azure Monitor: fired alerts, last 7 days"
+    evidence: fired-silently
+    lines: |
+      2026-09-30 14:03  api-5xx-high        Sev1  Fired  action groups: (suppressed by maint-weekend-db)
+      2026-09-29 09:41  disk-space-low-vm3  Sev2  Fired  action groups: (suppressed by maint-weekend-db)
+      2026-09-28 02:15  pg-cpu-high         Sev2  Fired  action groups: (suppressed by maint-weekend-db)
+  - name: "#db-team (chat)"
+    evidence: maintenance-chat
+    lines: |
+      2026-09-26 17:40 sanjay: muting alerts for the weekend DB maintenance with an alert processing rule, will turn it off Monday
+      2026-09-29 08:05 sanjay: maintenance done, all good
+
+hypotheses:
+  - id: processing-rule
+    text: "An alert processing rule from the maintenance is still suppressing every alert's notifications."
+    correct: true
+  - id: action-group-broken
+    text: "The action group's receivers are wrong or broken."
+    feedback: "The test notification reaches everyone, and the receivers are correct. The fired alerts never reached the action group: their action groups were removed by a processing rule."
+  - id: alert-not-firing
+    text: "The alert rule's threshold is wrong, so it didn't really fire."
+    feedback: "It did fire, at 14:03, for the right reason. Firing and notifying are separate steps, and only the second one failed."
+  - id: email-filtered
+    text: "The emails went to spam."
+    feedback: "SMS and the pager didn't arrive either. Every channel failing at once points at the action group not being called at all."
+
+actions:
+  - id: disable-rule
+    label: "az monitor alert-processing-rule update -g rg-ops -n maint-weekend-db --enabled false"
+    kind: fix
+    match_regex: "^az monitor alert-processing-rule update (-g|--resource-group) rg-ops (-n|--name) maint-weekend-db --enabled false$"
+    feedback: "Fired alerts keep their action groups again, so the next one reaches email, SMS and the pager. Re-check the three alerts that fired silently this week."
+  - id: scheduled-mutes
+    label: "Agree a rule for maintenance mutes: scope them to the affected resources, and always give them a schedule with an end time"
+    kind: fix
+    feedback: "A processing rule is always active unless you give it a schedule, and this one covered the whole subscription. A mute that ends on its own and only covers the database can't hide an API outage days later."
+  - id: recreate-action-group
+    label: "Delete and recreate the ag-oncall action group"
+    kind: wrong
+    feedback: "The action group is fine; the processing rule removes it from every fired alert before it's called. Recreating it also breaks every alert rule that points at the old one."
+  - id: lower-threshold
+    label: "Lower the api-5xx-high threshold so it fires sooner"
+    kind: wrong
+    feedback: "It fired on time. Firing sooner just means being ignored sooner while the suppression is on."
+  - id: disable-alert
+    label: "Turn off the api-5xx-high alert rule until the notification problem is solved"
+    kind: destructive
+    feedback: "Now it doesn't even show as fired in Azure Monitor. You'd have one fewer way to see an outage and the real cause still in place."
+
+solution_paths:
+  - [disable-rule, scheduled-mutes]
+
+key_evidence: [fired-silently, rule-enabled, no-schedule, maintenance-chat]
+
+evidence_labels:
+  fired-silently: "Three alerts fired this week with their action groups suppressed by maint-weekend-db"
+  rule-enabled: "The maintenance processing rule is still enabled"
+  no-schedule: "It has no schedule (so it's always active) and covers the whole subscription"
+  maintenance-chat: "It was created for last weekend's database maintenance, \"will turn it off Monday\""
+
+hints:
+  nudge: "Firing and notifying are separate steps. What can sit between an alert and its action group?"
+  direction: "Look at the fired alerts' details and at the subscription's alert processing rules."
+  answer: "maint-weekend-db (suppression, whole subscription, no schedule) is still enabled, so every fired alert has its action groups removed. Disable it, and make future maintenance mutes scoped and scheduled."
+
+analogy:
+  title: "The \"do not disturb\" sign left on the door"
+  text: |
+    For the weekend's renovation, the office put a "do not disturb, no
+    deliveries" sign on the main entrance. The work finished Monday, but
+    the sign stayed up, so urgent letters all week were turned away at the
+    door. The post was sent, and the mailroom works fine: the sign just
+    needed taking down, and next time it should say "until Monday 9am".
+
+debrief:
+  root_cause: |
+    In Azure Monitor, an alert rule fires an alert and then calls its action
+    groups to notify people. Alert processing rules can change that on the
+    way: a suppression rule removes all action groups from the alerts it
+    covers. For last weekend's database maintenance, a suppression rule was
+    created at subscription scope with no schedule, which means it's always
+    active. It was never turned off, so every alert in the subscription,
+    including yesterday's API errors, fired silently.
+  ideal_path:
+    - "Confirm the alert fired and the action group works: the gap is between the two."
+    - "Look at the fired alerts: their action groups were suppressed by maint-weekend-db."
+    - "Inspect the processing rule: enabled, subscription-wide, no schedule."
+    - "Disable it, then check the alerts that fired silently this week."
+    - "Make maintenance mutes scoped to the affected resources and scheduled to end."
+  real_world: |
+    Temporary mutes that become permanent are a classic monitoring gap. Give
+    every suppression an end time, scope it as narrowly as the maintenance,
+    and review active processing rules regularly (or alert on any rule
+    without a schedule).
+
+concepts:
+  - term: "Alert rule"
+    text: "Watches a signal (like a metric) and fires an alert when its condition is met."
+    url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview"
+  - term: "Action group"
+    text: "A reusable list of who or what to notify when an alert fires: email, SMS, a webhook, an automation."
+    url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups"
+  - term: "Alert processing rule"
+    text: "Changes fired alerts on their way out: it can add action groups, or suppress them (remove all notifications), across a scope. Without a schedule it's always active."
+    url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-processing-rules"
+
+sources:
+  - title: "Azure Monitor: Alert processing rules (suppression, always active by default, schedules)"
+    url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-processing-rules"
+    retrieved: 2026-10-01
+  - title: "Azure Monitor: Alerts overview (alert rules, action groups, fired alerts)"
+    url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Monitor: Action groups"
+    url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups"
+    retrieved: 2026-10-01
