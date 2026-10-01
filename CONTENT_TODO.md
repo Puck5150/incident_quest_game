@@ -154,6 +154,15 @@ from your own experience and tick them off.
 - [ ] The pl-0r53hc prefix list id is invented; the docs say AWS-managed prefix lists exist for
       the health checker ranges but this page doesn't name the list.
 
+## cloud/gcp-regional-cpu-quota
+- [ ] `list-errors` rows follow the documented format, trimmed (the INSTANCE_TEMPLATE and
+      VERSION_NAME columns are dropped); the docs' examples say "in zone", and the
+      "Limit: 240.0 in region us-central1." wording for a regional quota is from experience.
+- [ ] `instance-groups managed describe`, `regions describe` and `managed list` output:
+      trimmed and representative.
+- [ ] The autoscaler status message is verbatim from the docs; showing it with a timestamp
+      in a log view is representative (the console shows it on the instance group pages).
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.

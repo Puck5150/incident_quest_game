@@ -1,0 +1,223 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-regional-cpu-quota
+track: cloud
+difficulty: 3
+title: "Flash sale: the web tier stopped scaling at 10"
+par_minutes: 12
+
+ticket:
+  from: "On-call alert + marketing"
+  priority: P1
+  body: |
+    ALERT 12:09: shop-web p95 latency > 4 s, 5xx rate 28%.
+
+    Marketing: "The autumn flash sale started at 12:00, exactly as planned.
+    Isn't the site supposed to scale itself?"
+
+environment: |
+  The shop's web tier is a regional managed instance group (MIG),
+  shop-web-mig, in us-central1, behind an external Application Load Balancer.
+  Its autoscaler targets 60% CPU, with 6 to 40 n2-standard-8 VMs (8 vCPUs
+  each). The data team runs batch jobs in the same project and region on a
+  separate, fixed-size MIG, analytics-workers, also n2-standard-8. Nobody
+  checked capacity specifically for the sale: "it autoscales".
+
+diagram:
+  nodes:
+    - { id: lb, label: "Application Load Balancer", col: 0, row: 0, status: ok }
+    - { id: web, label: "shop-web-mig (us-central1)", col: 1, row: 0, status: degraded }
+    - { id: analytics, label: "analytics-workers (us-central1)", col: 1, row: 1, status: ok }
+  edges:
+    - { from: lb, to: web }
+
+metrics:
+  - name: "shop-web-mig size"
+    unit: VMs
+    evidence: size-capped
+    series:
+      - label: "autoscaler recommended size"
+        points: [["11:50", 6], ["11:55", 6], ["12:00", 9], ["12:03", 16], ["12:06", 24], ["12:09", 26], ["12:12", 26]]
+      - label: "running VMs"
+        points: [["11:50", 6], ["11:55", 6], ["12:00", 8], ["12:03", 10], ["12:06", 10], ["12:09", 10], ["12:12", 10]]
+  - name: "shop-web-mig CPU utilization"
+    unit: "%"
+    threshold: { value: 60, label: "autoscaler target: 60%" }
+    series:
+      - label: "average"
+        points: [["11:50", 31], ["11:55", 33], ["12:00", 71], ["12:03", 88], ["12:06", 96], ["12:09", 97], ["12:12", 97]]
+
+terminal:
+  prompt: "you@cloudshell:~ (shop-prod)$"
+  commands:
+    - match: "gcloud compute instance-groups managed list-errors shop-web-mig --region us-central1"
+      evidence: quota-exceeded
+      output: |
+        INSTANCE_URL                                                                                     ACTION    ERROR_CODE      ERROR_MESSAGE                                                                  TIMESTAMP
+        https://www.googleapis.com/compute/v1/projects/shop-prod/zones/us-central1-b/instances/shop-web-k2pq  CREATING  QUOTA_EXCEEDED  Instance 'shop-web-k2pq' creation failed: Quota 'CPUS' exceeded.  Limit: 240.0 in region us-central1.  2026-10-01T12:11:52.204-07:00
+        https://www.googleapis.com/compute/v1/projects/shop-prod/zones/us-central1-a/instances/shop-web-7tmx  CREATING  QUOTA_EXCEEDED  Instance 'shop-web-7tmx' creation failed: Quota 'CPUS' exceeded.  Limit: 240.0 in region us-central1.  2026-10-01T12:11:52.117-07:00
+        ...
+    - match: "gcloud compute instance-groups managed describe shop-web-mig --region us-central1"
+      output: |
+        name: shop-web-mig
+        region: us-central1
+        targetSize: 26
+        status:
+          autoscaler: projects/shop-prod/regions/us-central1/autoscalers/shop-web-mig-autoscaler
+          isStable: false
+        currentActions:
+          creating: 16
+          none: 10
+    - match: "gcloud compute regions describe us-central1"
+      when_actions: [pause-analytics]
+      output: |
+        name: us-central1
+        quotas:
+        - limit: 240.0
+          metric: CPUS
+          usage: 208.0
+        - limit: 4096.0
+          metric: DISKS_TOTAL_GB
+          usage: 1820.0
+        status: UP
+    - match: "gcloud compute regions describe us-central1"
+      evidence: quota-full
+      output: |
+        name: us-central1
+        quotas:
+        - limit: 240.0
+          metric: CPUS
+          usage: 240.0
+        - limit: 4096.0
+          metric: DISKS_TOTAL_GB
+          usage: 2460.0
+        status: UP
+    - match: "gcloud compute instance-groups managed list --filter=region:us-central1"
+      when_actions: [pause-analytics]
+      output: |
+        NAME               LOCATION     SCOPE   BASE_INSTANCE_NAME  SIZE  TARGET_SIZE  AUTOSCALED
+        analytics-workers  us-central1  region  analytics           0     0            no
+        shop-web-mig       us-central1  region  shop-web            26    26           yes
+    - match: "gcloud compute instance-groups managed list --filter=region:us-central1"
+      evidence: analytics-size
+      output: |
+        NAME               LOCATION     SCOPE   BASE_INSTANCE_NAME  SIZE  TARGET_SIZE  AUTOSCALED
+        analytics-workers  us-central1  region  analytics           20    20           no
+        shop-web-mig       us-central1  region  shop-web            10    26           yes
+
+logs:
+  - name: "Instance group status messages: shop-web-mig"
+    lines: |
+      12:04  Quota for some resources is exceeded. Increase the quota or delete resources to free up more quota.
+  - name: "#data-team (chat)"
+    evidence: batch-started
+    lines: |
+      11:28 maya: kicking off the quarterly re-index on analytics-workers, resizing to 20 so it's done by tonight
+      11:31 maya: all 20 workers up, ETA ~7h. it can be paused and resumed any time
+  - name: "Quota alerts"
+    lines: |
+      (none configured)
+
+hypotheses:
+  - id: regional-quota
+    text: "The project has used its whole regional CPU quota, so the autoscaler can't create the VMs it wants."
+    correct: true
+  - id: max-replicas
+    text: "The autoscaler has hit its maximum size."
+    feedback: "The maximum is 40 and the group is at 10. When it's the maximum, the status message says the number of instances has reached maxNumReplicas. This one says quota is exceeded."
+  - id: app-bug
+    text: "A slow code path in the sale pages is overloading the VMs."
+    feedback: "The VMs are busy because there are too few of them: the autoscaler wants 26 and has 10. Fix the capacity first, then look at efficiency."
+  - id: no-capacity
+    text: "Google Cloud has run out of n2 machines in us-central1."
+    feedback: "That would be a resource-availability error. The errors here are QUOTA_EXCEEDED: a limit on your project, which you can see and change."
+
+actions:
+  - id: pause-analytics
+    label: "gcloud compute instance-groups managed resize analytics-workers --size 0 --region us-central1"
+    kind: fix
+    match_regex: "^gcloud compute instance-groups managed resize analytics-workers --size[ =]0 --region[ =]us-central1$"
+    feedback: "That frees 160 vCPUs of regional quota. The autoscaler's pending creations succeed and the web tier reaches its recommended 26 VMs. The data team said the re-index can be resumed later; tell them it's paused and why."
+  - id: request-quota
+    label: "Request a CPUS quota increase for us-central1, sized for sale peaks plus the batch work"
+    kind: fix
+    feedback: "Quota increases aren't instant, so this doesn't rescue today's sale, but it's what lets both workloads run at once next time. Add an alert on regional CPU quota usage while you're there."
+  - id: raise-max
+    label: "gcloud compute instance-groups managed set-autoscaling shop-web-mig --region us-central1 --max-num-replicas 80"
+    kind: wrong
+    match_regex: "^gcloud compute instance-groups managed set-autoscaling shop-web-mig --region[ =]us-central1 --max-num-replicas[ =]\\d+( .*)?$"
+    feedback: "The group is at 10 of a possible 40; the maximum was never the limit. The VMs it wants still can't be created, because there's no quota to create them with."
+  - id: bigger-machines
+    label: "Switch the instance template to n2-standard-16 so each VM handles more"
+    kind: wrong
+    feedback: "Bigger VMs need more vCPUs each, and vCPUs are exactly what's run out. Rolling the template also replaces VMs while the tier is already overloaded."
+  - id: recreate-elsewhere
+    label: "Delete shop-web-mig and recreate it in us-east1, where there's quota"
+    kind: destructive
+    feedback: "Deleting the group takes the whole web tier down until a new one is built, has its load balancer backend set up and passes health checks: an outage in the middle of the sale, to fix a capacity shortfall."
+
+solution_paths:
+  - [pause-analytics, request-quota]
+
+key_evidence: [size-capped, quota-exceeded, quota-full, batch-started]
+
+evidence_labels:
+  size-capped: "The autoscaler wants 26 VMs but only 10 are running"
+  quota-exceeded: "New web VMs fail with QUOTA_EXCEEDED: the regional CPUS quota of 240"
+  quota-full: "us-central1 CPUS usage is 240 of 240"
+  batch-started: "The data team scaled analytics-workers to 20 VMs (160 vCPUs) at 11:28"
+
+hints:
+  nudge: "The autoscaler knows it needs more VMs. Why isn't it getting them?"
+  direction: "Check the group's errors and the region's quota usage, then what else in the region uses the same quota."
+  answer: "New VMs fail with QUOTA_EXCEEDED: us-central1's 240 vCPUs are all used, 160 of them by the analytics re-index started at 11:28. Pause analytics-workers (resize to 0) to free quota now, then request a quota increase."
+
+analogy:
+  title: "One credit limit, two shoppers"
+  text: |
+    You and a colleague share one company card with a fixed limit. They
+    booked a big batch of hotel rooms in the morning. At lunch you need to
+    buy supplies urgently, and the card is declined: not because the shop
+    is out of stock, but because the shared limit is used up. Cancel the
+    hotel booking that can wait, and ask for a higher limit before next time.
+
+debrief:
+  root_cause: |
+    Compute Engine limits how many vCPUs a project can use in each region,
+    and every workload in that project and region draws from the same
+    quota. At 11:28 the data team scaled analytics-workers to 20
+    n2-standard-8 VMs (160 vCPUs) for a re-index. When the sale started at
+    12:00, the web autoscaler correctly asked for 26 VMs, but after 10 the
+    regional CPUS quota of 240 was used up, and every new VM failed with
+    QUOTA_EXCEEDED. The autoscaler reported it ("Quota for some resources is
+    exceeded"), but there was no quota alert, so nobody looked until users
+    did.
+  ideal_path:
+    - "See the gap: the autoscaler recommends 26 VMs, 10 are running."
+    - "Read why: list-errors shows QUOTA_EXCEEDED for regional CPUS, and the autoscaler status says the same."
+    - "Check the region's quota usage: 240 of 240 vCPUs."
+    - "Find who else uses it: analytics-workers, 160 vCPUs, started at 11:28 and pausable."
+    - "Free quota now by pausing the batch job; watch the web tier reach 26 and latency recover."
+    - "Request a quota increase sized for peaks plus batch, and alert on regional quota usage."
+  real_world: |
+    Autoscaling only works up to your quota, and quota is shared by every
+    workload in a project and region. Before a known peak, check the quota
+    headroom the autoscaler will need, keep batch work in a separate project
+    or region (or schedule it around peaks), and alert well before quota
+    usage reaches its limit.
+
+sources:
+  - title: "Compute Engine: Understanding autoscaler decisions (recommended size, status messages)"
+    url: "https://cloud.google.com/compute/docs/autoscaler/understanding-autoscaler-decisions"
+    retrieved: 2026-10-01
+  - title: "Compute Engine: Getting info about MIGs (list-errors, QUOTA_EXCEEDED)"
+    url: "https://cloud.google.com/compute/docs/instance-groups/getting-info-about-migs"
+    retrieved: 2026-10-01
+  - title: "Compute Engine: Allocation quotas (regional quota, gcloud compute regions describe)"
+    url: "https://cloud.google.com/compute/quotas-limits"
+    retrieved: 2026-10-01
+  - title: "gcloud compute instance-groups managed resize"
+    url: "https://cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/resize"
+    retrieved: 2026-10-01
+  - title: "gcloud compute instance-groups managed set-autoscaling"
+    url: "https://cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/set-autoscaling"
+    retrieved: 2026-10-01

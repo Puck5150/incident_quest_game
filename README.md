@@ -12,7 +12,7 @@ file and token permissions), a microservices cascading failure and a message
 queue poison-message loop, and cloud failures on AWS (a single-AZ database, an IAM permissions boundary,
 Route 53 failover that never failed over), Azure (Application Gateway health
 probes, a publicly readable blob container) and Google Cloud (Cloud Run vs.
-Cloud SQL connections).
+Cloud SQL connections, an autoscaler capped by regional CPU quota).
 
 **Design challenges** flip it around: you build an architecture from a brief
 (pick a service per tier), run stress tests like a zone outage or a 20× traffic
