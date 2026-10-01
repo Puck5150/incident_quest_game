@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import path from 'node:path'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -8,4 +9,5 @@ import { contentPlugin } from './vite-plugin-content.ts'
 export default defineConfig({
   base: './', // relative asset paths, so the build works under GitHub Pages' /incident_quest_game/
   plugins: [react(), tailwindcss(), contentPlugin(path.resolve(import.meta.dirname, 'content'))],
+  test: { setupFiles: ['tests/setup.ts'] },
 })
