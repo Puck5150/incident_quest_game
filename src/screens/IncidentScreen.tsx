@@ -131,26 +131,23 @@ export default function IncidentScreen({
         </span>
       </header>
 
-      <section aria-labelledby="ticket-h" className="rounded-lg border border-line bg-panel p-4">
-        <h2 id="ticket-h" className="text-sm text-muted">
+      {/* Full context while briefing; once work starts the whole ticket folds
+          to one line so the tools sit near the top of the screen. */}
+      <details open={phase === 'briefing'} className="group rounded-lg border border-line bg-panel p-4">
+        <summary className="cursor-pointer text-sm text-muted hover:text-fg">
           Ticket from {scenario.ticket.from}
-        </h2>
+          <span className="block truncate text-fg group-open:hidden">{scenario.ticket.body.replace(/\s+/g, ' ')}</span>
+        </summary>
         <Prose className="mt-2" text={scenario.ticket.body} />
-        {/* Full context while briefing; tucked away once work starts so the
-            tools sit near the top of the screen. */}
-        <details open={phase === 'briefing'} className="group mt-3">
-          <summary className="cursor-pointer text-sm text-muted hover:text-fg">
-            Environment{scenario.diagram && ' and system diagram'}
-          </summary>
-          <Prose className="mt-2" text={scenario.environment} />
-          {scenario.diagram && (
-            <div className="mt-4">
-              <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
-              <Diagram diagram={scenario.diagram} />
-            </div>
-          )}
-        </details>
-      </section>
+        <h2 className="mt-4 text-sm text-muted">Environment</h2>
+        <Prose className="mt-2" text={scenario.environment} />
+        {scenario.diagram && (
+          <div className="mt-4">
+            <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
+            <Diagram diagram={scenario.diagram} />
+          </div>
+        )}
+      </details>
 
       {phase === 'briefing' ? (
         <button className={`${button} bg-accent text-bg`} onClick={() => send({ type: 'START' })}>

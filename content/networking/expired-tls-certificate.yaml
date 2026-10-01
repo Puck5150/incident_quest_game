@@ -218,6 +218,10 @@ solution_paths:
   - [allow-80, renew]
 
 key_evidence: [cert-expired, renewal-failing, port-80-denied]
+evidence_labels:
+  cert-expired: "The certificate expired at 00:07 UTC today"
+  renewal-failing: "Every renewal since August timed out on the HTTP-01 challenge"
+  port-80-denied: "The firewall denies port 80"
 
 hints:
   nudge: "The error message is unusually honest. When does the certificate say it expires?"

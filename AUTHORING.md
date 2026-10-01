@@ -38,6 +38,8 @@ Scenarios are data. You don't write any code to add an incident.
 - **Evidence should chain.** Each artifact should point at the next place to look.
   Tag the essential ones with `evidence:` and list them in `key_evidence`. Players
   who find all of them before declaring a hypothesis earn the methodical bonus.
+  Give each one a line in `evidence_labels` saying what it shows in plain words
+  ("The root filesystem is at 100%"); the debrief lists those, found or missed.
 - **Prose fields reflow.** `ticket.body`, `environment`, `analogy.text` and the
   debrief text are shown like Markdown paragraphs: single line breaks become
   spaces, and a blank line starts a new paragraph. Wrap lines wherever you like.
@@ -80,6 +82,8 @@ Optional, and each item can carry `evidence:` like logs and files:
 
 ## Things the validator enforces for you
 
+- Every `key_evidence` tag has a label in `evidence_labels`, and every label
+  belongs to a `key_evidence` tag.
 - Every `key_evidence` tag must be findable **before** any fix (not only on a
   `when_actions` entry). Otherwise the methodical bonus can't be earned.
 - Every solution path is played through the real engine in the test suite.

@@ -146,6 +146,10 @@ solution_paths:
   - [job-permissions]
 
 key_evidence: [label-forbidden, token-permissions, workflow-permissions]
+evidence_labels:
+  label-forbidden: "The labeling step was refused by the API; the tests passed"
+  token-permissions: "The job's token had only Contents and Metadata read"
+  workflow-permissions: "The workflow's new permissions block grants contents: read and nothing else"
 
 hints:
   nudge: "The tests pass. What is different about the one step that fails?"

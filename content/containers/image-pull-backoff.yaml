@@ -228,6 +228,10 @@ solution_paths:
   - [set-image, fix-manifest]
 
 key_evidence: [pull-backoff, tag-not-found, pushed-tag]
+evidence_labels:
+  pull-backoff: "The one new pod is stuck in ImagePullBackOff; the old pods still serve"
+  tag-not-found: "The pod asks for pricing-api:v2.3.0, which the registry says is not found"
+  pushed-tag: "CI pushed the image as pricing-api:2.3.0"
 
 hints:
   nudge: "The deploy job failed, but the site is fine. Which pods are actually serving traffic?"

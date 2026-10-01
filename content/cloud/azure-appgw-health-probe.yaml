@@ -172,6 +172,10 @@ solution_paths:
   - [update-probe, probe-in-iac]
 
 key_evidence: [all-unhealthy, probe-path, endpoint-renamed]
+evidence_labels:
+  all-unhealthy: "Both backend servers are marked Unhealthy"
+  probe-path: "The custom probe still requests /health"
+  endpoint-renamed: "Release v3.8 renamed the health endpoint to /healthz"
 
 hints:
   nudge: "A 502 from a gateway usually means it doesn't think any backend is usable. How does it decide?"

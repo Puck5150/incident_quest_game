@@ -115,6 +115,9 @@ solution_paths:               # resolved when ALL actions in ANY one path are ta
   - [fix-it]
 
 key_evidence: [service-failed, key-log-line]   # tags a methodical player should find
+evidence_labels:                # plain words for the debrief, one per key_evidence tag
+  service-failed: "The service failed to start"
+  key-log-line: "The log line that names the cause"
 
 hints:                        # each tier costs more XP
   nudge: "A question that points the right way"

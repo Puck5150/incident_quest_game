@@ -126,9 +126,10 @@ export default function DebriefScreen({
                   <Icon name="x" className="h-3.5 w-3.5" /> Missed
                 </span>
               )}{' '}
-              <span className="font-mono">{tag}</span>
-              <span className="text-muted"> in </span>
-              <span className="font-mono text-muted">{whereIs(scenario, tag).join(', ')}</span>
+              {scenario.evidence_labels[tag]}
+              <span className="block pl-5 text-muted">
+                Where: <span className="font-mono">{whereIs(scenario, tag).join(', ')}</span>
+              </span>
             </li>
           ))}
         </ul>
@@ -199,10 +200,11 @@ function describe(scenario: Scenario, e: GameEvent): string {
   }
 }
 
-// Where a piece of evidence could be found, for the "missed" list.
+// Where a piece of evidence could be found. Regex-matched commands show as
+// "terminal": a raw regex teaches nothing, and the ideal path names the command.
 function whereIs(scenario: Scenario, tag: string): string[] {
-  return [
-    ...(scenario.terminal?.commands ?? []).filter((c) => c.evidence === tag).map((c) => `$ ${c.match ?? c.match_regex}`),
+  return [...new Set([
+    ...(scenario.terminal?.commands ?? []).filter((c) => c.evidence === tag).map((c) => (c.match ? `$ ${c.match}` : 'terminal')),
     ...artifacts(scenario).filter((a) => a.evidence === tag).map((a) => `${a.kind} ${a.name}`),
-  ]
+  ])]
 }

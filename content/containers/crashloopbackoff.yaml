@@ -190,6 +190,10 @@ solution_paths:
   - [rollback]
 
 key_evidence: [crashloop, exit-code-1, missing-env]
+evidence_labels:
+  crashloop: "Every pod is in CrashLoopBackOff"
+  exit-code-1: "The container exits with code 1 during startup"
+  missing-env: "The app says DATABASE_URL is not set"
 
 hints:
   nudge: "Pods that start and immediately die usually say why on the way out. Where would that be?"

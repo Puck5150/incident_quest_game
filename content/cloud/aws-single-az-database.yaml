@@ -179,6 +179,10 @@ solution_paths:
   - [promote-replica, repoint-app, enable-multi-az]
 
 key_evidence: [az-event, single-az, replica-in-b]
+evidence_labels:
+  az-event: "AWS reported connectivity issues in us-east-1a"
+  single-az: "shop-db is Single-AZ, in us-east-1a"
+  replica-in-b: "The reporting read replica, shop-db-reports, is in us-east-1b"
 
 hints:
   nudge: "The web servers in one zone are fine. What do they all depend on, and where does it live?"

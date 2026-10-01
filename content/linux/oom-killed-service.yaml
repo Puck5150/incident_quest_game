@@ -196,6 +196,11 @@ solution_paths:
   - [raise-limit]
 
 key_evidence: [result-oom-kill, cgroup-oom, drop-in-limit, host-has-memory]
+evidence_labels:
+  result-oom-kill: "systemd shows Result: oom-kill, at the 256M memory max"
+  cgroup-oom: "The kernel killed it inside report-worker's own cgroup"
+  drop-in-limit: "A managed drop-in sets MemoryMax=256M"
+  host-has-memory: "The host has 11 GB available"
 
 hints:
   nudge: "It's being killed, not crashing. Who's killing it, and is the whole machine short of memory?"

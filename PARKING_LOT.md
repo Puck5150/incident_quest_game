@@ -8,12 +8,6 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - Leaderboards
 - AI-generated scenarios
 
-## Performance
-- Bundle: zod is build-time only, play/debrief screens load lazily, and each
-  content item is its own chunk loaded when played (the entry chunk keeps only
-  tracks and queue metadata). Entry chunk ~265 kB (~83 kB gzipped), about 200 kB
-  of it react-dom. Nothing obvious left to split.
-
 ## Gameplay
 - Typed fix commands in the terminal counting as actions (e.g. `systemctl restart nginx`)
 - Stateful terminal simulation (filesystem that actually changes, `cd`, pipes)
@@ -24,26 +18,14 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - Multi-stage incidents (fix reveals a second problem)
 - Postmortem-writing exercise after the debrief (SRE track)
 
-- Collapse the ticket/diagram once investigating starts, so the tools sit higher on the screen
-- Human-readable labels for evidence tags in the debrief (currently shows the tag id plus where it lives)
-
 ## Content
-- **Cloud system design, part 2: design-challenge mode** (requested 2026-09-30).
-  Part 1 (incident-style cloud scenarios) shipped in Milestone 7. Part 2 is a new
-  game mode: build an architecture from requirements (SLOs, traffic, budget) and
-  get scored on trade-offs. Needs new schema, UI and scoring; would draw on the
-  AWS and Azure Well-Architected Frameworks and the Google Cloud Architecture Framework.
-  **Shipped: see PLAN_DESIGN_CHALLENGES.md.** Drag-and-drop canvas planned in
-  PLAN_DESIGN_CANVAS.md (approved). Still parked:
-  more challenges. "Pick your cloud" challenges planned in PLAN_PICK_YOUR_CLOUD.md
-  (approved).
+- More design challenges (slot, canvas and "pick your cloud"; see AUTHORING.md)
 - More cloud incidents: public storage bucket, missing autoscaling, cross-region
   latency, IAM least privilege, DNS failover TTLs.
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
-- Tracks beyond the six MVP scenarios: Fundamentals, Windows/identity, Scripting and code, Cloud (AWS/Azure), Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
+- More tracks: Fundamentals, Windows/identity, Scripting and code, Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
 - More scenarios per track (each original track has two as of 2026-10-01) and difficulty 5
 
 ## Authoring tooling
 - JSON Schema generated from the Zod schema, for YAML autocomplete and validation in VS Code
 - Scenario preview/"play from file" dev page
-- Link checker for `sources` URLs in CI

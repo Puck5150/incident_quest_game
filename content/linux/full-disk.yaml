@@ -152,6 +152,9 @@ solution_paths:
   - [truncate-log, fix-logrotate]
 
 key_evidence: [write-failure, disk-full]
+evidence_labels:
+  write-failure: "The app fails writes with Errno 28 (No space left on device)"
+  disk-full: "The root filesystem is at 100%"
 
 hints:
   nudge: "What does Errno 28 mean? Check the app's own logs first."

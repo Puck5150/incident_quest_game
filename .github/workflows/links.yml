@@ -1,0 +1,25 @@
+name: Links
+
+# Checks that every source URL in the content still resolves. Separate from CI
+# so a flaky docs site never blocks a deploy; it isn't a required check.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays 06:17 UTC
+  workflow_dispatch:
+  pull_request:
+    paths: ['content/**']
+
+permissions:
+  contents: read
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm run check-links

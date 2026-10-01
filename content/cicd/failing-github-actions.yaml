@@ -189,6 +189,9 @@ solution_paths:
   - [commit-lockfile, protect-main]
 
 key_evidence: [ci-out-of-sync, lock-not-committed]
+evidence_labels:
+  ci-out-of-sync: "npm ci refused to install: package.json and the lock file disagree"
+  lock-not-committed: "The express bump changed package.json but not package-lock.json"
 
 hints:
   nudge: "Don't look at the last step that ran. Look at the first one that failed."

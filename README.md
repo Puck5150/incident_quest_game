@@ -31,6 +31,7 @@ npm install
 npm run dev     # play at http://localhost:5173
 npm test        # validates every scenario and runs the game logic tests
 npm run build   # also fails on any invalid scenario
+npm run check-links   # every source URL still resolves (CI runs it weekly)
 ```
 
 ## Docs

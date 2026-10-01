@@ -188,6 +188,8 @@ export const ScenarioSchema = z
       .min(2),
     solution_paths: z.array(z.array(id).min(1)).min(1),
     key_evidence: z.array(id).min(1),
+    // What each key evidence tag shows, in plain words, for the debrief.
+    evidence_labels: z.record(id, z.string().min(1)),
 
     hints: HintsSchema,
     analogy: AnalogySchema,
@@ -246,9 +248,13 @@ export const ScenarioSchema = z
         .map((a) => a.evidence)
         .filter(Boolean),
     )
+    Object.keys(s.evidence_labels).forEach((e) => {
+      if (!s.key_evidence.includes(e)) issue(`"${e}" is labelled but not in key_evidence`, ['evidence_labels', e])
+    })
     s.key_evidence.forEach((e, i) => {
       if (!evidence.has(e)) issue(`no artifact is tagged with evidence "${e}"`, ['key_evidence', i])
       else if (!beforeFix.has(e)) issue(`key evidence "${e}" is only visible after an action`, ['key_evidence', i])
+      if (!s.evidence_labels[e]) issue(`key evidence "${e}" needs a label in evidence_labels`, ['evidence_labels'])
     })
 
     s.traces?.forEach((t, i) => {

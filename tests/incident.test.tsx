@@ -61,6 +61,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   // The XP counts up visually; screen readers (and this test) get the final value.
   expect(await screen.findByText('115', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Root cause' })).toBeTruthy()
+  expect(screen.getByText('The root filesystem is at 100%')).toBeTruthy() // evidence label, not the tag id
   expect(location.hash).toBe('#/done/full-disk') // a reload opens the queue, not a fresh run
   expect(screen.getByText(/Promoted to Support Engineer/)).toBeTruthy()
   // Linux was Containers' only prerequisite.
@@ -86,6 +87,8 @@ it('theme toggle switches and persists', () => {
 it('hints reveal one tier at a time, analogy with the second', async () => {
   render(<App />)
   await openIncident()
+  // The ticket folds to one line once work starts, so the tools sit higher.
+  expect(screen.getByText(/^Ticket from/).closest('details')!.open).toBe(false)
   fireEvent.click(screen.getByRole('button', { name: /Show nudge hint/ }))
   expect(screen.getByText(/Errno 28 mean/)).toBeTruthy()
   expect(screen.queryByText(/filing cabinet/)).toBeNull()

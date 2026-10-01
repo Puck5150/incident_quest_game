@@ -190,6 +190,10 @@ solution_paths:
   - [rollback-inventory, add-timeout]
 
 key_evidence: [slow-inventory, workers-saturated, no-timeout]
+evidence_labels:
+  slow-inventory: "Stock lookups in inventory-svc take about 9 seconds"
+  workers-saturated: "All 64 checkout-svc workers are busy"
+  no-timeout: "checkout-svc calls inventory with no timeout and 3 retries"
 
 hints:
   nudge: "Every request that fails takes almost exactly 30 seconds. What is it waiting on?"

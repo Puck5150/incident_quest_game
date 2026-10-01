@@ -138,6 +138,10 @@ solution_paths:
   - [cap-instances, right-size-pool]
 
 key_evidence: [too-many-clients, connections-capped, scaled-out]
+evidence_labels:
+  too-many-clients: "The database refused new connections: too many clients"
+  connections-capped: "users-db connections hit max_connections (500)"
+  scaled-out: "signup-api scaled from 4 to 64 instances"
 
 hints:
   nudge: "The database's CPU is calm, so what is it actually saying no to?"

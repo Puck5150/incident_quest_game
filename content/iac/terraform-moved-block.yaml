@@ -224,6 +224,10 @@ solution_paths:
   - [moved-block]
 
 key_evidence: [plan-destroy, state-address, refactor-diff]
+evidence_labels:
+  plan-destroy: "The plan destroys aws_db_instance.orders because it's \"not in configuration\""
+  state-address: "State tracks the database at the old address"
+  refactor-diff: "The PR moved the resource into a module without a moved block"
 
 hints:
   nudge: "Read the destroy line's second comment. Why does Terraform think the database is not in configuration?"

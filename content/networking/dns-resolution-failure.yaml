@@ -147,6 +147,10 @@ solution_paths:
   - [update-resolv, add-to-inventory]
 
 key_evidence: [resolve-fail, stale-resolver, new-dns-works]
+evidence_labels:
+  resolve-fail: "The report job can't resolve the API's hostname"
+  stale-resolver: "reports-01 still points at the old DNS server, 10.0.0.53"
+  new-dns-works: "The new DNS server answers the same name fine"
 
 hints:
   nudge: "The error says 'could not resolve host'. Which part of the system turns names into IP addresses?"

@@ -148,6 +148,10 @@ solution_paths:
   - [force-unlock, rerun-apply]
 
 key_evidence: [lock-info, cancelled-run, nobody-running]
+evidence_labels:
+  lock-info: "The plan can't get the state lock: an apply on a CI runner holds it"
+  cancelled-run: "Run #212 was cancelled partway through its apply"
+  nobody-running: "Nobody on the team is running Terraform right now"
 
 hints:
   nudge: "The error tells you who took the lock, when, and for what. Who was it?"

@@ -184,6 +184,11 @@ solution_paths:
   - [add-dlx, reject-permanent]
 
 key_evidence: [redeliver-loop, same-messages-failing, nack-requeue, replay]
+evidence_labels:
+  redeliver-loop: "Deliveries near 3,000/s while acks are near zero"
+  same-messages-failing: "The same few orders fail again and again (KeyError: 'currency')"
+  nack-requeue: "The worker nacks every failure with requeue=true"
+  replay: "At 09:38 a replay published 420 old schema-v1 messages"
 
 hints:
   nudge: "The broker is delivering 3,000 messages a second and the workers are acknowledging almost none. What are they doing with the rest?"
