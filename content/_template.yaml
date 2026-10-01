@@ -140,6 +140,11 @@ debrief:
   real_world: |
     Optional: how this shows up in production.
 
+concepts:                     # optional, for basics incidents: 1-4 terms explained in the debrief
+  - term: "Example term"
+    text: "One or two plain-English sentences a newcomer can follow."
+    url: "https://example.com/official-doc"
+
 sources:                      # required: official docs only (see AUTHORING.md)
   - title: "Page title"
     url: "https://example.com/official-doc"

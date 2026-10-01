@@ -6,7 +6,7 @@ import { act } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../src/App.tsx'
 
-// Cloud System Design unlocks once any Cloud Platforms item is done.
+// Cloud System Design unlocks once any AWS, Azure or Google Cloud item is done.
 // Reduced motion shows stress-test results at once; the sequence has its own test.
 const seed = (motion: 'reduce' | 'system') => {
   localStorage.clear()

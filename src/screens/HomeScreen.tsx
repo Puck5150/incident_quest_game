@@ -62,7 +62,7 @@ export default function HomeScreen({
               {!open && (
                 <span className="flex items-center gap-1.5 text-sm font-normal text-muted">
                   <Icon name="lock" className="h-3.5 w-3.5" />
-                  Locked: finish something in {track.requires.map(name).join(' and ')}
+                  Locked: finish something in {track.requires.map(name).join(track.requires_any ? ' or ' : ' and ')}
                 </span>
               )}
             </h2>

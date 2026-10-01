@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: gcp-regional-cpu-quota
-track: cloud
+track: gcp
 difficulty: 3
 title: "Flash sale: the web tier stopped scaling at 10"
 par_minutes: 12

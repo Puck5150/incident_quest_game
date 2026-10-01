@@ -76,6 +76,22 @@ describe('unlocks', () => {
     expect(unlockedTracks(tracks, scenarios, done)).toEqual(new Set(['linux', 'containers', 'empty']))
     expect(unlockedTracks(tracks, scenarios, { ...done, c1: done.l1 }).has('micro')).toBe(true)
   })
+
+  it('requires_any unlocks after any one required track has a completion; empty tracks never satisfy it', () => {
+    const anyOf: Track[] = [
+      { id: 'aws', name: 'AWS', requires: [] },
+      { id: 'azure', name: 'Azure', requires: [] },
+      { id: 'gcp', name: 'GCP', requires: [] }, // no content
+      { id: 'design', name: 'Design', requires: ['aws', 'azure', 'gcp'], requires_any: true },
+    ]
+    const items = [
+      { id: 'a1', track: 'aws' },
+      { id: 'z1', track: 'azure' },
+    ]
+    const c = { bestScore: 1, completedAt: '', hintsUsed: 0, clean: true }
+    expect(unlockedTracks(anyOf, items, {}).has('design')).toBe(false)
+    expect(unlockedTracks(anyOf, items, { z1: c }).has('design')).toBe(true)
+  })
 })
 
 describe('storage', () => {

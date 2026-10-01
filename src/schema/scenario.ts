@@ -51,6 +51,8 @@ export const TrackSchema = z.strictObject({
   id,
   name: z.string().min(1),
   requires: z.array(id),
+  // true: unlocks once ANY one required track has a completion (default: all of them).
+  requires_any: z.boolean().optional(),
 })
 
 export const ScenarioSchema = z
@@ -200,6 +202,13 @@ export const ScenarioSchema = z
       ideal_path: z.array(z.string().min(1)).min(1),
       real_world: z.string().optional(),
     }),
+    // Optional, for basics incidents: plain-English definitions shown in the
+    // debrief, each linked to the provider's own docs.
+    concepts: z
+      .array(z.strictObject({ term: z.string().min(1), text: z.string().min(1), url: z.url() }))
+      .min(1)
+      .max(4)
+      .optional(),
     sources: SourcesSchema,
   })
   // Cross-references inside one file. These catch typos that would otherwise

@@ -11,7 +11,7 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 } as unknown as typeof ResizeObserver
 
-// Cloud Platforms done, so Cloud System Design (and its pick-your-cloud challenge) is unlocked.
+// An AWS incident done, so Cloud System Design (and its pick-your-cloud challenge) is unlocked.
 const seed = () =>
   localStorage.setItem(
     'incident-quest:v1',

@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: aws-permissions-boundary
-track: cloud
+track: aws
 difficulty: 3
 title: "orders-api deploy stuck: new tasks die at startup"
 par_minutes: 14

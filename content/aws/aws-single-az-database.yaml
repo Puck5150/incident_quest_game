@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: aws-single-az-database
-track: cloud
+track: aws
 difficulty: 2
 title: "Store is down, but every web server is healthy"
 par_minutes: 15

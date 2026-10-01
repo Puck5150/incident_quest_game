@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: gcp-cloud-run-connection-exhaustion
-track: cloud
+track: gcp
 difficulty: 3
 title: "Sign-ups failing the moment the launch goes live"
 par_minutes: 15

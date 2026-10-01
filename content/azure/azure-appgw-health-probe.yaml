@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: azure-appgw-health-probe
-track: cloud
+track: azure
 difficulty: 2
 title: "Customer portal returns 502 after a routine release"
 par_minutes: 12

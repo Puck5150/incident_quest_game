@@ -99,6 +99,25 @@ export default function DebriefScreen({
         <Prose text={debrief.root_cause} />
       </Card>
 
+      {scenario.concepts && (
+        <Card title="Concepts">
+          <dl className="space-y-3 text-sm">
+            {scenario.concepts.map((c) => (
+              <div key={c.term}>
+                <dt className="font-semibold">{c.term}</dt>
+                <dd className="text-muted">
+                  {c.text}{' '}
+                  <a href={c.url} target="_blank" rel="noreferrer" className="text-accent underline">
+                    Docs
+                    <span className="sr-only"> for {c.term} (opens in a new tab)</span>
+                  </a>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </Card>
+      )}
+
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
         <Card title="Ideal path">
           <ol className="list-decimal space-y-1.5 pl-5 text-sm">

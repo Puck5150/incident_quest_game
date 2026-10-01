@@ -102,6 +102,14 @@ commit the result (a test fails if you forget).
 - **The analogy should use no IT words.** If you need jargon to explain it, it's
   not an analogy yet.
 
+## Concepts (for basics incidents)
+
+Difficulty-1 incidents that teach a platform's basics can add `concepts`: 1 to 4
+terms, each with a plain-English `text` and a `url` to the provider's own docs.
+The debrief shows them right after the root cause. Write them for someone who has
+never used the platform: what the thing is and why it exists, not how to
+configure it.
+
 ## Distributed-systems views
 
 Optional, and each item can carry `evidence:` like logs and files:

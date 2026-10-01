@@ -142,16 +142,20 @@ export function rankFor(xp: number) {
 }
 
 // A track unlocks once every track it requires has at least one completed
-// incident. A required track with no content yet can't block anything.
+// incident (or, with requires_any, once any one of them does). A required
+// track with no content yet can't block anything, and can't satisfy an
+// any-of requirement either.
 // `items` is every playable thing (incidents and challenges); only id and track matter.
 export function unlockedTracks(
   tracks: Track[],
   items: { id: string; track: string }[],
   completed: Progress['completed'],
 ): Set<string> {
-  const done = (trackId: string) => {
-    const inTrack = items.filter((s) => s.track === trackId)
-    return inTrack.length === 0 || inTrack.some((s) => completed[s.id])
+  const hasContent = (trackId: string) => items.some((s) => s.track === trackId)
+  const finished = (trackId: string) => items.some((s) => s.track === trackId && completed[s.id])
+  const open = (t: Track) => {
+    const real = t.requires.filter(hasContent)
+    return t.requires_any ? real.length === 0 || real.some(finished) : real.every(finished)
   }
-  return new Set(tracks.filter((t) => t.requires.every(done)).map((t) => t.id))
+  return new Set(tracks.filter(open).map((t) => t.id))
 }

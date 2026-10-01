@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: aws-route53-failover
-track: cloud
+track: aws
 difficulty: 4
 title: "us-east-1 is down and DNS failover didn't fail over"
 par_minutes: 16

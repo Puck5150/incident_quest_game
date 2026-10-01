@@ -41,7 +41,7 @@ it('pick a cloud, build on it, and the queue remembers which cloud', async () =>
   const { unmount } = render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /Zone-resilient checkout/ }))
 
-  fireEvent.click(await screen.findByLabelText(/Google Cloud/))
+  fireEvent.click(await screen.findByRole('radio', { name: /Google Cloud/ }))
   expect(screen.getByText('Cloud SQL for PostgreSQL instance')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Start on Google Cloud' }))
 
@@ -81,7 +81,7 @@ it('pick a cloud, build on it, and the queue remembers which cloud', async () =>
 it('slot challenges work on the cloud of your choice too', async () => {
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /A launch-day spike, on the cloud of your choice/ }))
-  fireEvent.click(await screen.findByLabelText(/^Azure/))
+  fireEvent.click(await screen.findByRole('radio', { name: /^Azure/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Start on Azure' }))
 
   expect(await screen.findByText(/virtual machines on Azure in East US 2/)).toBeTruthy()

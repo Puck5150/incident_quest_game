@@ -613,6 +613,34 @@
       ],
       "additionalProperties": false
     },
+    "concepts": {
+      "minItems": 1,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "term": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "term",
+          "text",
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
     "sources": {
       "minItems": 1,
       "type": "array",

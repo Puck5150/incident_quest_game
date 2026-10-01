@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: azure-cross-region-latency
-track: cloud
+track: azure
 difficulty: 3
 title: "We moved closer to our customers and checkout got 10x slower"
 par_minutes: 14

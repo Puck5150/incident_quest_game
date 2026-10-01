@@ -1,6 +1,6 @@
 # Plan: Cloud coverage on AWS, Azure and Google Cloud
 
-Status: **draft, awaiting approval**. Requested 2026-10-01: a comprehensive suite of
+Status: **approved 2026-10-01** (all four defaults in §4). Phase A in progress. Requested 2026-10-01: a comprehensive suite of
 incidents and design challenges on all three platforms, with each platform's basics
 covered. Priority: **AWS, then Azure, then Google Cloud**.
 

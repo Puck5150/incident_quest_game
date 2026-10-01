@@ -49,7 +49,7 @@ export default function SkillTreeScreen({
         </span>
         <span className="text-xs text-muted">
           {state === 'locked' ? (
-            <>Needs {needs.join(' + ')}</>
+            <>Needs {needs.join(n.track.requires_any ? ' or ' : ' + ')}</>
           ) : (
             <span className="tabular-nums">
               {n.done}/{n.total} resolved
