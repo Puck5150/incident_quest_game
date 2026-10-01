@@ -171,10 +171,12 @@ actions:
   - id: rollback
     label: "kubectl rollout undo deployment/orders-api (back to v1.9)"
     kind: fix
+    match_regex: "^kubectl rollout undo deployment/orders-api( -n shop)?$"
     feedback: "Rolling back restores service fast while you fix forward. That's a valid mitigation: stop the bleeding first."
   - id: delete-pods
     label: "kubectl delete pod on the crashing pods"
     kind: wrong
+    match_regex: "^kubectl delete pods? orders-api-\\S+( orders-api-\\S+)*( -n shop)?$"
     feedback: "The Deployment recreates them from the same template, and they crash the same way."
   - id: raise-memory
     label: "Raise the memory limit to 1Gi"
@@ -183,6 +185,7 @@ actions:
   - id: delete-deployment
     label: "Delete the Deployment and recreate it from scratch"
     kind: destructive
+    match_regex: "^kubectl delete deployment( |/)orders-api( -n shop)?$"
     feedback: "You took down every remaining replica and lost the rollout history, and the new Deployment still has the wrong variable name."
 
 solution_paths:

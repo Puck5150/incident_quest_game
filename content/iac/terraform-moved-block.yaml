@@ -210,6 +210,7 @@ actions:
   - id: state-mv
     label: "Run terraform state mv aws_db_instance.orders module.database.aws_db_instance.orders against prod state now"
     kind: wrong
+    match_regex: "^terraform state mv aws_db_instance\\.orders module\\.database\\.aws_db_instance\\.orders$"
     feedback: "It changes production state before the code is merged. Until #318 merges, main's code still says aws_db_instance.orders, so any plan or apply from main now wants to destroy module.database.aws_db_instance.orders and create the old address. Terraform v1.1 and later has moved blocks so the move travels with the code."
   - id: prevent-destroy
     label: "Add lifecycle { prevent_destroy = true } to the resource in the new module"

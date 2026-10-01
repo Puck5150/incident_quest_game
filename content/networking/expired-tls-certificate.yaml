@@ -200,10 +200,12 @@ actions:
   - id: renew
     label: "Run certbot renew (after a successful --dry-run)"
     kind: fix
+    match_regex: "^(sudo )?certbot renew$"
     feedback: "With port 80 reachable, the challenge passes and certbot installs the new certificate through its nginx installer. Then check what nginx actually serves: curl from outside, or openssl x509 on the live file."
   - id: restart-nginx
     label: "Restart nginx"
     kind: wrong
+    match_regex: "^(sudo )?(systemctl restart nginx|service nginx restart)$"
     feedback: "nginx reloads the same expired files from /etc/letsencrypt/live. Nothing on disk changed, so nothing gets better."
   - id: dns-switch
     label: "Change the renewal to a DNS-01 challenge"

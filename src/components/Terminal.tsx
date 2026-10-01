@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
-import { normalize, runCommand } from '../game/engine.ts'
+import { actionFor, normalize, NOT_YET, runCommand } from '../game/engine.ts'
 
 type Line = { input: string; output: string }
 
@@ -9,10 +9,12 @@ type Line = { input: string; output: string }
 export default function Terminal({
   scenario,
   taken,
+  canAct,
   onRun,
 }: {
   scenario: Scenario
   taken: Set<string>
+  canAct: boolean // root cause declared: typed fix commands take effect
   onRun: (input: string) => void
 }) {
   const prompt = scenario.terminal!.prompt
@@ -35,10 +37,18 @@ export default function Terminal({
     onRun(cmd)
     setHistory((h) => [...h, cmd])
     if (cmd === 'clear') return setLines([])
+    const ran = runCommand(scenario, cmd, taken)
+    // A command that takes an action reports the result right here, so it's
+    // visible without looking away from the terminal.
+    const action = ran.scripted ? undefined : actionFor(scenario, cmd)
     const output =
       cmd === 'history'
         ? [...history, cmd].map((h, i) => `${String(i + 1).padStart(5)}  ${h}`).join('\n')
-        : runCommand(scenario, cmd, taken).output
+        : action
+          ? canAct
+            ? action.feedback
+            : NOT_YET
+          : ran.output
     setLines((l) => [...l, { input: cmd, output }])
   }
 
@@ -68,6 +78,7 @@ export default function Terminal({
       <div ref={out} role="log" aria-label="Terminal output" className="flex-1 overflow-auto p-3">
         <p className="text-muted">
           Type <span className="text-fg">help</span> to see some commands. ↑/↓ for history.
+          {scenario.actions.some((x) => x.match_regex) && ' Once you have named the root cause, you can type fixes here too.'}
         </p>
         {lines.map((l, i) => (
           <div key={i}>

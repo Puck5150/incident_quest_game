@@ -179,10 +179,12 @@ actions:
   - id: delete-lock
     label: "Delete package-lock.json and commit"
     kind: destructive
+    match_regex: "^git rm package-lock\\.json$"
     feedback: "npm ci requires a lock file, so CI still fails. And you've thrown away the pinned versions that make installs reproducible, which is a supply-chain risk."
   - id: force-push
     label: "Force-push main back to the last green commit"
     kind: destructive
+    match_regex: "^git push (-f|--force|--force-with-lease)( .*)?$|^git push origin \\+main$"
     feedback: "Rewriting shared history on main breaks everyone's local clones and silently drops Sam's change. Fix forward instead."
 
 solution_paths:

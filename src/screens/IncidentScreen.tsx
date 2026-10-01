@@ -63,7 +63,7 @@ export default function IncidentScreen({
     scenario.terminal && {
       id: 'terminal',
       label: 'Terminal',
-      panel: <Terminal scenario={scenario} taken={taken} onRun={(input) => send({ type: 'RUN_COMMAND', input })} />,
+      panel: <Terminal scenario={scenario} taken={taken} canAct={phase === 'acting'} onRun={(input) => send({ type: 'RUN_COMMAND', input })} />,
     },
     scenario.logs && {
       id: 'logs',

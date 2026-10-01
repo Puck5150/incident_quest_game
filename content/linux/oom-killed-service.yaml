@@ -178,6 +178,7 @@ actions:
   - id: restart-only
     label: "systemctl restart report-worker"
     kind: wrong
+    match_regex: "^(sudo )?systemctl restart report-worker(\\.service)?$"
     feedback: "It starts, loads the month's line items, reaches 256 MB and is killed again. systemd has already restarted it 43 times."
   - id: oom-policy-continue
     label: "Add OOMPolicy=continue so systemd stops failing the unit"
@@ -190,6 +191,7 @@ actions:
   - id: kill-python
     label: "Free memory: pkill -9 python3"
     kind: destructive
+    match_regex: "^(sudo )?(pkill|killall) -9 python3$"
     feedback: "invoice-api is also python3, so you just took down the API customers were using. And the host had 11 GB available anyway: the limit is per service, so freeing host memory changes nothing."
 
 solution_paths:

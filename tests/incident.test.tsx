@@ -98,6 +98,18 @@ it('hints reveal one tier at a time, analogy with the second', async () => {
   expect(screen.getByText('No hints left.')).toBeTruthy()
 })
 
+it('typed fix commands wait for the hypothesis, then take the action', async () => {
+  render(<App />)
+  await openIncident()
+  type('sudo reboot')
+  expect(output()).toMatch(/Declare a root cause first/)
+  fireEvent.click(screen.getByLabelText(/filesystem is full/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  type(': > /var/log/app/app.log')
+  expect(output()).toMatch(/space comes back immediately/) // the action's feedback, inline
+  expect(screen.getByRole('button', { name: /Truncate app\.log/ })).toHaveProperty('disabled', true) // done, like a click
+})
+
 it('shuffles hypotheses so the right answer is not always first', async () => {
   const spy = vi.spyOn(Math, 'random').mockReturnValue(0)
   render(<App />)

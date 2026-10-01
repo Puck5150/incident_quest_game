@@ -183,6 +183,8 @@ export const ScenarioSchema = z
           label: z.string().min(1),
           kind: z.enum(['fix', 'wrong', 'destructive']),
           feedback: z.string().min(1),
+          // Typing a matching command in the terminal takes this action too.
+          match_regex: z.string().min(1).optional(),
         }),
       )
       .min(2),
@@ -239,6 +241,21 @@ export const ScenarioSchema = z
           issue(`invalid regex: ${(e as Error).message}`, ['terminal', 'commands', i, 'match_regex'])
         }
       }
+    })
+    s.actions.forEach((a, i) => {
+      if (a.match_regex === undefined) return
+      if (!s.terminal) issue('match_regex needs a terminal to type into', ['actions', i, 'match_regex'])
+      let rx: RegExp
+      try {
+        rx = new RegExp(a.match_regex)
+      } catch (e) {
+        return issue(`invalid regex: ${(e as Error).message}`, ['actions', i, 'match_regex'])
+      }
+      // A typed command either shows scripted output or takes an action, never both.
+      s.terminal?.commands.forEach((c) => {
+        if (c.match && rx.test(c.match.trim().replace(/\s+/g, ' ')))
+          issue(`also matches the scripted command "${c.match}"`, ['actions', i, 'match_regex'])
+      })
     })
 
     // Key evidence must be findable BEFORE any fix, or the methodical bonus

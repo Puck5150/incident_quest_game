@@ -109,6 +109,7 @@ actions:                      # kind: fix | wrong | destructive
   - id: shotgun
     label: "Restart everything"
     kind: destructive         # big penalty: the "shotgun" approach
+    match_regex: "^(sudo )?reboot$"   # optional: typing this in the terminal takes the action
     feedback: "What this broke or why it didn't help"
 
 solution_paths:               # resolved when ALL actions in ANY one path are taken (any order)

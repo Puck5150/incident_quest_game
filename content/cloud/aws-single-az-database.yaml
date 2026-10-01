@@ -153,6 +153,7 @@ actions:
   - id: promote-replica
     label: "aws rds promote-read-replica --db-instance-identifier shop-db-reports"
     kind: fix
+    match_regex: "^aws rds promote-read-replica --db-instance-identifier shop-db-reports$"
     feedback: "RDS stops replication, reboots the replica, and it becomes a standalone read-write instance in us-east-1b. Writes from the last ~1.4 s of replica lag may be lost; say so in the incident notes."
   - id: repoint-app
     label: "Point the app's DB endpoint at shop-db-reports and roll the web tier"
@@ -161,10 +162,12 @@ actions:
   - id: enable-multi-az
     label: "aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az --apply-immediately"
     kind: fix
+    match_regex: "^aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az( --apply-immediately)?$"
     feedback: "The new primary gets a synchronous standby in another zone, so the next zone failure is an automatic failover instead of an outage."
   - id: reboot-db
     label: "Reboot shop-db"
     kind: wrong
+    match_regex: "^aws rds reboot-db-instance --db-instance-identifier shop-db$"
     feedback: "The instance lives in the impaired zone, and rebooting doesn't move it. 'Reboot with failover' only exists for Multi-AZ deployments, and this one isn't Multi-AZ."
   - id: scale-web
     label: "Double the web tier's Auto Scaling group"
@@ -173,6 +176,7 @@ actions:
   - id: delete-primary
     label: "Delete shop-db so the new primary can take its name"
     kind: destructive
+    match_regex: "^aws rds delete-db-instance --db-instance-identifier shop-db( .*)?$"
     feedback: "You destroyed the only copy of the writes that hadn't replicated yet, while the zone might have recovered. Rename or repoint instead; never delete during an incident."
 
 solution_paths:

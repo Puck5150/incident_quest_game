@@ -126,6 +126,7 @@ actions:
   - id: force-unlock
     label: "terraform force-unlock 6f1c2a9e-8b4d-4e57-9c1a-3d0e7b2f5a18"
     kind: fix
+    match_regex: "^terraform force-unlock( -force)? 6f1c2a9e-8b4d-4e57-9c1a-3d0e7b2f5a18$"
     feedback: "The stale lock is released. force-unlock doesn't touch your infrastructure, only the lock."
   - id: rerun-apply
     label: "Re-run the apply through the CI workflow"
@@ -134,10 +135,12 @@ actions:
   - id: lock-false
     label: "Run terraform apply -lock=false locally to get past it"
     kind: destructive
+    match_regex: "^terraform apply( .*)? -lock=false( .*)?$"
     feedback: "Terraform's docs recommend against disabling locking, and applying locally breaks the team's process. If anyone else wrote at the same time, the state could be corrupted."
   - id: delete-state
     label: "Delete terraform.tfstate from S3 and start fresh"
     kind: destructive
+    match_regex: "^aws s3 rm s3://acme-tfstate/prod/network/terraform\\.tfstate$"
     feedback: "Terraform no longer knows about any of your prod network resources. The next apply would try to create duplicates of everything."
   - id: wait
     label: "Wait an hour and try again"

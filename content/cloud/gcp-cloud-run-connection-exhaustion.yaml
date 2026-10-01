@@ -116,6 +116,7 @@ actions:
   - id: cap-instances
     label: "gcloud run services update signup-api --region us-central1 --max 20"
     kind: fix
+    match_regex: "^gcloud run services update signup-api .*--max(-instances)?[ =]20( .*)?$"
     feedback: "At most 20 instances × 20 connections = 400, under the 500 limit with room for admin and migrations. Cloud Run's docs list limiting database connections as a reason to set max instances."
   - id: right-size-pool
     label: "Lower the pool to pool_size=5, max_overflow=5 and document the budget: max instances × per-instance max < max_connections"
@@ -124,14 +125,17 @@ actions:
   - id: raise-max
     label: "Raise max instances to 300 so there's more capacity"
     kind: wrong
+    match_regex: "^gcloud run services update signup-api .*--max(-instances)?[ =]300( .*)?$"
     feedback: "More instances means more pools and even more connection attempts against the same 500-connection limit. Capacity was never the problem."
   - id: lower-concurrency
     label: "Lower concurrency to 10 so Cloud Run scales faster"
     kind: wrong
+    match_regex: "^gcloud run services update signup-api .*--concurrency[ =]10( .*)?$"
     feedback: "That's the fix for a 429 max-instances error, not this one. Fewer requests per instance means many more instances, and more connections."
   - id: restart-sql
     label: "Restart the Cloud SQL instance to clear the connections"
     kind: destructive
+    match_regex: "^gcloud sql instances restart users-db( .*)?$"
     feedback: "Every user of the database lost their connection, and 64 instances reconnected straight back into the same limit within seconds."
 
 solution_paths:

@@ -130,6 +130,7 @@ actions:
   - id: truncate-log
     label: "Truncate app.log in place (: > /var/log/app/app.log)"
     kind: fix
+    match_regex: "^(: ?> ?|> ?)/var/log/app/app\\.log$|^(sudo )?truncate -s ?0 /var/log/app/app\\.log$"
     feedback: "Output redirection truncates an existing file to zero size. The app keeps its open file handle, and the space comes back immediately."
   - id: fix-logrotate
     label: "Fix the path typo in /etc/logrotate.d/app (/var/log/ap → /var/log/app)"
@@ -138,6 +139,7 @@ actions:
   - id: rm-log
     label: "rm /var/log/app/app.log"
     kind: wrong
+    match_regex: "^(sudo )?rm (-f )?/var/log/app/app\\.log$"
     feedback: "The app still has the file open. Per unlink(2), the file stays in existence until the last file descriptor to it is closed, so no space is freed."
   - id: restart-db
     label: "Restart the PostgreSQL database"
@@ -146,6 +148,7 @@ actions:
   - id: reboot
     label: "Reboot web-01"
     kind: destructive
+    match_regex: "^(sudo )?(reboot|shutdown -r now|systemctl reboot)$"
     feedback: "The disk is still full after the reboot. You caused extra downtime and fixed nothing."
 
 solution_paths:

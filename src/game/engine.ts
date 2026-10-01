@@ -47,7 +47,16 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       return { ...s, phase: 'investigating', log: [...s.log, e], feedback: undefined }
 
     // Investigation is allowed while acting too, so the player can verify a fix.
-    case 'RUN_COMMAND':
+    // A command that matches an action's match_regex takes that action, but
+    // only once the root cause is named: the same gate as the action buttons.
+    case 'RUN_COMMAND': {
+      if (!working) return s
+      const ran = { ...s, log: [...s.log, e] }
+      const a = actionFor(scenario, e.input)
+      if (!a) return ran
+      if (s.phase === 'investigating') return { ...ran, feedback: { tone: 'bad', text: NOT_YET } }
+      return step(scenario, ran, { type: 'TAKE_ACTION', id: a.id, at: e.at })
+    }
     case 'OPEN_ARTIFACT':
       return working ? { ...s, log: [...s.log, e] } : s
 
@@ -91,6 +100,12 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
 
 // Collapse runs of spaces so "df  -h " matches "df -h".
 export const normalize = (input: string) => input.trim().replace(/\s+/g, ' ')
+
+export const NOT_YET = 'Not run: that changes the system. Declare a root cause first, then fix it.'
+
+// The action a typed command takes, if any (first match wins).
+export const actionFor = (scenario: Scenario, input: string) =>
+  scenario.actions.find((a) => a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input)))
 
 // What the fake shell prints for `input`, given which actions have been taken.
 // `clear` and `history` are handled by the Terminal component because they

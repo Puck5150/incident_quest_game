@@ -141,6 +141,7 @@ actions:
   - id: flush-firewall
     label: "Flush all firewall rules on reports-01 (iptables -F)"
     kind: destructive
+    match_regex: "^(sudo )?iptables -F$"
     feedback: "You removed this host's firewall protection to fix a problem that had nothing to do with the firewall."
 
 solution_paths:

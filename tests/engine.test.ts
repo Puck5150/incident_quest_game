@@ -2,6 +2,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
 import {
+  actionsTaken,
   evidenceSeen,
   hintsUsed,
   newSession,
@@ -25,6 +26,25 @@ const hint: GameEvent = { type: 'REQUEST_HINT', at: 0 }
 const close: GameEvent = { type: 'CLOSE_INCIDENT', at: 0 }
 
 describe('incident flow', () => {
+  it('a typed fix command takes the action once the root cause is named', () => {
+    const s = play(start, hyp('disk-full'), run(': > /var/log/app/app.log'))
+    expect(actionsTaken(s.log).has('truncate-log')).toBe(true)
+    expect(s.log.map((e) => e.type).slice(-2)).toEqual(['RUN_COMMAND', 'TAKE_ACTION'])
+    expect(s.feedback?.tone).toBe('good')
+  })
+
+  it('typed commands that change the system are refused before the hypothesis', () => {
+    const s = play(start, run('sudo reboot'))
+    expect(actionsTaken(s.log).size).toBe(0)
+    expect(s.feedback?.text).toMatch(/Declare a root cause first/)
+  })
+
+  it('a typed destructive command counts like the button', () => {
+    const s = play(start, hyp('disk-full'), run('sudo  reboot '))
+    expect(actionsTaken(s.log).has('reboot')).toBe(true)
+    expect(s.feedback?.tone).toBe('danger')
+  })
+
   it('happy path: fix, then close', () => {
     const s = play(start, hyp('disk-full'), act('truncate-log'), act('fix-logrotate'))
     expect(s.phase).toBe('acting')

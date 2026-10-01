@@ -166,10 +166,12 @@ actions:
   - id: lower-delivery-limit
     label: "Set a policy with delivery-limit: 5 on qq.order-emails"
     kind: wrong
+    match_regex: "^(sudo )?rabbitmqctl set_policy .*delivery-limit.*$"
     feedback: "On RabbitMQ 4.3, basic.nack with requeue doesn't increment the delivery count that the limit checks. The loop carries on exactly as before."
   - id: scale-workers
     label: "Scale email-worker from 3 to 12 replicas"
     kind: wrong
+    match_regex: "^kubectl scale deployment( |/)email-worker --replicas=12( -n shop)?$"
     feedback: "Requeued messages go back near the head of the queue and are immediately ready again, so the new consumers join the same redelivery loop. RabbitMQ's docs warn these loops are costly in network and CPU: you've quadrupled the cost and fixed nothing."
   - id: rollback-order-svc
     label: "Roll back order-svc 5.4.1"
@@ -178,6 +180,7 @@ actions:
   - id: purge-queue
     label: "rabbitmqctl purge_queue qq.order-emails"
     kind: destructive
+    match_regex: "^(sudo )?rabbitmqctl purge_queue qq\\.order-emails$"
     feedback: "Purging removes all messages in the queue: the 420 bad ones and over 24,000 real order confirmations from this morning. Those customers will never get their email, and you'll have to reconstruct them from the orders database."
 
 solution_paths:

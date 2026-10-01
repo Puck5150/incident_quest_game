@@ -57,6 +57,12 @@ Scenarios are data. You don't write any code to add an incident.
   extra spaces. Use `match_regex` for variants (`du -sh /var/log` vs
   `du -sh /var/log/*`). The regex runs against the input *after* spaces are
   collapsed. Remember to escape backslashes in YAML strings (`\\*`).
+- **Typed fixes:** give an action a `match_regex` and typing a matching command in
+  the terminal takes that action, the same as clicking it (only after the right
+  hypothesis; before that it's refused). Use it for actions that really are one
+  command (`kubectl rollout undo …`, `sudo reboot`); leave multi-step fixes as
+  buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
+  command, and the validator checks that.
 - **`help` in the terminal** lists your `match` commands, but not the regex ones.
   Use `match` for the obvious first steps and `match_regex` for the deeper digging
   you want players to think of themselves. `clear` and `history` are built in.

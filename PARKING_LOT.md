@@ -9,7 +9,6 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - AI-generated scenarios
 
 ## Gameplay
-- Typed fix commands in the terminal counting as actions (e.g. `systemctl restart nginx`)
 - Stateful terminal simulation (filesystem that actually changes, `cd`, pipes)
 - Tab completion in the terminal
 - Daily-play streak (MVP uses a clean-resolution streak; see PLAN.md open question 3)

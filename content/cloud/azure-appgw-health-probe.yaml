@@ -146,6 +146,7 @@ actions:
   - id: update-probe
     label: "az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path /healthz"
     kind: fix
+    match_regex: "^az network application-gateway probe update .*--path /healthz( .*)?$"
     feedback: "The next probes get 200 from /healthz. Both servers turn Healthy and the gateway starts forwarding traffic again."
   - id: probe-in-iac
     label: "Move the gateway config (including the probe) into the same Bicep repo and pipeline as the app"
@@ -154,6 +155,7 @@ actions:
   - id: restart-vms
     label: "Restart both VMs"
     kind: wrong
+    match_regex: "^az vm restart .*$"
     feedback: "The VMs come back running v3.8, still without /health, and the probe still fails."
   - id: raise-timeout
     label: "Raise the backend request timeout to 120 s"
@@ -166,6 +168,7 @@ actions:
   - id: recreate-gateway
     label: "Delete and recreate the Application Gateway"
     kind: destructive
+    match_regex: "^az network application-gateway delete .*$"
     feedback: "You rebuilt a hand-made gateway from memory during an outage, with a new IP, and the same probe mistake is likely to come back with it."
 
 solution_paths:

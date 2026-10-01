@@ -209,10 +209,12 @@ actions:
   - id: set-image
     label: "kubectl set image deployment/pricing-api pricing-api=registry.example.internal/shop/pricing-api:2.3.0 -n shop"
     kind: fix
+    match_regex: "^kubectl set image deployment/pricing-api pricing-api=registry\\.example\\.internal/shop/pricing-api:2\\.3\\.0( -n shop)?$"
     feedback: "This changes the Pod template, so the rollout continues with an image that exists. But Git still says v2.3.0: fix the manifest too, or the next kubectl apply puts the bad tag back."
   - id: rollout-undo
     label: "kubectl rollout undo deployment/pricing-api -n shop"
     kind: wrong
+    match_regex: "^kubectl rollout undo deployment/pricing-api( -n shop)?$"
     feedback: "Safe, but it doesn't help. The old pods were serving all traffic the whole time, so customers see no change, and the release still isn't out. The next deploy from Git fails the same way."
   - id: purge-cdn
     label: "Purge the CDN cache"
@@ -221,6 +223,7 @@ actions:
   - id: recreate-deployment
     label: "Delete the pricing-api Deployment and kubectl apply the manifest again"
     kind: destructive
+    match_regex: "^kubectl delete deployment( |/)pricing-api( -n shop)?$"
     feedback: "Deleting the Deployment deletes its ReplicaSets and their pods, including the three healthy ones. Re-applying the same manifest creates pods that can't pull v2.3.0 either, so pricing goes from \"old prices\" to fully down."
 
 solution_paths:
