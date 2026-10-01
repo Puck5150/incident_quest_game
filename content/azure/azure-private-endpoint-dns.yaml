@@ -1,0 +1,184 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-private-endpoint-dns
+track: azure
+difficulty: 3
+title: "Security closed the storage account's public access, and the app lost its files"
+par_minutes: 13
+
+ticket:
+  from: "App team"
+  priority: P1
+  body: |
+    Since 11:00 the document service can't read or write blobs in the storage
+    account stshopdocs: every request is refused. Security says they only
+    disabled public network access, which is fine "because we have a private
+    endpoint". The batch jobs in the hub network still work.
+
+environment: |
+  stshopdocs has a private endpoint for blob storage in vnet-hub, created
+  by the network team, with the private DNS zone
+  privatelink.blob.core.windows.net (resource group rg-net). The document
+  service runs on VMs in vnet-app, which is peered with vnet-hub. Both
+  networks use Azure-provided DNS.
+
+diagram:
+  nodes:
+    - { id: app, label: "document service (vnet-app)", col: 0, row: 0, status: down }
+    - { id: hub, label: "batch jobs (vnet-hub)", col: 0, row: 1, status: ok }
+    - { id: pe, label: "private endpoint 10.0.5.4 (vnet-hub)", col: 1, row: 1, status: ok }
+    - { id: st, label: "stshopdocs (public access disabled)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: app, to: st }
+    - { from: hub, to: pe }
+    - { from: pe, to: st }
+
+terminal:
+  prompt: "azureuser@doc-vm-1 (vnet-app):~$"
+  commands:
+    - match: "nslookup stshopdocs.blob.core.windows.net"
+      when_actions: [link-zone]
+      output: |
+        Non-authoritative answer:
+        stshopdocs.blob.core.windows.net    canonical name = stshopdocs.privatelink.blob.core.windows.net.
+        Name:    stshopdocs.privatelink.blob.core.windows.net
+        Address: 10.0.5.4
+    - match: "nslookup stshopdocs.blob.core.windows.net"
+      evidence: resolves-public
+      output: |
+        Non-authoritative answer:
+        stshopdocs.blob.core.windows.net    canonical name = stshopdocs.privatelink.blob.core.windows.net.
+        stshopdocs.privatelink.blob.core.windows.net    canonical name = blob.bl5prdstr09a.store.core.windows.net.
+        Name:    blob.bl5prdstr09a.store.core.windows.net
+        Address: 20.150.84.36
+    - match: "az network private-dns link vnet list -g rg-net -z privatelink.blob.core.windows.net --out table"
+      when_actions: [link-zone]
+      output: |
+        Name      VirtualNetwork  RegistrationEnabled  VirtualNetworkLinkState
+        --------  --------------  -------------------  -----------------------
+        link-hub  vnet-hub        False                Completed
+        link-app  vnet-app        False                Completed
+    - match: "az network private-dns link vnet list -g rg-net -z privatelink.blob.core.windows.net --out table"
+      evidence: hub-only-link
+      output: |
+        Name      VirtualNetwork  RegistrationEnabled  VirtualNetworkLinkState
+        --------  --------------  -------------------  -----------------------
+        link-hub  vnet-hub        False                Completed
+    - match: "az storage account show -n stshopdocs --query publicNetworkAccess"
+      output: |
+        "Disabled"
+
+logs:
+  - name: "document service errors"
+    lines: |
+      11:02:17 PUT https://stshopdocs.blob.core.windows.net/docs/88412.pdf -> 403 AuthorizationFailure: This request is not authorized to perform this operation.
+  - name: "batch job (vnet-hub), nslookup at 11:05"
+    lines: |
+      stshopdocs.blob.core.windows.net -> stshopdocs.privatelink.blob.core.windows.net -> 10.0.5.4
+  - name: "Activity log: stshopdocs"
+    evidence: public-disabled
+    lines: |
+      11:00:04  Update Storage Account  publicNetworkAccess: Enabled -> Disabled  caller: security-automation
+
+hypotheses:
+  - id: dns-zone-not-linked
+    text: "The private DNS zone is only linked to vnet-hub, so from vnet-app the name still resolves to the public endpoint, which is now closed."
+    correct: true
+  - id: no-peering-route
+    text: "vnet-app can't route to the private endpoint."
+    feedback: "The networks are peered, and the app never even tries the private address: its DNS lookup returns the public IP 20.150.84.36."
+  - id: rbac
+    text: "The app's identity lost its storage role."
+    feedback: "Nothing changed in access control; the only change at 11:00 was public network access. Requests arriving over the public endpoint are now refused, whoever makes them."
+  - id: endpoint-broken
+    text: "The private endpoint is broken."
+    feedback: "The batch jobs in vnet-hub resolve the private address 10.0.5.4 and work fine through it."
+
+actions:
+  - id: link-zone
+    label: "az network private-dns link vnet create -g rg-net -z privatelink.blob.core.windows.net -n link-app -v <vnet-app's resource ID> -e false"
+    kind: fix
+    match_regex: "^az network private-dns link vnet create (-g|--resource-group) rg-net (-z|--zone-name) privatelink\\.blob\\.core\\.windows\\.net (-n|--name) link-app (-v|--virtual-network) \\S+ (-e|--registration-enabled) false$"
+    feedback: "With the zone linked to vnet-app, the name resolves to 10.0.5.4 there too, so the app reaches the storage account privately over the peering. Public access can stay disabled."
+  - id: reenable-public
+    label: "Turn public network access back on for stshopdocs"
+    kind: wrong
+    feedback: "The app works again, over the public endpoint, undoing the security change. The private endpoint was there all along; the app just couldn't find it."
+  - id: hosts-file
+    label: "Add 10.0.5.4 stshopdocs.blob.core.windows.net to /etc/hosts on the app VMs"
+    kind: wrong
+    feedback: "It works until the endpoint's IP changes, a new VM is built without the edit, or another storage account is added. DNS is the right place: link the zone."
+  - id: delete-zone
+    label: "Delete the private DNS zone so all names resolve the same way everywhere"
+    kind: destructive
+    feedback: "Now vnet-hub resolves the public endpoint too, which is disabled, so the batch jobs fail as well. Everything that used the private endpoint loses storage."
+
+solution_paths:
+  - [link-zone]
+
+key_evidence: [resolves-public, hub-only-link, public-disabled]
+
+evidence_labels:
+  resolves-public: "From vnet-app, stshopdocs resolves to a public IP, not the private endpoint"
+  hub-only-link: "The privatelink.blob.core.windows.net zone is linked only to vnet-hub"
+  public-disabled: "Public network access on stshopdocs was disabled at 11:00"
+
+hints:
+  nudge: "The hub works and the app doesn't. When the app looks up stshopdocs, which address does it get?"
+  direction: "Compare name resolution from vnet-app and vnet-hub, and check which networks the private DNS zone is linked to."
+  answer: "privatelink.blob.core.windows.net is only linked to vnet-hub, so vnet-app resolves the public endpoint, which security just disabled. Link the zone to vnet-app."
+
+analogy:
+  title: "The private entrance nobody told you about"
+  text: |
+    The building has a staff-only back entrance, but it's only listed in the
+    directory of the east wing. Today the front door was locked "because
+    everyone uses the back entrance". The west-wing team, whose directory
+    still shows only the front door, is stuck outside. Add the back entrance
+    to the west wing's directory.
+
+debrief:
+  root_cause: |
+    A private endpoint gives the storage account a private IP in vnet-hub,
+    but clients only use it if DNS resolves the account's name to that IP.
+    That happens through the private DNS zone privatelink.blob.core.windows.net,
+    and only in virtual networks linked to the zone. The zone was linked to
+    vnet-hub only, so in vnet-app the name still resolved to the public
+    endpoint. That kept working until 11:00, when public network access was
+    disabled; from then on every request from the app was refused.
+  ideal_path:
+    - "Notice the split: the hub works, the peered app network doesn't."
+    - "Resolve the name from an app VM: it returns a public IP, not the endpoint's 10.0.5.4."
+    - "Check the private DNS zone's virtual network links: hub only."
+    - "Link the zone to vnet-app, and verify the name now resolves privately."
+    - "Leave public network access disabled."
+  real_world: |
+    Private endpoint DNS is the most common reason "private" access doesn't
+    work. Link private DNS zones to every network that needs them (or use a
+    central DNS design), test resolution from each network before disabling
+    public access, and remember that creating a private endpoint doesn't by
+    itself stop public access.
+
+concepts:
+  - term: "Private endpoint"
+    text: "A network interface in your virtual network with a private IP that connects to an Azure service, like a storage account, over Private Link."
+    url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-private-endpoints"
+  - term: "Private DNS zone"
+    text: "A DNS zone that only resolves inside the virtual networks linked to it. privatelink.blob.core.windows.net maps storage account names to their private endpoint IPs."
+    url: "https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns"
+  - term: "Virtual network link"
+    text: "Connects a private DNS zone to a virtual network. Networks without a link don't see the zone's records, so they resolve the public address."
+    url: "https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns-integration"
+  - term: "Public network access"
+    text: "A storage account setting. Disabling it refuses all traffic over the public endpoint, so only private endpoints work."
+    url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-private-endpoints"
+
+sources:
+  - title: "Azure Storage: Use private endpoints (DNS resolution inside and outside the virtual network)"
+    url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-private-endpoints"
+    retrieved: 2026-10-01
+  - title: "Azure Private Link: Private endpoint DNS integration (link the zone to all peered virtual networks)"
+    url: "https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns-integration"
+    retrieved: 2026-10-01
+  - title: "Azure Private Link: Azure Private Endpoint DNS configuration (zone names, CNAME chain)"
+    url: "https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns"
+    retrieved: 2026-10-01

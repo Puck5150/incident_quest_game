@@ -206,6 +206,15 @@ from your own experience and tick them off.
       gcloud `--format` output shapes, the bucket IAM policy's legacy bindings, and the INFORMATION_SCHEMA.JOBS
       summary table. The 403 text, dry-run message and retest-window behaviour are from the docs.
 
+## AWS and Azure depth, batch 2
+- [ ] aws-lambda-vpc-public-subnet: Lambda log framing around "Task timed out after 30.03 seconds" is representative.
+- [ ] aws-asg-elb-health-check: CLI output tables trimmed; describe-auto-scaling-instances health shown as HEALTHY.
+- [ ] aws-s3-sse-kms-decrypt: the AccessDenied text naming kms:Decrypt follows the documented format; how S3 relays
+      it to the caller is from experience.
+- [ ] azure-slot-swap-connection-string: `az webapp config connection-string list` table shape, orders-per-hour table.
+- [ ] azure-private-endpoint-dns: nslookup output, the 403 AuthorizationFailure text, the public storage host name.
+- [ ] azure-cosmos-hot-partition: metric chart values and the container show/throughput output shapes.
+
 ## cloud-design (design challenges, all three)
 - [ ] aws-vpc-network-layout and azure-vnet-network-layout: costs are scenario units; "S3/storage traffic via NAT"
       at 8 units stands in for per-GB processing charges on several TB a month.

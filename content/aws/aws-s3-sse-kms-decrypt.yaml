@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-s3-sse-kms-decrypt
+track: aws
+difficulty: 3
+title: "Old reports open fine; anything from this week is AccessDenied"
+par_minutes: 12
+
+ticket:
+  from: "Finance tools team"
+  priority: P2
+  body: |
+    The report viewer can open every report from before last Tuesday, but any
+    report generated since then fails with AccessDenied. Same bucket, same
+    role, same code. The viewer's IAM policy allows s3:GetObject on the whole
+    bucket and hasn't changed.
+
+environment: |
+  The report generator writes PDFs to the S3 bucket acme-reports; the report
+  viewer, running as the IAM role report-viewer-role, reads them. Last
+  Tuesday, to meet a compliance requirement, the bucket's default encryption
+  was changed from SSE-S3 to SSE-KMS with a customer managed key,
+  alias/reports. The key uses the default key policy.
+
+diagram:
+  nodes:
+    - { id: gen, label: "report generator", col: 0, row: 0, status: ok }
+    - { id: bucket, label: "S3: acme-reports", col: 1, row: 0, status: ok }
+    - { id: kms, label: "KMS key alias/reports", col: 1, row: 1, status: ok }
+    - { id: viewer, label: "report viewer (report-viewer-role)", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: gen, to: bucket }
+    - { from: bucket, to: kms }
+    - { from: viewer, to: bucket }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws s3api head-object --bucket acme-reports --key 2026/09/22/sales.pdf --query ServerSideEncryption"
+      evidence: old-sse-s3
+      output: |
+        "AES256"
+    - match: "aws s3api head-object --bucket acme-reports --key 2026/09/30/sales.pdf --query [ServerSideEncryption,SSEKMSKeyId]"
+      evidence: new-sse-kms
+      output: |
+        [
+            "aws:kms",
+            "arn:aws:kms:us-east-1:111122223333:key/7f2a9c1e-4b6d-4e8a-9c3f-2d1e0b5a6c7d"
+        ]
+    - match: "aws iam get-role-policy --role-name report-viewer-role --policy-name read-reports --query PolicyDocument.Statement"
+      when_actions: [grant-decrypt]
+      output: |
+        [
+            { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::acme-reports" },
+            { "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::acme-reports/*" },
+            { "Effect": "Allow", "Action": ["kms:Decrypt"], "Resource": "arn:aws:kms:us-east-1:111122223333:key/7f2a9c1e-4b6d-4e8a-9c3f-2d1e0b5a6c7d" }
+        ]
+    - match: "aws iam get-role-policy --role-name report-viewer-role --policy-name read-reports --query PolicyDocument.Statement"
+      evidence: no-kms-permission
+      output: |
+        [
+            { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::acme-reports" },
+            { "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::acme-reports/*" }
+        ]
+    - match: "aws kms get-key-policy --key-id 7f2a9c1e-4b6d-4e8a-9c3f-2d1e0b5a6c7d --policy-name default --query Policy --output text"
+      output: |
+        {"Version":"2012-10-17","Statement":[{"Sid":"Enable IAM User Permissions","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111122223333:root"},"Action":"kms:*","Resource":"*"}]}
+
+logs:
+  - name: "report viewer errors"
+    evidence: kms-denied
+    lines: |
+      10:22:41 GET 2026/09/30/sales.pdf -> AccessDenied: User: arn:aws:sts::111122223333:assumed-role/report-viewer-role/viewer-1 is not authorized to perform: kms:Decrypt on resource: arn:aws:kms:us-east-1:111122223333:key/7f2a9c1e-... because no identity-based policy allows the kms:Decrypt action
+      10:22:44 GET 2026/09/19/sales.pdf -> 200 OK
+
+hypotheses:
+  - id: needs-kms-decrypt
+    text: "New objects are encrypted with the KMS key, and reading them also needs kms:Decrypt on that key, which the viewer's role doesn't have."
+    correct: true
+  - id: s3-permission
+    text: "The viewer lost s3:GetObject on new objects."
+    feedback: "s3:GetObject covers acme-reports/*, old and new alike, and the error isn't about S3 at all: it's kms:Decrypt that's denied."
+  - id: bucket-policy
+    text: "A bucket policy now denies the viewer."
+    feedback: "The error says no identity-based policy allows kms:Decrypt. A bucket policy deny would say \"with an explicit deny\"."
+  - id: key-policy-blocks
+    text: "The key's policy doesn't allow the account to use it."
+    feedback: "The key uses the default key policy, whose \"Enable IAM User Permissions\" statement lets IAM policies in the account grant access. The missing piece is an IAM policy that does."
+
+actions:
+  - id: grant-decrypt
+    label: "Add kms:Decrypt on the alias/reports key's ARN to report-viewer-role's read-reports policy"
+    kind: fix
+    feedback: "Downloading an SSE-KMS object needs kms:Decrypt on the key as well as s3:GetObject. The default key policy lets IAM grant it, so the viewer reads new reports, and still only this key."
+  - id: back-to-sse-s3
+    label: "Switch the bucket's default encryption back to SSE-S3"
+    kind: wrong
+    feedback: "It breaks the compliance requirement, and the reports already written with the KMS key stay encrypted with it, so the viewer still can't read this week's files."
+  - id: kms-star
+    label: "Give the role kms:* on all keys (Resource: *)"
+    kind: wrong
+    feedback: "It works, and lets the viewer decrypt everything any KMS key protects in the account, and administer the keys. It needs kms:Decrypt on one key."
+  - id: delete-key
+    label: "Schedule the alias/reports key for deletion and re-encrypt with a new one"
+    kind: destructive
+    feedback: "Once the waiting period ends, every object encrypted under that key is unrecoverable, a week of reports included. Deleting keys is irreversible; granting a permission isn't."
+
+solution_paths:
+  - [grant-decrypt]
+
+key_evidence: [kms-denied, new-sse-kms, old-sse-s3, no-kms-permission]
+
+evidence_labels:
+  kms-denied: "Reading a new report is denied on kms:Decrypt, not on S3"
+  new-sse-kms: "New objects are encrypted with SSE-KMS using the alias/reports key"
+  old-sse-s3: "Older objects use SSE-S3 (AES256), which needs no KMS permission"
+  no-kms-permission: "The viewer's role allows S3 actions but no KMS actions"
+
+hints:
+  nudge: "Old objects work, new ones don't. What changed about the new objects themselves?"
+  direction: "Compare how an old and a new object are encrypted, and read which action the error says was denied."
+  answer: "New objects are SSE-KMS with a customer managed key; reading them needs kms:Decrypt on that key. Add kms:Decrypt for that key's ARN to report-viewer-role's policy."
+
+analogy:
+  title: "The safe inside the filing cabinet"
+  text: |
+    The viewer has a key to the filing cabinet and always has. This week,
+    new reports started going into a locked box inside the cabinet, opened
+    by a different key. Old reports are still loose in the drawer; new ones
+    are in the box. The viewer needs the box key too: just for that box,
+    not a master key to every safe in the building.
+
+debrief:
+  root_cause: |
+    With SSE-KMS, S3 encrypts each object with a data key protected by a KMS
+    key, so reading an object needs two permissions: s3:GetObject on the
+    object and kms:Decrypt on the KMS key. When the bucket's default
+    encryption switched to SSE-KMS with alias/reports, every new report was
+    encrypted under that key. The viewer's role had s3:GetObject but no KMS
+    permissions, so older SSE-S3 objects still opened and every new one was
+    refused on kms:Decrypt.
+  ideal_path:
+    - "Notice the split: old objects work, new ones don't, from the change date."
+    - "Read the error: the denied action is kms:Decrypt, not an S3 action."
+    - "Compare objects: old ones are AES256 (SSE-S3), new ones aws:kms with alias/reports."
+    - "Check where KMS access can be granted: the default key policy enables IAM policies."
+    - "Add kms:Decrypt on that key to the viewer's role; verify a new report opens."
+  real_world: |
+    Switching a bucket to SSE-KMS is a common compliance change, and every
+    reader then needs kms:Decrypt (and every writer kms:GenerateDataKey).
+    Inventory the bucket's readers and writers before switching, grant on
+    the specific key, and treat key deletion as the irreversible step it is.
+
+concepts:
+  - term: "SSE-S3 vs SSE-KMS"
+    text: "Two ways S3 encrypts objects at rest. SSE-S3 needs no extra permissions to read; SSE-KMS uses a KMS key, so readers also need permission to use that key."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html"
+  - term: "KMS key"
+    text: "A key managed by AWS KMS that protects the data keys used to encrypt your data. Using it (for example kms:Decrypt) is a permission in its own right."
+    url: "https://docs.aws.amazon.com/kms/latest/developerguide/overview.html"
+  - term: "Key policy"
+    text: "Every KMS key has a key policy. The default one lets IAM policies in the account grant access to the key."
+    url: "https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html"
+
+sources:
+  - title: "Amazon S3: Using server-side encryption with AWS KMS keys (kms:Decrypt to download, kms:GenerateDataKey to upload)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html"
+    retrieved: 2026-10-01
+  - title: "AWS KMS: Default key policy (enable IAM policies)"
+    url: "https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html"
+    retrieved: 2026-10-01
+  - title: "AWS KMS: Delete an AWS KMS key (irreversible after the waiting period)"
+    url: "https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html"
+    retrieved: 2026-10-01
+  - title: "IAM: Troubleshoot access denied error messages"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html"
+    retrieved: 2026-10-01

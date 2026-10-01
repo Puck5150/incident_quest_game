@@ -1,0 +1,174 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-cosmos-hot-partition
+track: azure
+difficulty: 3
+title: "Cosmos DB is throttling us at a quarter of what we pay for"
+par_minutes: 14
+
+ticket:
+  from: "IoT platform team"
+  priority: P2
+  body: |
+    Our device ingestion is falling behind: Cosmos DB keeps answering 429
+    "Request rate is too large". But the container has 20,000 RU/s
+    provisioned and we're only using about 5,000 RU/s in total. How can we
+    be throttled at a quarter of our capacity?
+
+environment: |
+  Device readings are written to the Cosmos DB for NoSQL container
+  telemetry (database iot, account cosmos-iot). It has 20,000 RU/s of manual
+  throughput, spread over 4 physical partitions. Its partition key is
+  /date (for example "2026-10-01"), chosen so "today's readings" queries are
+  cheap. About 40,000 devices each write a reading every few seconds.
+
+diagram:
+  nodes:
+    - { id: devices, label: "40,000 devices", col: 0, row: 0, status: ok }
+    - { id: ingest, label: "ingestion service", col: 1, row: 0, status: degraded }
+    - { id: cosmos, label: "Cosmos DB telemetry (/date)", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: devices, to: ingest }
+    - { from: ingest, to: cosmos }
+
+metrics:
+  - name: "Normalized RU Consumption (%) by PartitionKeyRangeId"
+    unit: "%"
+    evidence: one-range-hot
+    series:
+      - label: "range 0, 1, 3 (each)"
+        points: [["09:00", 2], ["09:15", 1], ["09:30", 2], ["09:45", 1], ["10:00", 2]]
+      - label: "range 2"
+        points: [["09:00", 100], ["09:15", 100], ["09:30", 100], ["09:45", 100], ["10:00", 100]]
+  - name: "Total requests by status code (per minute)"
+    unit: requests
+    evidence: throttled
+    series:
+      - label: "201 Created"
+        points: [["09:00", 59800], ["09:15", 60100], ["09:30", 59900], ["09:45", 60050], ["10:00", 59950]]
+      - label: "429 Too Many Requests"
+        points: [["09:00", 41200], ["09:15", 43800], ["09:30", 44900], ["09:45", 46100], ["10:00", 47300]]
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az cosmosdb sql container show -a cosmos-iot -g rg-iot -d iot -n telemetry --query resource.partitionKey"
+      evidence: date-key
+      output: |
+        {
+          "kind": "Hash",
+          "paths": [ "/date" ],
+          "version": 2
+        }
+    - match: "az cosmosdb sql container throughput show -a cosmos-iot -g rg-iot -d iot -n telemetry --query resource.throughput"
+      when_actions: [raise-rus]
+      output: |
+        40000
+    - match: "az cosmosdb sql container throughput show -a cosmos-iot -g rg-iot -d iot -n telemetry --query resource.throughput"
+      output: |
+        20000
+
+hypotheses:
+  - id: hot-partition
+    text: "Every write today has the same partition key (today's date), so they all land on one physical partition, which only gets a quarter of the RU/s."
+    correct: true
+  - id: under-provisioned
+    text: "The container simply needs more RU/s overall."
+    feedback: "Three of the four partitions are nearly idle. The container isn't short of throughput; one partition is, because all the writes go to it."
+  - id: sdk-bug
+    text: "The SDK is sending duplicate requests."
+    feedback: "The 429s are real throttling from one partition key range at 100%. The SDK retries 429s by default, which hides some of them, but it isn't the cause."
+  - id: storage-full
+    text: "A logical partition has hit its storage limit."
+    feedback: "A full partition gives a different error, not 429 rate limiting. Today's readings are nowhere near 20 GB; the problem is the rate of requests."
+
+actions:
+  - id: raise-rus
+    label: "Short term: raise the container to 40,000 RU/s"
+    kind: fix
+    match_regex: "^az cosmosdb sql container throughput update (-a|--account-name) cosmos-iot (-g|--resource-group) rg-iot (-d|--database-name) iot (-n|--name) telemetry --throughput 40000$"
+    feedback: "Throughput is split evenly across physical partitions, so the hot one gets 10,000 RU/s instead of 5,000 and ingestion catches up. It's a stopgap: you're paying for four partitions to help one."
+  - id: new-partition-key
+    label: "Long term: migrate to a new container partitioned by /deviceId (or deviceId plus date), then lower the RU/s"
+    kind: fix
+    feedback: "Partition keys can't be changed in place, so this means a new container and a data migration. With 40,000 devices as keys, writes spread across every partition and the provisioned RU/s are actually usable."
+  - id: autoscale
+    label: "Switch the container to autoscale with a 20,000 RU/s maximum"
+    kind: wrong
+    feedback: "Autoscale's maximum is still split across the same partitions, so the hot partition gets the same quarter. It changes billing, not the bottleneck."
+  - id: more-workers
+    label: "Scale the ingestion service from 4 to 16 instances"
+    kind: wrong
+    feedback: "More writers hammer the same hot partition harder: more 429s, more retries, same throughput."
+  - id: recreate-container
+    label: "Delete the container and recreate it with partition key /deviceId"
+    kind: destructive
+    feedback: "That deletes all the telemetry history to fix a key choice. Migrate the data to a new container instead, then switch over."
+
+solution_paths:
+  - [raise-rus, new-partition-key]
+
+key_evidence: [one-range-hot, throttled, date-key]
+
+evidence_labels:
+  one-range-hot: "One partition key range is at 100% while the other three are nearly idle"
+  throttled: "429s keep rising alongside successful writes"
+  date-key: "The partition key is /date, so every write today has the same key"
+
+hints:
+  nudge: "You're using a quarter of the throughput, and there are four physical partitions. Coincidence?"
+  direction: "Look at normalized RU consumption per partition key range, and at the container's partition key."
+  answer: "Partitioning by /date sends all of today's writes to one physical partition, which gets 5,000 of the 20,000 RU/s. Raise RU/s temporarily, and migrate to a container partitioned by device."
+
+analogy:
+  title: "Four checkout lanes, one queue"
+  text: |
+    The supermarket has four tills, but the sign says "today's shoppers use
+    till 3". Till 3 has a queue out of the door while the other three
+    cashiers read magazines. Paying for more cashiers spread across the four
+    tills barely helps. Change the sign so shoppers spread across all tills.
+
+debrief:
+  root_cause: |
+    Cosmos DB hashes each item's partition key to a physical partition and
+    divides provisioned throughput evenly between physical partitions. With
+    the key /date, every reading written today has the same key, so all
+    writes land in one logical partition on one physical partition. That
+    partition gets a quarter of the 20,000 RU/s, about 5,000, so it was
+    throttled at 100% while the other three sat almost idle. The container
+    had plenty of capacity; the key put all the load in one place.
+  ideal_path:
+    - "Notice the mismatch: throttled while total usage is about a quarter of provisioned."
+    - "Look at normalized RU consumption per partition key range: one at 100%, others near idle."
+    - "Check the partition key: /date, the same value for every write today."
+    - "Short term, raise RU/s so the hot partition gets more; accept the cost."
+    - "Long term, migrate to a container keyed by deviceId (or a synthetic key) and bring RU/s back down."
+  real_world: |
+    Date and status are classic bad partition keys for write-heavy workloads.
+    Pick a key with many values that spreads both storage and requests (a
+    device, user or tenant ID, or a synthetic combination), and check
+    per-partition consumption before buying more RU/s.
+
+concepts:
+  - term: "Request units (RU/s)"
+    text: "Cosmos DB's unit of throughput. Every read, write and query costs RUs; a container is provisioned with a number of RU/s."
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/request-units"
+  - term: "Partition key"
+    text: "The item property Cosmos DB uses to spread data and requests across partitions. It can't be changed in place."
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning-overview"
+  - term: "Hot partition"
+    text: "When most requests share a few key values, they land on one physical partition, which only has its share of the RU/s, so it's throttled while others sit idle."
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/troubleshoot-request-rate-too-large"
+  - term: "429 (request rate too large)"
+    text: "Cosmos DB's answer when a request would exceed the RU/s available. SDKs retry these automatically, which can hide the problem."
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/troubleshoot-request-rate-too-large"
+
+sources:
+  - title: "Azure Cosmos DB: Diagnose and troubleshoot request rate too large (429) exceptions (hot partitions, short and long term)"
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/troubleshoot-request-rate-too-large"
+    retrieved: 2026-10-01
+  - title: "Azure Cosmos DB: Partitioning and horizontal scaling (throughput divided evenly across physical partitions)"
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Cosmos DB: Request units"
+    url: "https://learn.microsoft.com/en-us/azure/cosmos-db/request-units"
+    retrieved: 2026-10-01

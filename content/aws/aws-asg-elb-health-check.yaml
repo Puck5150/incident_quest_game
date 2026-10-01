@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-asg-elb-health-check
+track: aws
+difficulty: 2
+title: "Four servers are dead, and Auto Scaling says they're fine"
+par_minutes: 10
+
+ticket:
+  from: "On-call alert"
+  priority: P2
+  body: |
+    ALERT: shop-web p95 latency 6.2 s, 5xx 9%. The load balancer shows only
+    2 of 6 targets healthy, and has for about three hours. The Auto Scaling
+    group is supposed to replace broken instances. It hasn't replaced
+    anything.
+
+environment: |
+  shop-web runs on an EC2 Auto Scaling group, web-asg (desired capacity 6,
+  across two Availability Zones), registered with an Application Load
+  Balancer target group that health-checks /health. The app has a known,
+  not-yet-fixed bug: after a day or two of uptime, its process can hang
+  while the instance itself keeps running.
+
+diagram:
+  nodes:
+    - { id: alb, label: "Application Load Balancer", col: 0, row: 0, status: ok }
+    - { id: good, label: "2 healthy instances", col: 1, row: 0, status: degraded }
+    - { id: bad, label: "4 hung instances", col: 1, row: 1, status: down }
+    - { id: asg, label: "web-asg", col: 2, row: 0, status: ok }
+  edges:
+    - { from: alb, to: good }
+    - { from: alb, to: bad }
+    - { from: asg, to: good }
+    - { from: asg, to: bad }
+
+metrics:
+  - name: "Target group: healthy vs unhealthy hosts"
+    unit: hosts
+    evidence: unhealthy-hosts
+    series:
+      - label: "HealthyHostCount"
+        points: [["06:00", 6], ["07:00", 5], ["08:00", 4], ["09:00", 2], ["10:00", 2], ["11:00", 2], ["12:00", 2]]
+      - label: "UnHealthyHostCount"
+        points: [["06:00", 0], ["07:00", 1], ["08:00", 2], ["09:00", 4], ["10:00", 4], ["11:00", 4], ["12:00", 4]]
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names web-asg --query AutoScalingGroups[0].[HealthCheckType,HealthCheckGracePeriod]"
+      when_actions: [elb-health-check]
+      output: |
+        [
+            "ELB",
+            300
+        ]
+    - match: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names web-asg --query AutoScalingGroups[0].[HealthCheckType,HealthCheckGracePeriod]"
+      evidence: ec2-only
+      output: |
+        [
+            "EC2",
+            300
+        ]
+    - match: "aws autoscaling describe-auto-scaling-instances --query AutoScalingInstances[].[InstanceId,LifecycleState,HealthStatus]"
+      evidence: asg-thinks-healthy
+      output: |
+        i-0a11  InService  HEALTHY
+        i-0a12  InService  HEALTHY
+        i-0a13  InService  HEALTHY
+        i-0b21  InService  HEALTHY
+        i-0b22  InService  HEALTHY
+        i-0b23  InService  HEALTHY
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/shop-web/9a7c --query TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason]"
+      output: |
+        i-0a11  healthy
+        i-0a12  unhealthy  Target.Timeout
+        i-0a13  unhealthy  Target.Timeout
+        i-0b21  healthy
+        i-0b22  unhealthy  Target.Timeout
+        i-0b23  unhealthy  Target.Timeout
+
+hypotheses:
+  - id: ec2-health-type
+    text: "The group uses EC2 health checks only, so instances whose app has hung still count as healthy and are never replaced."
+    correct: true
+  - id: asg-suspended
+    text: "Someone suspended Auto Scaling's replacement process."
+    feedback: "Nothing is suspended. Auto Scaling would replace an unhealthy instance; it just doesn't think any are unhealthy: all six show HEALTHY."
+  - id: lb-wrong
+    text: "The load balancer's health check is wrong; the instances are actually fine."
+    feedback: "The four instances time out on /health, and real requests to them fail the same way. The load balancer is right; Auto Scaling isn't listening to it."
+  - id: capacity
+    text: "The group needs more instances to handle the load."
+    feedback: "Six instances is normally plenty. Four of them are serving nothing because they've hung; more instances would just hang in a day or two as well."
+
+actions:
+  - id: elb-health-check
+    label: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB --health-check-grace-period 300"
+    kind: fix
+    match_regex: "^aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB( --health-check-grace-period \\d+)?$"
+    feedback: "With ELB health checks on, Auto Scaling marks instances the load balancer reports Unhealthy as unhealthy on its next check and replaces them. The four hung instances are swapped for fresh ones, which keep the grace period to boot."
+  - id: alarm-unhealthy
+    label: "Alarm on UnHealthyHostCount > 0 for 10 minutes, and fix the hang bug as a follow-up"
+    kind: fix
+    feedback: "Self-healing hides the bug as much as it fixes the outage. An alarm makes sure someone sees that instances keep hanging, so the leak actually gets fixed."
+  - id: raise-desired
+    label: "Raise desired capacity from 6 to 12"
+    kind: wrong
+    feedback: "Six fresh instances help for a day or two, then hang too, and the four dead ones are still counted and never replaced. You'd pay for twice the servers to serve with fewer than half."
+  - id: terminate-all
+    label: "Terminate all six instances so the group relaunches fresh ones"
+    kind: destructive
+    feedback: "That takes the two working instances down as well: the site is fully down until six new instances boot and pass health checks. Fix the health check type and let the group replace only the broken ones."
+
+solution_paths:
+  - [elb-health-check, alarm-unhealthy]
+
+key_evidence: [unhealthy-hosts, asg-thinks-healthy, ec2-only]
+
+evidence_labels:
+  unhealthy-hosts: "The load balancer has reported 4 of 6 targets unhealthy for three hours"
+  asg-thinks-healthy: "Auto Scaling shows all six instances as HEALTHY"
+  ec2-only: "web-asg's health check type is EC2: it ignores the load balancer's checks"
+
+hints:
+  nudge: "The load balancer and Auto Scaling disagree about four instances. Which one is Auto Scaling listening to?"
+  direction: "Check the group's health check type."
+  answer: "web-asg uses EC2 health checks, which only check that the instance is running, so hung apps count as healthy. Switch the group to ELB health checks so it replaces what the load balancer marks unhealthy, and alarm on unhealthy hosts."
+
+analogy:
+  title: "Asking whether someone is breathing, not whether they can work"
+  text: |
+    The supervisor's rule is to replace any worker who doesn't turn up. Four
+    workers turned up but fell asleep at their desks. The receptionist stopped
+    sending them customers hours ago, but the supervisor only checks the
+    attendance list, so nobody is replaced. Tell the supervisor to listen to
+    the receptionist.
+
+debrief:
+  root_cause: |
+    An Auto Scaling group decides an instance is unhealthy from its health
+    check type. web-asg used EC2 health checks, which check that the
+    instance is running, and by default Auto Scaling ignores the load
+    balancer's health checks. When the app's process hung, the instances
+    kept running, so Auto Scaling kept them as healthy while the load
+    balancer correctly stopped sending them traffic. Two instances ended up
+    serving everything.
+  ideal_path:
+    - "Spot the disagreement: the load balancer says 4 unhealthy, Auto Scaling says all healthy."
+    - "Check the group's health check type: EC2."
+    - "Turn on ELB health checks, keeping a grace period for new instances to boot."
+    - "Watch the hung instances get replaced and healthy hosts return to six."
+    - "Alarm on unhealthy hosts, and fix the hang itself."
+  real_world: |
+    For instances behind a load balancer, ELB health checks are almost always
+    what you want: they check the app, not just the machine. Pair them with a
+    sensible grace period, and keep alarming on unhealthy hosts so
+    self-healing doesn't quietly hide a recurring bug.
+
+concepts:
+  - term: "Auto Scaling health checks"
+    text: "How an Auto Scaling group decides an instance is unhealthy and should be replaced. EC2 checks only that the instance is running."
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html"
+  - term: "ELB health checks for Auto Scaling"
+    text: "When turned on, Auto Scaling also treats instances the load balancer reports Unhealthy as unhealthy and replaces them. They're off by default."
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html"
+  - term: "Health check grace period"
+    text: "How long Auto Scaling waits after launching an instance before acting on its health checks, so it isn't replaced while still starting up."
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html"
+
+sources:
+  - title: "Amazon EC2 Auto Scaling: Health checks for instances in an Auto Scaling group (ELB results ignored by default)"
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html"
+    retrieved: 2026-10-01
+  - title: "Elastic Load Balancing: Health checks for target groups"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+    retrieved: 2026-10-01
+  - title: "Elastic Load Balancing: CloudWatch metrics for your Application Load Balancer (HealthyHostCount, UnHealthyHostCount)"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-cloudwatch-metrics.html"
+    retrieved: 2026-10-01

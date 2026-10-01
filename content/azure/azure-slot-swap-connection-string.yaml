@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-slot-swap-connection-string
+track: azure
+difficulty: 3
+title: "Since this morning's release, new orders vanish after checkout"
+par_minutes: 13
+
+ticket:
+  from: "Warehouse operations"
+  priority: P1
+  body: |
+    The shop says checkout succeeds and customers get confirmation emails,
+    but our back office hasn't received a single new order since 10:00.
+    Release 4.0 went out at 10:00 with a staging-slot swap. The release was
+    tested in staging all of yesterday and looked perfect.
+
+environment: |
+  shop-api runs on Azure App Service (resource group rg-shop) with two slots:
+  production and staging. Production should use the database orders-db-prod;
+  staging uses orders-db-staging, a copy with test data. The back office
+  reads orders from orders-db-prod. Releases are deployed to staging, tested,
+  then swapped into production.
+
+diagram:
+  nodes:
+    - { id: prod, label: "shop-api production slot (v4.0)", col: 0, row: 0, status: ok }
+    - { id: dbstaging, label: "orders-db-staging", col: 1, row: 0, status: ok }
+    - { id: dbprod, label: "orders-db-prod", col: 1, row: 1, status: ok }
+    - { id: office, label: "back office", col: 2, row: 1, status: degraded }
+  edges:
+    - { from: prod, to: dbstaging }
+    - { from: office, to: dbprod }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az webapp config connection-string list -n shop-api -g rg-shop --query \"[].{name:name, slotSetting:slotSetting, server:value}\" --out table"
+      when_actions: [swap-back, sticky-setting]
+      output: |
+        Name      SlotSetting    Server
+        --------  -------------  -------------------------------------------------
+        OrdersDb  True           Server=orders-db-prod.postgres.database.azure.com;...
+    - match: "az webapp config connection-string list -n shop-api -g rg-shop --query \"[].{name:name, slotSetting:slotSetting, server:value}\" --out table"
+      evidence: prod-uses-staging-db
+      output: |
+        Name      SlotSetting    Server
+        --------  -------------  ----------------------------------------------------
+        OrdersDb  False          Server=orders-db-staging.postgres.database.azure.com;...
+    - match: "az webapp config connection-string list -n shop-api -g rg-shop --slot staging --query \"[].{name:name, slotSetting:slotSetting, server:value}\" --out table"
+      output: |
+        Name      SlotSetting    Server
+        --------  -------------  -------------------------------------------------
+        OrdersDb  False          Server=orders-db-prod.postgres.database.azure.com;...
+
+logs:
+  - name: "Activity log: shop-api, today"
+    evidence: swap-at-10
+    lines: |
+      10:00:12  Swap Web App Slots  staging -> production  caller: release-pipeline
+  - name: "New orders per hour, by database"
+    evidence: orders-in-staging
+    lines: |
+      hour    orders-db-prod   orders-db-staging
+      08:00   212              0
+      09:00   238              0
+      10:00   17               219
+      11:00   0                244
+
+hypotheses:
+  - id: conn-string-swapped
+    text: "The OrdersDb connection string wasn't marked as a deployment slot setting, so the swap moved staging's value into production, and production now writes to the staging database."
+    correct: true
+  - id: release-bug
+    text: "Release 4.0 has a bug that loses orders."
+    feedback: "The orders aren't lost: 463 of them are in orders-db-staging since 10:00. The code saves them fine, just to the database its configuration points at."
+  - id: back-office-broken
+    text: "The back office has stopped reading orders."
+    feedback: "The back office reads orders-db-prod correctly; orders-db-prod simply hasn't received any since the swap."
+  - id: db-down
+    text: "orders-db-prod is down."
+    feedback: "It's up and the back office reads from it. Production isn't talking to it at all any more."
+
+actions:
+  - id: swap-back
+    label: "az webapp deployment slot swap -g rg-shop -n shop-api --slot staging --target-slot production"
+    kind: fix
+    match_regex: "^az webapp deployment slot swap (-g|--resource-group) rg-shop (-n|--name) shop-api --slot staging --target-slot production$"
+    feedback: "Swapping the same two slots again restores their pre-swap state: production goes back to v3.x writing to orders-db-prod. New orders reach the warehouse again within a minute."
+  - id: sticky-setting
+    label: "Mark OrdersDb as a deployment slot setting in both slots, with each slot's own database (--slot-settings OrdersDb)"
+    kind: fix
+    feedback: "Slot settings stay with their slot during a swap, so production always keeps orders-db-prod and staging always keeps orders-db-staging. Now 4.0 can be swapped in safely."
+  - id: migrate-orders
+    label: "Copy the orders written to orders-db-staging since 10:00 into orders-db-prod, and tell the warehouse"
+    kind: fix
+    feedback: "Those 463 orders are real customers' paid orders. Without moving them, they'd never be shipped."
+  - id: edit-prod-only
+    label: "Change production's OrdersDb value to orders-db-prod (without making it a slot setting)"
+    kind: wrong
+    feedback: "It fixes production right now, and the next swap moves the values across again, sending production's writes to staging all over again."
+  - id: restart
+    label: "Restart the production slot"
+    kind: wrong
+    feedback: "It restarts with the same configuration and keeps writing to orders-db-staging."
+  - id: wipe-staging
+    label: "Reset orders-db-staging back to its test data to clean up the mess"
+    kind: destructive
+    feedback: "That deletes 463 real, paid customer orders that exist nowhere else. Move them to production first."
+
+solution_paths:
+  - [swap-back, sticky-setting, migrate-orders]
+
+key_evidence: [prod-uses-staging-db, swap-at-10, orders-in-staging]
+
+evidence_labels:
+  prod-uses-staging-db: "Production's OrdersDb points at orders-db-staging, and isn't a slot setting"
+  swap-at-10: "The release pipeline swapped staging into production at 10:00"
+  orders-in-staging: "Since 10:00, new orders land in orders-db-staging instead of production"
+
+hints:
+  nudge: "The orders aren't lost. Count orders per database since 10:00."
+  direction: "Check which database production's connection string points at now, and whether that setting sticks to its slot during a swap."
+  answer: "OrdersDb wasn't a slot setting, so the 10:00 swap moved staging's connection string into production. Swap back, mark OrdersDb as a deployment slot setting in both slots, and move the orders written to staging into production."
+
+analogy:
+  title: "Swapping desks, address book and all"
+  text: |
+    Two shop assistants swap desks every morning. Each desk has a sticky
+    note with the delivery address: the real warehouse, or the practice
+    warehouse for training. The note isn't stuck down, so it travels with
+    the desk, and the trained-up assistant now sends real customers' parcels
+    to the practice warehouse. Glue each note to its own desk.
+
+debrief:
+  root_cause: |
+    During a slot swap, App Service swaps app settings and connection strings
+    between the slots unless they're marked as deployment slot settings
+    (sticky). OrdersDb wasn't, so at 10:00 the release's swap moved staging's
+    value, pointing at orders-db-staging, into production. The release
+    itself worked perfectly: it saved every order, to the staging database,
+    which the back office never reads.
+  ideal_path:
+    - "Find where the orders are going: since 10:00, into orders-db-staging."
+    - "Check production's connection string: it now points at staging's database, and isn't a slot setting."
+    - "Tie it to the 10:00 swap in the activity log."
+    - "Swap back immediately to restore production's configuration."
+    - "Make OrdersDb a slot setting in both slots, then swap 4.0 in again."
+    - "Move the orders written to staging into production."
+  real_world: |
+    Environment-specific settings (database connections, API keys, feature
+    flags for test systems) must be slot settings, or every swap moves them.
+    Use the swap preview to check the target's configuration before
+    completing a swap, and keep slot settings in infrastructure code.
+
+concepts:
+  - term: "Deployment slots"
+    text: "Live copies of an App Service app (like staging) with their own host names. You deploy to one, test it, then swap it into production with no downtime."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots"
+  - term: "Swap"
+    text: "Exchanges the content and most configuration of two slots. Swapping the same two slots again rolls it back."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots"
+  - term: "Deployment slot setting"
+    text: "An app setting or connection string marked to stick to its slot, so it isn't swapped. Use it for anything environment-specific."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots"
+
+sources:
+  - title: "Azure App Service: Set up staging environments (which settings are swapped, slot settings, rolling back a swap)"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots"
+    retrieved: 2026-10-01
+  - title: "Azure CLI: az webapp config connection-string (--slot-settings)"
+    url: "https://learn.microsoft.com/en-us/cli/azure/webapp/config/connection-string"
+    retrieved: 2026-10-01

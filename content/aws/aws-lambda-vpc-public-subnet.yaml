@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-lambda-vpc-public-subnet
+track: aws
+difficulty: 2
+title: "The webhook can reach the database now, but not the payment API"
+par_minutes: 10
+
+ticket:
+  from: "Payments team"
+  priority: P1
+  body: |
+    This morning we attached the order-webhook Lambda function to our VPC so it
+    can write to the orders database directly. Database writes work, but
+    every call to the payment provider's API now times out, so payments are
+    stuck. We deliberately put it in the public subnets so it would keep
+    internet access. What's going on?
+
+environment: |
+  order-webhook is a Lambda function (timeout 30 seconds). Until today it
+  wasn't attached to a VPC. The VPC has public subnets (route 0.0.0.0/0 to an
+  internet gateway) and private subnets (route 0.0.0.0/0 to a NAT gateway),
+  in two Availability Zones. The orders database (RDS) is in the private
+  subnets; EC2 services in the private subnets reach the internet through the
+  NAT gateway.
+
+diagram:
+  nodes:
+    - { id: fn, label: "Lambda order-webhook", col: 0, row: 0, status: degraded }
+    - { id: rds, label: "RDS orders (private)", col: 1, row: 1, status: ok }
+    - { id: igw, label: "internet gateway", col: 1, row: 0, status: ok }
+    - { id: psp, label: "payment provider API", col: 2, row: 0, status: ok }
+  edges:
+    - { from: fn, to: rds }
+    - { from: fn, to: igw }
+    - { from: igw, to: psp }
+
+logs:
+  - name: "CloudWatch Logs: /aws/lambda/order-webhook"
+    evidence: timeout
+    lines: |
+      09:14:02 START RequestId: 41c7... Version: $LATEST
+      09:14:02 saved order 88412 to orders DB
+      09:14:02 calling https://api.payments.example.com/v1/charges
+      09:14:32 Task timed out after 30.03 seconds
+  - name: "deploy notes, 08:50"
+    evidence: attached-public
+    lines: |
+      order-webhook: attach to vpc-0shop, subnets public-a and public-b ("so it keeps internet access"), security group sg-0webhook
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws lambda get-function-configuration --function-name order-webhook --query VpcConfig"
+      when_actions: [private-subnets]
+      output: |
+        {
+            "SubnetIds": [ "subnet-0priva", "subnet-0privb" ],
+            "SecurityGroupIds": [ "sg-0webhook" ],
+            "VpcId": "vpc-0shop"
+        }
+    - match: "aws lambda get-function-configuration --function-name order-webhook --query VpcConfig"
+      evidence: vpc-config
+      output: |
+        {
+            "SubnetIds": [ "subnet-0puba", "subnet-0pubb" ],
+            "SecurityGroupIds": [ "sg-0webhook" ],
+            "VpcId": "vpc-0shop"
+        }
+    - match: "aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-0puba --query RouteTables[0].Routes"
+      output: |
+        [
+            { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local" },
+            { "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-0shop" }
+        ]
+    - match: "aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-0priva --query RouteTables[0].Routes"
+      output: |
+        [
+            { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local" },
+            { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c" }
+        ]
+
+hypotheses:
+  - id: public-subnet-no-ip
+    text: "Attaching a function to a public subnet doesn't give it a public IP address, so its internet traffic goes nowhere. It needs private subnets with a NAT gateway route."
+    correct: true
+  - id: provider-down
+    text: "The payment provider is down."
+    feedback: "The same calls worked until the function was attached to the VPC this morning, and EC2 services reach the provider through the NAT gateway right now."
+  - id: security-group
+    text: "The function's security group blocks outbound traffic."
+    feedback: "sg-0webhook allows all outbound traffic, and the database writes through it work. A security group problem wouldn't explain internet-only failures."
+  - id: timeout-too-short
+    text: "30 seconds is too short for the payment API."
+    feedback: "The API normally answers in under a second. The call never gets an answer at all; a longer timeout would just wait longer for nothing."
+
+actions:
+  - id: private-subnets
+    label: "aws lambda update-function-configuration --function-name order-webhook --vpc-config SubnetIds=subnet-0priva,subnet-0privb,SecurityGroupIds=sg-0webhook"
+    kind: fix
+    match_regex: "^aws lambda update-function-configuration --function-name order-webhook --vpc-config SubnetIds=subnet-0priva,subnet-0privb,SecurityGroupIds=sg-0webhook$"
+    feedback: "In the private subnets, the function's internet traffic follows the 0.0.0.0/0 route to the NAT gateway, and the database is still in reach. Payments go through again."
+  - id: raise-timeout
+    label: "Raise the function's timeout to 120 seconds"
+    kind: wrong
+    feedback: "The request never gets an answer, so it now times out after 120 seconds instead of 30, and each stuck invocation costs four times as much."
+  - id: sg-egress
+    label: "Add an explicit outbound rule for 443 to 0.0.0.0/0 on sg-0webhook"
+    kind: wrong
+    feedback: "Outbound is already allowed. The packets leave the function fine; there's just no public address for replies to come back to through the internet gateway."
+  - id: detach-vpc
+    label: "Detach the function from the VPC again"
+    kind: destructive
+    feedback: "Payment calls work again, and every order write to the private database fails: you've traded one outage for another. The function needs both, which private subnets with a NAT gateway give it."
+
+solution_paths:
+  - [private-subnets]
+
+key_evidence: [timeout, attached-public, vpc-config]
+
+evidence_labels:
+  timeout: "Database writes succeed, then the payment call hangs until the 30-second timeout"
+  attached-public: "The function was attached to the VPC this morning, in the public subnets"
+  vpc-config: "Its subnets are public-a and public-b, whose only internet route is the internet gateway"
+
+hints:
+  nudge: "Inside the VPC, what does it take for something in a public subnet to use the internet gateway?"
+  direction: "Look at which subnets the function is in, and what a Lambda function gets (or doesn't) when attached to them."
+  answer: "Lambda functions attached to a VPC don't get public IP addresses, even in public subnets, so they can't use the internet gateway. Move the function to the private subnets, whose internet traffic goes through the NAT gateway."
+
+analogy:
+  title: "Standing by the front door without a key"
+  text: |
+    The new worker was seated next to the building's front door so they could
+    pop outside whenever needed. But the front door only opens for people with
+    their own key card, and they weren't given one. Colleagues in the back
+    office send their post out through the post room instead. Seat the new
+    worker in the back office, where the post room serves everyone.
+
+debrief:
+  root_cause: |
+    Until today, order-webhook wasn't attached to a VPC, and Lambda functions
+    like that have internet access by default. Attaching it to the VPC sent
+    all its traffic through the VPC instead. It was placed in public subnets,
+    whose internet route goes to the internet gateway, but connecting a
+    function to a public subnet doesn't give it internet access or a public IP
+    address. Without one, its packets to the payment provider had no way out
+    and back, and every call waited until the function's 30-second timeout.
+  ideal_path:
+    - "Read the log: the DB write works, the payment call hangs until the timeout."
+    - "Tie it to the change: the function was attached to the VPC this morning."
+    - "Check its subnets: public, with only an internet gateway route."
+    - "Remember the rule: Lambda in a VPC never gets a public IP, so it needs a NAT gateway for internet access."
+    - "Move it to the private subnets (route to the NAT gateway) and verify payments."
+  real_world: |
+    "We put the Lambda in a public subnet so it can reach the internet" is
+    one of the most common Lambda networking mistakes. Attach functions to
+    private subnets with a NAT gateway route (or use VPC endpoints for AWS
+    services), and only attach to a VPC when the function needs private
+    resources.
+
+concepts:
+  - term: "Lambda in a VPC"
+    text: "By default a function runs outside your VPC with internet access. Attaching it to a VPC lets it reach private resources, and sends all its traffic through that VPC's subnets."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html"
+  - term: "Public IPs and Lambda"
+    text: "A function attached to a VPC never gets a public IP address, even in a public subnet, so it can't use an internet gateway directly."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc-internet.html"
+  - term: "NAT gateway"
+    text: "Gives resources in private subnets, including Lambda functions, outbound internet access."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html"
+
+sources:
+  - title: "AWS Lambda: Giving Lambda functions access to resources in an Amazon VPC (public subnets don't give internet access)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html"
+    retrieved: 2026-10-01
+  - title: "AWS Lambda: Enable internet access for VPC-connected Lambda functions"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc-internet.html"
+    retrieved: 2026-10-01
+  - title: "AWS Lambda: Troubleshoot invocation issues (Task timed out)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/troubleshooting-invocation.html"
+    retrieved: 2026-10-01
