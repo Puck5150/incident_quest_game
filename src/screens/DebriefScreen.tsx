@@ -1,4 +1,5 @@
-import { artifacts, type Scenario } from '../schema/scenario.ts'
+import { artifacts } from '../schema/constants.ts'
+import type { Scenario } from '../schema/scenario.ts'
 import { evidenceSeen, type GameEvent } from '../game/engine.ts'
 import Prose from '../components/Prose.tsx'
 import Icon from '../components/Icon.tsx'

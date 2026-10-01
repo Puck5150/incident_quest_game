@@ -7,6 +7,9 @@
 // ever sees one file.
 
 import { z } from 'zod'
+import { artifacts } from './constants.ts'
+
+export { artifacts, type ArtifactKind } from './constants.ts'
 
 export const id = z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'must be kebab-case (a-z, 0-9, dashes)')
 
@@ -269,26 +272,6 @@ export const ScenarioSchema = z
       })
     }
   })
-
-export type ArtifactKind = 'log' | 'file' | 'trace' | 'metric' | 'stage'
-
-// Everything the player can "open", flattened. Used by the validator, the
-// engine (evidence tracking) and the debrief (where evidence lived).
-export function artifacts(s: {
-  logs?: { name: string; evidence?: string }[]
-  files?: { path: string; evidence?: string }[]
-  traces?: { name: string; evidence?: string }[]
-  metrics?: { name: string; evidence?: string }[]
-  pipeline?: { stages: { name: string; evidence?: string }[] }
-}): { kind: ArtifactKind; name: string; evidence?: string }[] {
-  return [
-    ...(s.logs ?? []).map((a) => ({ kind: 'log' as const, name: a.name, evidence: a.evidence })),
-    ...(s.files ?? []).map((a) => ({ kind: 'file' as const, name: a.path, evidence: a.evidence })),
-    ...(s.traces ?? []).map((a) => ({ kind: 'trace' as const, name: a.name, evidence: a.evidence })),
-    ...(s.metrics ?? []).map((a) => ({ kind: 'metric' as const, name: a.name, evidence: a.evidence })),
-    ...(s.pipeline?.stages ?? []).map((a) => ({ kind: 'stage' as const, name: a.name, evidence: a.evidence })),
-  ]
-}
 
 function dupes(xs: string[]): string[] {
   return [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))]

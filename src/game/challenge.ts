@@ -2,7 +2,8 @@
 //   evaluate(challenge, picks) -> which stress tests pass, and why not
 //   scoreChallenge(challenge, runs, hints) -> itemized score
 
-import { RPO_LEVELS, type Challenge, type Picks } from '../schema/challenge.ts'
+import { RPO_LEVELS } from '../schema/constants.ts'
+import type { Challenge, Picks } from '../schema/challenge.ts'
 import { HINT_TIERS } from './engine.ts'
 
 export type TestResult = { id: string; label: string; pass: boolean; failing: string[]; reasons: string[] }

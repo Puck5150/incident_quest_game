@@ -36,16 +36,16 @@ const link = (from: string, to: string) => {
   fireEvent.click(within(inspector()).getAllByRole('button', { name: 'Link' })[0])
 }
 
-it('pick a cloud, build on it, and the queue remembers which cloud', () => {
+it('pick a cloud, build on it, and the queue remembers which cloud', async () => {
   const { unmount } = render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /Zone-resilient checkout/ }))
 
-  fireEvent.click(screen.getByLabelText(/Google Cloud/))
+  fireEvent.click(await screen.findByLabelText(/Google Cloud/))
   expect(screen.getByText('Cloud SQL for PostgreSQL instance')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Start on Google Cloud' }))
 
   // The canvas speaks Google Cloud now.
-  expect(screen.getByRole('button', { name: 'Add Compute Engine VM (web)' })).toBeTruthy()
+  expect(await screen.findByRole('button', { name: 'Add Compute Engine VM (web)' })).toBeTruthy()
   add('Regional external Application Load Balancer', 'r1')
   for (const z of ['r1-a', 'r1-a', 'r1-b', 'r1-b']) add('Compute Engine VM (web)', z)
   add('Cloud SQL for PostgreSQL instance', 'r1-a')
@@ -64,7 +64,7 @@ it('pick a cloud, build on it, and the queue remembers which cloud', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Submit design' }))
 
   // The debrief names the same parts on the other clouds, with what isn't equivalent.
-  const table = screen.getByRole('heading', { name: 'Same design on other clouds' }).closest('section')!
+  const table = (await screen.findByRole('heading', { name: 'Same design on other clouds' })).closest('section')!
   expect(within(table).getByRole('columnheader', { name: /Google Cloud \(you\)/ })).toBeTruthy()
   expect(table.textContent).toMatch(/RDS for PostgreSQL instance/)
   expect(table.textContent).toMatch(/Azure Database for PostgreSQL flexible server/)
@@ -77,20 +77,20 @@ it('pick a cloud, build on it, and the queue remembers which cloud', () => {
   expect(card.textContent).not.toMatch(/AWS completed/)
 })
 
-it('slot challenges work on the cloud of your choice too', () => {
+it('slot challenges work on the cloud of your choice too', async () => {
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /A launch-day spike, on the cloud of your choice/ }))
-  fireEvent.click(screen.getByLabelText(/^Azure/))
+  fireEvent.click(await screen.findByLabelText(/^Azure/))
   fireEvent.click(screen.getByRole('button', { name: 'Start on Azure' }))
 
-  expect(screen.getByText(/virtual machines on Azure in East US 2/)).toBeTruthy()
+  expect(await screen.findByText(/virtual machines on Azure in East US 2/)).toBeTruthy()
   fireEvent.click(within(screen.getByRole('group', { name: 'In front of the servers' })).getByLabelText(/Azure Front Door/))
   fireEvent.click(within(screen.getByRole('group', { name: 'Web servers' })).getByLabelText(/^Zone-spanning virtual machine scale set/))
   fireEvent.click(screen.getByRole('button', { name: 'Run stress tests' }))
   expect(screen.getByRole('region', { name: /Stress tests/ }).textContent).toMatch(/One zone in East US 2 fails/)
   fireEvent.click(screen.getByRole('button', { name: 'Submit design' }))
 
-  const table = screen.getByRole('heading', { name: 'Same design on other clouds' }).closest('section')!
+  const table = (await screen.findByRole('heading', { name: 'Same design on other clouds' })).closest('section')!
   expect(table.textContent).toMatch(/Amazon CloudFront with caching/)
   expect(table.textContent).toMatch(/Cloud CDN on a global external Application Load Balancer/)
   expect(table.textContent).toMatch(/Regional managed instance group/)

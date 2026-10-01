@@ -9,9 +9,9 @@
 import { z } from 'zod'
 import { AnalogySchema, HintsSchema, SourcesSchema, id } from './scenario.ts'
 
-export const MAX_NODES = 12
-export const ROLES = ['route', 'serve', 'write-store'] as const
-export const USERS = 'users' // implicit source of all traffic
+import { MAX_NODES, ROLES, USERS } from './constants.ts'
+
+export { MAX_NODES, ROLES, USERS } from './constants.ts'
 
 const PaletteItemSchema = z.strictObject({
   id,

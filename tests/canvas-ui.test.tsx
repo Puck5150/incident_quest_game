@@ -42,9 +42,10 @@ const link = (from: string, to: string) => {
 }
 const results = () => screen.getByRole('region', { name: /Stress tests/ })
 
-it('build, fail, fix, pass and submit a canvas design without dragging', () => {
+it('build, fail, fix, pass and submit a canvas design without dragging', async () => {
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /Build a checkout that survives losing a zone/ }))
+  await screen.findByRole('region', { name: /Stress tests/ }) // screen loads lazily
 
   add('Application Load Balancer', 'use1')
   add('EC2 web server', 'use1-az1')
@@ -93,6 +94,6 @@ it('build, fail, fix, pass and submit a canvas design without dragging', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Submit design' }))
 
   // 300 base + 20% lean - 10% for the extra run = 330
-  expect(screen.getByText('330', { selector: '.sr-only' })).toBeTruthy()
+  expect(await screen.findByText('330', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByText(/Design accepted on run 2/)).toBeTruthy()
 })

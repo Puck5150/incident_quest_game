@@ -1,4 +1,5 @@
-import { PROVIDER_NAMES, type Provider } from '../schema/multi.ts'
+import { PROVIDER_NAMES } from '../schema/constants.ts'
+import type { Provider } from '../schema/multi.ts'
 import Card from './Card.tsx'
 
 export type CrossCloud = {

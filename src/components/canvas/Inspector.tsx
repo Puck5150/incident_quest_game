@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { USERS, type CanvasChallenge, type Design } from '../../schema/canvas.ts'
+import { USERS } from '../../schema/constants.ts'
+import type { CanvasChallenge, Design } from '../../schema/canvas.ts'
 import { laneLabel, lanesFor, targets } from '../../game/canvasEdit.ts'
 
 type Kind = Design['edges'][number]['kind']

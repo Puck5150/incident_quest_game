@@ -5,12 +5,12 @@
 
 import { z } from 'zod'
 import { AnalogySchema, HintsSchema, SourcesSchema, id } from './scenario.ts'
-import { DesignSchema, ROLES, type CanvasChallenge, type Design } from './canvas.ts'
-import { RPO_LEVELS, type Challenge } from './challenge.ts'
+import { DesignSchema, type CanvasChallenge, type Design } from './canvas.ts'
+import { type Challenge } from './challenge.ts'
 
-export const PROVIDERS = ['aws', 'azure', 'gcp'] as const
-export type Provider = (typeof PROVIDERS)[number]
-export const PROVIDER_NAMES: Record<Provider, string> = { aws: 'AWS', azure: 'Azure', gcp: 'Google Cloud' }
+import { PROVIDERS, PROVIDER_NAMES, ROLES, RPO_LEVELS, type Provider } from './constants.ts'
+
+export { PROVIDERS, PROVIDER_NAMES, type Provider } from './constants.ts'
 
 const perProvider = <T extends z.ZodType>(schema: T) =>
   z.strictObject({ aws: schema.optional(), azure: schema.optional(), gcp: schema.optional() })

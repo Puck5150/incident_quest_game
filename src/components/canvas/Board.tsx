@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { USERS, type CanvasChallenge, type Design } from '../../schema/canvas.ts'
+import { USERS } from '../../schema/constants.ts'
+import type { CanvasChallenge, Design } from '../../schema/canvas.ts'
 import { lanes, type Lane } from '../../game/canvasEdit.ts'
 
 export type DragPayload = { kind: 'new'; type: string } | { kind: 'move'; id: string }

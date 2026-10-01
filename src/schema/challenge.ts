@@ -5,8 +5,9 @@
 import { z } from 'zod'
 import { AnalogySchema, HintsSchema, SourcesSchema, id } from './scenario.ts'
 
-// How much data an option can lose in a failure, best to worst.
-export const RPO_LEVELS = ['zero', 'seconds', 'minutes', 'hours'] as const
+import { RPO_LEVELS } from './constants.ts'
+
+export { RPO_LEVELS } from './constants.ts'
 
 const OptionSchema = z.strictObject({
   id,

@@ -4,7 +4,8 @@
 // take over, then check that users can still reach what the test needs. Every
 // failure comes with a plain-English reason built from the actual graph.
 
-import { USERS, type CanvasChallenge, type CanvasTest, type Design } from '../schema/canvas.ts'
+import { USERS } from '../schema/constants.ts'
+import type { CanvasChallenge, CanvasTest, Design } from '../schema/canvas.ts'
 
 export type CanvasTestResult = {
   id: string

@@ -1,19 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import content from 'virtual:content'
 import type { GameEvent } from './game/engine.ts'
 import { score, type Score } from './game/scoring.ts'
 import { loadProgress, rankFor, recordResult, saveProgress, unlockedTracks, type Progress } from './game/progress.ts'
 import HomeScreen from './screens/HomeScreen.tsx'
-import IncidentScreen from './screens/IncidentScreen.tsx'
-import DebriefScreen from './screens/DebriefScreen.tsx'
 import SkillTreeScreen from './screens/SkillTreeScreen.tsx'
-import ChallengeScreen from './screens/ChallengeScreen.tsx'
-import ChallengeDebrief from './screens/ChallengeDebrief.tsx'
 import { scoreChallenge, scoreRuns, type ChallengeScore, type Run } from './game/challenge.ts'
-import CanvasScreen, { type CanvasRun } from './screens/CanvasScreen.tsx'
-import CanvasDebrief from './screens/CanvasDebrief.tsx'
+import type { CanvasRun } from './screens/CanvasScreen.tsx'
 import { evaluateCanvas } from './game/canvas.ts'
-import PickCloudScreen from './screens/PickCloudScreen.tsx'
 import type { Provider } from './schema/multi.ts'
 import type { CanvasChallenge } from './schema/canvas.ts'
 import type { Challenge, Picks } from './schema/challenge.ts'
@@ -21,6 +15,15 @@ import type { Design } from './schema/canvas.ts'
 import type { CrossCloud } from './components/CrossCloud.tsx'
 import type { QueueItem } from './screens/HomeScreen.tsx'
 import Icon from './components/Icon.tsx'
+
+// Home and skill tree load up front; play and debrief screens load on first use.
+const IncidentScreen = lazy(() => import('./screens/IncidentScreen.tsx'))
+const DebriefScreen = lazy(() => import('./screens/DebriefScreen.tsx'))
+const ChallengeScreen = lazy(() => import('./screens/ChallengeScreen.tsx'))
+const ChallengeDebrief = lazy(() => import('./screens/ChallengeDebrief.tsx'))
+const CanvasScreen = lazy(() => import('./screens/CanvasScreen.tsx'))
+const CanvasDebrief = lazy(() => import('./screens/CanvasDebrief.tsx'))
+const PickCloudScreen = lazy(() => import('./screens/PickCloudScreen.tsx'))
 
 // A handful of screens don't need a router (see PARKING_LOT.md). `run`
 // remounts the incident screen on replay so it starts from a clean session.
@@ -200,97 +203,99 @@ export default function App() {
       </header>
 
       <main id="main" className="mx-auto max-w-7xl p-4 lg:p-6">
-        {screen.name === 'home' && (
-          <HomeScreen
-            tracks={content.tracks}
-            items={items}
-            progress={progress}
-            unlocked={unlocks(progress)}
-            focusTrack={screen.track}
-            onPlay={play}
-          />
-        )}
-        {screen.name === 'tree' && (
-          <SkillTreeScreen
-            tracks={content.tracks}
-            scenarios={items}
-            progress={progress}
-            unlocked={unlocks(progress)}
-            onOpenTrack={(track) => setScreen({ name: 'home', track })}
-          />
-        )}
-        {screen.name === 'incident' && (
-          <IncidentScreen key={screen.run} scenario={scenario!} onResolved={(log) => resolved(screen.id, log)} />
-        )}
-        {screen.name === 'challenge' && (
-          <ChallengeScreen
-            key={screen.run}
-            challenge={challenge!}
-            onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints, screen.provider)}
-          />
-        )}
-        {screen.name === 'pick-cloud' && multi && (
-          <PickCloudScreen
-            title={multi.title}
-            providers={multi.providers}
-            summary={(p) => cloudSummary(multi, p)}
-            completedOn={progress.completed[multi.id]?.providers ?? []}
-            onPick={(provider) =>
-              setScreen(
-                multi.kind === 'canvas'
-                  ? { name: 'canvas', id: multi.id, run: Date.now(), provider }
-                  : { name: 'challenge', id: multi.id, run: Date.now(), provider },
-              )
-            }
-          />
-        )}
-        {screen.name === 'canvas' && (
-          <CanvasScreen
-            key={screen.run}
-            challenge={canvas!}
-            onFinished={(runs, hints) => canvasFinished(screen.id, runs, hints, screen.provider)}
-          />
-        )}
-        {screen.name === 'canvas-debrief' && (
-          <CanvasDebrief
-            challenge={canvas!}
-            runs={screen.runs}
-            score={screen.score}
-            outcome={screen}
-            streak={progress.streak.current}
-            onHome={() => setScreen({ name: 'home' })}
-            onTree={() => setScreen({ name: 'tree' })}
-            onReplay={() => play(screen.id)}
-            crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.design) : undefined}
-          />
-        )}
-        {screen.name === 'challenge-debrief' && (
-          <ChallengeDebrief
-            challenge={challenge!}
-            runs={screen.runs}
-            score={screen.score}
-            outcome={screen}
-            streak={progress.streak.current}
-            onHome={() => setScreen({ name: 'home' })}
-            onTree={() => setScreen({ name: 'tree' })}
-            onReplay={() => play(screen.id)}
-            crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.picks) : undefined}
-          />
-        )}
-        {screen.name === 'debrief' && (
-          <DebriefScreen
-            scenario={scenario!}
-            log={screen.log}
-            score={screen.score}
-            gained={screen.gained}
-            rankUp={screen.rankUp}
-            unlocked={screen.unlocked}
-            streak={progress.streak.current}
-            onHome={() => setScreen({ name: 'home' })}
-            onTree={() => setScreen({ name: 'tree' })}
-            onReplay={() => play(screen.id)}
-          />
-        )}
+        <Suspense fallback={<p className="text-muted">Loading…</p>}>
+          {screen.name === 'home' && (
+            <HomeScreen
+              tracks={content.tracks}
+              items={items}
+              progress={progress}
+              unlocked={unlocks(progress)}
+              focusTrack={screen.track}
+              onPlay={play}
+            />
+          )}
+          {screen.name === 'tree' && (
+            <SkillTreeScreen
+              tracks={content.tracks}
+              scenarios={items}
+              progress={progress}
+              unlocked={unlocks(progress)}
+              onOpenTrack={(track) => setScreen({ name: 'home', track })}
+            />
+          )}
+          {screen.name === 'incident' && (
+            <IncidentScreen key={screen.run} scenario={scenario!} onResolved={(log) => resolved(screen.id, log)} />
+          )}
+          {screen.name === 'challenge' && (
+            <ChallengeScreen
+              key={screen.run}
+              challenge={challenge!}
+              onFinished={(runs, hints) => challengeFinished(screen.id, runs, hints, screen.provider)}
+            />
+          )}
+          {screen.name === 'pick-cloud' && multi && (
+            <PickCloudScreen
+              title={multi.title}
+              providers={multi.providers}
+              summary={(p) => cloudSummary(multi, p)}
+              completedOn={progress.completed[multi.id]?.providers ?? []}
+              onPick={(provider) =>
+                setScreen(
+                  multi.kind === 'canvas'
+                    ? { name: 'canvas', id: multi.id, run: Date.now(), provider }
+                    : { name: 'challenge', id: multi.id, run: Date.now(), provider },
+                )
+              }
+            />
+          )}
+          {screen.name === 'canvas' && (
+            <CanvasScreen
+              key={screen.run}
+              challenge={canvas!}
+              onFinished={(runs, hints) => canvasFinished(screen.id, runs, hints, screen.provider)}
+            />
+          )}
+          {screen.name === 'canvas-debrief' && (
+            <CanvasDebrief
+              challenge={canvas!}
+              runs={screen.runs}
+              score={screen.score}
+              outcome={screen}
+              streak={progress.streak.current}
+              onHome={() => setScreen({ name: 'home' })}
+              onTree={() => setScreen({ name: 'tree' })}
+              onReplay={() => play(screen.id)}
+              crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.design) : undefined}
+            />
+          )}
+          {screen.name === 'challenge-debrief' && (
+            <ChallengeDebrief
+              challenge={challenge!}
+              runs={screen.runs}
+              score={screen.score}
+              outcome={screen}
+              streak={progress.streak.current}
+              onHome={() => setScreen({ name: 'home' })}
+              onTree={() => setScreen({ name: 'tree' })}
+              onReplay={() => play(screen.id)}
+              crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.picks) : undefined}
+            />
+          )}
+          {screen.name === 'debrief' && (
+            <DebriefScreen
+              scenario={scenario!}
+              log={screen.log}
+              score={screen.score}
+              gained={screen.gained}
+              rankUp={screen.rankUp}
+              unlocked={screen.unlocked}
+              streak={progress.streak.current}
+              onHome={() => setScreen({ name: 'home' })}
+              onTree={() => setScreen({ name: 'tree' })}
+              onReplay={() => play(screen.id)}
+            />
+          )}
+        </Suspense>
       </main>
     </>
   )

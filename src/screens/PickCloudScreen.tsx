@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
-import { PROVIDER_NAMES, type Provider } from '../schema/multi.ts'
+import { PROVIDER_NAMES } from '../schema/constants.ts'
+import type { Provider } from '../schema/multi.ts'
 import Icon from '../components/Icon.tsx'
 
 // Choose the cloud for a "pick your cloud" challenge. Same brief and stress

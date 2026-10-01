@@ -9,9 +9,10 @@ import content from 'virtual:content'
 beforeEach(() => localStorage.clear())
 afterEach(cleanup)
 
-const openIncident = () => {
+// Play and debrief screens load lazily, so the first query after a screen change awaits.
+const openIncident = async () => {
   fireEvent.click(screen.getByRole('button', { name: /Checkout returning 500s/ }))
-  fireEvent.click(screen.getByRole('button', { name: 'Take incident' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Take incident' }))
 }
 
 const type = (cmd: string) => {
@@ -21,9 +22,9 @@ const type = (cmd: string) => {
 }
 const output = () => screen.getByRole('log', { name: 'Terminal output' }).textContent
 
-it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and progress survives a reload', () => {
+it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and progress survives a reload', async () => {
   const { unmount } = render(<App />)
-  openIncident()
+  await openIncident()
 
   type('df -h')
   expect(output()).toMatch(/100%/)
@@ -55,7 +56,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
 
   // Debrief: 100 base + 20 time + 20 methodical + 10 verified - 10 wrong hyp - 25 destructive = 115
   // The XP counts up visually; screen readers (and this test) get the final value.
-  expect(screen.getByText('115', { selector: '.sr-only' })).toBeTruthy()
+  expect(await screen.findByText('115', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Root cause' })).toBeTruthy()
   expect(screen.getByText(/Promoted to Support Engineer/)).toBeTruthy()
   // Linux was Containers' only prerequisite.
@@ -78,9 +79,9 @@ it('theme toggle switches and persists', () => {
   expect(screen.getByRole('button', { name: 'Dark mode' })).toBeTruthy()
 })
 
-it('hints reveal one tier at a time, analogy with the second', () => {
+it('hints reveal one tier at a time, analogy with the second', async () => {
   render(<App />)
-  openIncident()
+  await openIncident()
   fireEvent.click(screen.getByRole('button', { name: /Show nudge hint/ }))
   expect(screen.getByText(/Errno 28 mean/)).toBeTruthy()
   expect(screen.queryByText(/filing cabinet/)).toBeNull()
@@ -90,10 +91,10 @@ it('hints reveal one tier at a time, analogy with the second', () => {
   expect(screen.getByText('No hints left.')).toBeTruthy()
 })
 
-it('shuffles hypotheses so the right answer is not always first', () => {
+it('shuffles hypotheses so the right answer is not always first', async () => {
   const spy = vi.spyOn(Math, 'random').mockReturnValue(0)
   render(<App />)
-  openIncident()
+  await openIncident()
   const first = screen.getAllByRole('radio')[0].closest('label')!.textContent
   expect(first).not.toMatch(/filesystem is full/) // listed first in the YAML
   spy.mockRestore()

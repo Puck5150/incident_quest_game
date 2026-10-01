@@ -1,7 +1,8 @@
 // Editing a canvas design, as pure functions. The UI (drag, menus, keyboard)
 // only calls these, so every way of building a design follows the same rules.
 
-import { MAX_NODES, USERS, type CanvasChallenge, type Design } from '../schema/canvas.ts'
+import { MAX_NODES, USERS } from '../schema/constants.ts'
+import type { CanvasChallenge, Design } from '../schema/canvas.ts'
 
 export type Lane = { id: string; label: string; scope: 'zonal' | 'regional' | 'global'; region?: string }
 type Kind = Design['edges'][number]['kind']

@@ -6,7 +6,8 @@
 // player DID; anything derived (evidence found, hints used) is recomputed
 // from it by the helpers at the bottom, so there's one source of truth.
 
-import { artifacts, type ArtifactKind, type Scenario } from '../schema/scenario.ts'
+import { artifacts } from '../schema/constants.ts'
+import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 

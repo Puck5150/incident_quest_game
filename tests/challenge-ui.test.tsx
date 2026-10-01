@@ -35,11 +35,11 @@ const pick = (tier: string, option: RegExp) =>
   fireEvent.click(within(screen.getByRole('group', { name: tier })).getByLabelText(option))
 const results = () => screen.getByRole('region', { name: /Stress tests/ })
 
-it('design, fail, revise, pass, submit', () => {
+it('design, fail, revise, pass, submit', async () => {
   const { unmount } = render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /survives losing a data center/ }))
 
-  const run = screen.getByRole('button', { name: /Run stress tests/ })
+  const run = await screen.findByRole('button', { name: /Run stress tests/ })
   expect(run).toHaveProperty('disabled', true) // every tier needs a pick
 
   pick('Web / app tier', /One EC2 instance/)
@@ -57,7 +57,7 @@ it('design, fail, revise, pass, submit', () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Submit design' }))
   // 200 base + 20% lean - 10% for the extra run = 220
-  expect(screen.getByText('220', { selector: '.sr-only' })).toBeTruthy()
+  expect(await screen.findByText('220', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByRole('columnheader', { name: 'Recommended' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'What failed along the way' })).toBeTruthy()
   expect(screen.getByText(/Design accepted on run 2/)).toBeTruthy()
@@ -67,11 +67,12 @@ it('design, fail, revise, pass, submit', () => {
   expect(screen.getByRole('button', { name: /survives losing a data center.*Completed/ })).toBeTruthy()
 })
 
-it('plays stress tests one at a time, and Skip reveals the rest', () => {
+it('plays stress tests one at a time, and Skip reveals the rest', async () => {
   seed('system')
-  vi.useFakeTimers()
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /survives losing a data center/ }))
+  await screen.findByRole('button', { name: /Run stress tests/ }) // screen loads lazily
+  vi.useFakeTimers()
   pick('Web / app tier', /One EC2 instance/)
   pick('Orders database', /Single-AZ/)
   fireEvent.click(screen.getByRole('button', { name: /Run stress tests/ }))
