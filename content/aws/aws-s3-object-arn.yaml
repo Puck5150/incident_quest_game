@@ -1,0 +1,199 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-s3-object-arn
+track: aws
+difficulty: 1
+title: "The exporter can list the templates but can't read any of them"
+par_minutes: 8
+
+ticket:
+  from: "Finance tools team"
+  priority: P3
+  body: |
+    The new report-exporter service fails on every run with "AccessDenied"
+    when it loads its template from S3. The odd part: it can list the bucket
+    and sees every template. We gave its role s3:GetObject. What are we
+    missing?
+
+environment: |
+  report-exporter runs on EC2 with the IAM role report-exporter-role. Its
+  HTML templates live in the S3 bucket acme-report-templates, which has S3
+  Block Public Access turned on and no bucket policy. The role's permissions
+  come from one inline policy, read-templates, written for this service last
+  week.
+
+diagram:
+  nodes:
+    - { id: exporter, label: "report-exporter (EC2)", col: 0, row: 0, status: down }
+    - { id: bucket, label: "S3: acme-report-templates", col: 1, row: 0, status: ok }
+  edges:
+    - { from: exporter, to: bucket }
+
+terminal:
+  prompt: "ec2-user@exporter-1:~$"
+  commands:
+    - match: "aws sts get-caller-identity"
+      output: |
+        {
+            "UserId": "AROA3EXAMPLEID:i-0exporter1",
+            "Account": "111122223333",
+            "Arn": "arn:aws:sts::111122223333:assumed-role/report-exporter-role/i-0exporter1"
+        }
+    - match: "aws s3 ls s3://acme-report-templates/"
+      evidence: list-works
+      output: |
+        2026-09-24 14:02:11       8214 credit-note.html
+        2026-09-24 14:02:11      11903 invoice.html
+        2026-09-24 14:02:12       6630 statement.html
+    - match: "aws s3api get-object --bucket acme-report-templates --key invoice.html invoice.html"
+      when_actions: [fix-policy]
+      output: |
+        {
+            "ContentLength": 11903,
+            "ContentType": "text/html"
+        }
+    - match: "aws s3api get-object --bucket acme-report-templates --key invoice.html invoice.html"
+      evidence: get-denied
+      output: |
+        An error occurred (AccessDenied) when calling the GetObject operation: User: arn:aws:sts::111122223333:assumed-role/report-exporter-role/i-0exporter1 is not authorized to perform: s3:GetObject on resource: "arn:aws:s3:::acme-report-templates/invoice.html" because no identity-based policy allows the s3:GetObject action
+    - match: "aws s3 cp s3://acme-report-templates/invoice.html ."
+      when_actions: [fix-policy]
+      output: |
+        download: s3://acme-report-templates/invoice.html to ./invoice.html
+    - match: "aws s3 cp s3://acme-report-templates/invoice.html ."
+      output: |
+        fatal error: An error occurred (403) when calling the HeadObject operation: Forbidden
+    - match: "aws iam get-role-policy --role-name report-exporter-role --policy-name read-templates"
+      when_actions: [fix-policy]
+      output: |
+        {
+            "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                    { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::acme-report-templates" },
+                    { "Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::acme-report-templates/*" }
+                ]
+            }
+        }
+    - match: "aws iam get-role-policy --role-name report-exporter-role --policy-name read-templates"
+      evidence: bucket-arn-only
+      output: |
+        {
+            "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [ "s3:ListBucket", "s3:GetObject" ],
+                        "Resource": "arn:aws:s3:::acme-report-templates"
+                    }
+                ]
+            }
+        }
+    - match: "aws s3api get-bucket-policy --bucket acme-report-templates"
+      output: |
+        An error occurred (NoSuchBucketPolicy) when calling the GetBucketPolicy operation: The bucket policy does not exist
+
+hypotheses:
+  - id: object-arn
+    text: "The policy grants s3:GetObject on the bucket's ARN, not on the objects inside it, so it never matches a request for an object."
+    correct: true
+  - id: block-public-access
+    text: "S3 Block Public Access is blocking the role."
+    feedback: "Block Public Access stops access granted to everyone (public), not access granted to a role in your own account. And the error says why it was denied: no identity-based policy allows s3:GetObject on that object."
+  - id: bucket-policy-deny
+    text: "A bucket policy denies the role."
+    feedback: "The bucket has no bucket policy, and an explicit deny would say \"with an explicit deny\". This error says nothing allowed the request."
+  - id: wrong-role
+    text: "The service isn't using report-exporter-role."
+    feedback: "get-caller-identity shows the assumed role report-exporter-role, and the same role can list the bucket. It's the right role with a policy that doesn't match."
+
+actions:
+  - id: fix-policy
+    label: "Split the policy: s3:ListBucket on arn:aws:s3:::acme-report-templates, and s3:GetObject on arn:aws:s3:::acme-report-templates/*"
+    kind: fix
+    feedback: "Listing is an action on the bucket; reading is an action on objects, whose ARNs are bucket/key. Now each action is granted on the kind of resource it acts on, and get-object succeeds."
+  - id: s3-full-access
+    label: "Attach the AmazonS3FullAccess managed policy to the role"
+    kind: wrong
+    feedback: "It works, and it lets this service read, overwrite and delete every object in every bucket in the account. The fix is two characters: /* on the resource."
+  - id: bucket-policy-same
+    label: "Add a bucket policy allowing the role s3:GetObject on arn:aws:s3:::acme-report-templates"
+    kind: wrong
+    feedback: "Same mistake in a second place: that resource is the bucket, and GetObject acts on objects. The request still matches nothing."
+  - id: public-bucket
+    label: "Turn off Block Public Access and make the templates public-read"
+    kind: destructive
+    feedback: "Now anyone on the internet can read the templates, and the next thing someone puts in this bucket. The service's own role was two characters away from working."
+
+solution_paths:
+  - [fix-policy]
+
+key_evidence: [get-denied, list-works, bucket-arn-only]
+
+evidence_labels:
+  get-denied: "Reading invoice.html is denied: no identity-based policy allows s3:GetObject on that object"
+  list-works: "Listing the bucket works with the same role"
+  bucket-arn-only: "The policy grants both actions on the bucket ARN only, with no /* for objects"
+
+hints:
+  nudge: "Listing works and reading doesn't. Are those actions on the same kind of thing?"
+  direction: "Compare the resource in the error message with the resource in the role's policy."
+  answer: "The error is about arn:aws:s3:::acme-report-templates/invoice.html (an object); the policy only grants arn:aws:s3:::acme-report-templates (the bucket). Grant s3:GetObject on acme-report-templates/*."
+
+analogy:
+  title: "The key to the filing cabinet, not the folders"
+  text: |
+    You were given a pass that says "filing cabinet 7". It lets you open the
+    cabinet and read the labels on the folders. But each folder has its own
+    lock, and your pass doesn't mention the folders, so you can see every
+    folder and open none of them. You need a pass that says "the folders in
+    cabinet 7".
+
+debrief:
+  root_cause: |
+    In S3, listing a bucket (s3:ListBucket) is an action on the bucket, whose
+    ARN is arn:aws:s3:::acme-report-templates. Reading an object
+    (s3:GetObject) is an action on the object, whose ARN is
+    arn:aws:s3:::acme-report-templates/invoice.html. The policy granted both
+    actions on the bucket ARN only, so listing matched and every read
+    matched nothing. With no other policy allowing it, the read was denied
+    ("because no identity-based policy allows the s3:GetObject action").
+  ideal_path:
+    - "Read the error: the role, the action and the exact resource (an object ARN) are all in it."
+    - "Notice the contrast: listing works with the same role."
+    - "Read the role's policy: both actions on the bucket ARN, nothing on bucket/*."
+    - "Grant s3:GetObject on arn:aws:s3:::acme-report-templates/* and keep s3:ListBucket on the bucket."
+    - "Verify with get-object."
+  real_world: |
+    Bucket ARN versus object ARN is one of the most common S3 permission
+    mistakes. Read the resource in the access denied message, use the IAM
+    policy simulator for the exact action and resource, and keep grants
+    narrow: one bucket, the actions the service needs.
+
+concepts:
+  - term: "S3 bucket and object"
+    text: "A bucket is a container in S3; objects are the files in it, each with a key (its name). Some actions work on the bucket (list it), others on objects (read, write, delete one)."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html"
+  - term: "ARN"
+    text: "Amazon Resource Name: the unique ID of a resource that policies refer to. A bucket is arn:aws:s3:::bucket-name; all its objects are arn:aws:s3:::bucket-name/*."
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html"
+  - term: "IAM policy"
+    text: "A JSON document listing which actions are allowed (or denied) on which resources. A request is allowed only if some policy allows that exact action on that exact resource."
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html"
+  - term: "S3 Block Public Access"
+    text: "Account and bucket settings that stop anything in S3 being made readable by the whole internet. It doesn't affect access you grant to roles in your own account."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+
+sources:
+  - title: "Amazon S3: Troubleshoot access denied (403 Forbidden) errors (message formats)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/troubleshoot-403-errors.html"
+    retrieved: 2026-10-01
+  - title: "Amazon S3: How Amazon S3 works with IAM (policy resources, bucket/* for all objects)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-arn-format.html"
+    retrieved: 2026-10-01
+  - title: "Amazon S3: Required permissions for Amazon S3 API operations (ListObjectsV2 needs s3:ListBucket)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html"
+    retrieved: 2026-10-01
+  - title: "Amazon S3: Blocking public access to your Amazon S3 storage"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+    retrieved: 2026-10-01

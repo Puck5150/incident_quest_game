@@ -178,6 +178,11 @@ from your own experience and tick them off.
       generation numbers but don't print a listing.
 - [ ] The audit log row is simplified; real entries are JSON with methodName and resourceName.
 
+## aws basics (Phase A: private-subnet-no-route, security-group-port, s3-object-arn, access-keys-to-role, cloudwatch-alarm-stale, nat-gateway-cost)
+- [ ] CLI JSON outputs are trimmed and representative (field names from API references).
+- [ ] Error texts from experience, not printed in docs: `curl: (28) ...`, `aws s3 cp` "HeadObject ... Forbidden",
+      S3 `InvalidAccessKeyId` for a deactivated key, Cost Explorer usage-type rows (USE1-NatGateway-Bytes).
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.

@@ -1,0 +1,201 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-nat-gateway-cost
+track: aws
+difficulty: 2
+title: "The AWS bill is up 40% and nobody launched anything big"
+par_minutes: 10
+
+ticket:
+  from: "Finance"
+  priority: P3
+  body: |
+    This month's AWS forecast is 40% higher than last month's. Cost
+    Explorer puts almost all of the increase under "EC2-Other" in us-east-1,
+    which tells us nothing. Engineering says nothing big was launched. Can
+    someone explain it, and stop it if it's waste?
+
+environment: |
+  The shop runs in one VPC in us-east-1. Services in private subnets reach
+  the internet through a NAT gateway. Two weeks ago the media team launched
+  image-resizer in those private subnets: it reads original photos from the
+  S3 bucket acme-media-originals and writes resized copies to
+  acme-media-resized, both in us-east-1, around 1.3 TB a day.
+
+diagram:
+  nodes:
+    - { id: resizer, label: "image-resizer (private subnets)", col: 0, row: 0, status: ok }
+    - { id: nat, label: "NAT gateway", col: 1, row: 0, status: ok }
+    - { id: s3, label: "S3 (us-east-1)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: resizer, to: nat }
+    - { from: nat, to: s3 }
+
+metrics:
+  - name: "NAT gateway: BytesOutToDestination (daily, TB)"
+    unit: TB
+    evidence: nat-bytes
+    series:
+      - label: "bytes out"
+        points: [["09-14", 0.06], ["09-16", 0.05], ["09-17", 1.31], ["09-19", 1.29], ["09-21", 1.34], ["09-23", 1.30], ["09-25", 1.33], ["09-27", 1.28], ["09-29", 1.32]]
+
+logs:
+  - name: "Cost Explorer: EC2-Other by usage type, month to date"
+    evidence: usage-type
+    lines: |
+      USE1-NatGateway-Bytes        up from last month: +1,820%   (largest increase)
+      USE1-NatGateway-Hours        unchanged
+      USE1-EBS:VolumeUsage.gp3     +3%
+      USE1-DataTransfer-Regional-Bytes  +1%
+  - name: "image-resizer deploy"
+    evidence: resizer-launch
+    lines: |
+      2026-09-17 09:12 image-resizer v1.0 live in private-a, private-b (reads s3://acme-media-originals, writes s3://acme-media-resized)
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=vpc-0shop"
+      when_actions: [s3-endpoint]
+      output: |
+        {
+            "VpcEndpoints": [
+                { "VpcEndpointId": "vpce-0s3gw", "VpcEndpointType": "Gateway", "ServiceName": "com.amazonaws.us-east-1.s3", "RouteTableIds": [ "rtb-0private" ], "State": "available" }
+            ]
+        }
+    - match: "aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=vpc-0shop"
+      evidence: no-endpoint
+      output: |
+        {
+            "VpcEndpoints": []
+        }
+    - match: "aws ec2 describe-route-tables --route-table-ids rtb-0private --query RouteTables[0].Routes"
+      when_actions: [s3-endpoint]
+      output: |
+        [
+            { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local" },
+            { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c" },
+            { "DestinationPrefixListId": "pl-63a5400a", "GatewayId": "vpce-0s3gw" }
+        ]
+    - match: "aws ec2 describe-route-tables --route-table-ids rtb-0private --query RouteTables[0].Routes"
+      output: |
+        [
+            { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local" },
+            { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c" }
+        ]
+    - match: "aws s3api get-bucket-location --bucket acme-media-originals"
+      output: |
+        {
+            "LocationConstraint": null
+        }
+
+hypotheses:
+  - id: s3-via-nat
+    text: "image-resizer's S3 traffic goes through the NAT gateway, which charges for every gigabyte it processes."
+    correct: true
+  - id: internet-egress
+    text: "Something is sending a lot of data out to the internet."
+    feedback: "The traffic is to S3 in the same region, not to the internet; it just takes the NAT gateway's path to get there. The cost line is NAT data processing, not internet data transfer."
+  - id: big-instances
+    text: "Someone launched oversized EC2 instances."
+    feedback: "Instance costs show up under EC2 compute, not EC2-Other, and the line that grew is NatGateway-Bytes. The NAT gateway's hourly charge didn't change either: it's the data."
+  - id: cross-region
+    text: "image-resizer is reading from a bucket in another region."
+    feedback: "Both buckets are in us-east-1 (a null LocationConstraint means us-east-1). Same region, but still routed through the NAT gateway."
+
+actions:
+  - id: s3-endpoint
+    label: "aws ec2 create-vpc-endpoint --vpc-id vpc-0shop --service-name com.amazonaws.us-east-1.s3 --route-table-ids rtb-0private"
+    kind: fix
+    match_regex: "^aws ec2 create-vpc-endpoint --vpc-id vpc-0shop (--vpc-endpoint-type Gateway )?--service-name com\\.amazonaws\\.us-east-1\\.s3 --route-table-ids rtb-0private$"
+    feedback: "A gateway endpoint adds a route for S3's addresses to the private route table. It's more specific than 0.0.0.0/0, so S3 traffic now goes straight to S3, and gateway endpoints have no additional charge. Nothing changes in image-resizer."
+  - id: budget-alert
+    label: "Set up an AWS Budgets alert (or cost anomaly alert) on the account, sent to engineering as well as finance"
+    kind: fix
+    feedback: "The increase started on 09-17 and was found two weeks later on a forecast. An alert on unexpected spend tells you within days, not at the end of the month."
+  - id: bigger-nat
+    label: "Add a second NAT gateway to spread the load"
+    kind: wrong
+    feedback: "A second NAT gateway adds another hourly charge and processes the same bytes. The problem is that this traffic goes through a NAT gateway at all."
+  - id: public-subnets
+    label: "Move image-resizer into public subnets with public IP addresses"
+    kind: wrong
+    feedback: "It avoids the NAT gateway, and exposes a service that never needed to be reachable from the internet. A gateway endpoint gets the same saving without changing the network exposure."
+  - id: delete-nat
+    label: "Delete the NAT gateway to stop the charges"
+    kind: destructive
+    feedback: "Every service in the private subnets loses internet access: payment calls, package updates, third-party APIs. The bill goes down because the shop stops working."
+
+solution_paths:
+  - [s3-endpoint, budget-alert]
+
+key_evidence: [usage-type, nat-bytes, resizer-launch, no-endpoint]
+
+evidence_labels:
+  usage-type: "The increase is almost all NatGateway-Bytes: data processed by the NAT gateway"
+  nat-bytes: "NAT gateway traffic jumped from about 0.05 TB to 1.3 TB a day on 09-17"
+  resizer-launch: "image-resizer went live on 09-17, moving about 1.3 TB a day to and from S3"
+  no-endpoint: "The VPC has no S3 gateway endpoint, so S3 traffic takes the 0.0.0.0/0 route to the NAT gateway"
+
+hints:
+  nudge: "Which usage type grew, and what started the same day?"
+  direction: "A NAT gateway is billed per gigabyte. Where is image-resizer's traffic going, and does it have to pass through the NAT gateway to get there?"
+  answer: "NatGateway-Bytes grew from 09-17, when image-resizer started moving 1.3 TB a day to S3 through the NAT gateway. Add an S3 gateway endpoint to the private route table (no additional charge), and set up a spend alert."
+
+analogy:
+  title: "Paying the courier to cross the street"
+  text: |
+    The office sends every parcel through a courier who charges by weight,
+    including the boxes that go to the warehouse across the street. When the
+    new team started shipping a tonne a day to that warehouse, the courier
+    bill exploded. There's a free side gate straight to the warehouse; open
+    it, and keep the courier for everything else.
+
+debrief:
+  root_cause: |
+    image-resizer runs in private subnets whose only route out is 0.0.0.0/0
+    to the NAT gateway, so all of its S3 traffic, about 1.3 TB a day, passed
+    through the NAT gateway. A NAT gateway is charged for each hour it runs
+    and for each gigabyte it processes. Cost Explorer files that under
+    "EC2-Other", which hid it until the usage type was broken out. An S3
+    gateway endpoint gives private subnets a direct route to S3 in the same
+    region, and gateway endpoints have no additional charge.
+  ideal_path:
+    - "Break \"EC2-Other\" down by usage type: NatGateway-Bytes is the increase."
+    - "Match the timing: NAT gateway bytes jumped on 09-17, the day image-resizer launched."
+    - "Check how private subnets reach S3: no gateway endpoint, so through the NAT gateway."
+    - "Add an S3 gateway endpoint to the private route tables; S3 traffic stops using the NAT gateway."
+    - "Watch NAT gateway bytes drop back, and set up a spend alert so the next one is caught in days."
+  real_world: |
+    NAT gateway data processing for traffic to AWS's own services is one of
+    the most common surprise line items. Add S3 and DynamoDB gateway
+    endpoints to any VPC with private subnets (they have no additional
+    charge), consider interface endpoints for other heavy services, and
+    alert on spend so a new workload's costs show up the week it launches.
+
+concepts:
+  - term: "NAT gateway pricing"
+    text: "A NAT gateway costs money for every hour it runs and every gigabyte it processes, in either direction. Heavy traffic through it gets expensive."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-pricing.html"
+  - term: "Gateway endpoint"
+    text: "A way for private subnets to reach S3 or DynamoDB directly, through a route in the subnet's route table, without a NAT gateway. There's no additional charge."
+    url: "https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html"
+  - term: "Cost Explorer usage types"
+    text: "Cost Explorer can group spend by service, and within a service by usage type, which names exactly what was billed (for example, NAT gateway bytes rather than hours)."
+    url: "https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html"
+  - term: "AWS Budgets"
+    text: "Lets you set a spending threshold and get alerted when actual or forecast costs cross it."
+    url: "https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html"
+
+sources:
+  - title: "Amazon VPC: Pricing for NAT gateways (charged per hour and per GB processed; use endpoints for AWS services)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-pricing.html"
+    retrieved: 2026-10-01
+  - title: "AWS PrivateLink: Gateway endpoints (routes added to route tables, prefix lists)"
+    url: "https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html"
+    retrieved: 2026-10-01
+  - title: "AWS PrivateLink: Gateway endpoints for Amazon S3 (no additional charge, same Region)"
+    url: "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html"
+    retrieved: 2026-10-01
+  - title: "AWS Cost Management: Managing your costs with AWS Budgets"
+    url: "https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html"
+    retrieved: 2026-10-01

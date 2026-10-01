@@ -1,0 +1,205 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-security-group-port
+track: aws
+difficulty: 1
+title: "The new reports service never comes up behind the load balancer"
+par_minutes: 8
+
+ticket:
+  from: "Reports team"
+  priority: P3
+  body: |
+    We deployed reports-api to two new EC2 instances and registered them in a
+    target group behind the shop's Application Load Balancer. Both targets have
+    been "unhealthy" for an hour. The app is definitely running: curl on the
+    instance itself gets a 200 from /health. Launch is tomorrow.
+
+environment: |
+  reports-api listens on port 8080. The Application Load Balancer (security
+  group sg-0alb) forwards /reports/* to a target group of the two instances,
+  with an HTTP health check on port 8080, path /health. The instances use a
+  new security group, sg-0reports, created from the web servers' template.
+
+diagram:
+  nodes:
+    - { id: users, label: "users", col: 0, row: 0, status: ok }
+    - { id: alb, label: "Application Load Balancer", col: 1, row: 0, status: ok }
+    - { id: reports, label: "reports-api x2 (port 8080)", col: 2, row: 0, status: down }
+  edges:
+    - { from: users, to: alb }
+    - { from: alb, to: reports }
+
+terminal:
+  prompt: "ec2-user@reports-1:~$"
+  commands:
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' http://localhost:8080/health"
+      output: |
+        200
+    - match: "ss -ltn"
+      output: |
+        State    Recv-Q   Send-Q     Local Address:Port      Peer Address:Port
+        LISTEN   0        128              0.0.0.0:22             0.0.0.0:*
+        LISTEN   0        100              0.0.0.0:8080           0.0.0.0:*
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/reports-api/6d0ecf831eec9f09"
+      when_actions: [allow-from-alb]
+      output: |
+        {
+            "TargetHealthDescriptions": [
+                { "Target": { "Id": "i-0reports1", "Port": 8080 }, "TargetHealth": { "State": "healthy" } },
+                { "Target": { "Id": "i-0reports2", "Port": 8080 }, "TargetHealth": { "State": "healthy" } }
+            ]
+        }
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/reports-api/6d0ecf831eec9f09"
+      evidence: target-timeout
+      output: |
+        {
+            "TargetHealthDescriptions": [
+                { "Target": { "Id": "i-0reports1", "Port": 8080 },
+                  "TargetHealth": { "State": "unhealthy", "Reason": "Target.Timeout", "Description": "Request timed out" } },
+                { "Target": { "Id": "i-0reports2", "Port": 8080 },
+                  "TargetHealth": { "State": "unhealthy", "Reason": "Target.Timeout", "Description": "Request timed out" } }
+            ]
+        }
+    - match: "aws ec2 describe-security-groups --group-ids sg-0reports --query SecurityGroups[0].IpPermissions"
+      when_actions: [allow-from-alb]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] },
+            { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "IpRanges": [ { "CidrIp": "0.0.0.0/0" } ] },
+            { "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "UserIdGroupPairs": [ { "GroupId": "sg-0alb", "Description": "from the ALB" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0reports --query SecurityGroups[0].IpPermissions"
+      evidence: no-8080-rule
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] },
+            { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "IpRanges": [ { "CidrIp": "0.0.0.0/0" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0alb --query SecurityGroups[0].IpPermissionsEgress"
+      output: |
+        [
+            { "IpProtocol": "-1", "IpRanges": [ { "CidrIp": "0.0.0.0/0" } ] }
+        ]
+
+files:
+  - path: "target group reports-api: health check settings"
+    evidence: hc-port
+    content: |
+      Protocol:            HTTP
+      Port:                traffic port (8080)
+      Path:                /health
+      Healthy threshold:   5
+      Unhealthy threshold: 2
+      Timeout:             5 seconds
+      Interval:            30 seconds
+
+hypotheses:
+  - id: sg-blocks-8080
+    text: "The instances' security group doesn't allow the load balancer in on port 8080, so health checks time out."
+    correct: true
+  - id: app-down
+    text: "reports-api isn't running or isn't listening."
+    feedback: "It's listening on 0.0.0.0:8080 and answers /health with 200 locally. The load balancer's checks never get that far: they time out."
+  - id: wrong-path
+    text: "The health check path is wrong."
+    feedback: "A wrong path gets an HTTP error back (like a 404), so the reason would be a response-code mismatch. \"Request timed out\" means no response at all."
+  - id: missing-outbound
+    text: "The instances' security group needs an outbound rule for the replies."
+    feedback: "Security groups are stateful: replies to traffic that was allowed in are always allowed out. The problem is that the request is never allowed in."
+
+actions:
+  - id: allow-from-alb
+    label: "aws ec2 authorize-security-group-ingress --group-id sg-0reports --protocol tcp --port 8080 --source-group sg-0alb"
+    kind: fix
+    match_regex: "^aws ec2 authorize-security-group-ingress --group-id sg-0reports --protocol tcp --port 8080 --source-group sg-0alb$"
+    feedback: "Only things with the load balancer's security group can now reach port 8080. Health checks pass after the healthy threshold, and the targets go healthy."
+  - id: allow-from-anywhere
+    label: "aws ec2 authorize-security-group-ingress --group-id sg-0reports --protocol tcp --port 8080 --cidr 0.0.0.0/0"
+    kind: wrong
+    match_regex: "^aws ec2 authorize-security-group-ingress --group-id sg-0reports --protocol tcp --port 8080 --cidr 0\\.0\\.0\\.0/0$"
+    feedback: "The health checks would pass, but so would traffic from anywhere that can reach these instances, bypassing the load balancer. Reference the load balancer's security group instead: only it needs in."
+  - id: add-egress
+    label: "Add an outbound rule to sg-0reports allowing traffic back to the load balancer"
+    kind: wrong
+    feedback: "Security groups are stateful, so replies already go out. Nothing changes until the request is allowed in."
+  - id: change-path
+    label: "Change the health check path to /"
+    kind: wrong
+    feedback: "The checks time out before any path matters. A health check on / would also stop telling you whether the app is healthy."
+  - id: open-everything
+    label: "Allow all traffic from 0.0.0.0/0 on sg-0reports, just to rule out the security group"
+    kind: destructive
+    feedback: "That opens every port on these instances, SSH included, to anything that can reach them. Diagnosing by switching off the firewall tends to stay switched off. Read the rules instead: there's no rule for 8080."
+
+solution_paths:
+  - [allow-from-alb]
+
+key_evidence: [target-timeout, no-8080-rule, hc-port]
+
+evidence_labels:
+  target-timeout: "Both targets are unhealthy with Target.Timeout: the checks get no answer"
+  no-8080-rule: "sg-0reports allows 22 and 443 in, but not 8080"
+  hc-port: "The health check, like the app, uses port 8080"
+
+hints:
+  nudge: "The app answers locally but the load balancer gets no answer at all. What sits between them?"
+  direction: "Compare the port the health check uses with the ports the instances' security group lets in."
+  answer: "sg-0reports came from the web servers' template: 22 and 443, no 8080. Allow TCP 8080 in, with the load balancer's security group (sg-0alb) as the source."
+
+analogy:
+  title: "The guest list at the side door"
+  text: |
+    The new team set up in the back room, and the receptionist keeps trying
+    to send visitors through the side door. The doorman's guest list was
+    copied from the front entrance, so the side door isn't on it, and
+    visitors are turned away without a word. Add "anyone the receptionist
+    sends" to the side door's list, not "anyone at all".
+
+debrief:
+  root_cause: |
+    sg-0reports was created from the web servers' template, which allows SSH
+    from the office and HTTPS (443) from anywhere. reports-api listens on
+    8080, and the load balancer health-checks it on 8080. Security groups only
+    contain allow rules, and with no rule for 8080 every health check
+    connection was dropped, so the checks timed out and both targets stayed
+    unhealthy. The app itself was fine.
+  ideal_path:
+    - "Read the target health: Target.Timeout, \"Request timed out\", so there's no response at all."
+    - "Confirm the app is up locally: listening on 8080 and /health returns 200."
+    - "Check what the instances' security group allows in: 22 and 443, nothing on 8080."
+    - "Allow TCP 8080 with the load balancer's security group as the source."
+    - "Watch the targets turn healthy after the healthy threshold."
+  real_world: |
+    "Unhealthy: request timed out" on a new target almost always means a
+    security group or network ACL, not the app. Reference the load
+    balancer's security group rather than opening a port to an address
+    range, and don't copy security groups between services that listen on
+    different ports.
+
+concepts:
+  - term: "Security group"
+    text: "A firewall around each instance (strictly, each network interface). It only has allow rules: anything not allowed is dropped. A new security group allows all outbound traffic and no inbound traffic."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html"
+  - term: "Stateful"
+    text: "If a request is allowed in, its reply is allowed out automatically, and the other way round. You only write rules for who may start a connection."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  - term: "Referencing a security group"
+    text: "A rule's source can be another security group instead of an IP range: \"allow anything that has the load balancer's security group\". It keeps working as instances come and go."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  - term: "Target group health check"
+    text: "The load balancer regularly calls each target on a port and path. Only targets that pass get traffic; failing ones show a reason, like Target.Timeout."
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+
+sources:
+  - title: "Elastic Load Balancing: Troubleshoot Application Load Balancers (a registered target is not in service)"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-troubleshooting.html"
+    retrieved: 2026-10-01
+  - title: "Elastic Load Balancing: Health checks for target groups (reason codes)"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: Security group rules (allow rules only, stateful, referencing)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: Control traffic with security groups"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html"
+    retrieved: 2026-10-01

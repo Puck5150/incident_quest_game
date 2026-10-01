@@ -1,0 +1,195 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-access-keys-to-role
+track: aws
+difficulty: 1
+title: "Last night's database backup didn't happen"
+par_minutes: 10
+
+ticket:
+  from: "Backup monitor"
+  priority: P2
+  body: |
+    ALERT: nightly orders-db backup missing. Expected
+    s3://acme-db-backups/orders/2026-10-01.sql.gz by 03:00 UTC; nothing
+    was uploaded. Previous backups all present.
+
+environment: |
+  db-backup-01 is an EC2 instance that runs a cron job at 02:00: pg_dump of
+  the orders database, then "aws s3 cp" to the acme-db-backups bucket. The
+  script was set up two years ago and reads its AWS settings from
+  /etc/backup/env. Yesterday the security team cleaned up leaked credentials.
+
+diagram:
+  nodes:
+    - { id: box, label: "db-backup-01 (EC2)", col: 0, row: 0, status: degraded }
+    - { id: db, label: "orders database", col: 0, row: 1, status: ok }
+    - { id: s3, label: "S3: acme-db-backups", col: 1, row: 0, status: ok }
+  edges:
+    - { from: db, to: box }
+    - { from: box, to: s3 }
+
+logs:
+  - name: "/var/log/backup/orders.log (db-backup-01)"
+    evidence: key-rejected
+    lines: |
+      2026-10-01 02:00:01 starting pg_dump orders
+      2026-10-01 02:06:44 dump complete (2.1 GB)
+      2026-10-01 02:06:45 uploading to s3://acme-db-backups/orders/2026-10-01.sql.gz
+      upload failed: ./orders-2026-10-01.sql.gz to s3://acme-db-backups/orders/2026-10-01.sql.gz An error occurred (InvalidAccessKeyId) when calling the PutObject operation: The AWS Access Key Id you provided does not exist in our records.
+      2026-10-01 02:06:46 backup FAILED (exit 1)
+  - name: "#security (chat)"
+    evidence: key-deactivated
+    lines: |
+      2026-09-30 16:58 lena: found an access key for IAM user backup-bot in a public gist. Deactivating AKIAIOSFODNN7EXAMPLE now.
+      2026-09-30 17:01 lena: done. Nobody claimed backup-bot, so I didn't look further.
+
+files:
+  - path: "/etc/backup/env (db-backup-01)"
+    evidence: keys-in-env
+    content: |
+      PGHOST=orders-db.internal
+      PGUSER=backup
+      AWS_DEFAULT_REGION=us-east-1
+      AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+      AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+  - path: "/etc/cron.d/backup (db-backup-01)"
+    content: |
+      0 2 * * * backup . /etc/backup/env && /opt/backup/run.sh orders >> /var/log/backup/orders.log 2>&1
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws iam list-access-keys --user-name backup-bot"
+      output: |
+        {
+            "AccessKeyMetadata": [
+                { "UserName": "backup-bot", "AccessKeyId": "AKIAIOSFODNN7EXAMPLE", "Status": "Inactive", "CreateDate": "2024-09-12T10:31:07Z" }
+            ]
+        }
+    - match: "aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values=i-0backup01"
+      when_actions: [attach-role]
+      output: |
+        {
+            "IamInstanceProfileAssociations": [
+                { "InstanceId": "i-0backup01", "IamInstanceProfile": { "Arn": "arn:aws:iam::111122223333:instance-profile/backup-writer" }, "State": "associated" }
+            ]
+        }
+    - match: "aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values=i-0backup01"
+      evidence: no-role
+      output: |
+        {
+            "IamInstanceProfileAssociations": []
+        }
+
+hypotheses:
+  - id: deactivated-key
+    text: "The backup authenticates with an IAM user's long-term access key, and that key was deactivated yesterday after it leaked."
+    correct: true
+  - id: bucket-gone
+    text: "The backup bucket was deleted or renamed."
+    feedback: "The error is about the access key, not the bucket: \"The AWS Access Key Id you provided does not exist in our records.\" Earlier backups are still in the bucket."
+  - id: missing-permission
+    text: "The backup user lost its permission to write to the bucket."
+    feedback: "A missing permission gives AccessDenied, naming the action and resource. Here AWS doesn't accept the key at all, so permissions are never checked."
+  - id: pg-dump-failed
+    text: "pg_dump failed, so there was nothing to upload."
+    feedback: "The dump completed (2.1 GB). The script failed at the upload step."
+
+actions:
+  - id: attach-role
+    label: "Create a role backup-writer (s3:PutObject on acme-db-backups/orders/*), and attach it to db-backup-01: aws ec2 associate-iam-instance-profile --instance-id i-0backup01 --iam-instance-profile Name=backup-writer"
+    kind: fix
+    match_regex: "^aws ec2 associate-iam-instance-profile --instance-id i-0backup01 --iam-instance-profile Name=backup-writer$"
+    feedback: "The instance now gets temporary credentials for backup-writer, refreshed automatically. Nothing to leak, nothing to rotate."
+  - id: remove-keys
+    label: "Delete AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from /etc/backup/env, then re-run the backup"
+    kind: fix
+    feedback: "The AWS CLI uses environment variables before instance profile credentials, so while the dead key was still exported, the new role was ignored. With them gone, the CLI falls through to the role, and the upload succeeds."
+  - id: reactivate
+    label: "Reactivate the access key so tonight's backup runs"
+    kind: destructive
+    feedback: "That key is in a public gist. Reactivating it hands write access to your backups (and whatever else backup-bot can do) to anyone who found it. Leaked keys stay dead."
+  - id: new-key
+    label: "Create a new access key for backup-bot and put it in /etc/backup/env"
+    kind: wrong
+    feedback: "It would work tonight, and recreate the exact problem: a long-term secret in a file, waiting to leak again. Code on EC2 should use the instance's role."
+  - id: more-permissions
+    label: "Attach AmazonS3FullAccess to backup-bot"
+    kind: wrong
+    feedback: "The key is rejected before permissions are even checked. More permissions on a dead key change nothing, and would make the next leak worse."
+
+solution_paths:
+  - [attach-role, remove-keys]
+
+key_evidence: [key-rejected, key-deactivated, keys-in-env, no-role]
+
+evidence_labels:
+  key-rejected: "The upload failed because AWS didn't accept the access key"
+  key-deactivated: "Security deactivated backup-bot's leaked key yesterday at 17:00"
+  keys-in-env: "The backup script loads a long-term access key from /etc/backup/env"
+  no-role: "db-backup-01 has no IAM role attached"
+
+hints:
+  nudge: "The dump worked. What does the upload's error say about the key itself?"
+  direction: "Find where the script's credentials come from, and what security did yesterday. Does the instance have a role it could use instead?"
+  answer: "The script exports backup-bot's access key from /etc/backup/env, and security deactivated it after it leaked. Attach a role to the instance with just the S3 permission it needs, and remove the keys from the env file so the CLI uses the role."
+
+analogy:
+  title: "The copied front-door key"
+  text: |
+    The cleaner had a copy of the office key taped inside a notebook. The
+    notebook turned up on a train, so the locks were changed, and the next
+    morning the cleaner couldn't get in. Cutting another copy just starts the
+    story again. Better: a badge the front desk issues each day, that stops
+    working by itself and is never written down.
+
+debrief:
+  root_cause: |
+    The backup script authenticated as the IAM user backup-bot with a
+    long-term access key stored in /etc/backup/env. That key leaked in a
+    public gist, and security deactivated it yesterday, so last night's
+    upload was rejected ("The AWS Access Key Id you provided does not exist
+    in our records"). The instance had no IAM role, so there was nothing
+    else to fall back on. Code running on EC2 should get temporary
+    credentials from an instance role instead of carrying keys.
+  ideal_path:
+    - "Read the backup log: the dump succeeded, and the upload's error is about the access key."
+    - "Connect it to yesterday: security deactivated backup-bot's leaked key."
+    - "Find where the key lives (/etc/backup/env) and confirm the instance has no role."
+    - "Create a role with only the permission the backup needs and attach it to the instance."
+    - "Remove the keys from the env file: the CLI uses environment variables before the instance role."
+    - "Re-run the backup, then delete backup-bot's key (and the user, if nothing else uses it)."
+  real_world: |
+    Long-term access keys on servers are one of the most common ways AWS
+    accounts get compromised: they end up in repositories, gists, images
+    and backups. AWS recommends that workloads use temporary credentials
+    from IAM roles. When you move a workload to a role, remove the old keys
+    everywhere, or they'll quietly keep taking precedence.
+
+concepts:
+  - term: "IAM user vs IAM role"
+    text: "A user is a permanent identity with long-term credentials (a password, access keys). A role has no long-term credentials: whoever is allowed to use it, like an EC2 instance, gets temporary credentials."
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html"
+  - term: "Access keys"
+    text: "A long-term access key ID and secret that sign API requests. They work until someone deactivates or deletes them, so they're dangerous to leave on servers or in code."
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html"
+  - term: "Instance profile"
+    text: "The container that attaches an IAM role to an EC2 instance. Code on the instance gets the role's temporary credentials from the instance metadata, refreshed automatically."
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html"
+  - term: "Credential precedence"
+    text: "The AWS CLI and SDKs look for credentials in a fixed order: command-line options, then environment variables and config files, and only then the instance's role. Old keys earlier in the order win."
+    url: "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html"
+
+sources:
+  - title: "IAM: Security best practices (require workloads to use temporary credentials with IAM roles)"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html"
+    retrieved: 2026-10-01
+  - title: "IAM: Use an IAM role to grant permissions to applications running on Amazon EC2 instances"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html"
+    retrieved: 2026-10-01
+  - title: "AWS CLI: Configuration and credentials precedence"
+    url: "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html"
+    retrieved: 2026-10-01
+  - title: "IAM: Manage access keys for IAM users"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html"
+    retrieved: 2026-10-01

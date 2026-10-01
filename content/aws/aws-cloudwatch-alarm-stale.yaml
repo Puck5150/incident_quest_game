@@ -1,0 +1,222 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-cloudwatch-alarm-stale
+track: aws
+difficulty: 1
+title: "Checkout was slow for 40 minutes and nobody got paged"
+par_minutes: 9
+
+ticket:
+  from: "Head of engineering"
+  priority: P2
+  body: |
+    Yesterday 14:10 to 14:50 checkout was crawling: the servers were maxed
+    out and customers told us on social media before we noticed. We have a
+    CPU alarm for exactly this, wired to the on-call pager. Why didn't it
+    fire? Find out and fix it before the next one.
+
+environment: |
+  Checkout used to run on a single EC2 instance. On 09-24 it moved to an
+  Auto Scaling group, checkout-asg, and the old instance was terminated. The
+  CloudWatch alarm checkout-cpu-high sends to the SNS topic oncall-pager,
+  which pages whoever is on call. The pager itself was tested last week.
+
+diagram:
+  nodes:
+    - { id: asg, label: "checkout-asg", col: 0, row: 0, status: ok }
+    - { id: cw, label: "CloudWatch alarm checkout-cpu-high", col: 1, row: 0, status: ok }
+    - { id: sns, label: "SNS topic oncall-pager", col: 2, row: 0, status: ok }
+  edges:
+    - { from: asg, to: cw }
+    - { from: cw, to: sns }
+
+metrics:
+  - name: "CPUUtilization, AutoScalingGroupName=checkout-asg (yesterday)"
+    unit: "%"
+    evidence: cpu-was-high
+    threshold: { value: 80, label: "alarm threshold: 80%" }
+    series:
+      - label: "average"
+        points: [["13:50", 41], ["14:00", 58], ["14:10", 96], ["14:20", 99], ["14:30", 99], ["14:40", 98], ["14:50", 62], ["15:00", 44]]
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws cloudwatch describe-alarms --alarm-names checkout-cpu-high"
+      when_actions: [repoint]
+      output: |
+        {
+            "MetricAlarms": [
+                {
+                    "AlarmName": "checkout-cpu-high",
+                    "AlarmActions": [ "arn:aws:sns:us-east-1:111122223333:oncall-pager" ],
+                    "InsufficientDataActions": [ "arn:aws:sns:us-east-1:111122223333:oncall-pager" ],
+                    "StateValue": "OK",
+                    "MetricName": "CPUUtilization",
+                    "Namespace": "AWS/EC2",
+                    "Statistic": "Average",
+                    "Dimensions": [ { "Name": "AutoScalingGroupName", "Value": "checkout-asg" } ],
+                    "Period": 300,
+                    "EvaluationPeriods": 2,
+                    "Threshold": 80.0,
+                    "ComparisonOperator": "GreaterThanThreshold",
+                    "TreatMissingData": "missing"
+                }
+            ]
+        }
+    - match: "aws cloudwatch describe-alarms --alarm-names checkout-cpu-high"
+      evidence: alarm-stale
+      output: |
+        {
+            "MetricAlarms": [
+                {
+                    "AlarmName": "checkout-cpu-high",
+                    "AlarmActions": [ "arn:aws:sns:us-east-1:111122223333:oncall-pager" ],
+                    "InsufficientDataActions": [],
+                    "StateValue": "INSUFFICIENT_DATA",
+                    "StateUpdatedTimestamp": "2026-09-24T11:42:00Z",
+                    "MetricName": "CPUUtilization",
+                    "Namespace": "AWS/EC2",
+                    "Statistic": "Average",
+                    "Dimensions": [ { "Name": "InstanceId", "Value": "i-0checkoutold" } ],
+                    "Period": 300,
+                    "EvaluationPeriods": 2,
+                    "Threshold": 80.0,
+                    "ComparisonOperator": "GreaterThanThreshold",
+                    "TreatMissingData": "missing"
+                }
+            ]
+        }
+    - match: "aws ec2 describe-instances --instance-ids i-0checkoutold --query Reservations[0].Instances[0].State"
+      evidence: instance-gone
+      output: |
+        {
+            "Code": 48,
+            "Name": "terminated"
+        }
+    - match: "aws sns list-subscriptions-by-topic --topic-arn arn:aws:sns:us-east-1:111122223333:oncall-pager"
+      output: |
+        {
+            "Subscriptions": [
+                { "Protocol": "https", "Endpoint": "https://events.pager.example.com/aws/sns", "SubscriptionArn": "arn:aws:sns:us-east-1:111122223333:oncall-pager:9b1e..." }
+            ]
+        }
+
+logs:
+  - name: "change log"
+    evidence: migration
+    lines: |
+      2026-09-24 11:20 CHG-2318 checkout moves to Auto Scaling group checkout-asg (2-6 instances)
+      2026-09-24 11:38 CHG-2318 terminated old checkout instance i-0checkoutold
+      2026-09-24 11:40 CHG-2318 done; monitoring unchanged
+
+hypotheses:
+  - id: stale-dimension
+    text: "The alarm still watches the old, terminated instance, so it has no data and sits in INSUFFICIENT_DATA instead of going into ALARM."
+    correct: true
+  - id: pager-broken
+    text: "The pager integration is broken."
+    feedback: "The SNS topic and its pager subscription are fine, and were tested last week. The alarm never sent anything, because it never went into ALARM."
+  - id: threshold-high
+    text: "The threshold (80%) is too high."
+    feedback: "CPU sat at 96-99% for 40 minutes, well above 80%. The alarm wasn't comparing that data at all: it's watching a different instance."
+  - id: cloudwatch-delay
+    text: "CloudWatch metrics were delayed during the incident."
+    feedback: "The checkout-asg CPU metric shows the spike clearly, minute by minute. The alarm has been in INSUFFICIENT_DATA since 09-24, long before yesterday."
+
+actions:
+  - id: repoint
+    label: "Update checkout-cpu-high to watch AutoScalingGroupName=checkout-asg instead of the old instance ID"
+    kind: fix
+    feedback: "The alarm now evaluates the average CPU of whatever instances are in the group, so it survives instances being replaced. It goes back to OK, and would have gone into ALARM yesterday."
+  - id: notify-insufficient
+    label: "Also send the alarm's INSUFFICIENT_DATA state to the on-call topic (--insufficient-data-actions)"
+    kind: fix
+    feedback: "If this alarm ever loses its data again, someone hears about it the same day instead of finding out during an outage."
+  - id: lower-threshold
+    label: "Lower the threshold to 50%"
+    kind: wrong
+    feedback: "There's still no data for the terminated instance, so the alarm still can't compare anything. A lower threshold on a metric that doesn't exist fires exactly as often: never."
+  - id: missing-as-breaching
+    label: "Set TreatMissingData to breaching"
+    kind: wrong
+    feedback: "The alarm would go into ALARM and stay there, paging forever about an instance that no longer exists, while still ignoring the servers that actually run checkout."
+  - id: delete-alarm
+    label: "Delete checkout-cpu-high; it's clearly broken"
+    kind: destructive
+    feedback: "Now checkout has no CPU alarm at all, which is quieter but no safer. The alarm needed one setting changed."
+
+solution_paths:
+  - [repoint, notify-insufficient]
+
+key_evidence: [alarm-stale, instance-gone, cpu-was-high, migration]
+
+evidence_labels:
+  alarm-stale: "The alarm watches InstanceId i-0checkoutold and has been in INSUFFICIENT_DATA since 09-24"
+  instance-gone: "That instance was terminated on 09-24"
+  cpu-was-high: "The Auto Scaling group's CPU was above 80% for 40 minutes yesterday"
+  migration: "Checkout moved to an Auto Scaling group on 09-24, with \"monitoring unchanged\""
+
+hints:
+  nudge: "An alarm can be in three states. Which one is it in, and since when?"
+  direction: "Look at the alarm's dimensions and state, and compare them with the move to the Auto Scaling group."
+  answer: "The alarm's dimension is InstanceId=i-0checkoutold, terminated on 09-24. With no data and TreatMissingData=missing it has sat in INSUFFICIENT_DATA ever since. Point it at AutoScalingGroupName=checkout-asg, and page on INSUFFICIENT_DATA too."
+
+analogy:
+  title: "The smoke detector in the old flat"
+  text: |
+    You moved house, and the smoke alarm's app still listens to the detector
+    in your old flat. It hasn't heard anything since you left, so it shows
+    "no signal", which nobody reads. The kitchen in the new house filled with
+    smoke and the app stayed quiet. Point it at the new detector, and make
+    "no signal" itself a reason to get a notification.
+
+debrief:
+  root_cause: |
+    CloudWatch alarms watch one metric, identified by its namespace, name and
+    dimensions. checkout-cpu-high watched CPUUtilization for
+    InstanceId=i-0checkoutold. When checkout moved to an Auto Scaling group on
+    09-24, that instance was terminated and its metric stopped reporting. With
+    the default treatment of missing data (missing), an alarm with no data in
+    its evaluation range goes to INSUFFICIENT_DATA, not ALARM, and only
+    ALARM had an action. So the alarm sat silently for a week, and yesterday's
+    40 minutes at 99% CPU paged nobody.
+  ideal_path:
+    - "Confirm the problem was real: the group's CPU was above the threshold for 40 minutes."
+    - "Look at the alarm itself: state INSUFFICIENT_DATA since 09-24, dimension InstanceId=i-0checkoutold."
+    - "Connect it to the move: that instance was terminated the same morning."
+    - "Point the alarm at AutoScalingGroupName=checkout-asg."
+    - "Notify on INSUFFICIENT_DATA too, so a blind alarm is noticed the day it goes blind."
+  real_world: |
+    Alarms that quietly stop watching anything are a classic gap after
+    migrations: instance IDs, load balancer names and queue names change,
+    and the alarms don't. Alarm on group-level dimensions, make "migrate the
+    alarms" part of every change checklist, and treat INSUFFICIENT_DATA on
+    an important alarm as something to look at.
+
+concepts:
+  - term: "CloudWatch metric and dimensions"
+    text: "A metric is a time series, like CPUUtilization. Dimensions say which thing it's about: one instance (InstanceId) or a whole Auto Scaling group (AutoScalingGroupName)."
+    url: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html"
+  - term: "Alarm states"
+    text: "An alarm is OK, ALARM, or INSUFFICIENT_DATA (not enough data to decide). Actions like paging are attached to a state, usually only ALARM."
+    url: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html"
+  - term: "Treat missing data"
+    text: "What an alarm does when data points are missing: the default, missing, goes to INSUFFICIENT_DATA if there's no data at all; other options treat gaps as breaching, not breaching, or keep the current state."
+    url: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html"
+  - term: "SNS topic"
+    text: "A message channel that alarms publish to. Subscribers (email, a pager service, a Lambda function) receive each message."
+    url: "https://docs.aws.amazon.com/sns/latest/dg/welcome.html"
+
+sources:
+  - title: "Amazon CloudWatch: Configuring how alarms treat missing data"
+    url: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html"
+    retrieved: 2026-10-01
+  - title: "Amazon EC2: CloudWatch metrics for your instances (AutoScalingGroupName dimension)"
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/viewing_metrics_with_cloudwatch.html"
+    retrieved: 2026-10-01
+  - title: "AWS CLI: aws cloudwatch put-metric-alarm (--insufficient-data-actions)"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/cloudwatch/put-metric-alarm.html"
+    retrieved: 2026-10-01
+  - title: "Amazon CloudWatch: Concepts (metrics, dimensions)"
+    url: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html"
+    retrieved: 2026-10-01

@@ -1,0 +1,242 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-private-subnet-no-route
+track: aws
+difficulty: 1
+title: "New workers can't reach the payment provider"
+par_minutes: 8
+
+ticket:
+  from: "Payments team"
+  priority: P2
+  body: |
+    We added a third availability zone yesterday and launched 4 more payment
+    workers there. The new ones can't reach the payment provider's API: every
+    call times out. The 8 workers in the first two zones are fine, and they
+    all run the same image.
+
+environment: |
+  Workers run on EC2 in private subnets of the shop VPC (no public IP
+  addresses). They reach the internet through a NAT gateway in a public
+  subnet. Private subnets private-a and private-b already existed; private-c
+  (us-east-1c) was added yesterday with Terraform, along with the new
+  workers.
+
+diagram:
+  nodes:
+    - { id: wab, label: "workers in private-a/b", col: 0, row: 0, status: ok }
+    - { id: wc, label: "workers in private-c (new)", col: 0, row: 1, status: down }
+    - { id: nat, label: "NAT gateway", col: 1, row: 0, status: ok }
+    - { id: igw, label: "internet gateway", col: 2, row: 0, status: ok }
+    - { id: api, label: "payment provider API", col: 3, row: 0, status: ok }
+  edges:
+    - { from: wab, to: nat }
+    - { from: nat, to: igw }
+    - { from: igw, to: api }
+
+terminal:
+  prompt: "ec2-user@worker-c1:~$"
+  commands:
+    - match: "curl -m 10 https://api.payments.example.com/health"
+      when_actions: [associate]
+      output: |
+        {"status":"ok"}
+    - match: "curl -m 10 https://api.payments.example.com/health"
+      evidence: times-out
+      output: |
+        curl: (28) Connection timed out after 10001 milliseconds
+    - match: "aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-0c3c"
+      when_actions: [associate]
+      output: |
+        {
+            "RouteTables": [
+                {
+                    "RouteTableId": "rtb-0private",
+                    "Routes": [
+                        { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local", "State": "active" },
+                        { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c", "State": "active" }
+                    ]
+                }
+            ]
+        }
+    - match: "aws ec2 describe-route-tables --filters Name=association.subnet-id,Values=subnet-0c3c"
+      evidence: no-association
+      output: |
+        {
+            "RouteTables": []
+        }
+    - match: "aws ec2 describe-route-tables --filters Name=association.main,Values=true"
+      evidence: main-local-only
+      output: |
+        {
+            "RouteTables": [
+                {
+                    "RouteTableId": "rtb-0main",
+                    "Associations": [ { "Main": true } ],
+                    "Routes": [
+                        { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local", "State": "active" }
+                    ]
+                }
+            ]
+        }
+    - match: "aws ec2 describe-route-tables --route-table-ids rtb-0private"
+      output: |
+        {
+            "RouteTables": [
+                {
+                    "RouteTableId": "rtb-0private",
+                    "Associations": [
+                        { "SubnetId": "subnet-0a1a" },
+                        { "SubnetId": "subnet-0b2b" }
+                    ],
+                    "Routes": [
+                        { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local", "State": "active" },
+                        { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c", "State": "active" }
+                    ]
+                }
+            ]
+        }
+    - match: "aws ec2 describe-subnets --query Subnets[].[SubnetId,AvailabilityZone,Tags[0].Value]"
+      output: |
+        subnet-0a1a  us-east-1a  private-a
+        subnet-0b2b  us-east-1b  private-b
+        subnet-0c3c  us-east-1c  private-c
+        subnet-0p1p  us-east-1a  public-a
+    - match: "aws ec2 describe-nat-gateways --query NatGateways[].[NatGatewayId,State,SubnetId]"
+      output: |
+        nat-0a1b2c  available  subnet-0p1p
+
+files:
+  - path: "infra/network.tf (excerpt)"
+    language: hcl
+    evidence: missing-association
+    content: |
+      resource "aws_subnet" "private" {
+        for_each          = { a = "10.20.1.0/24", b = "10.20.2.0/24", c = "10.20.3.0/24" }
+        vpc_id            = aws_vpc.shop.id
+        cidr_block        = each.value
+        availability_zone = "us-east-1${each.key}"
+      }
+
+      resource "aws_route_table_association" "private_a" {
+        subnet_id      = aws_subnet.private["a"].id
+        route_table_id = aws_route_table.private.id
+      }
+
+      resource "aws_route_table_association" "private_b" {
+        subnet_id      = aws_subnet.private["b"].id
+        route_table_id = aws_route_table.private.id
+      }
+      # (no association for private-c)
+
+hypotheses:
+  - id: no-route
+    text: "The new subnet isn't associated with the private route table, so it uses the main route table, which has no route to the NAT gateway."
+    correct: true
+  - id: nat-down
+    text: "The NAT gateway is down."
+    feedback: "The NAT gateway is available, and the workers in private-a and private-b use it successfully right now. Only the new subnet is affected."
+  - id: security-group
+    text: "The new workers' security group blocks outbound traffic."
+    feedback: "All 12 workers share the same security group, and it allows all outbound traffic. If it were blocking, the old workers would fail too."
+  - id: provider-blocking
+    text: "The payment provider is blocking requests from the new workers."
+    feedback: "Workers in private subnets reach the internet through the NAT gateway, so the provider sees the same address for old and new workers. A timeout here means the packets never leave the VPC."
+
+actions:
+  - id: associate
+    label: "aws ec2 associate-route-table --route-table-id rtb-0private --subnet-id subnet-0c3c"
+    kind: fix
+    match_regex: "^aws ec2 associate-route-table --(route-table-id rtb-0private --subnet-id subnet-0c3c|subnet-id subnet-0c3c --route-table-id rtb-0private)$"
+    feedback: "private-c now uses the private route table, so its internet traffic goes to the NAT gateway, and the new workers reach the provider."
+  - id: fix-terraform
+    label: "Add the missing aws_route_table_association for private-c in Terraform and apply"
+    kind: fix
+    feedback: "The association now lives in code, so it survives the next apply and the next subnet someone adds. A for_each over all private subnets would stop this from happening again."
+  - id: reboot
+    label: "Reboot the new workers"
+    kind: wrong
+    feedback: "Routing is a property of the subnet, not the instance. They come back in the same subnet with the same route table."
+  - id: open-sg
+    label: "Add an outbound rule allowing all traffic to the security group"
+    kind: wrong
+    feedback: "The security group already allows all outbound traffic: it's the same one the working instances use. The packets have nowhere to go once they leave the instance."
+  - id: igw-on-main
+    label: "Add a 0.0.0.0/0 route to the internet gateway on the main route table"
+    kind: destructive
+    feedback: "That makes every subnet that relies on the main route table a public subnet, now and every one created later. It doesn't even fix this: instances without public IP addresses can't use an internet gateway directly; private instances need the NAT gateway."
+
+solution_paths:
+  - [associate, fix-terraform]
+
+key_evidence: [times-out, no-association, main-local-only]
+
+evidence_labels:
+  times-out: "Calls from the new workers time out: the packets never get an answer"
+  no-association: "No route table is explicitly associated with private-c"
+  main-local-only: "The main route table, which private-c falls back to, has only the local route"
+
+hints:
+  nudge: "Old and new workers run the same image and security group. What differs between them?"
+  direction: "Compare the route table each subnet uses. What does a subnet use if nobody associated it with a route table?"
+  answer: "private-c has no explicit association, so it uses the main route table, which only has the local route. Associate private-c with rtb-0private (where 0.0.0.0/0 goes to the NAT gateway), and add the association in Terraform."
+
+analogy:
+  title: "The new office with no directions"
+  text: |
+    A company opens a third office. The first two have a sign by the door:
+    "post for outside goes to the mailroom". Nobody put the sign up in the new
+    office, so letters for outside just sit in the tray, while letters for
+    colleagues in other offices arrive fine. Same staff, same envelopes: the
+    missing piece is the sign that says where outside post goes.
+
+debrief:
+  root_cause: |
+    Terraform created the new subnet, private-c, but no route table
+    association for it. In a VPC, any subnet without an explicit association
+    uses the main route table, and this VPC's main route table only has the
+    local route (traffic inside the VPC). So the new workers could reach
+    anything inside the VPC, but their internet traffic had no route to the
+    NAT gateway, and every call to the payment provider timed out.
+  ideal_path:
+    - "Reproduce from a new worker: the provider's API times out."
+    - "Rule out the shared parts: same image, same security group, NAT gateway available and working for the other subnets."
+    - "Check which route table private-c uses: none explicitly, so the main route table."
+    - "See that the main route table has no 0.0.0.0/0 route; the private table sends it to the NAT gateway."
+    - "Associate private-c with the private route table, and fix the Terraform so it stays fixed."
+  real_world: |
+    Missing route table associations are one of the most common reasons a
+    new subnet "can't reach anything". Keep the main route table minimal (so
+    a forgotten association fails safe, as here, rather than making a subnet
+    public), and generate associations for every subnet in code rather than
+    one by one.
+
+concepts:
+  - term: "VPC and subnets"
+    text: "A VPC is your own private network in AWS. You split it into subnets, each in one availability zone; what a subnet can reach is decided by its route table."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html"
+  - term: "Route table"
+    text: "A list of rules saying where traffic for each destination goes. Every route table has a local route for traffic inside the VPC. A subnet with no association of its own uses the VPC's main route table."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html"
+  - term: "Internet gateway"
+    text: "Connects a VPC to the internet. A subnet whose route table sends traffic to one is a public subnet; its instances need public IP addresses to use it."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html"
+  - term: "NAT gateway"
+    text: "Lets instances in private subnets start connections to the internet without being reachable from it. It sits in a public subnet, and private subnets route their internet traffic to it."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html"
+
+sources:
+  - title: "Amazon VPC: Configure route tables (main route table, subnet associations)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: Subnet route tables"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/subnet-route-tables.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: Troubleshoot NAT gateways (instances cannot access the internet)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-troubleshooting.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: Enable internet access using an internet gateway (public vs private subnets)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: NAT gateways"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html"
+    retrieved: 2026-10-01
