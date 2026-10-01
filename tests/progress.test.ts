@@ -20,6 +20,7 @@ const result = (total: number, clean = true): Score => ({
   methodical: true,
   verified: true,
   clean,
+  relaxed: false,
 })
 const now = new Date('2026-09-30T12:00:00Z')
 

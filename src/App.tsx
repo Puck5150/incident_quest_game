@@ -59,7 +59,7 @@ export default function App() {
   const canvas =
     multi?.kind === 'canvas' && provider ? multi.variants[provider] : item?.kind === 'canvas' ? item.canvas : undefined
   const { rank, next } = rankFor(progress.xp)
-  const { theme, motion = 'system' } = progress.settings
+  const { theme, motion = 'system', relaxed = false } = progress.settings
 
   useEffect(() => saveProgress(progress), [progress])
   useEffect(() => {
@@ -148,7 +148,7 @@ export default function App() {
   }
 
   function resolved(id: string, log: GameEvent[]) {
-    const s = score(scenario!, log)
+    const s = score(scenario!, log, relaxed)
     setScreen({ name: 'debrief', id, log, score: s, ...record(id, s) })
   }
 
@@ -212,6 +212,14 @@ export default function App() {
             </div>
           </dl>
           <div className="ml-auto flex gap-2">
+            <button
+              className={toggle}
+              aria-pressed={relaxed}
+              title="No time bonus on incidents, and no clock in the debrief"
+              onClick={() => setting({ relaxed: !relaxed })}
+            >
+              Relaxed mode
+            </button>
             <button className={toggle} aria-pressed={motion === 'reduce'} onClick={() => setting({ motion: motion === 'reduce' ? 'system' : 'reduce' })}>
               Reduce motion
             </button>

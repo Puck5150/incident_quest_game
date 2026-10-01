@@ -24,6 +24,7 @@ export type Score = {
   methodical: boolean // saw every key_evidence before the correct hypothesis
   verified: boolean // re-checked the system after the fix, before closing
   clean: boolean // no hints and no destructive actions
+  relaxed: boolean // played without the clock: no time bonus
 }
 
 // All percentages are of the base XP.
@@ -35,7 +36,9 @@ const WRONG_ACTION = 10
 const DESTRUCTIVE_ACTION = 25
 const FLOOR = 10
 
-export function score(scenario: Scenario, log: GameEvent[]): Score {
+// `relaxed` turns the time bonus off rather than awarding it, so switching it
+// on can never raise a score.
+export function score(scenario: Scenario, log: GameEvent[], relaxed = false): Score {
   const base = 100 * scenario.difficulty
   const pct = (p: number) => Math.round((base * p) / 100)
   const lines: ScoreLine[] = [{ label: `Base (difficulty ${scenario.difficulty})`, xp: base }]
@@ -48,7 +51,8 @@ export function score(scenario: Scenario, log: GameEvent[]): Score {
   const elapsedMs = end - start
   const par = scenario.par_minutes * 60_000
   const timeFactor = Math.min(1, Math.max(0, 2 - elapsedMs / par))
-  add(elapsedMs <= par ? 'Time bonus (under par)' : 'Time bonus (partial)', Math.round(pct(TIME_BONUS) * timeFactor))
+  if (relaxed) lines.push({ label: 'Time bonus: off (relaxed mode)', xp: 0 })
+  else add(elapsedMs <= par ? 'Time bonus (under par)' : 'Time bonus (partial)', Math.round(pct(TIME_BONUS) * timeFactor))
 
   const isCorrect = (id: string) => scenario.hypotheses.find((h) => h.id === id)?.correct
   const correctAt = log.findIndex((e) => e.type === 'DECLARE_HYPOTHESIS' && isCorrect(e.id))
@@ -92,5 +96,6 @@ export function score(scenario: Scenario, log: GameEvent[]): Score {
     methodical,
     verified,
     clean: hints === 0 && destructive === 0,
+    relaxed,
   }
 }

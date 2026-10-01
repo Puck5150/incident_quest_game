@@ -53,9 +53,13 @@ export default function DebriefScreen({
     <div className="space-y-6">
       <ResultHeader
         status={
-          <>
-            Incident resolved in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
-          </>
+          score.relaxed ? (
+            'Incident resolved'
+          ) : (
+            <>
+              Incident resolved in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
+            </>
+          )
         }
         title={scenario.title}
         gained={gained}

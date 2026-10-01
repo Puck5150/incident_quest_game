@@ -135,6 +135,16 @@ it('skill tree shows only tracks with content, with lock state and requirements'
   await waitFor(() => expect(document.activeElement?.id).toBe('track-linux'))
 })
 
+it('relaxed mode setting persists', async () => {
+  const { unmount } = render(<App />)
+  const toggle = screen.getByRole('button', { name: 'Relaxed mode' })
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute('aria-pressed')).toBe('true')
+  unmount()
+  render(<App />)
+  expect(screen.getByRole('button', { name: 'Relaxed mode' }).getAttribute('aria-pressed')).toBe('true')
+})
+
 it('reduce motion setting persists and marks the document', () => {
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: 'Reduce motion' }))

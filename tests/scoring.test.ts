@@ -51,6 +51,14 @@ describe('scoring', () => {
     expect(Object.keys(lines(log(FIX, PAR * 2)))).not.toContain('Time bonus (partial)')
   })
 
+  it('relaxed mode turns the time bonus off, so it never beats playing on the clock', () => {
+    const fast = log([...EVIDENCE, ...FIX, 'run df -h'])
+    const relaxed = score(scenario, fast, true)
+    expect(relaxed.relaxed).toBe(true)
+    expect(relaxed.lines.find((x) => x.label.startsWith('Time bonus'))).toEqual({ label: 'Time bonus: off (relaxed mode)', xp: 0 })
+    expect(relaxed.total).toBe(score(scenario, fast).total - 20) // the 20% time bonus on base 100
+  })
+
   it('evidence found only after deciding is not methodical', () => {
     expect(score(scenario, log(['hyp disk-full', ...EVIDENCE, 'act truncate-log', 'act fix-logrotate'])).methodical).toBe(false)
   })

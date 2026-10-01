@@ -28,8 +28,12 @@ const ProgressSchema = z.object({
   ),
   // Consecutive incidents resolved "clean": no hints, no destructive actions.
   streak: z.object({ current: z.number(), best: z.number() }),
-  // `motion` was added after v1 shipped, so it's optional: old saves stay valid.
-  settings: z.object({ theme: z.enum(['dark', 'light']), motion: z.optional(z.enum(['system', 'reduce'])) }),
+  // `motion` and `relaxed` were added after v1 shipped, so they're optional: old saves stay valid.
+  settings: z.object({
+    theme: z.enum(['dark', 'light']),
+    motion: z.optional(z.enum(['system', 'reduce'])),
+    relaxed: z.optional(z.boolean()), // no time bonus, no clock in the debrief
+  }),
 })
 
 export type Progress = z.infer<typeof ProgressSchema>
