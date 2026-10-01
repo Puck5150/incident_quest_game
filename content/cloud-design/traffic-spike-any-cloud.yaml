@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/pick-cloud-slot.json
 type: challenge
 providers: [aws, azure, gcp]
 id: traffic-spike-any-cloud

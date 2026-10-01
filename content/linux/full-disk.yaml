@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/incident.json
 id: full-disk
 track: linux
 difficulty: 1

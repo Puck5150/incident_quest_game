@@ -17,6 +17,27 @@ Scenarios are data. You don't write any code to add an incident.
    ```
 4. Run `npm run dev` and play it. The page reloads when you save a YAML file.
 
+### Editor support
+
+Line 1 of every content file names its JSON Schema:
+
+```yaml
+# yaml-language-server: $schema=../../schemas/incident.json
+```
+
+With a YAML language server (in VS Code, the recommended Red Hat YAML
+extension), that gives autocomplete for field names and enum values, and inline
+errors for typos, wrong types and missing fields as you type. The templates already have
+the line; keep it when you copy one, and point it at the schema for the kind of
+file (`incident`, `challenge`, `canvas`, `pick-cloud-canvas`,
+`pick-cloud-slot`). `npm test` fails if it's missing or wrong.
+
+The schemas cover each file's shape. Rules that span fields or files (solution
+paths name real actions, evidence is findable, reference designs pass) are
+still only checked by `npm test`. The schemas are generated from the Zod
+schemas: after changing anything in `src/schema/`, run `npm run schemas` and
+commit the result (a test fails if you forget).
+
 `npm run build` runs the same validation, so a broken scenario can't ship.
 
 ## How a scenario plays

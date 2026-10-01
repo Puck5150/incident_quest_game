@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
 type: challenge
 id: gcp-launch-day-signups
 track: cloud-design

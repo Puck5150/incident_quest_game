@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/incident.json
 id: poison-message-loop
 track: microservices
 difficulty: 4

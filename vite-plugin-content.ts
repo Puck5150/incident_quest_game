@@ -41,6 +41,18 @@ export type Content = {
   multis: MultiChallenge[]
 }
 
+// Which schema a content file uses. `type: challenge` files are design
+// challenges (`mode: canvas` for the canvas kind, `providers:` for "pick your
+// cloud"); everything else is an incident. Top-level keys only: block text is
+// indented, so it can't match these. Also names the file in schemas/.
+export type ContentKind = 'incident' | 'challenge' | 'canvas' | 'pick-cloud-canvas' | 'pick-cloud-slot'
+export function contentKind(raw: string): ContentKind {
+  const challenge = /^type:\s*challenge\s*$/m.test(raw)
+  const canvas = challenge && /^mode:\s*canvas\s*$/m.test(raw)
+  const multi = /^providers:/m.test(raw)
+  return canvas ? (multi ? 'pick-cloud-canvas' : 'canvas') : challenge ? (multi ? 'pick-cloud-slot' : 'challenge') : 'incident'
+}
+
 export function loadContent(dir: string): Content {
   const errors: string[] = []
 
@@ -93,13 +105,9 @@ export function loadContent(dir: string): Content {
   const multis: MultiChallenge[] = []
   for (const file of scenarioFiles(dir)) {
     const rel = path.relative(dir, file)
-    // `type: challenge` files are design challenges (`mode: canvas` for the
-    // canvas kind); everything else is an incident. Top-level keys only: block
-    // text is indented, so it can't match these.
     const raw = fs.readFileSync(file, 'utf8')
-    const isChallenge = /^type:\s*challenge\s*$/m.test(raw)
-    const isCanvas = isChallenge && /^mode:\s*canvas\s*$/m.test(raw)
-    if (isCanvas && /^providers:/m.test(raw)) {
+    const kind = contentKind(raw)
+    if (kind === 'pick-cloud-canvas') {
       const m = check(file, MultiCanvasSchema, errors)
       if (!m) continue
       commonChecks(rel, file, m.id, m.track)
@@ -128,7 +136,7 @@ export function loadContent(dir: string): Content {
       })
       continue
     }
-    if (isChallenge && /^providers:/m.test(raw)) {
+    if (kind === 'pick-cloud-slot') {
       const m = check(file, MultiSlotSchema, errors)
       if (!m) continue
       commonChecks(rel, file, m.id, m.track)
@@ -156,9 +164,9 @@ export function loadContent(dir: string): Content {
       })
       continue
     }
-    const s = isCanvas
+    const s = kind === 'canvas'
       ? check(file, CanvasChallengeSchema, errors)
-      : isChallenge
+      : kind === 'challenge'
         ? check(file, ChallengeSchema, errors)
         : check(file, ScenarioSchema, errors)
     if (!s) continue
