@@ -24,17 +24,22 @@ const walk = (x: unknown, item: string) => {
 const c = loadContent(path.resolve(import.meta.dirname, '../content'))
 for (const x of [...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis]) walk(x, x.id)
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 async function check(url: string): Promise<string | undefined> {
   for (let attempt = 1; ; attempt++) {
+    let retryAfter = 0
     try {
-      const res = await fetch(url, { headers: { 'user-agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(20_000) })
+      const res = await fetch(url, { headers: { 'user-agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(30_000) })
       if (res.ok) return undefined
-      if (attempt < 3 && (res.status === 429 || res.status >= 500)) continue
-      return `HTTP ${res.status}`
+      if (attempt >= 4 || (res.status !== 429 && res.status < 500)) return `HTTP ${res.status}`
+      retryAfter = Number(res.headers.get('retry-after')) || 0
     } catch (e) {
-      if (attempt < 3) continue
-      return (e as Error).message
+      // fetch() hides the network error (DNS, reset, timeout) in `cause`.
+      const err = e as Error & { cause?: { code?: string; message?: string } }
+      if (attempt >= 4) return err.cause?.code ?? err.cause?.message ?? err.message
     }
+    await sleep(Math.min(retryAfter * 1000 || 5000 * attempt, 60_000))
   }
 }
 
