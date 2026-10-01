@@ -1,0 +1,196 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-sqs-visibility-timeout
+track: aws
+difficulty: 2
+title: "Customers are getting their invoices two or three times"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P2
+  body: |
+    Since yesterday's release, customers receive the same invoice email two
+    or three times. A few have asked whether they were charged twice (they
+    weren't). The invoice workers look healthy and the queue isn't backing up.
+
+environment: |
+  When an order ships, the shop sends a message to the SQS standard queue
+  invoice-jobs. Four invoice-worker containers poll the queue, build the
+  invoice and email it, then delete the message. Yesterday's release (v3.0)
+  added a PDF attachment to every invoice.
+
+diagram:
+  nodes:
+    - { id: shop, label: "shop (order shipped)", col: 0, row: 0, status: ok }
+    - { id: sqs, label: "SQS: invoice-jobs", col: 1, row: 0, status: ok }
+    - { id: workers, label: "invoice-worker x4", col: 2, row: 0, status: ok }
+    - { id: email, label: "email provider", col: 3, row: 0, status: ok }
+  edges:
+    - { from: shop, to: sqs }
+    - { from: sqs, to: workers }
+    - { from: workers, to: email }
+
+metrics:
+  - name: "invoice-jobs: messages sent vs received (per 5 min)"
+    unit: messages
+    evidence: received-vs-sent
+    series:
+      - label: "NumberOfMessagesSent"
+        points: [["day -1 09:00", 120], ["day -1 12:00", 118], ["release", 121], ["today 09:00", 119], ["today 12:00", 122]]
+      - label: "NumberOfMessagesReceived"
+        points: [["day -1 09:00", 121], ["day -1 12:00", 119], ["release", 266], ["today 09:00", 281], ["today 12:00", 290]]
+  - name: "invoice-worker: time to process one job (p95)"
+    unit: seconds
+    evidence: processing-time
+    threshold: { value: 30, label: "queue visibility timeout: 30 s" }
+    series:
+      - label: "p95"
+        points: [["day -1 09:00", 4], ["day -1 12:00", 5], ["release", 44], ["today 09:00", 47], ["today 12:00", 46]]
+
+logs:
+  - name: "invoice-worker logs (one message)"
+    evidence: same-message-twice
+    lines: |
+      10:02:11 worker-2 received msg 9a41... (order 88213) ApproximateReceiveCount=1
+      10:02:41 worker-4 received msg 9a41... (order 88213) ApproximateReceiveCount=2
+      10:02:57 worker-2 sent invoice INV-88213 to customer, deleted msg 9a41...
+      10:03:11 worker-1 received msg 9a41... (order 88213) ApproximateReceiveCount=3
+      10:03:26 worker-4 sent invoice INV-88213 to customer
+      10:03:58 worker-1 sent invoice INV-88213 to customer
+  - name: "release notes v3.0"
+    lines: |
+      invoice-worker: attach a PDF invoice (rendered with headless Chrome, 30-50 s per invoice)
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/111122223333/invoice-jobs --attribute-names VisibilityTimeout"
+      when_actions: [raise-timeout]
+      output: |
+        {
+            "Attributes": {
+                "VisibilityTimeout": "180"
+            }
+        }
+    - match: "aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/111122223333/invoice-jobs --attribute-names VisibilityTimeout"
+      evidence: timeout-30
+      output: |
+        {
+            "Attributes": {
+                "VisibilityTimeout": "30"
+            }
+        }
+
+hypotheses:
+  - id: visibility-timeout
+    text: "Jobs now take longer than the queue's 30-second visibility timeout, so each message becomes visible again and another worker processes it too."
+    correct: true
+  - id: shop-sends-twice
+    text: "The shop is sending each message two or three times."
+    feedback: "Messages sent didn't change (about 120 per 5 minutes); messages received more than doubled. The same message is being received several times, as its ApproximateReceiveCount shows."
+  - id: email-retries
+    text: "The email provider is retrying deliveries."
+    feedback: "The worker logs show three different workers each sending the invoice for the same message. The duplicates come from your side."
+  - id: worker-crash
+    text: "Workers crash before deleting messages."
+    feedback: "No crashes: each worker finishes and sends the invoice. The first one even deletes the message. The others got it because it reappeared at 30 seconds, while the first was still working."
+
+actions:
+  - id: raise-timeout
+    label: "aws sqs set-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/111122223333/invoice-jobs --attributes VisibilityTimeout=180"
+    kind: fix
+    match_regex: "^aws sqs set-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/111122223333/invoice-jobs --attributes VisibilityTimeout=(\\d+)$"
+    feedback: "Messages now stay invisible well past the slowest job, so only one worker handles each invoice. Received drops back to match sent."
+  - id: idempotent
+    label: "Make invoice-worker idempotent: skip sending if INV-<order> was already emailed"
+    kind: fix
+    feedback: "SQS standard queues deliver at least once, so a message can still arrive twice occasionally, and a worker can still crash mid-job. Checking whether this invoice was already sent makes a duplicate delivery harmless."
+  - id: more-workers
+    label: "Scale invoice-worker from 4 to 10 containers"
+    kind: wrong
+    feedback: "Every job still takes 45 seconds and still reappears at 30. More workers just pick up the reappearing messages faster."
+  - id: retention
+    label: "Increase the queue's message retention period"
+    kind: wrong
+    feedback: "Retention is how long unprocessed messages are kept (days). The problem is that messages come back after 30 seconds."
+  - id: delete-first
+    label: "Change the worker to delete each message as soon as it receives it, then build the invoice"
+    kind: destructive
+    feedback: "No more duplicates, and any worker that crashes or is redeployed mid-job loses that invoice for good: the message is gone and nothing will retry it."
+
+solution_paths:
+  - [raise-timeout, idempotent]
+
+key_evidence: [same-message-twice, processing-time, timeout-30, received-vs-sent]
+
+evidence_labels:
+  same-message-twice: "The same message is received by three workers, 30 seconds apart"
+  processing-time: "Since v3.0, a job takes about 45 seconds"
+  timeout-30: "The queue's visibility timeout is the default 30 seconds"
+  received-vs-sent: "Messages received more than doubled while messages sent stayed flat"
+
+hints:
+  nudge: "The same message reaches three workers about 30 seconds apart. What happens to a message 30 seconds after it's received?"
+  direction: "Compare how long a job takes now with the queue's visibility timeout."
+  answer: "Since the PDF change, jobs take ~45 s but the visibility timeout is 30 s, so each message reappears and another worker takes it. Raise the visibility timeout above the slowest job, and make the worker skip invoices it already sent."
+
+analogy:
+  title: "The task on the shared board"
+  text: |
+    Workers take a card from the board, and the card's slot stays covered
+    for 30 seconds. Jobs used to take 5 seconds. Now each takes 45, so after
+    30 seconds the slot looks free again, a second worker takes a copy of the
+    same card, then a third. Give each card a longer cover, and have workers
+    check the "done" list before starting.
+
+debrief:
+  root_cause: |
+    When a worker receives a message from SQS, the message stays in the
+    queue but is hidden for the visibility timeout (30 seconds by default).
+    If it isn't deleted by then, it becomes visible again. Release v3.0 added
+    PDF rendering, so each invoice now takes about 45 seconds. Every message
+    reappeared after 30 seconds and was picked up by another worker, and
+    sometimes a third, each of which built and emailed the same invoice.
+  ideal_path:
+    - "Spot the pattern: messages received more than doubled while messages sent stayed the same."
+    - "Follow one message: three workers, 30 seconds apart, rising receive count."
+    - "Compare: jobs take ~45 s since v3.0; the queue's visibility timeout is 30 s."
+    - "Raise the visibility timeout well above the slowest job (or extend it while working)."
+    - "Make the worker idempotent, because standard queues can deliver a message more than once anyway."
+  real_world: |
+    Duplicate processing after a change that makes jobs slower is a classic
+    SQS incident. Set the visibility timeout from measured processing time
+    with headroom (AWS recommends six times the function timeout for Lambda
+    consumers), extend it for long jobs, and design consumers so that
+    processing a message twice does no harm.
+
+concepts:
+  - term: "SQS queue"
+    text: "A managed message queue: producers send messages, and consumers poll for them, process them and delete them."
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html"
+  - term: "Visibility timeout"
+    text: "After a consumer receives a message, it's hidden from others for this long (30 seconds by default). If it isn't deleted in time, it reappears for someone else."
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html"
+  - term: "At-least-once delivery"
+    text: "Standard queues may deliver a message more than once, so consumers should be able to handle repeats safely."
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html"
+  - term: "Idempotent"
+    text: "Doing the same operation twice has the same effect as doing it once, like checking \"already sent?\" before sending."
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html"
+
+sources:
+  - title: "Amazon SQS: Visibility timeout (reappearing messages, extending, best practices)"
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html"
+    retrieved: 2026-10-01
+  - title: "Amazon SQS API: SetQueueAttributes (VisibilityTimeout, default 30)"
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html"
+    retrieved: 2026-10-01
+  - title: "Amazon SQS: Available CloudWatch metrics (NumberOfMessagesSent, NumberOfMessagesReceived)"
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html"
+    retrieved: 2026-10-01
+  - title: "AWS Lambda: Configuring an SQS event source (visibility timeout six times the function timeout)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html"
+    retrieved: 2026-10-01
+  - title: "Amazon SQS: At-least-once delivery"
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html"
+    retrieved: 2026-10-01

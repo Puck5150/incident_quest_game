@@ -1,0 +1,204 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-front-door-host-header
+track: azure
+difficulty: 3
+title: "After moving the shop behind Front Door, every page is a 404"
+par_minutes: 13
+
+ticket:
+  from: "Web team"
+  priority: P1
+  body: |
+    We cut www.acme.example over to Azure Front Door at 09:00 (Bicep, reviewed,
+    deployed by the pipeline). Every page now returns 404. The app itself is
+    fine: https://shop-web.azurewebsites.net works when we open it directly.
+    We'd like to avoid rolling back the
+    WAF we just got in front of the site.
+
+environment: |
+  The shop runs on App Service as shop-web (default host name
+  shop-web.azurewebsites.net). Customers sign in with App Service's built-in
+  authentication. Front Door (profile fd-shop, resource group rg-edge) now
+  serves www.acme.example, with a WAF policy, and forwards to the origin
+  shop-web.azurewebsites.net in origin group og-web. DNS for www points at
+  the Front Door endpoint.
+
+diagram:
+  nodes:
+    - { id: users, label: "users (www.acme.example)", col: 0, row: 0, status: degraded }
+    - { id: fd, label: "Front Door + WAF", col: 1, row: 0, status: ok }
+    - { id: app, label: "App Service shop-web", col: 2, row: 0, status: ok }
+  edges:
+    - { from: users, to: fd }
+    - { from: fd, to: app }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://www.acme.example/"
+      when_actions: [custom-domain]
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://www.acme.example/"
+      evidence: users-404
+      output: |
+        404
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://shop-web.azurewebsites.net/"
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' -H 'Host: www.acme.example' https://shop-web.azurewebsites.net/"
+      when_actions: [custom-domain]
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' -H 'Host: www.acme.example' https://shop-web.azurewebsites.net/"
+      evidence: host-404
+      output: |
+        404
+    - match: "az afd origin show -g rg-edge --profile-name fd-shop --origin-group-name og-web --origin-name shop-web --query \"{hostName:hostName, originHostHeader:originHostHeader}\""
+      evidence: header-unset
+      output: |
+        {
+          "hostName": "shop-web.azurewebsites.net",
+          "originHostHeader": null
+        }
+    - match: "az webapp config hostname list --webapp-name shop-web -g rg-web --out table"
+      when_actions: [custom-domain]
+      output: |
+        Name                        ResourceGroup
+        --------------------------  ---------------
+        shop-web.azurewebsites.net  rg-web
+        www.acme.example            rg-web
+    - match: "az webapp config hostname list --webapp-name shop-web -g rg-web --out table"
+      evidence: no-custom-domain
+      output: |
+        Name                        ResourceGroup
+        --------------------------  ---------------
+        shop-web.azurewebsites.net  rg-web
+
+files:
+  - path: "infra/frontdoor.bicep (excerpt)"
+    language: bicep
+    content: |
+      resource origin 'Microsoft.Cdn/profiles/originGroups/origins@2024-02-01' = {
+        parent: webOriginGroup
+        name: 'shop-web'
+        properties: {
+          hostName: 'shop-web.azurewebsites.net'
+          httpsPort: 443
+          // originHostHeader not set
+        }
+      }
+
+hypotheses:
+  - id: host-not-bound
+    text: "Front Door passes the visitor's host name (www.acme.example) to App Service, which doesn't have that domain configured, so it answers 404."
+    correct: true
+  - id: app-broken
+    text: "The app is broken."
+    feedback: "The same app answers 200 on its default host name. Asked for www.acme.example on the same server, it answers 404: the difference is the host name, not the app."
+  - id: waf-blocking
+    text: "The WAF is blocking requests."
+    feedback: "A WAF block returns 403, not 404, and the 404 is reproducible against App Service directly, without Front Door or the WAF, by sending Host: www.acme.example."
+  - id: dns
+    text: "DNS for www hasn't switched to Front Door yet."
+    feedback: "Requests are reaching Front Door and coming back with App Service's 404. And the same 404 appears against App Service directly when you send Host: www.acme.example, so it's not DNS."
+
+actions:
+  - id: custom-domain
+    label: "Add www.acme.example as a custom domain on shop-web (verify it with the asuid TXT record; DNS for www keeps pointing at Front Door), and bind a certificate imported from Key Vault"
+    kind: fix
+    match_regex: "^az webapp config hostname add --webapp-name shop-web (-g|--resource-group) rg-web --hostname www\\.acme\\.example$"
+    feedback: "App Service now accepts requests for www.acme.example, so the host name is preserved end to end, which Microsoft recommends behind a reverse proxy: sign-in redirects and cookies keep using the real domain. The free App Service managed certificate can't be used here, because DNS points at Front Door, not App Service."
+  - id: fix-bicep
+    label: "Put the custom domain binding and certificate for shop-web in Bicep, next to the Front Door origin"
+    kind: fix
+    feedback: "The cutover broke because the infrastructure code described Front Door but not the app's side of the arrangement. With both in code, the next environment gets it right first time."
+  - id: override-header
+    label: "az afd origin update -g rg-edge --profile-name fd-shop --origin-group-name og-web --origin-name shop-web --origin-host-header shop-web.azurewebsites.net"
+    kind: wrong
+    match_regex: "^az afd origin update (-g|--resource-group) rg-edge --profile-name fd-shop --origin-group-name og-web --origin-name shop-web --origin-host-header shop-web\\.azurewebsites\\.net$"
+    feedback: "Pages load again, but App Service now thinks the site is shop-web.azurewebsites.net: sign-in builds its redirect URL and cookies for that name, so customers are bounced to the azurewebsites.net address, or lose their session, when they log in. Microsoft's guidance is to preserve the original host name."
+  - id: purge-cache
+    label: "Purge the Front Door cache"
+    kind: wrong
+    feedback: "Even freshly fetched pages come back 404, because the origin answers 404 for this host name every time."
+  - id: disable-waf
+    label: "Disable the WAF policy to rule it out"
+    kind: destructive
+    feedback: "The shop is now on the internet without the protection you just added, and nothing changes: the 404 comes from App Service. A WAF block would be a 403."
+
+solution_paths:
+  - [custom-domain, fix-bicep]
+
+key_evidence: [users-404, host-404, header-unset, no-custom-domain]
+
+evidence_labels:
+  users-404: "Through Front Door, www.acme.example returns 404"
+  host-404: "App Service itself returns 404 when asked for Host: www.acme.example"
+  header-unset: "The origin's host header isn't set, so Front Door forwards the visitor's host name"
+  no-custom-domain: "shop-web only knows its azurewebsites.net host name"
+
+hints:
+  nudge: "The app works on one host name and 404s on another. What does App Service do with a host name it doesn't know?"
+  direction: "Check which host header Front Door sends to the origin, and which host names shop-web is configured for."
+  answer: "originHostHeader isn't set, so Front Door forwards Host: www.acme.example, and shop-web has no such custom domain, so it returns 404. Add www.acme.example as a custom domain on shop-web (TXT verification, imported certificate) rather than overriding the header, which would break sign-in."
+
+analogy:
+  title: "The receptionist who only knows the old company name"
+  text: |
+    A new switchboard forwards every caller with "a call for Acme Shop". The
+    receptionist only knows the company by its registered name, says "no one
+    of that name works here" and hangs up. You could tell the switchboard to
+    use the registered name, but then the receptionist hands out business
+    cards with the wrong name. Better: teach the receptionist the name
+    customers actually use.
+
+debrief:
+  root_cause: |
+    Front Door forwards requests with a Host header. When the origin host
+    header isn't set explicitly, as in this Bicep, Front Door sends the
+    incoming host name: www.acme.example. App Service routes requests by host
+    name, and shop-web only had its default azurewebsites.net name, so it
+    answered 404 to every forwarded request. Overriding the header to the
+    azurewebsites.net name would load pages but break sign-in redirects and
+    cookies; the recommended fix is to preserve the host name and configure
+    it on the app.
+  ideal_path:
+    - "Reproduce outside Front Door: the app answers its default name and 404s for Host: www.acme.example."
+    - "Check the origin's host header: not set, so the visitor's host name is forwarded."
+    - "Check the app's host names: only azurewebsites.net."
+    - "Add www.acme.example as a custom domain on the app (TXT verification), with an imported certificate."
+    - "Capture both sides in Bicep."
+  real_world: |
+    Host-name mismatches behind reverse proxies (Front Door, Application
+    Gateway, CDNs) cause 404s, redirect loops, broken sign-in and lost
+    sessions. Preserve the original host name all the way to the app, and
+    configure every platform behind the proxy for the public domain.
+
+concepts:
+  - term: "Azure Front Door"
+    text: "A global entry point for web apps: it receives users' requests at the edge, can apply a WAF, and forwards them to your origins."
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-overview"
+  - term: "Origin and origin host header"
+    text: "An origin is the backend Front Door forwards to. The origin host header is the Host value it sends; if not set, it forwards the visitor's host name."
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/origin"
+  - term: "Host header"
+    text: "The part of an HTTP request that says which site you want. Platforms like App Service use it to decide which app answers, and refuse names they don't know."
+    url: "https://learn.microsoft.com/en-us/azure/architecture/best-practices/host-name-preservation"
+  - term: "App Service custom domain"
+    text: "A public domain you attach to an app, verified with a DNS TXT record, so the app accepts requests for that name."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/app-service-web-tutorial-custom-domain"
+
+sources:
+  - title: "Azure Front Door: Origins and origin groups (origin host header, defaults)"
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/origin"
+    retrieved: 2026-10-01
+  - title: "Azure Architecture Center: Preserve the original HTTP host name between a reverse proxy and its back-end web application"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/best-practices/host-name-preservation"
+    retrieved: 2026-10-01
+  - title: "Azure CLI: az afd origin (--origin-host-header)"
+    url: "https://learn.microsoft.com/en-us/cli/azure/afd/origin"
+    retrieved: 2026-10-01
+  - title: "Azure App Service: Map an existing custom DNS name"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/app-service-web-tutorial-custom-domain"
+    retrieved: 2026-10-01

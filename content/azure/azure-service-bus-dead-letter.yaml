@@ -1,0 +1,204 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-service-bus-dead-letter
+track: azure
+difficulty: 2
+title: "Some orders never reach the warehouse, and nothing looks wrong"
+par_minutes: 11
+
+ticket:
+  from: "Warehouse operations"
+  priority: P1
+  body: |
+    Customers are calling about orders placed since Tuesday that were never
+    shipped. Our warehouse system has never heard of them. Most orders arrive
+    fine. The shop team says every order was published to Service Bus, and
+    the queue's active message count is zero.
+
+environment: |
+  order-svc publishes every order to the Service Bus queue
+  orders-to-warehouse (namespace sb-shop, resource group rg-shop).
+  warehouse-sync, an Azure Function, receives each message with peek-lock,
+  sends it to the warehouse system, then completes it. Order-svc 7.4 shipped
+  on Tuesday with gift wrapping.
+
+diagram:
+  nodes:
+    - { id: orders, label: "order-svc", col: 0, row: 0, status: ok }
+    - { id: queue, label: "queue orders-to-warehouse", col: 1, row: 0, status: ok }
+    - { id: dlq, label: "dead-letter queue", col: 1, row: 1, status: degraded }
+    - { id: sync, label: "warehouse-sync (Function)", col: 2, row: 0, status: ok }
+    - { id: wms, label: "warehouse system", col: 3, row: 0, status: ok }
+  edges:
+    - { from: orders, to: queue }
+    - { from: queue, to: sync }
+    - { from: queue, to: dlq }
+    - { from: sync, to: wms }
+
+metrics:
+  - name: "orders-to-warehouse: dead-lettered messages"
+    unit: messages
+    evidence: dlq-growing
+    series:
+      - label: "DeadletteredMessages"
+        points: [["Mon", 0], ["Tue 09:00", 0], ["Tue 18:00", 41], ["Wed 09:00", 96], ["Wed 18:00", 170], ["Thu 09:00", 238], ["Thu 15:00", 312]]
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az servicebus queue show -g rg-shop --namespace-name sb-shop -n orders-to-warehouse --query countDetails"
+      when_actions: [resubmit]
+      output: |
+        {
+          "activeMessageCount": 0,
+          "deadLetterMessageCount": 0,
+          "scheduledMessageCount": 0
+        }
+    - match: "az servicebus queue show -g rg-shop --namespace-name sb-shop -n orders-to-warehouse --query countDetails"
+      evidence: dlq-count
+      output: |
+        {
+          "activeMessageCount": 0,
+          "deadLetterMessageCount": 312,
+          "scheduledMessageCount": 0
+        }
+    - match: "az servicebus queue show -g rg-shop --namespace-name sb-shop -n orders-to-warehouse --query maxDeliveryCount"
+      output: |
+        10
+
+logs:
+  - name: "Service Bus Explorer: peek orders-to-warehouse/$deadletterqueue (first message)"
+    evidence: dlq-reason
+    lines: |
+      MessageId:          ord-771904
+      DeliveryCount:      10
+      DeadLetterReason:   MaxDeliveryCountExceeded
+      DeadLetterErrorDescription: Message could not be consumed after 10 delivery attempts.
+      Body: {"orderId":"771904","items":[...],"giftWrap":{"paper":"blue","message":"Happy birthday!"}}
+  - name: "warehouse-sync: Application Insights exceptions"
+    evidence: consumer-throws
+    lines: |
+      Thu 14:58:02 ord-772210 System.Text.Json.JsonException: The JSON property 'giftWrap' could not be mapped to any .NET member contained in type 'WarehouseOrder'. Message abandoned.
+      Thu 14:58:09 ord-772210 System.Text.Json.JsonException: The JSON property 'giftWrap' could not be mapped to any .NET member contained in type 'WarehouseOrder'. Message abandoned.
+  - name: "order-svc 7.4 release notes (Tuesday 10:00)"
+    lines: |
+      Gift wrapping: orders can include an optional "giftWrap" object (about 8% of orders so far).
+
+files:
+  - path: "warehouse-sync/Function.cs (excerpt)"
+    language: csharp
+    content: |
+      var options = new JsonSerializerOptions
+      {
+          UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow   // strict: reject unknown fields
+      };
+      var order = JsonSerializer.Deserialize<WarehouseOrder>(message.Body, options);
+
+hypotheses:
+  - id: dead-lettered
+    text: "Orders with gift wrapping make warehouse-sync throw, so after 10 failed deliveries Service Bus moves them to the dead-letter queue, where they sit unnoticed."
+    correct: true
+  - id: not-published
+    text: "order-svc isn't publishing some orders."
+    feedback: "They were published: 312 of them are sitting in the queue's dead-letter subqueue, and the one peeked is a missing order."
+  - id: warehouse-rejects
+    text: "The warehouse system rejects some orders."
+    feedback: "warehouse-sync fails before calling the warehouse: it can't even read the message because of the unknown giftWrap field."
+  - id: messages-expired
+    text: "The messages expired before they were processed."
+    feedback: "Expired messages are dead-lettered with reason TTLExpiredException. These say MaxDeliveryCountExceeded, with a delivery count of 10: they were tried and failed."
+
+actions:
+  - id: fix-consumer
+    label: "Change warehouse-sync to accept giftWrap (add it to WarehouseOrder, or ignore unknown fields) and deploy"
+    kind: fix
+    feedback: "New gift-wrap orders now go straight through. Do this before resubmitting, or the dead-lettered orders will just fail ten more times and land back in the DLQ."
+  - id: resubmit
+    label: "Resubmit the 312 dead-lettered messages from orders-to-warehouse/$deadletterqueue to the queue (Service Bus Explorer: re-send, then complete from the DLQ)"
+    kind: fix
+    feedback: "Messages stay in the dead-letter queue until someone takes them out; nothing retries them on its own. Once the fixed consumer is live, they flow through to the warehouse."
+  - id: dlq-alert
+    label: "Alert when DeadletteredMessages on the queue is above zero"
+    kind: fix
+    feedback: "The DLQ grew for three days while every dashboard was green. An alert on dead-lettered messages turns that into a page within the hour."
+  - id: raise-max-delivery
+    label: "Raise the queue's max delivery count from 10 to 100"
+    kind: wrong
+    feedback: "The messages fail every time, so they'd just fail 100 times instead of 10 before reaching the same dead-letter queue."
+  - id: rollback-order-svc
+    label: "Roll back order-svc to 7.3 (before gift wrapping)"
+    kind: wrong
+    feedback: "New orders stop having giftWrap, but the 312 orders already in the DLQ are still stuck, and customers lose a feature that only broke because one consumer was too strict."
+  - id: purge-dlq
+    label: "Purge the dead-letter queue to clear the alarming number"
+    kind: destructive
+    feedback: "That deletes 312 paid customer orders that were waiting to be shipped. The DLQ is where they were safe; the fix is to process them, not erase them."
+
+solution_paths:
+  - [fix-consumer, resubmit, dlq-alert]
+
+key_evidence: [dlq-count, dlq-reason, consumer-throws]
+
+evidence_labels:
+  dlq-count: "The active count is 0, but 312 messages are in the dead-letter queue"
+  dlq-reason: "Dead-lettered with MaxDeliveryCountExceeded after 10 tries, and the body has a giftWrap field"
+  consumer-throws: "warehouse-sync can't deserialize giftWrap, so it abandons the message every time"
+
+hints:
+  nudge: "The active message count is zero. Is that the only count a Service Bus queue has?"
+  direction: "Look at the queue's dead-letter count, peek a dead-lettered message, and check warehouse-sync's errors."
+  answer: "Gift-wrap orders make warehouse-sync throw (unknown giftWrap field), so after 10 deliveries they're dead-lettered. Fix the consumer, resubmit the 312 messages from the DLQ, and alert on dead-lettered messages."
+
+analogy:
+  title: "The \"can't deliver\" shelf"
+  text: |
+    The sorting office tries each parcel up to ten times. Parcels with a new
+    kind of label confuse the sorter, so after ten tries they're put on the
+    "can't deliver" shelf, safely, but nobody checks the shelf. The main
+    belt looks empty and everyone assumes all is well. Teach the sorter the
+    new label, carry the shelf's parcels back to the belt, and put a light
+    on the shelf.
+
+debrief:
+  root_cause: |
+    order-svc 7.4 added an optional giftWrap object to orders. warehouse-sync
+    deserializes strictly and rejects unknown fields, so every gift-wrap order
+    threw an exception and was abandoned. Each abandon increases a message's
+    delivery count; after the queue's max delivery count (10, the default),
+    Service Bus moved it to the queue's dead-letter subqueue with reason
+    MaxDeliveryCountExceeded. Dead-lettered messages stay there until someone
+    removes them, and the active count stays at zero, so 312 orders waited
+    unnoticed for three days.
+  ideal_path:
+    - "Look past the active count: the queue has 312 dead-lettered messages."
+    - "Peek one: MaxDeliveryCountExceeded after 10 deliveries, and a giftWrap field in the body."
+    - "Match it to warehouse-sync's errors: it can't map giftWrap, so it abandons the message."
+    - "Fix the consumer to accept the new field, and deploy it first."
+    - "Resubmit the dead-lettered messages, then check they reach the warehouse."
+    - "Alert on dead-lettered messages so the DLQ is never silent again."
+  real_world: |
+    A dead-letter queue keeps messages safe, but only if someone watches it.
+    Alert on dead-lettered message counts for every important queue, make
+    consumers tolerant of new optional fields, and have a tested way to
+    resubmit messages after a fix.
+
+concepts:
+  - term: "Service Bus queue"
+    text: "A managed message queue. Senders put messages in; a receiver takes each one, processes it and completes it."
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-queues-topics-subscriptions"
+  - term: "Peek-lock and delivery count"
+    text: "The receiver locks a message while it works. If it abandons the message or the lock expires, the message is delivered again and its delivery count goes up."
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-transfers-locks-settlement"
+  - term: "Dead-letter queue (DLQ)"
+    text: "A built-in subqueue of every queue (<queue>/$deadletterqueue). Messages that exceed the max delivery count (10 by default) are moved there and stay until someone takes them out."
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues"
+
+sources:
+  - title: "Azure Service Bus: Dead-letter queues (max delivery count, MaxDeliveryCountExceeded, $deadletterqueue path)"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues"
+    retrieved: 2026-10-01
+  - title: "Azure Service Bus: Message transfers, locks, and settlement"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-transfers-locks-settlement"
+    retrieved: 2026-10-01
+  - title: "Azure Service Bus: Monitoring data reference (DeadletteredMessages metric)"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/monitor-service-bus-reference"
+    retrieved: 2026-10-01

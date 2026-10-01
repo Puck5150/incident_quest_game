@@ -192,6 +192,15 @@ from your own experience and tick them off.
       representative; the docs describe the behaviour, not this output.
 - [ ] `az network nic show-effective-route-table` table and `nc` output: representative.
 
+## AWS and Azure depth (Phase C incidents)
+- [ ] aws-lambda-concurrency-starved: API Gateway execution log lines ("Lambda invocation failed with status: 429",
+      "Method completed with status: 502") are from experience; Lambda's exception and reason names are documented.
+- [ ] aws-sqs-visibility-timeout: worker log lines and the "release" x-axis labels are scenario data.
+- [ ] azure-service-bus-dead-letter: Service Bus Explorer peek layout, the DeadLetterErrorDescription text and the
+      System.Text.Json exception message: representative.
+- [ ] azure-front-door-host-header: App Service answering 404 for an unknown host name is from experience (not
+      printed in the docs); `az afd origin show` / `az webapp config hostname list` output: representative.
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.

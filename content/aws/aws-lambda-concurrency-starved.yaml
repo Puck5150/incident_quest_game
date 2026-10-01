@@ -1,0 +1,209 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-lambda-concurrency-starved
+track: aws
+difficulty: 3
+title: "Checkout errors started the minute the data team's backfill did"
+par_minutes: 12
+
+ticket:
+  from: "On-call alert"
+  priority: P1
+  body: |
+    ALERT 14:06: checkout API 5xx rate 38%. No deploys today. The data team
+    mentions they kicked off a thumbnail backfill at 14:00, but that's a
+    completely separate function and queue. Coincidence?
+
+environment: |
+  checkout-api is a Lambda function behind API Gateway. thumbnail-backfill is
+  a Lambda function that reads jobs from an SQS queue (2.1 million queued
+  today). Both are in the same AWS account and region (us-east-1). Neither
+  function has reserved concurrency configured. Normal checkout traffic needs
+  about 150 concurrent executions at peak.
+
+diagram:
+  nodes:
+    - { id: apigw, label: "API Gateway", col: 0, row: 0, status: degraded }
+    - { id: checkout, label: "Lambda checkout-api", col: 1, row: 0, status: degraded }
+    - { id: pool, label: "account concurrency (1,000)", col: 2, row: 0, status: ok }
+    - { id: backfill, label: "Lambda thumbnail-backfill", col: 1, row: 1, status: ok }
+    - { id: sqs, label: "SQS: thumbnail-jobs (2.1M)", col: 0, row: 1, status: ok }
+  edges:
+    - { from: apigw, to: checkout }
+    - { from: checkout, to: pool }
+    - { from: sqs, to: backfill }
+    - { from: backfill, to: pool }
+
+metrics:
+  - name: "Lambda ConcurrentExecutions"
+    unit: executions
+    evidence: pool-exhausted
+    threshold: { value: 1000, label: "account limit: 1,000" }
+    series:
+      - label: "account total"
+        points: [["13:55", 140], ["14:00", 150], ["14:02", 610], ["14:04", 990], ["14:06", 1000], ["14:08", 1000], ["14:10", 1000]]
+      - label: "thumbnail-backfill"
+        points: [["13:55", 0], ["14:00", 5], ["14:02", 470], ["14:04", 860], ["14:06", 905], ["14:08", 912], ["14:10", 908]]
+      - label: "checkout-api"
+        points: [["13:55", 140], ["14:00", 145], ["14:02", 140], ["14:04", 130], ["14:06", 95], ["14:08", 88], ["14:10", 92]]
+  - name: "checkout-api Throttles"
+    unit: count/min
+    evidence: checkout-throttled
+    series:
+      - label: "throttles"
+        points: [["13:55", 0], ["14:00", 0], ["14:02", 0], ["14:04", 210], ["14:06", 1840], ["14:08", 2010], ["14:10", 1960]]
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws lambda get-account-settings"
+      evidence: no-reservations
+      output: |
+        {
+            "AccountLimit": {
+                "ConcurrentExecutions": 1000,
+                "UnreservedConcurrentExecutions": 1000
+            },
+            "AccountUsage": { "FunctionCount": 23 }
+        }
+    - match: "aws lambda get-function-concurrency --function-name checkout-api"
+      when_actions: [reserve-checkout]
+      output: |
+        {
+            "ReservedConcurrentExecutions": 300
+        }
+    - match: "aws lambda get-function-concurrency --function-name checkout-api"
+      output: |
+        {}
+    - match: "aws lambda get-function-concurrency --function-name thumbnail-backfill"
+      when_actions: [cap-backfill]
+      output: |
+        {
+            "ReservedConcurrentExecutions": 100
+        }
+    - match: "aws lambda get-function-concurrency --function-name thumbnail-backfill"
+      output: |
+        {}
+
+logs:
+  - name: "API Gateway execution log: checkout (14:06)"
+    evidence: rate-exceeded
+    lines: |
+      14:06:12 POST /checkout  Lambda invocation failed with status: 429. Lambda request id: 5f1c...
+      14:06:12 POST /checkout  TooManyRequestsException: Rate Exceeded. (Reason: ConcurrentInvocationLimitExceeded)
+      14:06:12 POST /checkout  Method completed with status: 502
+  - name: "#data-team (chat)"
+    lines: |
+      13:58 jun: starting the thumbnail backfill, 2.1M jobs on the queue. Lambda will scale it, should be done by tonight
+
+hypotheses:
+  - id: shared-pool
+    text: "The backfill has used up the account's shared Lambda concurrency, so checkout-api's invocations are throttled."
+    correct: true
+  - id: checkout-bug
+    text: "checkout-api has a bug that makes it fail."
+    feedback: "The failing requests never run checkout-api's code: Lambda refuses them with 429 TooManyRequestsException, ConcurrentInvocationLimitExceeded. That's about capacity, not the code."
+  - id: api-gateway-throttle
+    text: "API Gateway's own throttling limits are rejecting requests."
+    feedback: "API Gateway passes the requests on and Lambda answers 429; the reason is ConcurrentInvocationLimitExceeded, a Lambda account limit."
+  - id: separate-functions
+    text: "The two functions are separate, so the backfill can't be the cause."
+    feedback: "Separate functions, same pool: functions without reserved concurrency all share the account's unreserved concurrency in a region. The backfill took 900 of the 1,000."
+
+actions:
+  - id: cap-backfill
+    label: "aws lambda put-function-concurrency --function-name thumbnail-backfill --reserved-concurrent-executions 100"
+    kind: fix
+    match_regex: "^aws lambda put-function-concurrency --function-name thumbnail-backfill --reserved-concurrent-executions [1-9]\\d{0,2}$"
+    feedback: "Reserved concurrency also caps a function: the backfill can never use more than 100 again. The rest of the pool is free, checkout's throttles stop, and the backfill just takes longer while its queue holds the work."
+  - id: reserve-checkout
+    label: "aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions 300"
+    kind: fix
+    match_regex: "^aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions [2-9]\\d{2}$"
+    feedback: "300 executions are now set aside for checkout, and no other function can use them. Size it above checkout's real peak (about 150), because reserved concurrency is also its maximum."
+  - id: limit-increase
+    label: "Request a higher account concurrency limit"
+    kind: wrong
+    feedback: "It isn't instant, and a backfill with 2.1 million jobs would scale into the new headroom too. The fix is isolation: cap the batch job, guarantee the critical one."
+  - id: more-memory
+    label: "Give checkout-api more memory so it runs faster"
+    kind: wrong
+    feedback: "The requests aren't slow; they're refused before checkout-api runs, because no concurrency is left."
+  - id: purge-queue
+    label: "Purge the thumbnail-jobs queue to stop the backfill"
+    kind: destructive
+    feedback: "That deletes 2.1 million jobs the data team needs, and doesn't stop the next batch job from doing the same thing. Capping its concurrency stops the harm and keeps the work."
+
+solution_paths:
+  - [cap-backfill, reserve-checkout]
+
+key_evidence: [rate-exceeded, pool-exhausted, checkout-throttled, no-reservations]
+
+evidence_labels:
+  rate-exceeded: "Lambda refuses checkout invocations: 429, ConcurrentInvocationLimitExceeded"
+  pool-exhausted: "Account concurrency hit 1,000 at 14:06, about 900 of it the backfill"
+  checkout-throttled: "checkout-api's throttles jumped as the backfill scaled up"
+  no-reservations: "No function has reserved concurrency: all 1,000 are one shared pool"
+
+hints:
+  nudge: "Lambda says ConcurrentInvocationLimitExceeded. Whose limit is that?"
+  direction: "Look at account-level concurrency and which function is using it, then at whether any function has reserved concurrency."
+  answer: "The backfill scaled to ~900 of the account's 1,000 shared executions, starving checkout-api. Cap thumbnail-backfill with reserved concurrency (say 100) and reserve ~300 for checkout-api."
+
+analogy:
+  title: "One car park for everyone"
+  text: |
+    The office and the warehouse share one 1,000-space car park. Today the
+    warehouse called in 900 temporary drivers, and now customers coming to
+    the shop can't find a space and drive away. Give the warehouse its own
+    roped-off section of 100, and keep 300 spaces signed "customers only".
+
+debrief:
+  root_cause: |
+    By default an AWS account has 1,000 concurrent Lambda executions per
+    region, and every function without reserved concurrency shares that
+    pool. At 14:00 thumbnail-backfill started working through 2.1 million
+    SQS jobs and Lambda scaled it to about 900 concurrent executions. With
+    the pool exhausted, new checkout-api invocations were refused with
+    TooManyRequestsException (ConcurrentInvocationLimitExceeded), and API
+    Gateway returned errors to customers. Nothing was wrong with checkout;
+    it had simply never been protected from its neighbours.
+  ideal_path:
+    - "Read the failure: Lambda answers 429, ConcurrentInvocationLimitExceeded (an account-level limit)."
+    - "Look at account concurrency: pinned at 1,000 since 14:06, mostly thumbnail-backfill."
+    - "Check reservations: none, so every function competes for the same pool."
+    - "Cap the backfill with reserved concurrency; checkout recovers immediately."
+    - "Reserve concurrency for checkout-api, sized above its peak, so it's guaranteed next time."
+  real_world: |
+    Queue-driven batch functions are the classic noisy neighbour in a shared
+    Lambda account. Give every queue consumer a reserved-concurrency cap,
+    reserve capacity for customer-facing functions, and alert on account
+    concurrency and Throttles. Many teams also put batch work in a separate
+    account.
+
+concepts:
+  - term: "Lambda concurrency"
+    text: "The number of requests a function is handling at the same moment. Each one needs its own execution environment."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html"
+  - term: "Account concurrency limit"
+    text: "By default 1,000 concurrent executions per region, shared by every function that doesn't have reserved concurrency."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html"
+  - term: "Reserved concurrency"
+    text: "Sets aside concurrency for one function that no other function can use, and also caps that function at the same number."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html"
+  - term: "Throttling"
+    text: "When no concurrency is available, Lambda refuses the invocation with a 429 TooManyRequestsException instead of running it."
+    url: "https://docs.aws.amazon.com/lambda/latest/api/API_Invoke.html"
+
+sources:
+  - title: "AWS Lambda: Understanding Lambda function scaling (account limit, unreserved pool, reserved concurrency)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html"
+    retrieved: 2026-10-01
+  - title: "AWS Lambda: Configuring reserved concurrency"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html"
+    retrieved: 2026-10-01
+  - title: "AWS Lambda API: Invoke (TooManyRequestsException, ConcurrentInvocationLimitExceeded)"
+    url: "https://docs.aws.amazon.com/lambda/latest/api/API_Invoke.html"
+    retrieved: 2026-10-01
+  - title: "AWS Lambda: Monitoring concurrency"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/monitoring-concurrency.html"
+    retrieved: 2026-10-01
