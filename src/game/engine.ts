@@ -139,6 +139,35 @@ export function runCommand(
   return { output: (t.unknown_output ?? '{cmd}: no simulated output for that here. Type help for commands that work.').replaceAll('{cmd}', name) }
 }
 
+// Tab completion, bash-style. Draws only on what `help` already reveals
+// (exact-match commands) plus the scenario's file and log paths, so it never
+// gives away regex-only commands or typed fixes.
+export function complete(scenario: Scenario, input: string): { input: string; options?: string[] } {
+  const exact = (scenario.terminal?.commands ?? []).flatMap((c) => (c.match ? [normalize(c.match)] : []))
+  const words = input.replace(/^\s+/, '').split(' ')
+  const word = words.at(-1)!
+  const first = words.length === 1
+  const vocabulary = first
+    ? [...exact.map((c) => c.split(' ')[0]), 'help', 'clear', 'history']
+    : [
+        ...exact.flatMap((c) => c.split(' ').slice(1)),
+        ...[...(scenario.files ?? []).map((x) => x.path), ...(scenario.logs ?? []).map((x) => x.name)].filter((p) => p.startsWith('/') && !p.includes(' ')),
+      ]
+  if (!word && first) return { input } // nothing typed yet: nothing to complete
+  const options = [...new Set(vocabulary)].filter((v) => v.startsWith(word)).sort()
+  if (options.length === 0) return { input }
+  const head = input.slice(0, input.length - word.length)
+  if (options.length === 1) return { input: head + options[0] + (options[0].endsWith('/') ? '' : ' ') }
+  const common = options.reduce(commonPrefix)
+  return common.length > word.length ? { input: head + common } : { input, options }
+}
+
+function commonPrefix(a: string, b: string): string {
+  let i = 0
+  while (i < a.length && a[i] === b[i]) i++
+  return a.slice(0, i)
+}
+
 // ---------------------------------------------------------------------------
 // Derived from the log
 // ---------------------------------------------------------------------------

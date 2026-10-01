@@ -110,6 +110,20 @@ it('typed fix commands wait for the hypothesis, then take the action', async () 
   expect(screen.getByRole('button', { name: /Truncate app\.log/ })).toHaveProperty('disabled', true) // done, like a click
 })
 
+it('Tab completes in the terminal, but moves focus on an empty prompt', async () => {
+  render(<App />)
+  await openIncident()
+  const input = screen.getByLabelText('Terminal command') as HTMLInputElement
+  fireEvent.change(input, { target: { value: 'cat /e' } })
+  expect(fireEvent.keyDown(input, { key: 'Tab' })).toBe(false) // handled (default prevented)
+  expect(input.value).toBe('cat /etc/logrotate.d/app ')
+  fireEvent.change(input, { target: { value: 'c' } })
+  fireEvent.keyDown(input, { key: 'Tab' })
+  expect(output()).toMatch(/cat {2}clear/)
+  fireEvent.change(input, { target: { value: '' } })
+  expect(fireEvent.keyDown(input, { key: 'Tab' })).toBe(true) // left alone: focus moves as usual
+})
+
 it('shuffles hypotheses so the right answer is not always first', async () => {
   const spy = vi.spyOn(Math, 'random').mockReturnValue(0)
   render(<App />)

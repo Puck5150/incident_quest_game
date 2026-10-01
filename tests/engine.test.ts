@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
 import {
   actionsTaken,
+  complete,
   evidenceSeen,
   hintsUsed,
   newSession,
@@ -117,5 +118,34 @@ describe('derived from the log', () => {
 
   it('hints cap at three tiers', () => {
     expect(hintsUsed(play(start, hint, hint, hint, hint).log)).toBe(3)
+  })
+})
+
+describe('tab completion', () => {
+  it('completes a unique command name and adds a space', () => {
+    expect(complete(scenario, 'ta')).toEqual({ input: 'tail ' })
+  })
+
+  it('lists candidates when there is no common prefix to add', () => {
+    expect(complete(scenario, 'c')).toEqual({ input: 'c', options: ['cat', 'clear'] })
+  })
+
+  it('completes paths from scripted commands and the scenario\'s files', () => {
+    expect(complete(scenario, 'cat /e')).toEqual({ input: 'cat /etc/logrotate.d/app ' })
+    expect(complete(scenario, 'tail /var/log/n')).toEqual({ input: 'tail /var/log/nginx/access.log ' })
+  })
+
+  it('extends to the common prefix first', () => {
+    expect(complete(scenario, 'ls -lh /v').input).toBe('ls -lh /var/log/')
+  })
+
+  it('never reveals regex-only commands or typed fixes', () => {
+    expect(complete(scenario, 'journ')).toEqual({ input: 'journ' }) // journalctl is regex-matched
+    expect(complete(scenario, 'trunc')).toEqual({ input: 'trunc' }) // a typed fix
+    expect(complete(scenario, 'reb')).toEqual({ input: 'reb' })
+  })
+
+  it('does nothing on an empty prompt', () => {
+    expect(complete(scenario, '')).toEqual({ input: '' })
   })
 })

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
-import { actionFor, normalize, NOT_YET, runCommand } from '../game/engine.ts'
+import { actionFor, complete, normalize, NOT_YET, runCommand } from '../game/engine.ts'
 
-type Line = { input: string; output: string }
+type Line = { input: string; output: string; completions?: boolean } // completions: Tab's list, not a run command
 
 // A deliberately simple fake shell: a text input plus a scrolling transcript.
 // Real text (not a canvas) so screen readers and copy/paste just work.
@@ -53,7 +53,15 @@ export default function Terminal({
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
+    // Tab completes only when there's something to complete; on an empty
+    // prompt (or with Shift) it moves focus as usual, so the terminal never
+    // traps keyboard users.
+    if (e.key === 'Tab' && !e.shiftKey && input.trim()) {
+      e.preventDefault()
+      const c = complete(scenario, input)
+      setInput(c.input)
+      if (c.options) setLines((l) => [...l, { input, output: c.options!.join('  '), completions: true }])
+    } else if (e.key === 'Enter') {
       e.preventDefault()
       submit()
     } else if (e.key === 'ArrowUp' && history.length) {
@@ -77,17 +85,23 @@ export default function Terminal({
     >
       <div ref={out} role="log" aria-label="Terminal output" className="flex-1 overflow-auto p-3">
         <p className="text-muted">
-          Type <span className="text-fg">help</span> to see some commands. ↑/↓ for history.
+          Type <span className="text-fg">help</span> to see some commands. Tab completes, ↑/↓ for history.
           {scenario.actions.some((x) => x.match_regex) && ' Once you have named the root cause, you can type fixes here too.'}
         </p>
-        {lines.map((l, i) => (
-          <div key={i}>
-            <div>
-              <span className="text-ok">{prompt}</span> {l.input}
+        {lines.map((l, i) =>
+          l.completions ? (
+            <pre key={i} className="whitespace-pre-wrap text-muted">
+              {l.output}
+            </pre>
+          ) : (
+            <div key={i}>
+              <div>
+                <span className="text-ok">{prompt}</span> {l.input}
+              </div>
+              {l.output && <pre className="whitespace-pre">{l.output}</pre>}
             </div>
-            {l.output && <pre className="whitespace-pre">{l.output}</pre>}
-          </div>
-        ))}
+          ),
+        )}
       </div>
       <div className="flex items-center gap-2 border-t border-line p-3">
         <label htmlFor="terminal-input" className="sr-only">

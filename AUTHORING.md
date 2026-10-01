@@ -85,6 +85,9 @@ commit the result (a test fails if you forget).
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.
 - **`help` in the terminal** lists your `match` commands, but not the regex ones.
+  Tab completion follows the same rule: it completes command names and arguments
+  from `match` commands, plus file and log paths that start with `/`, never
+  regex-only commands or typed fixes.
   Use `match` for the obvious first steps and `match_regex` for the deeper digging
   you want players to think of themselves. `clear` and `history` are built in.
 - **The analogy should use no IT words.** If you need jargon to explain it, it's
