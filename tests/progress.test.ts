@@ -94,6 +94,49 @@ describe('storage', () => {
     expect(localStorage.getItem(backup!)).toBe('{"version":1,"xp":"lots"}')
   })
 
+  // Saved data is untrusted: anything that doesn't have the right shape is
+  // backed up and replaced, never half-loaded.
+  const valid = {
+    version: 1,
+    xp: 40,
+    completed: { a: { bestScore: 40, completedAt: '2026-09-30', hintsUsed: 0, clean: true, providers: ['aws'] } },
+    streak: { current: 1, best: 1 },
+    settings: { theme: 'light', motion: 'reduce', relaxed: true },
+  }
+  const loads = (patch: (v: typeof valid & Record<string, unknown>) => void) => {
+    const v = structuredClone(valid) as typeof valid & Record<string, unknown>
+    patch(v)
+    localStorage.setItem('incident-quest:v1', JSON.stringify(v))
+    return JSON.stringify(loadProgress()) !== JSON.stringify(newProgress())
+  }
+
+  it('accepts a full save, and old saves without the later optional fields', () => {
+    expect(loads(() => {})).toBe(true)
+    expect(
+      loads((v) => {
+        delete (v.settings as Partial<typeof valid.settings>).motion
+        delete (v.settings as Partial<typeof valid.settings>).relaxed
+        delete (v.completed.a as Partial<typeof valid.completed.a>).providers
+      }),
+    ).toBe(true)
+  })
+
+  it.each([
+    ['wrong version', (v: Record<string, unknown>) => (v.version = 2)],
+    ['negative xp', (v: Record<string, unknown>) => (v.xp = -1)],
+    ['fractional xp', (v: Record<string, unknown>) => (v.xp = 1.5)],
+    ['completed is a list', (v: Record<string, unknown>) => (v.completed = [])],
+    ['completion missing a field', (v: Record<string, unknown>) => delete (v.completed as Record<string, Partial<typeof valid.completed.a>>).a.clean],
+    ['providers not strings', (v: Record<string, unknown>) => ((v.completed as typeof valid.completed).a.providers = [1 as unknown as string])],
+    ['streak missing', (v: Record<string, unknown>) => delete v.streak],
+    ['unknown theme', (v: Record<string, unknown>) => ((v.settings as typeof valid.settings).theme = 'sepia')],
+    ['unknown motion', (v: Record<string, unknown>) => ((v.settings as typeof valid.settings).motion = 'fast')],
+    ['relaxed not a boolean', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).relaxed = 'yes')],
+    ['not an object', (v: Record<string, unknown>) => Object.keys(v).forEach((k) => delete v[k])],
+  ])('rejects a save with %s', (_, patch) => {
+    expect(loads(patch)).toBe(false)
+  })
+
   it('survives storage that throws', () => {
     const broken = { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } } as unknown as Storage
     expect(loadProgress(broken)).toEqual(newProgress())

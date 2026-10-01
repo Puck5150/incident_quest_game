@@ -24,4 +24,3 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - More scenarios per track (each original track has two as of 2026-10-01) and difficulty 5
 
 ## Authoring tooling
-- Scenario preview/"play from file" dev page

@@ -23,6 +23,7 @@ const ChallengeDebrief = lazy(() => import('./screens/ChallengeDebrief.tsx'))
 const CanvasScreen = lazy(() => import('./screens/CanvasScreen.tsx'))
 const CanvasDebrief = lazy(() => import('./screens/CanvasDebrief.tsx'))
 const PickCloudScreen = lazy(() => import('./screens/PickCloudScreen.tsx'))
+const PreviewScreen = lazy(() => import('./screens/PreviewScreen.tsx'))
 
 // Screens are plain state; the routable ones mirror the URL hash (see `go`).
 // `run` remounts the incident screen on replay so it starts from a clean session.
@@ -34,6 +35,7 @@ type Screen =
   | { name: 'challenge'; id: string; run: number; provider?: Provider }
   | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore; provider?: Provider } & Outcome)
   | { name: 'pick-cloud'; id: string }
+  | { name: 'preview' }
   | { name: 'canvas'; id: string; run: number; provider?: Provider }
   | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore; provider?: Provider } & Outcome)
 
@@ -49,6 +51,8 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   // The item being played, loaded on demand (each item is its own chunk).
   const [item, setItem] = useState<Item>()
+  const [previewing, setPreviewing] = useState(false) // playing a file from #/preview
+  const [previewText, setPreviewText] = useState('') // kept while you play it
   const scenario = item?.kind === 'incident' ? item.scenario : undefined
   const multi = item?.kind === 'multi' ? item.multi : undefined
   const provider = 'provider' in screen ? screen.provider : undefined
@@ -81,7 +85,7 @@ export default function App() {
 
   // Routes live in the URL hash, so deep links work on GitHub Pages (no server
   // rewrites) and the back button moves between screens:
-  //   #/  #/tree  #/track/<id>  #/play/<id>  #/play/<id>/<provider>  #/done/<id>
+  //   #/  #/tree  #/track/<id>  #/play/<id>  #/play/<id>/<provider>  #/done/<id>  #/preview
   // Debriefs aren't routable (they show one run's results): finishing replaces
   // the play URL with #/done/<id>, which opens that track's queue on reload.
   const go = (hash: string) => (location.hash === hash ? navigate(hash) : location.assign(hash))
@@ -91,33 +95,45 @@ export default function App() {
   const navSeq = useRef(0)
   async function navigate(hash: string) {
     const seq = ++navSeq.current
+    setPreviewing(false)
     const [route, id, extra] = hash.replace(/^#\/?/, '').split('/')
     const meta = items.find((x) => x.id === id)
     if (route === 'tree') return setScreen({ name: 'tree' })
+    if (route === 'preview') return setScreen({ name: 'preview' })
     if (route === 'track' && id) return setScreen({ name: 'home', track: id })
     if (route !== 'play' || !meta) return setScreen({ name: 'home', track: meta?.track })
     if (!unlocks(progress).has(meta.track)) return setScreen({ name: 'home', track: meta.track })
     const loaded = await loadItem(meta.id)
     if (seq !== navSeq.current) return
+    start(loaded, seq, extra)
+  }
+
+  // Show an item's play screen (or the cloud picker). `run` must be unique per
+  // start, so a replay remounts the screen with a clean session.
+  function start(loaded: Item, run: number, provider?: string) {
     setItem(loaded)
-    const run = seq // unique per navigation, so a replay remounts the screen
     if (loaded.kind === 'multi') {
-      const provider = loaded.multi.providers.find((p) => p === extra)
-      if (!provider) return setScreen({ name: 'pick-cloud', id: meta.id })
+      const { id } = loaded.multi
+      const p = loaded.multi.providers.find((x) => x === provider)
+      if (!p) return setScreen({ name: 'pick-cloud', id })
       return setScreen(
-        loaded.multi.kind === 'canvas'
-          ? { name: 'canvas', id: meta.id, run, provider }
-          : { name: 'challenge', id: meta.id, run, provider },
+        loaded.multi.kind === 'canvas' ? { name: 'canvas', id, run, provider: p } : { name: 'challenge', id, run, provider: p },
       )
     }
     setScreen(
       loaded.kind === 'canvas'
-        ? { name: 'canvas', id: meta.id, run }
+        ? { name: 'canvas', id: loaded.canvas.id, run }
         : loaded.kind === 'challenge'
-          ? { name: 'challenge', id: meta.id, run }
-          : { name: 'incident', id: meta.id, run },
+          ? { name: 'challenge', id: loaded.challenge.id, run }
+          : { name: 'incident', id: loaded.scenario.id, run },
     )
   }
+
+  // Playing a file from the preview page: it isn't in the index or the URL
+  // scheme, so replays and cloud picks restart it locally, and nothing is saved.
+  const replay = (id: string, provider?: Provider) =>
+    previewing ? start(item!, ++navSeq.current, provider) : go(`#/play/${id}${provider ? `/${provider}` : ''}`)
+
   // The listener is registered once, so it calls the current render's navigate.
   const navigateRef = useRef(navigate)
   useEffect(() => {
@@ -132,6 +148,7 @@ export default function App() {
 
   // Save a finished incident or challenge and work out what it changed.
   function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }, provider?: Provider): Outcome {
+    if (previewing) return { gained: 0, unlocked: [] }
     history.replaceState(null, '', `#/done/${id}`)
     const result = recordResult(progress, id, s, new Date(), provider)
     const newRank = rankFor(result.progress.xp).rank
@@ -232,7 +249,26 @@ export default function App() {
       </header>
 
       <main id="main" className="mx-auto max-w-7xl p-4 lg:p-6">
+        {previewing && (
+          <p className="mb-4 flex flex-wrap items-center gap-x-3 rounded-lg border border-accent/60 bg-panel px-4 py-2 text-sm">
+            Previewing a file: nothing is saved to your progress.
+            <button className="text-accent underline" onClick={() => go('#/preview')}>
+              Back to the preview page
+            </button>
+          </p>
+        )}
         <Suspense fallback={<p className="text-muted">Loading…</p>}>
+          {screen.name === 'preview' && (
+            <PreviewScreen
+              text={previewText}
+              tracks={content.tracks}
+              onText={setPreviewText}
+              onPlay={(loaded) => {
+                setPreviewing(true)
+                start(loaded, ++navSeq.current)
+              }}
+            />
+          )}
           {screen.name === 'home' && (
             <HomeScreen
               tracks={content.tracks}
@@ -268,7 +304,7 @@ export default function App() {
               providers={multi.providers}
               summary={(p) => cloudSummary(multi, p)}
               completedOn={progress.completed[multi.id]?.providers ?? []}
-              onPick={(provider) => go(`#/play/${multi.id}/${provider}`)}
+              onPick={(provider) => (previewing ? start(item!, ++navSeq.current, provider) : go(`#/play/${multi.id}/${provider}`))}
             />
           )}
           {screen.name === 'canvas' && (
@@ -287,7 +323,7 @@ export default function App() {
               streak={progress.streak.current}
               onHome={() => go('#/')}
               onTree={() => go('#/tree')}
-              onReplay={() => go(`#/play/${screen.id}${'provider' in screen && screen.provider ? `/${screen.provider}` : ''}`)}
+              onReplay={() => replay(screen.id, 'provider' in screen ? screen.provider : undefined)}
               crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.design) : undefined}
             />
           )}
@@ -300,7 +336,7 @@ export default function App() {
               streak={progress.streak.current}
               onHome={() => go('#/')}
               onTree={() => go('#/tree')}
-              onReplay={() => go(`#/play/${screen.id}${'provider' in screen && screen.provider ? `/${screen.provider}` : ''}`)}
+              onReplay={() => replay(screen.id, 'provider' in screen ? screen.provider : undefined)}
               crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.picks) : undefined}
             />
           )}
@@ -315,7 +351,7 @@ export default function App() {
               streak={progress.streak.current}
               onHome={() => go('#/')}
               onTree={() => go('#/tree')}
-              onReplay={() => go(`#/play/${screen.id}${'provider' in screen && screen.provider ? `/${screen.provider}` : ''}`)}
+              onReplay={() => replay(screen.id)}
             />
           )}
         </Suspense>

@@ -17,6 +17,15 @@ Scenarios are data. You don't write any code to add an incident.
    ```
 4. Run `npm run dev` and play it. The page reloads when you save a YAML file.
 
+### Preview without the repo
+
+No dev setup? Open the game's preview page,
+https://puck5150.github.io/incident_quest_game/#/preview, then paste a file or
+pick one. It runs the same per-file checks as `npm test` (everything except id
+matching the filename and ids being unique across all content) and lets you play
+it. Nothing played there is saved to progress. Useful for reviewing a pull
+request's YAML, too.
+
 ### Editor support
 
 Line 1 of every content file names its JSON Schema:

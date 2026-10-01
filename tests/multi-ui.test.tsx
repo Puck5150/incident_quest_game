@@ -10,7 +10,7 @@ globalThis.ResizeObserver ??= class {
 
 beforeEach(() => {
   localStorage.clear()
-  location.hash = ''
+  history.replaceState(null, '', location.pathname) // reset the URL without a stray hashchange event
   localStorage.setItem(
     'incident-quest:v1',
     JSON.stringify({

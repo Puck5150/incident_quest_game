@@ -8,7 +8,7 @@ import content from 'virtual:content'
 
 beforeEach(() => {
   localStorage.clear()
-  location.hash = ''
+  history.replaceState(null, '', location.pathname) // reset the URL without a stray hashchange event
 })
 afterEach(cleanup)
 

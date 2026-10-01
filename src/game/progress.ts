@@ -2,41 +2,63 @@
 // from it (rank, unlocked tracks). Rank and unlocks are never stored, so they
 // can't drift out of sync with the XP and completions they come from.
 
-// zod/mini: same validation, a fraction of the bundle size. This is the only
-// Zod code that ships to the browser (content is validated at build time).
-import * as z from 'zod/mini'
 import type { Track } from '../schema/scenario.ts'
 
 const KEY = 'incident-quest:v1'
 
+export type Progress = {
+  version: 1
+  xp: number
+  completed: Record<
+    string,
+    {
+      bestScore: number
+      completedAt: string
+      hintsUsed: number
+      clean: boolean
+      // "Pick your cloud" challenges: which clouds it's been completed on. Optional so old saves stay valid.
+      providers?: string[]
+    }
+  >
+  // Consecutive incidents resolved "clean": no hints, no destructive actions.
+  streak: { current: number; best: number }
+  // `motion` and `relaxed` were added after v1 shipped, so they're optional: old saves stay valid.
+  settings: { theme: 'dark' | 'light'; motion?: 'system' | 'reduce'; relaxed?: boolean }
+}
+
 // Saved data is untrusted: a player can edit it, and an old app version may
 // have written a different shape. Anything that fails this is backed up, not
-// silently thrown away.
-const ProgressSchema = z.object({
-  version: z.literal(1),
-  xp: z.int().check(z.minimum(0)),
-  completed: z.record(
-    z.string(),
-    z.object({
-      bestScore: z.number(),
-      completedAt: z.string(),
-      hintsUsed: z.number(),
-      clean: z.boolean(),
-      // "Pick your cloud" challenges: which clouds it's been completed on. Optional so old saves stay valid.
-      providers: z.optional(z.array(z.string())),
-    }),
-  ),
-  // Consecutive incidents resolved "clean": no hints, no destructive actions.
-  streak: z.object({ current: z.number(), best: z.number() }),
-  // `motion` and `relaxed` were added after v1 shipped, so they're optional: old saves stay valid.
-  settings: z.object({
-    theme: z.enum(['dark', 'light']),
-    motion: z.optional(z.enum(['system', 'reduce'])),
-    relaxed: z.optional(z.boolean()), // no time bonus, no clock in the debrief
-  }),
-})
+// silently thrown away. Hand-written rather than Zod so no Zod code is in the
+// startup bundle (content is validated at build time; only the preview page
+// loads Zod). tests/progress.test.ts pins down every rule.
+type Obj = Record<string, unknown>
+const isObj = (x: unknown): x is Obj => typeof x === 'object' && x !== null && !Array.isArray(x)
+const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+const optional = (x: unknown, ok: (v: unknown) => boolean) => x === undefined || ok(x)
+const oneOf = (...xs: unknown[]) => (v: unknown) => xs.includes(v)
 
-export type Progress = z.infer<typeof ProgressSchema>
+const isCompletion = (c: unknown) =>
+  isObj(c) &&
+  isNum(c.bestScore) &&
+  typeof c.completedAt === 'string' &&
+  isNum(c.hintsUsed) &&
+  typeof c.clean === 'boolean' &&
+  optional(c.providers, (p) => Array.isArray(p) && p.every((x) => typeof x === 'string'))
+
+export const isProgress = (p: unknown): p is Progress =>
+  isObj(p) &&
+  p.version === 1 &&
+  Number.isInteger(p.xp) &&
+  (p.xp as number) >= 0 &&
+  isObj(p.completed) &&
+  Object.values(p.completed).every(isCompletion) &&
+  isObj(p.streak) &&
+  isNum(p.streak.current) &&
+  isNum(p.streak.best) &&
+  isObj(p.settings) &&
+  oneOf('dark', 'light')(p.settings.theme) &&
+  optional(p.settings.motion, oneOf('system', 'reduce')) &&
+  optional(p.settings.relaxed, (r) => typeof r === 'boolean')
 
 export const newProgress = (): Progress => ({
   version: 1,
@@ -52,8 +74,8 @@ export function loadProgress(storage: Storage = localStorage): Progress {
   try {
     const raw = storage.getItem(KEY)
     if (raw === null) return newProgress()
-    const parsed = ProgressSchema.safeParse(JSON.parse(raw))
-    if (parsed.success) return parsed.data
+    const parsed: unknown = JSON.parse(raw)
+    if (isProgress(parsed)) return parsed
     storage.setItem(`${KEY}:backup-${Date.now()}`, raw)
   } catch {
     // fall through to a fresh save

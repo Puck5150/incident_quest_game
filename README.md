@@ -37,7 +37,8 @@ npm run check-links   # every source URL still resolves (CI runs it weekly)
 ## Docs
 
 - [PLAN.md](PLAN.md): architecture, data model, game loop, scoring
-- [AUTHORING.md](AUTHORING.md): write your own incidents and design challenges (they're YAML, no code)
+- [AUTHORING.md](AUTHORING.md): write your own incidents and design challenges (they're YAML, no code);
+  try a file without any setup on the [preview page](https://puck5150.github.io/incident_quest_game/#/preview)
 - [PLAN_DESIGN_CHALLENGES.md](PLAN_DESIGN_CHALLENGES.md): how design challenges work
 - [CONTENT_TODO.md](CONTENT_TODO.md): output formats still to verify against real systems
 - [PARKING_LOT.md](PARKING_LOT.md): ideas for later

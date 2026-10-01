@@ -23,7 +23,7 @@ const seed = (motion: 'reduce' | 'system') => {
 }
 beforeEach(() => {
   localStorage.clear()
-  location.hash = ''
+  history.replaceState(null, '', location.pathname) // reset the URL without a stray hashchange event
   seed('reduce')
 })
 afterEach(() => {

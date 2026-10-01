@@ -2,8 +2,9 @@
 // URL hash routing: deep links, the back button, and links that can't be honored.
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import App from '../src/App.tsx'
+import fullDisk from '../content/linux/full-disk.yaml?raw'
 
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -25,7 +26,7 @@ const seed = () =>
 
 beforeEach(() => {
   localStorage.clear()
-  location.hash = ''
+  history.replaceState(null, '', location.pathname) // reset the URL without a stray hashchange event
 })
 afterEach(cleanup)
 
@@ -66,4 +67,46 @@ it('an unknown item falls back to the queue', async () => {
   location.hash = '#/play/no-such-incident'
   render(<App />)
   expect(await screen.findByRole('button', { name: /Checkout returning 500s/ })).toBeTruthy()
+})
+
+describe('preview page', () => {
+  const paste = async (yaml: string) => {
+    location.hash = '#/preview'
+    render(<App />)
+    fireEvent.change(await screen.findByLabelText('or paste it here'), { target: { value: yaml } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check and play' }))
+  }
+
+  it('plays a pasted file, with a banner saying nothing is saved', async () => {
+    await paste(fullDisk.replace('title: "Checkout returning 500s"', 'title: "My draft incident"'))
+    expect(await screen.findByRole('heading', { name: 'My draft incident' })).toBeTruthy()
+    expect(screen.getByText(/nothing is saved to your progress/)).toBeTruthy()
+
+    // Play it through: the debrief appears, but no progress is saved and the URL stays put.
+    fireEvent.click(screen.getByRole('button', { name: 'Take incident' }))
+    fireEvent.click(screen.getByLabelText(/filesystem is full/))
+    fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+    fireEvent.click(screen.getByRole('button', { name: /Truncate app\.log/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Fix the path typo/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close incident' }))
+    expect(await screen.findByRole('heading', { name: 'Root cause' })).toBeTruthy()
+    expect(JSON.parse(localStorage.getItem('incident-quest:v1') ?? '{"completed":{}}').completed).toEqual({})
+    expect(location.hash).toBe('#/preview')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the preview page' }))
+    expect(await screen.findByRole('heading', { name: 'Preview a content file' })).toBeTruthy()
+    expect((screen.getByLabelText('or paste it here') as HTMLTextAreaElement).value).toMatch(/My draft incident/) // kept
+  })
+
+  it('shows the same errors the build would', async () => {
+    await paste(fullDisk.replace('[truncate-log, fix-logrotate]', '[truncate-log, typo]'))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/"typo" is not an action with kind: fix/)
+    expect(screen.queryByRole('button', { name: 'Take incident' })).toBeNull()
+  })
+
+  it('checks the track exists', async () => {
+    await paste(fullDisk.replace('track: linux', 'track: underwater-basketry'))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/track "underwater-basketry" is not defined/)
+  })
 })
