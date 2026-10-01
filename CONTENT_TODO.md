@@ -202,6 +202,8 @@ from your own experience and tick them off.
       printed in the docs); `az afd origin show` / `az webapp config hostname list` output: representative.
 
 ## cloud-design (design challenges, all three)
+- [ ] aws-vpc-network-layout and azure-vnet-network-layout: costs are scenario units; "S3/storage traffic via NAT"
+      at 8 units stands in for per-GB processing charges on several TB a month.
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.
 - [ ] Hidden capabilities (`scales`, `survives`) are judgment calls, not doc

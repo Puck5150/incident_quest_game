@@ -1,0 +1,192 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: azure-vnet-network-layout
+track: cloud-design
+difficulty: 2
+title: "Lay out the network for a new shop on Azure"
+provider: azure
+par_minutes: 10
+
+brief: |
+  A new online shop is moving to Azure in East US 2: web servers on VMs, an
+  Azure Database for PostgreSQL flexible server (zone-redundant high
+  availability), and product images in a storage account that the web tier
+  reads and writes heavily. The web servers call a payment provider's API on
+  the internet. Security wants nothing reachable from the internet except the
+  website itself, and finance wants no surprise network charges. The web VMs
+  already run in two availability zones. The virtual network is new, so its
+  subnets are private by default.
+
+requirements:
+  - "Only the website is reachable from the internet"
+  - "Web servers can call the payment provider's API"
+  - "Keep working if one availability zone fails"
+  - "Stay within 13 cost units per month"
+budget: 13
+
+tiers:
+  - id: web
+    label: "Web servers"
+    options:
+      - id: web-public-ip
+        short: "VMs + public IPs"
+        label: "VMs with their own public IP addresses, in two zones"
+        cost: 2
+        facts:
+          - "Each VM is directly reachable from the internet on its public IP, subject to its NSG rules."
+          - "A VM with a public IP can also start its own outbound connections."
+        capabilities: { survives: [az-outage, payment-call], scales: 1 }
+      - id: web-appgw
+        short: "Private + App Gateway"
+        label: "VMs without public IPs, behind an Application Gateway v2"
+        cost: 4
+        facts:
+          - "Application Gateway reaches backend servers on their private IP addresses."
+          - "New Application Gateway v2 gateways are zone-redundant by default."
+          - "The VMs have no public IP, so the internet can't start a connection to them."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+  - id: database
+    label: "Database networking (PostgreSQL flexible server)"
+    options:
+      - id: db-public
+        short: "Public access"
+        label: "Public access, with firewall rules for allowed IP addresses"
+        cost: 4
+        facts:
+          - "The server has a public endpoint; firewall rules decide which IP addresses may connect."
+        capabilities: { survives: [az-outage, payment-call], scales: 1 }
+      - id: db-private
+        short: "Private access"
+        label: "Private access (virtual network integration) in a delegated subnet"
+        cost: 4
+        facts:
+          - "The server is deployed into your virtual network and is reachable only from inside it (and connected networks)."
+          - "Private access uses a private DNS zone so the app can resolve the server's private address."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+  - id: outbound
+    label: "Outbound internet for the private subnets"
+    options:
+      - id: outbound-none
+        short: "None"
+        label: "Nothing: rely on the subnet defaults"
+        cost: 0
+        facts:
+          - "New virtual networks default to private subnets, without default outbound access, so VMs without a public IP need an explicit outbound method."
+        capabilities: { survives: [internet-scan, az-outage], scales: 1 }
+      - id: nat-zonal
+        short: "NAT (zonal)"
+        label: "A Standard NAT gateway deployed in zone 1"
+        cost: 3
+        facts:
+          - "A Standard NAT gateway deployed to a specific zone is a zonal resource."
+          - "By itself, a zonal resource doesn't provide resiliency to an availability zone outage."
+          - "NAT gateways are billed per hour and per GB of data processed."
+        capabilities: { survives: [internet-scan, payment-call], scales: 1 }
+      - id: nat-v2
+        short: "NAT (StandardV2)"
+        label: "A StandardV2 NAT gateway"
+        cost: 3
+        facts:
+          - "The StandardV2 SKU provides automatic zone redundancy."
+          - "Standard and StandardV2 NAT gateways are the same price."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+  - id: storage
+    label: "Path to the storage account for image traffic"
+    options:
+      - id: storage-via-nat
+        short: "Via NAT"
+        label: "Over the storage account's public endpoint, out through the NAT gateway"
+        cost: 8
+        facts: ["NAT gateways charge for every GB they process, in both directions, so heavy image traffic adds up."]
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+      - id: storage-service-endpoint
+        short: "Service endpoint"
+        label: "A Microsoft.Storage service endpoint on the web subnet"
+        cost: 0
+        facts:
+          - "Service endpoints take traffic directly from your virtual network to the service over the Azure backbone."
+          - "There's no extra charge for using service endpoints."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+
+stress_tests:
+  - id: internet-scan
+    label: "Someone scans the whole internet for open servers and databases"
+    requires: { every_tier_survives: internet-scan }
+  - id: payment-call
+    label: "A customer pays: the web tier must reach the payment provider"
+    requires: { every_tier_survives: payment-call }
+  - id: az-outage
+    label: "Zone 1 in East US 2 becomes unavailable"
+    requires: { every_tier_survives: az-outage }
+
+failure_feedback:
+  web-public-ip:
+    internet-scan: "Every web VM has a public IP, so the scan reaches the servers themselves, not just the website through the gateway."
+  db-public:
+    internet-scan: "The database has a public endpoint. Firewall rules help, but it's still on the internet, one rule change from exposure."
+  outbound-none:
+    payment-call: "The subnets are private and the VMs have no public IPs, so they have no way out to the payment provider."
+  nat-zonal:
+    az-outage: "The zonal NAT gateway was in zone 1. The VMs in zone 2 survived, but lost their way out to the payment provider."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { web: web-appgw, database: db-private, outbound: nat-v2, storage: storage-service-endpoint }
+    why: "Only Application Gateway faces the internet; VMs and database are private. A zone-redundant StandardV2 NAT gateway gives a way out that survives a zone failure, and image traffic goes straight to storage over a service endpoint, with no NAT data charges."
+
+hints:
+  nudge: "Which parts must the internet reach, which only need to reach out, and which need neither?"
+  direction: "Your subnets are private by default, so outbound needs something explicit. Is that something tied to one zone? And which path to storage avoids paying per GB?"
+  answer: "VMs behind an Application Gateway v2, PostgreSQL with private access, a StandardV2 (zone-redundant) NAT gateway, and a storage service endpoint for the image traffic."
+
+analogy:
+  title: "Reception, back offices and the post room"
+  text: |
+    Visitors only ever meet reception; the offices behind have no street
+    door. Staff send letters out through the post room, which should be
+    built so a flood in one wing doesn't close it. And parcels for the
+    warehouse next door use the free internal corridor, not the courier who
+    charges by weight.
+
+debrief:
+  summary: |
+    The same principles as on any cloud: expose only the entry point, keep
+    servers and data private, give private resources an explicit way out,
+    and keep heavy traffic to platform services off paths that charge per
+    GB. Azure has its own details. New virtual networks are private by
+    default, so outbound needs a NAT gateway or similar. A Standard NAT
+    gateway pinned to a zone doesn't survive that zone, while the StandardV2
+    SKU is zone-redundant at the same price. Service endpoints send storage
+    traffic straight over the Azure backbone with no extra charge.
+  real_world: |
+    Compare this with the AWS version of the challenge: AWS NAT gateways
+    are zonal, so you deploy one per zone; Azure's StandardV2 NAT gateway is
+    one zone-redundant resource. Private endpoints are the other common way
+    to reach PaaS services privately: they give the service a private IP in
+    your network, with their own charges.
+
+sources:
+  - title: "Azure: Default outbound access (new virtual networks default to private subnets)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/default-outbound-access"
+    retrieved: 2026-10-01
+  - title: "Azure NAT Gateway: Reliability and availability zones (zonal vs StandardV2 zone-redundant)"
+    url: "https://learn.microsoft.com/en-us/azure/nat-gateway/nat-availability-zones"
+    retrieved: 2026-10-01
+  - title: "Azure NAT Gateway: FAQ (Standard and StandardV2 pricing)"
+    url: "https://learn.microsoft.com/en-us/azure/nat-gateway/faq"
+    retrieved: 2026-10-01
+  - title: "Azure NAT Gateway pricing (per hour and per GB processed)"
+    url: "https://azure.microsoft.com/en-us/pricing/details/azure-nat-gateway/"
+    retrieved: 2026-10-01
+  - title: "Azure: Virtual network service endpoints (direct over the backbone, no extra charge)"
+    url: "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-service-endpoints-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Application Gateway: How an application gateway works (private IPs to backends)"
+    url: "https://learn.microsoft.com/en-us/azure/application-gateway/how-application-gateway-works"
+    retrieved: 2026-10-01
+  - title: "Azure reliability: Application Gateway v2 (zone-redundant by default)"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-application-gateway-v2"
+    retrieved: 2026-10-01
+  - title: "Azure Database for PostgreSQL flexible server: Networking with private access"
+    url: "https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-networking"
+    retrieved: 2026-10-01

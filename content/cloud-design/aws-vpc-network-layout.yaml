@@ -1,0 +1,185 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: aws-vpc-network-layout
+track: cloud-design
+difficulty: 2
+title: "Lay out the network for a new shop on AWS"
+provider: aws
+par_minutes: 10
+
+brief: |
+  A new online shop is moving to AWS in us-east-1: web servers, a PostgreSQL
+  database, and product images in S3 (the web tier reads and writes several
+  terabytes of images a month). The web servers also call a payment
+  provider's API on the internet. Security wants nothing reachable from the
+  internet except the website itself, and finance wants no surprise network
+  charges. Both web servers and the database already run in two
+  Availability Zones.
+
+requirements:
+  - "Only the website is reachable from the internet"
+  - "Web servers can call the payment provider's API"
+  - "Keep working if one Availability Zone fails"
+  - "Stay within 15 cost units per month"
+budget: 15
+
+tiers:
+  - id: web
+    label: "Web servers"
+    options:
+      - id: web-public
+        short: "Public subnets"
+        label: "EC2 in public subnets, each with a public IP address"
+        cost: 2
+        facts:
+          - "An internet gateway lets resources in public subnets connect to the internet if they have a public IPv4 address, and lets the internet initiate connections to them."
+          - "Instances are spread across two Availability Zones."
+        capabilities: { survives: [az-outage, payment-call], scales: 1 }
+      - id: web-private-alb
+        short: "Private + ALB"
+        label: "EC2 in private subnets, behind an internet-facing Application Load Balancer"
+        cost: 4
+        facts:
+          - "The load balancer's nodes are in public subnets; it routes requests to targets using their private IP addresses."
+          - "Instances in private subnets have no public IP address, so the internet can't start a connection to them."
+          - "Instances are spread across two Availability Zones."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+  - id: database
+    label: "Database (RDS for PostgreSQL, Multi-AZ)"
+    options:
+      - id: db-public
+        short: "Publicly accessible"
+        label: "Public access on, in subnets with an internet gateway"
+        cost: 4
+        facts:
+          - "With Public access on, the DB instance gets a public IP address in addition to its private one."
+          - "Its DB subnet group must have an internet gateway."
+        capabilities: { survives: [az-outage, payment-call], scales: 1 }
+      - id: db-private
+        short: "Private"
+        label: "Public access off, in private subnets; security group allows only the web tier"
+        cost: 4
+        facts:
+          - "The DB instance has only a private IP address inside the VPC."
+          - "Its security group allows PostgreSQL only from the web servers' security group."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+  - id: outbound
+    label: "Outbound internet for private subnets"
+    options:
+      - id: nat-none
+        short: "None"
+        label: "No NAT gateway"
+        cost: 0
+        facts: ["Instances in private subnets can't start connections to the internet."]
+        capabilities: { survives: [internet-scan, az-outage], scales: 1 }
+      - id: nat-single
+        short: "1 NAT gateway"
+        label: "One NAT gateway, in one Availability Zone, shared by both zones"
+        cost: 3
+        facts:
+          - "Each NAT gateway is created in one Availability Zone and is redundant within that zone."
+          - "If resources in several zones share one NAT gateway and its zone is down, resources in the other zones lose internet access."
+        capabilities: { survives: [internet-scan, payment-call], scales: 1 }
+      - id: nat-per-az
+        short: "NAT per AZ"
+        label: "A NAT gateway in each Availability Zone, each zone routing to its own"
+        cost: 6
+        facts:
+          - "AWS recommends a NAT gateway in each Availability Zone, with each zone's resources routed to the NAT gateway in the same zone."
+          - "NAT gateways are charged per hour and per gigabyte processed."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+  - id: s3
+    label: "Path to S3 for the image traffic"
+    options:
+      - id: s3-via-nat
+        short: "Via NAT"
+        label: "Through the NAT gateway, like any other internet traffic"
+        cost: 8
+        facts:
+          - "NAT gateways charge for each gigabyte they process, so several terabytes a month to S3 adds up."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+      - id: s3-gateway-endpoint
+        short: "Gateway endpoint"
+        label: "An S3 gateway endpoint on the private route tables"
+        cost: 0
+        facts:
+          - "A gateway endpoint adds a route for S3 to the selected route tables, so S3 traffic doesn't use the NAT gateway."
+          - "There's no additional charge for using gateway endpoints."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+
+stress_tests:
+  - id: internet-scan
+    label: "Someone scans the whole internet for open servers and databases"
+    requires: { every_tier_survives: internet-scan }
+  - id: payment-call
+    label: "A customer pays: the web tier must reach the payment provider"
+    requires: { every_tier_survives: payment-call }
+  - id: az-outage
+    label: "us-east-1a becomes unreachable"
+    requires: { every_tier_survives: az-outage }
+
+failure_feedback:
+  web-public:
+    internet-scan: "The web servers have public IP addresses, so the scan reaches them directly, not just the website through a load balancer."
+  db-public:
+    internet-scan: "The database has a public IP address. Even with a strict security group, it's now one rule change away from the internet."
+  nat-none:
+    payment-call: "Private web servers have no route to the internet, so they can't reach the payment provider."
+  nat-single:
+    az-outage: "The only NAT gateway was in us-east-1a. The web servers in the other zone are fine, but they can't reach the payment provider."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { web: web-private-alb, database: db-private, outbound: nat-per-az, s3: s3-gateway-endpoint }
+    why: "Only the load balancer faces the internet; servers and database are private. Each zone has its own NAT gateway for the payment API, and image traffic goes straight to S3 through a gateway endpoint instead of being charged per GB at the NAT gateway."
+
+hints:
+  nudge: "For each piece, ask: does the internet need to start connections to it, or does it only need to start connections out?"
+  direction: "Public IPs make things reachable; NAT gateways give private things a way out. What happens to the way out if its zone fails? And what does every gigabyte through it cost?"
+  answer: "Web servers in private subnets behind an internet-facing ALB, a private database, a NAT gateway per Availability Zone, and an S3 gateway endpoint for the image traffic."
+
+analogy:
+  title: "Reception, back offices and the post room"
+  text: |
+    Visitors only ever meet reception; the offices behind it have no street
+    door. Staff can still send letters out through the post room, but if
+    there's one post room in one wing and that wing floods, nobody can send
+    anything, so each wing gets its own. And parcels for the warehouse next
+    door shouldn't go through the paid courier at all: there's a free gate.
+
+debrief:
+  summary: |
+    A secure AWS network separates what must be reachable from the internet
+    (the load balancer) from what only needs to reach out (web servers) and
+    what needs neither (the database). Private subnets give you that
+    separation; NAT gateways give private resources a way out, and because
+    each lives in one Availability Zone you need one per zone for the way out
+    to survive a zone failure. Heavy traffic to S3 should use a gateway
+    endpoint, which has no additional charge, rather than the NAT gateway,
+    which charges per gigabyte.
+  real_world: |
+    This is the standard AWS layout for web applications: public subnets for
+    load balancers and NAT gateways, private subnets for everything else,
+    gateway endpoints for S3 and DynamoDB. The two mistakes this challenge
+    catches, a single shared NAT gateway and S3 traffic through NAT, show up
+    in real outages and real bills.
+
+sources:
+  - title: "Amazon VPC: Enable internet access using an internet gateway"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html"
+    retrieved: 2026-10-01
+  - title: "Elastic Load Balancing: How it works (internet-facing load balancers route to private IP addresses)"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html"
+    retrieved: 2026-10-01
+  - title: "Amazon RDS: Working with a DB instance in a VPC (Public access)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: NAT gateway basics (one per Availability Zone for resiliency)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-basics.html"
+    retrieved: 2026-10-01
+  - title: "Amazon VPC: Pricing for NAT gateways"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-pricing.html"
+    retrieved: 2026-10-01
+  - title: "AWS PrivateLink: Gateway endpoints"
+    url: "https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html"
+    retrieved: 2026-10-01
