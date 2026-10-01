@@ -102,13 +102,21 @@ commit the result (a test fails if you forget).
 - **The analogy should use no IT words.** If you need jargon to explain it, it's
   not an analogy yet.
 
-## Concepts (for basics incidents)
+## Concepts
 
-Difficulty-1 incidents that teach a platform's basics can add `concepts`: 1 to 4
-terms, each with a plain-English `text` and a `url` to the provider's own docs.
-The debrief shows them right after the root cause. Write them for someone who has
-never used the platform: what the thing is and why it exists, not how to
-configure it.
+Any incident can add `concepts`: 1 to 4 terms, each with a plain-English `text`
+and a `url` to the provider's own docs. Players see them **during play**, free, in
+the Field guide panel, and again in the debrief after the root cause. Write them
+for someone who has never used the platform: what the thing is and why it
+exists, not how to configure it.
+
+Because they're free, concepts must not be hints. The test: would this text
+still be true and useful in a *different* incident on the same services? Define
+the pieces in play (including the ones behind the wrong hypotheses); don't say
+what's wrong here, what the default is when the default is the cause, or which
+option to pick. "Rule priority: lower numbers are processed first" passes;
+"Key Vault Reader never reads values" (in the incident where that's the cause)
+doesn't. Save those for `hints` and the debrief's `root_cause`.
 
 ## Distributed-systems views
 

@@ -9,6 +9,7 @@ import StressResults from '../components/StressResults.tsx'
 import { useStressRun } from '../components/useStressRun.ts'
 import CostMeter from '../components/CostMeter.tsx'
 import HintPanel from '../components/HintPanel.tsx'
+import FieldGuide from '../components/FieldGuide.tsx'
 import Prose from '../components/Prose.tsx'
 
 export type CanvasRun = { design: Design; at: number }
@@ -249,6 +250,7 @@ export default function CanvasScreen({
             selected={focusTest?.id}
             onSelect={setShownTest}
           />
+          <FieldGuide mode="design" />
           <HintPanel scenario={c} used={hints} onRequest={() => setHints((h) => Math.min(3, h + 1))} />
         </div>
       </div>

@@ -168,7 +168,7 @@ concepts:
     text: "A reusable list of who or what to notify when an alert fires: email, SMS, a webhook, an automation."
     url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups"
   - term: "Alert processing rule"
-    text: "Changes fired alerts on their way out: it can add action groups, or suppress them (remove all notifications), across a scope. Without a schedule it's always active."
+    text: "Changes fired alerts on their way out: it can add action groups, or suppress them (remove all notifications), across a scope."
     url: "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-processing-rules"
 
 sources:

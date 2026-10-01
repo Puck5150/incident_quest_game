@@ -158,7 +158,7 @@ concepts:
     text: "An identity for an application or pipeline (not a person) that signs in to Azure and gets roles like a user does."
     url: "https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals"
   - term: "Authentication vs authorization"
-    text: "Authentication proves who you are (signing in). Authorization decides what you may do, at which scope. This pipeline passed the first and failed the second."
+    text: "Authentication proves who you are (signing in). Authorization decides what you may do, at which scope."
     url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/overview"
 
 sources:

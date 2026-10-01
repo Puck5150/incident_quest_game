@@ -9,6 +9,7 @@ import TraceWaterfall from '../components/TraceWaterfall.tsx'
 import MetricChart from '../components/MetricChart.tsx'
 import PipelineView from '../components/PipelineView.tsx'
 import HintPanel from '../components/HintPanel.tsx'
+import FieldGuide from '../components/FieldGuide.tsx'
 import Tabs from '../components/Tabs.tsx'
 import Prose from '../components/Prose.tsx'
 import Icon, { type IconName } from '../components/Icon.tsx'
@@ -236,6 +237,7 @@ export default function IncidentScreen({
               )}
             </div>
 
+            <FieldGuide mode="incident" phase={phase} concepts={scenario.concepts} />
             <HintPanel scenario={scenario} used={hintsUsed(session.log)} onRequest={() => send({ type: 'REQUEST_HINT' })} />
           </div>
         </div>

@@ -168,7 +168,7 @@ concepts:
     text: "The control plane manages the vault itself (create it, change settings); the data plane is using what's inside (read or write secrets). Roles grant one or the other."
     url: "https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide"
   - term: "Key Vault Secrets User"
-    text: "The built-in role for apps that need to read secret values. Key Vault Reader only reads metadata, never values."
+    text: "The built-in role for apps that need to read secret values."
     url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/security"
 
 sources:

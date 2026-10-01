@@ -167,7 +167,7 @@ concepts:
     text: "Managed file shares in a storage account that clients mount over SMB (or NFS), like a network drive."
     url: "https://learn.microsoft.com/en-us/azure/storage/files/storage-how-to-use-files-windows"
   - term: "SMB and port 445"
-    text: "SMB is the Windows file-sharing protocol and uses TCP port 445, which many networks block outbound to the internet."
+    text: "SMB is the Windows file-sharing protocol and uses TCP port 445. Clients must be able to open a connection on that port to the share."
     url: "https://learn.microsoft.com/en-us/troubleshoot/azure/azure-storage/files/connectivity/files-troubleshoot-smb-connectivity"
   - term: "Private endpoint over VPN"
     text: "Gives the storage account a private IP in your virtual network, so offices connected by VPN or ExpressRoute reach it without crossing the internet."

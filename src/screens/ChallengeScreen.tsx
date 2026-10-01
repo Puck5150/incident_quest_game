@@ -5,6 +5,7 @@ import StressResults from '../components/StressResults.tsx'
 import CostMeter from '../components/CostMeter.tsx'
 import { useStressRun } from '../components/useStressRun.ts'
 import HintPanel from '../components/HintPanel.tsx'
+import FieldGuide from '../components/FieldGuide.tsx'
 import Prose from '../components/Prose.tsx'
 import Diagram from '../components/Diagram.tsx'
 
@@ -154,6 +155,7 @@ export default function ChallengeScreen({
             onSkip={skip}
             onSubmit={() => onFinished(runs, hints)}
           />
+          <FieldGuide mode="design" />
           <HintPanel scenario={c} used={hints} onRequest={() => setHints((h) => Math.min(3, h + 1))} />
         </div>
       </div>

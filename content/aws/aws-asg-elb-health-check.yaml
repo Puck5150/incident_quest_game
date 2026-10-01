@@ -161,7 +161,7 @@ concepts:
     text: "How an Auto Scaling group decides an instance is unhealthy and should be replaced. EC2 checks only that the instance is running."
     url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html"
   - term: "ELB health checks for Auto Scaling"
-    text: "When turned on, Auto Scaling also treats instances the load balancer reports Unhealthy as unhealthy and replaces them. They're off by default."
+    text: "When turned on, Auto Scaling also treats instances the load balancer reports Unhealthy as unhealthy and replaces them."
     url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/health-checks-overview.html"
   - term: "Health check grace period"
     text: "How long Auto Scaling waits after launching an instance before acting on its health checks, so it isn't replaced while still starting up."

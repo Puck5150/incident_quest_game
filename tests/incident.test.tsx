@@ -168,3 +168,15 @@ it('reduce motion setting persists and marks the document', () => {
   expect(screen.getByRole('button', { name: 'Reduce motion' }).getAttribute('aria-pressed')).toBe('true')
   fireEvent.click(screen.getByRole('button', { name: 'Reduce motion' }))
 })
+
+it('the field guide is there from the start, free, and its coaching follows the phase', async () => {
+  render(<App />)
+  await openIncident()
+  const guide = () => screen.getByRole('region', { name: /Field guide/ })
+  expect(guide().textContent).toMatch(/Collect evidence/)
+  expect(within(guide()).getByText('How to approach it')).toBeTruthy()
+
+  fireEvent.click(screen.getByLabelText(/filesystem is full/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  expect(guide().textContent).toMatch(/smallest safe change/)
+})
