@@ -171,6 +171,13 @@ from your own experience and tick them off.
       `replicationRole` value "AsyncReplica": representative.
 - [ ] psql output with `\timing` on: format from the psql docs; the values are scenario data.
 
+## cloud/gcp-lifecycle-deleted-objects
+- [ ] `gcloud storage buckets describe --format=json(...)` field names (lifecycle_config,
+      soft_delete_policy.retentionDurationSeconds): representative, not verified against a real run.
+- [ ] Soft-deleted listing format (`gs://bucket/object#generation`): the docs describe
+      generation numbers but don't print a listing.
+- [ ] The audit log row is simplified; real entries are JSON with methodName and resourceName.
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.

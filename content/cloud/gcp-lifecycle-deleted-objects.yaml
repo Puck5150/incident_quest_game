@@ -1,0 +1,191 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-lifecycle-deleted-objects
+track: cloud
+difficulty: 2
+title: "Customers' uploaded documents are disappearing"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P1
+  body: |
+    Since this morning, customers opening documents they uploaded (ID scans,
+    signed contracts) get "file not found". Anything uploaded today still
+    works. It seems to be everything older than about a day. We've had 60
+    tickets in an hour.
+
+environment: |
+  The app stores customer uploads in the Cloud Storage bucket acme-user-docs.
+  A second bucket, acme-exports, holds temporary CSV exports that should be
+  cleaned up daily. Both use the default soft delete policy (deleted objects
+  are kept for 7 days and can be restored). Bucket changes are made with
+  gcloud by the platform team.
+
+diagram:
+  nodes:
+    - { id: app, label: "app", col: 0, row: 0, status: degraded }
+    - { id: docs, label: "gs://acme-user-docs", col: 1, row: 0, status: ok }
+    - { id: exports, label: "gs://acme-exports", col: 1, row: 1, status: ok }
+  edges:
+    - { from: app, to: docs }
+    - { from: app, to: exports }
+
+terminal:
+  prompt: "you@cloudshell:~ (acme-prod)$"
+  commands:
+    - match: "gcloud storage buckets describe gs://acme-user-docs --format=json(lifecycle_config,soft_delete_policy)"
+      when_actions: [stop-rule]
+      output: |
+        {
+          "soft_delete_policy": { "retentionDurationSeconds": "604800" }
+        }
+    - match: "gcloud storage buckets describe gs://acme-user-docs --format=json(lifecycle_config,soft_delete_policy)"
+      evidence: wrong-bucket-rule
+      output: |
+        {
+          "lifecycle_config": { "rule": [ { "action": { "type": "Delete" }, "condition": { "age": 1 } } ] },
+          "soft_delete_policy": { "retentionDurationSeconds": "604800" }
+        }
+    - match: "gcloud storage buckets describe gs://acme-exports --format=json(lifecycle_config,soft_delete_policy)"
+      output: |
+        {
+          "soft_delete_policy": { "retentionDurationSeconds": "604800" }
+        }
+    - match: "gcloud storage ls gs://acme-user-docs/customers/1042/"
+      output: |
+        gs://acme-user-docs/customers/1042/2026-10-01-delivery-note.pdf
+    - match_regex: "^gcloud storage ls \"?gs://acme-user-docs/\\*\\*\"? --soft-deleted( \\| head.*)?$"
+      evidence: soft-deleted
+      output: |
+        gs://acme-user-docs/customers/1042/2026-03-14-id-scan.pdf#1710412800443120
+        gs://acme-user-docs/customers/1042/2026-07-02-signed-contract.pdf#1719921600118337
+        gs://acme-user-docs/customers/1043/2025-11-20-id-scan.pdf#1700480400905211
+        ...
+    - match: "cat exports-cleanup.json"
+      output: |
+        {
+          "rule": [
+            { "action": { "type": "Delete" }, "condition": { "age": 1 } }
+          ]
+        }
+
+logs:
+  - name: "Cloud Audit Logs (Admin Activity): bucket changes, last 2 days"
+    evidence: audit-change
+    lines: |
+      2026-09-30 16:41:07  alex@acme.example  storage.buckets.update  projects/_/buckets/acme-user-docs  (lifecycle configuration set)
+  - name: "#platform (chat)"
+    evidence: meant-exports
+    lines: |
+      16:38 alex: adding the daily cleanup for the temp exports bucket, rule is in exports-cleanup.json (delete anything older than 1 day)
+      16:42 alex: done, applied with gcloud storage buckets update --lifecycle-file=exports-cleanup.json
+      16:43 dana: 👍
+  - name: "app errors"
+    lines: |
+      08:02:11 GET /documents/1042/2026-03-14-id-scan.pdf -> storage 404 No such object
+      08:02:40 GET /documents/1043/2025-11-20-id-scan.pdf -> storage 404 No such object
+      08:03:05 GET /documents/1042/2026-10-01-delivery-note.pdf -> 200
+
+hypotheses:
+  - id: rule-wrong-bucket
+    text: "A lifecycle rule meant for the exports bucket (delete everything older than 1 day) was applied to the customer documents bucket."
+    correct: true
+  - id: app-bug
+    text: "A bug in the app is deleting customer files."
+    feedback: "The pattern is by age, not by feature: everything older than about a day is gone and today's uploads are fine. That's what a lifecycle age condition does. And the documents bucket has exactly that rule."
+  - id: permissions
+    text: "Someone changed the bucket's permissions, so the app can't read old files."
+    feedback: "A permissions problem would affect new and old files alike, and would be refused, not missing. The old objects really are deleted: they show up as soft-deleted."
+  - id: manual-delete
+    text: "Someone deleted the files by hand."
+    feedback: "The audit log shows one change to the bucket: its lifecycle configuration, set yesterday at 16:41. Lifecycle deletions then happened in the background overnight."
+
+actions:
+  - id: stop-rule
+    label: "gcloud storage buckets update gs://acme-user-docs --clear-lifecycle"
+    kind: fix
+    match_regex: "^gcloud storage buckets update gs://acme-user-docs --clear-lifecycle$"
+    feedback: "The rule is removed from the documents bucket. Lifecycle changes can take up to 24 hours to go into effect, though, so the old rule may still delete some objects until then. They'll be soft-deleted too, so check again and restore any stragglers tomorrow."
+  - id: bulk-restore
+    label: "Bulk-restore everything soft-deleted since the change: gcloud storage restore \"gs://acme-user-docs/**\" --async --deleted-after-time=2026-09-30T16:40:00Z"
+    kind: fix
+    match_regex: "^gcloud storage restore \"?gs://acme-user-docs/\\*\\*\"? --async --deleted-after-time=\\S+( --deleted-before-time=\\S+)?$"
+    feedback: "That starts a bulk restore as a long-running operation. It runs asynchronously and can take an hour or more to begin, so tell support when to expect documents back, and track the operation until it finishes."
+  - id: age-30
+    label: "Change the rule's age condition from 1 day to 30 days"
+    kind: wrong
+    feedback: "This is a bucket of customer documents: nothing in it should be deleted by age at all. A 30-day rule just deletes everything older than a month."
+  - id: enable-versioning
+    label: "Turn on Object Versioning so this can't happen"
+    kind: wrong
+    feedback: "Versioning only affects objects deleted or overwritten after it's on; it doesn't bring back what's already gone. Soft delete is what already protects these objects, and it's what you restore from."
+  - id: disable-soft-delete
+    label: "Clear the bucket's soft delete policy, to stop paying to store hundreds of GB of soft-deleted objects"
+    kind: destructive
+    feedback: "Objects already soft-deleted are kept. But for up to 24 hours the old lifecycle rule may still delete more documents, and with soft delete off those deletions are permanent. Google's docs warn about exactly this: with soft delete disabled, deleted objects can't be restored."
+
+solution_paths:
+  - [stop-rule, bulk-restore]
+
+key_evidence: [wrong-bucket-rule, soft-deleted, audit-change, meant-exports]
+
+evidence_labels:
+  wrong-bucket-rule: "The documents bucket has a lifecycle rule: delete anything older than 1 day"
+  soft-deleted: "The missing documents are soft-deleted, so they can still be restored"
+  audit-change: "The lifecycle rule was set on acme-user-docs yesterday at 16:41"
+  meant-exports: "The rule was written for the temporary exports bucket"
+
+hints:
+  nudge: "Only files older than about a day are gone. What deletes files by age on its own?"
+  direction: "Look at the documents bucket's lifecycle configuration and its recent changes, and check whether the missing files are soft-deleted."
+  answer: "The exports cleanup rule (Delete, age 1) was applied to acme-user-docs instead of acme-exports. Clear the lifecycle config on acme-user-docs, then bulk-restore objects deleted since 16:40 yesterday. Don't touch soft delete."
+
+analogy:
+  title: "The shredding schedule on the wrong cabinet"
+  text: |
+    The office sets up a rule: "shred anything in the scrap tray older than a
+    day." The label goes on the wrong cabinet: the one holding customer
+    contracts. Overnight the cleaner shreds everything older than a day.
+    Luckily, shredded paper sits in a bin for a week before it's collected,
+    so you can tape it back together. Take the label off, empty the bin back
+    into the cabinet, and don't let anyone collect the bin early.
+
+debrief:
+  root_cause: |
+    A lifecycle configuration written to clean up temporary exports (Delete,
+    age 1 day, no other conditions) was applied to acme-user-docs instead of
+    acme-exports. Cloud Storage applies lifecycle actions asynchronously, so
+    overnight it deleted every object older than a day: years of customer
+    uploads. Because the bucket had the default soft delete policy, each
+    deleted object became soft-deleted and stays restorable for 7 days.
+  ideal_path:
+    - "Notice the pattern: everything older than about a day is missing, new uploads work."
+    - "Check the bucket's lifecycle configuration: a Delete rule with age 1."
+    - "Find the change in the Admin Activity audit log, and the intent in chat: it was meant for acme-exports."
+    - "Clear the lifecycle config on acme-user-docs."
+    - "Confirm the objects are soft-deleted, then bulk-restore everything deleted since the change."
+    - "Leave soft delete on: the old rule can act for up to 24 hours. Check again tomorrow and restore stragglers."
+    - "Then apply the rule to the bucket it was meant for, and test lifecycle rules on non-production data first."
+  real_world: |
+    Lifecycle rules are powerful and silent: they act in the background,
+    and a missing prefix condition or the wrong bucket name turns cleanup
+    into data loss. Keep soft delete (or versioning) on for anything you
+    can't recreate, keep lifecycle config in code review, and test rules on
+    a small prefix before applying them to production.
+
+sources:
+  - title: "Cloud Storage: Object Lifecycle Management (Delete action, age condition, changes take up to 24 hours, asynchronous actions)"
+    url: "https://cloud.google.com/storage/docs/lifecycle"
+    retrieved: 2026-10-01
+  - title: "Cloud Storage: Soft delete (default 7-day retention, interaction with lifecycle rules)"
+    url: "https://cloud.google.com/storage/docs/soft-delete"
+    retrieved: 2026-10-01
+  - title: "Cloud Storage: Use soft-deleted objects (list, restore, bulk restore)"
+    url: "https://cloud.google.com/storage/docs/use-soft-deleted-objects"
+    retrieved: 2026-10-01
+  - title: "gcloud storage buckets update (--clear-lifecycle, --clear-soft-delete)"
+    url: "https://cloud.google.com/sdk/gcloud/reference/storage/buckets/update"
+    retrieved: 2026-10-01
+  - title: "Cloud Storage: Cloud Audit Logs (updating bucket metadata is Admin Activity)"
+    url: "https://cloud.google.com/storage/docs/audit-logging"
+    retrieved: 2026-10-01
