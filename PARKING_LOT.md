@@ -10,10 +10,10 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - URL routing / deep links to a specific incident / back-button support
 
 ## Performance
-- Code-split content per item. Zod is out of the browser bundle and the play and
-  debrief screens load lazily, which brought the entry chunk from ~592 kB to ~424 kB
-  (~122 kB gzipped). Most of what's left is react-dom (~200 kB) and the content
-  (~170 kB, every item's full text). Split it when content roughly doubles.
+- Bundle: zod is build-time only, play/debrief screens load lazily, and each
+  content item is its own chunk loaded when played (the entry chunk keeps only
+  tracks and queue metadata). Entry chunk ~265 kB (~83 kB gzipped), about 200 kB
+  of it react-dom. Nothing obvious left to split.
 
 ## Gameplay
 - Typed fix commands in the terminal counting as actions (e.g. `systemctl restart nginx`)

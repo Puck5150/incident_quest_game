@@ -1,5 +1,6 @@
-// Loads every YAML file under /content, validates it, and exposes the result
-// to the app as `import content from 'virtual:content'`.
+// Loads every YAML file under /content, validates it, and exposes it to the
+// app as `virtual:content`: a small index (tracks plus queue metadata) and
+// `loadItem(id)`, which imports one item's full content as its own chunk.
 //
 // Why a plugin instead of importing YAML at runtime: validation happens at
 // BUILD time. A broken scenario fails `npm run build` (and shows Vite's error
@@ -215,17 +216,65 @@ function scenarioFiles(dir: string): string[] {
     .map((f) => path.join(dir, f))
 }
 
+// What the queue, skill tree and unlocks need, without the full content.
+function indexOf(c: Content) {
+  const base = (x: { id: string; track: string; title: string; difficulty: number }) => ({
+    id: x.id,
+    track: x.track,
+    title: x.title,
+    difficulty: x.difficulty,
+  })
+  return {
+    tracks: c.tracks,
+    items: [
+      ...c.scenarios.map((s) => ({ ...base(s), kind: 'incident' as const, tag: s.ticket.priority })),
+      ...c.challenges.map((x) => ({ ...base(x), kind: 'challenge' as const, tag: 'Design' })),
+      ...c.canvases.map((x) => ({ ...base(x), kind: 'challenge' as const, tag: 'Design · canvas' })),
+      ...c.multis.map((m) => ({ ...base(m), kind: 'challenge' as const, tag: 'Design · pick your cloud', providers: m.providers })),
+    ],
+  }
+}
+
+// One item's full content, tagged with how it plays.
+function itemOf(c: Content, id: string) {
+  const find = <T extends { id: string }>(xs: T[]) => xs.find((x) => x.id === id)
+  const s = find(c.scenarios)
+  if (s) return { kind: 'incident', scenario: s }
+  const ch = find(c.challenges)
+  if (ch) return { kind: 'challenge', challenge: ch }
+  const cv = find(c.canvases)
+  if (cv) return { kind: 'canvas', canvas: cv }
+  const m = find(c.multis)
+  if (m) return { kind: 'multi', multi: m }
+}
+
 const VIRTUAL_ID = 'virtual:content'
 const RESOLVED_ID = '\0' + VIRTUAL_ID
+const ITEM_PREFIX = VIRTUAL_ID + '/item/'
 
 export function contentPlugin(dir: string): Plugin {
+  // Validated once per build (and again after a YAML change in dev), not once per module.
+  let cached: Content | undefined
+  const content = () => (cached ??= loadContent(dir))
   return {
     name: 'incident-quest-content',
     resolveId(id) {
-      if (id === VIRTUAL_ID) return RESOLVED_ID
+      if (id === VIRTUAL_ID || id.startsWith(ITEM_PREFIX)) return '\0' + id
     },
     load(id) {
-      if (id === RESOLVED_ID) return `export default ${JSON.stringify(loadContent(dir))}`
+      if (id === RESOLVED_ID) {
+        const c = content()
+        const all = [...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis]
+        const loaders = all.map((x) => `${JSON.stringify(x.id)}: () => import(${JSON.stringify(ITEM_PREFIX + x.id)})`)
+        return [
+          `export default ${JSON.stringify(indexOf(c))}`,
+          `const loaders = {${loaders.join(',')}}`,
+          `export const loadItem = (id) => loaders[id]().then((m) => m.default)`,
+        ].join('\n')
+      }
+      if (id.startsWith('\0' + ITEM_PREFIX)) {
+        return `export default ${JSON.stringify(itemOf(content(), id.slice(1 + ITEM_PREFIX.length)))}`
+      }
     },
     // YAML files aren't imported modules, so Vite doesn't know to reload when
     // they change. Watch the folder ourselves and force a full reload.
@@ -233,8 +282,9 @@ export function contentPlugin(dir: string): Plugin {
       server.watcher.add(dir)
       server.watcher.on('all', (_event, file) => {
         if (!file.startsWith(dir)) return
-        const mod = server.moduleGraph.getModuleById(RESOLVED_ID)
-        if (mod) server.moduleGraph.invalidateModule(mod)
+        cached = undefined
+        for (const [id, mod] of server.moduleGraph.idToModuleMap)
+          if (id.startsWith(RESOLVED_ID)) server.moduleGraph.invalidateModule(mod)
         server.ws.send({ type: 'full-reload' })
       })
     },
