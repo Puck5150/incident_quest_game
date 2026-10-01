@@ -18,7 +18,7 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 ## Content
 - More design challenges (slot, canvas and "pick your cloud"; see AUTHORING.md)
 - More cloud content: priority AWS, then Azure, then Google Cloud, including each
-  platform's basics (see the cloud coverage plan)
+  platform's basics (see PLAN_CLOUD_COVERAGE.md)
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - More tracks: Fundamentals, Windows/identity, Scripting and code, Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
 - More scenarios per track (each original track has two as of 2026-10-01) and difficulty 5
