@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-backup-file-recovery
+track: azure
+difficulty: 2
+title: "Someone deleted the Contracts folder; everything else must stay as it is"
+par_minutes: 10
+
+ticket:
+  from: "Finance manager"
+  priority: P2
+  body: |
+    At 10:40 someone deleted D:\Finance\Contracts on the finance file
+    server: about 1,800 files, 3.2 GB. We need it back as it was last night.
+    The rest of the team has been working on that server all morning, so
+    please don't undo their changes.
+
+environment: |
+  fs-finance-01 is a Windows Server VM (resource group rg-finance) backed up
+  by Azure Backup to the Recovery Services vault rsv-prod, every night at
+  23:00, with 30 days of retention. There are no other copies of the
+  folder. Windows shadow copies aren't enabled on the server.
+
+diagram:
+  nodes:
+    - { id: users, label: "finance team", col: 0, row: 0, status: ok }
+    - { id: vm, label: "fs-finance-01", col: 1, row: 0, status: degraded }
+    - { id: vault, label: "Recovery Services vault rsv-prod", col: 2, row: 0, status: ok }
+  edges:
+    - { from: users, to: vm }
+    - { from: vm, to: vault }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az backup recoverypoint list -g rg-finance -v rsv-prod -c fs-finance-01 -i fs-finance-01 --backup-management-type AzureIaasVM --query \"[0:3].{name:name, time:properties.recoveryPointTime}\" --out table"
+      evidence: recovery-points
+      output: |
+        Name               Time
+        -----------------  -------------------------
+        81432916551742     2026-09-30T23:04:12+00:00
+        81432830219874     2026-09-29T23:03:58+00:00
+        81432743986410     2026-09-28T23:04:30+00:00
+
+logs:
+  - name: "fs-finance-01: Security event log (object access), today"
+    evidence: deleted-1040
+    lines: |
+      10:40:17  Delete  D:\Finance\Contracts (folder, 1,812 files)  user: ACME\t.nguyen
+  - name: "fs-finance-01: files changed today (outside Contracts)"
+    evidence: others-working
+    lines: |
+      214 files modified or created since 08:00 under D:\Finance (budgets, invoices, month-end workings)
+
+hypotheses:
+  - id: file-recovery
+    text: "Last night's recovery point has the folder. Mount it with File Recovery and copy only Contracts back, leaving today's other changes alone."
+    correct: true
+  - id: no-backup
+    text: "The folder is gone for good: it isn't in any backup."
+    feedback: "The VM is backed up nightly, and the 09-30 23:04 recovery point was taken almost twelve hours before the deletion."
+  - id: whole-vm-only
+    text: "Azure Backup can only restore whole VMs or disks."
+    feedback: "It can also restore individual files and folders: File Recovery mounts a recovery point's disks so you can copy what you need."
+
+actions:
+  - id: file-recovery
+    label: "In the VM's Backup blade, choose File Recovery for the 09-30 23:04 recovery point, run the generated script, and copy D:\\Finance\\Contracts back from the mounted volume"
+    kind: fix
+    feedback: "The script mounts the recovery point's disks as volumes; you copy just the one folder back. At 3.2 GB it's within the 10 GB File Recovery is meant for, and nobody else's work is touched."
+  - id: unmount
+    label: "When the copy is verified, select Unmount disks for that recovery point"
+    kind: fix
+    feedback: "Access through the script would otherwise stay open for up to 12 hours. Unmounting invalidates it immediately: the recovery point holds the whole server's data, so don't leave it mounted."
+  - id: replace-existing
+    label: "Restore the VM from last night's recovery point with Replace existing"
+    kind: wrong
+    feedback: "The folder comes back, along with the rest of the disk as it was last night: 214 of today's changes by the rest of the team are gone (Azure Backup snapshots the VM before replacing, so it can be undone, at the cost of more downtime). Restore the folder, not the server."
+  - id: new-vm
+    label: "Create a new VM from the recovery point and move everyone to it"
+    kind: wrong
+    feedback: "Same problem, more work: the new VM has last night's state for everything, so the team loses this morning's changes, and you have a second file server to retire."
+  - id: overwrite-drive
+    label: "Mount the recovery point and copy the whole recovered D: drive over the live D: drive"
+    kind: destructive
+    feedback: "That overwrites every file the team changed this morning with last night's version, and there's no snapshot of the live state to go back to. Copy only the folder that was deleted."
+
+solution_paths:
+  - [file-recovery, unmount]
+
+key_evidence: [deleted-1040, recovery-points, others-working]
+
+evidence_labels:
+  deleted-1040: "The folder was deleted at 10:40 today"
+  recovery-points: "The most recent recovery point is from 09-30 at 23:04, before the deletion"
+  others-working: "214 other files on the server changed this morning and must be kept"
+
+hints:
+  nudge: "You need one folder from last night, and nothing else from last night."
+  direction: "Find a recovery point from before the deletion, then pick a restore option that returns files, not whole disks."
+  answer: "Use File Recovery on the 09-30 23:04 recovery point: run the script to mount it, copy D:\\Finance\\Contracts back, then unmount. Don't replace the VM or the drive."
+
+analogy:
+  title: "Fetching one file from the archive"
+  text: |
+    One drawer of the filing cabinet was emptied by mistake. The archive has
+    a photocopy of the whole office from last night. You don't replace the
+    office with the photocopy, because everyone has done a morning's work
+    since. You take the drawer's pages from the copy and put them back.
+
+debrief:
+  root_cause: |
+    The Contracts folder was deleted at 10:40, after a morning of other
+    work on the same server. Azure Backup's nightly recovery point from
+    23:04 has it. Restoring the whole VM or disk (Replace existing, or a new
+    VM) would also roll back everything else to last night. File Recovery
+    mounts a recovery point's disks through a generated script so you can
+    copy back just the folder, and is intended for restores up to 10 GB;
+    unmounting afterwards ends access to the recovery point.
+  ideal_path:
+    - "Confirm what's lost and when: Contracts, deleted at 10:40."
+    - "Pick the recovery point before that: 09-30 at 23:04."
+    - "Notice the constraint: 214 other files changed today must be kept."
+    - "Use File Recovery, mount the point, and copy only Contracts back."
+    - "Verify, then unmount the disks."
+  real_world: |
+    Most restores are a folder or a few files, not a whole machine. Learn
+    the file-level restore path before you need it, keep an eye on
+    recovery-point frequency versus how much work you can afford to lose,
+    and consider shadow copies or Azure Files snapshots for quick
+    self-service undo.
+
+concepts:
+  - term: "Recovery Services vault"
+    text: "Where Azure Backup stores recovery points for VMs and other workloads, according to a backup policy (schedule and retention)."
+    url: "https://learn.microsoft.com/en-us/azure/backup/backup-azure-arm-restore-vms"
+  - term: "Recovery point"
+    text: "A backup of the VM at a point in time that you can restore from: whole VM, disks, or individual files."
+    url: "https://learn.microsoft.com/en-us/azure/backup/backup-azure-arm-restore-vms"
+  - term: "File Recovery"
+    text: "Mounts a recovery point's disks on a machine through a generated script, so you can copy individual files and folders back. Meant for small restores (10 GB or less)."
+    url: "https://learn.microsoft.com/en-us/azure/backup/backup-azure-restore-files-from-vm"
+  - term: "Replace existing"
+    text: "Restores disks over the current VM's disks (after a snapshot). Everything on them returns to the recovery point's state."
+    url: "https://learn.microsoft.com/en-us/azure/backup/backup-azure-arm-restore-vms"
+
+sources:
+  - title: "Azure Backup: Recover files from Azure virtual machine backup (File Recovery, script, 10 GB guidance, unmount)"
+    url: "https://learn.microsoft.com/en-us/azure/backup/backup-azure-restore-files-from-vm"
+    retrieved: 2026-10-01
+  - title: "Azure Backup: Restore VMs by using the Azure portal (restore options, Replace existing)"
+    url: "https://learn.microsoft.com/en-us/azure/backup/backup-azure-arm-restore-vms"
+    retrieved: 2026-10-01

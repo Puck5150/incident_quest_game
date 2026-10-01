@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-policy-allowed-locations
+track: azure
+difficulty: 1
+title: "The deployment is refused, and we're Owner of the subscription"
+par_minutes: 8
+
+ticket:
+  from: "Partner integrations team"
+  priority: P3
+  body: |
+    Our Bicep deployment for the new partner portal fails immediately with
+    "RequestDisallowedByPolicy". We're Owner on the subscription, so it
+    can't be permissions. We put it in West US because the partner is in
+    California. Can someone with more access just push it through?
+
+environment: |
+  The subscription sub-partners sits under the company's management group
+  mg-acme. The governance team assigns Azure Policy at mg-acme for company
+  standards, including data-residency rules agreed with legal. The team
+  deploys with az deployment group create and a Bicep file.
+
+diagram:
+  nodes:
+    - { id: team, label: "deployment (Owner)", col: 0, row: 0, status: degraded }
+    - { id: policy, label: "Azure Policy at mg-acme", col: 1, row: 0, status: ok }
+    - { id: sub, label: "sub-partners", col: 2, row: 0, status: ok }
+  edges:
+    - { from: team, to: policy }
+    - { from: policy, to: sub }
+
+pipeline:
+  name: "deploy partner-portal · run #3"
+  trigger: "manual · Ines"
+  stages:
+    - name: "az deployment group create -g rg-partners -f main.bicep"
+      status: failure
+      duration_s: 6
+      evidence: disallowed
+      log: |
+        {"code":"RequestDisallowedByPolicy","target":"partner-portal-plan","message":"Resource 'partner-portal-plan' was disallowed by policy. Policy identifiers: '[{\"policyAssignment\":{\"name\":\"Allowed locations\",\"id\":\"/providers/Microsoft.Management/managementGroups/mg-acme/providers/Microsoft.Authorization/policyAssignments/allowed-locations\"},\"policyDefinition\":{\"name\":\"Allowed locations\",\"id\":\"/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c\"}}]'."}
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az policy assignment show --name allowed-locations --scope /providers/Microsoft.Management/managementGroups/mg-acme --query \"{name:displayName, params:parameters}\""
+      evidence: allowed-list
+      output: |
+        {
+          "name": "Allowed locations",
+          "params": {
+            "listOfAllowedLocations": { "value": [ "eastus2", "centralus" ] }
+          }
+        }
+    - match: "grep location main.bicep"
+      when_actions: [allowed-region]
+      output: |
+        param location string = 'centralus'
+    - match: "grep location main.bicep"
+      evidence: westus
+      output: |
+        param location string = 'westus'
+
+hypotheses:
+  - id: policy-location
+    text: "An Azure Policy assignment at the management group only allows East US 2 and Central US, and the deployment asks for West US."
+    correct: true
+  - id: rbac
+    text: "Our role on the subscription isn't high enough."
+    feedback: "You're Owner, and the error isn't AuthorizationFailed. Azure Policy is evaluated separately from role-based access: an Owner is still refused if a resource breaks a Deny policy."
+  - id: region-capacity
+    text: "West US has no capacity for this App Service plan."
+    feedback: "A capacity problem has its own error. This one names the policy assignment \"Allowed locations\" that refused the resource."
+  - id: bicep-error
+    text: "The Bicep file has a syntax error."
+    feedback: "The template was accepted and evaluated; a specific resource was then refused by policy."
+
+actions:
+  - id: allowed-region
+    label: "Set the Bicep location parameter to centralus (an allowed region) and redeploy"
+    kind: fix
+    feedback: "Central US is allowed, so the deployment goes through. It's also a short hop from California for the partner."
+  - id: exemption-process
+    label: "If West US is really required, ask the governance team for a policy exemption through their process"
+    kind: fix
+    feedback: "Exemptions exist for genuine exceptions, with an owner and an expiry, decided by the people accountable for the data-residency rule. That's the right channel, rather than going around it."
+  - id: more-access
+    label: "Ask a global admin to assign us a higher role and retry"
+    kind: wrong
+    feedback: "Roles don't override policy. Even the highest role is refused by a Deny effect on that resource; the request itself breaks the rule."
+  - id: portal
+    label: "Create the resources by hand in the portal instead"
+    kind: wrong
+    feedback: "Policy applies to every request, however it's made. The portal gets the same 403."
+  - id: delete-assignment
+    label: "Delete the Allowed locations assignment at mg-acme"
+    kind: destructive
+    feedback: "That removes a data-residency control for every subscription in the company, agreed with legal, to unblock one deployment. Someone else's audit will find it."
+
+solution_paths:
+  - [allowed-region, exemption-process]
+
+key_evidence: [disallowed, allowed-list, westus]
+
+evidence_labels:
+  disallowed: "RequestDisallowedByPolicy, naming the Allowed locations assignment at mg-acme"
+  allowed-list: "The assignment allows only eastus2 and centralus"
+  westus: "The Bicep file deploys to westus"
+
+hints:
+  nudge: "The error names a policy assignment, not a role. What does that policy allow?"
+  direction: "Read the assignment's parameters and compare them with the location in the Bicep file."
+  answer: "The Allowed locations policy at mg-acme permits eastus2 and centralus; the template uses westus. Deploy to an allowed region (or request an exemption through governance)."
+
+analogy:
+  title: "The building rules apply to the landlord too"
+  text: |
+    You hold every key to your floor, but the building has a rule: nothing
+    may be stored on the roof. Having more keys doesn't change the rule,
+    and taking the stairs instead of the lift doesn't either. Put it in an
+    allowed storeroom, or ask the building manager for a written exception.
+
+debrief:
+  root_cause: |
+    Azure Policy and role-based access control are separate checks. RBAC
+    decides whether you may make a request; policy decides whether the
+    resource you're asking for is allowed. The governance team assigned the
+    built-in "Allowed locations" policy at the management group with East US
+    2 and Central US, and its Deny effect refuses non-compliant requests with
+    403 RequestDisallowedByPolicy. Being Owner doesn't change that: the
+    request itself broke the rule by asking for West US.
+  ideal_path:
+    - "Read the error: RequestDisallowedByPolicy names the assignment and definition."
+    - "Read the assignment's parameters: allowed regions are eastus2 and centralus."
+    - "Compare with the template: location westus."
+    - "Deploy to an allowed region."
+    - "If a different region is truly needed, request an exemption through governance."
+  real_world: |
+    Policy denials surprise teams who assume Owner means anything goes.
+    Read the policy identifiers in the error, check assignments with
+    what-if or a test deployment before release day, and treat exemptions as
+    owned, time-limited exceptions.
+
+concepts:
+  - term: "Azure Policy"
+    text: "Rules that evaluate resources against company standards (allowed regions, required tags, no public IPs) and can deny, audit or modify them."
+    url: "https://learn.microsoft.com/en-us/azure/governance/policy/overview"
+  - term: "Deny effect"
+    text: "Prevents a request for a resource that doesn't match the policy; the request fails with 403 (Forbidden)."
+    url: "https://learn.microsoft.com/en-us/azure/governance/policy/concepts/effect-deny"
+  - term: "Management group"
+    text: "A container above subscriptions. Policies and roles assigned to it apply to every subscription inside it."
+    url: "https://learn.microsoft.com/en-us/azure/governance/management-groups/overview"
+  - term: "Policy vs RBAC"
+    text: "RBAC controls who can act; policy controls what resources are allowed. Passing one doesn't pass the other."
+    url: "https://learn.microsoft.com/en-us/azure/governance/policy/overview"
+
+sources:
+  - title: "Azure Resource Manager: Resolve errors for request disallowed by policy"
+    url: "https://learn.microsoft.com/en-us/azure/azure-resource-manager/troubleshooting/error-policy-requestdisallowedbypolicy"
+    retrieved: 2026-10-01
+  - title: "Azure Policy: Deny effect"
+    url: "https://learn.microsoft.com/en-us/azure/governance/policy/concepts/effect-deny"
+    retrieved: 2026-10-01
+  - title: "Azure Policy: Overview"
+    url: "https://learn.microsoft.com/en-us/azure/governance/policy/overview"
+    retrieved: 2026-10-01
+  - title: "Azure Policy: Troubleshoot errors (denied by Azure Policy)"
+    url: "https://learn.microsoft.com/en-us/azure/governance/policy/troubleshoot/general"
+    retrieved: 2026-10-01

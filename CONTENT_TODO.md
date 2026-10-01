@@ -215,6 +215,15 @@ from your own experience and tick them off.
 - [ ] azure-private-endpoint-dns: nslookup output, the 403 AuthorizationFailure text, the public storage host name.
 - [ ] azure-cosmos-hot-partition: metric chart values and the container show/throughput output shapes.
 
+## Exam-outline gap batch (S3 classes, DynamoDB, CloudFront, Azure Files, Policy, Backup)
+- [ ] aws-cloudfront-stale-index: S3 returning 403 (not 404) for a missing object when the reader can't list the
+      bucket is from experience; header lines and ages are representative.
+- [ ] aws-dynamodb-gsi-throttle / aws-s3-glacier-lifecycle: CLI query outputs and metric values are representative.
+- [ ] azure-files-port-445: firewall rule table is scenario data; Test-NetConnection output format is from the docs.
+- [ ] azure-policy-allowed-locations: the built-in "Allowed locations" definition ID and the listOfAllowedLocations
+      parameter name are from memory; the error format is from the docs.
+- [ ] azure-backup-file-recovery: `az backup recoverypoint list` output shape and recovery point names.
+
 ## cloud-design (design challenges, all three)
 - [ ] aws-vpc-network-layout and azure-vnet-network-layout: costs are scenario units; "S3/storage traffic via NAT"
       at 8 units stands in for per-GB processing charges on several TB a month.

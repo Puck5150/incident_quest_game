@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-s3-glacier-lifecycle
+track: aws
+difficulty: 2
+title: "Customers can't download any invoice older than three months"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P2
+  body: |
+    Since the start of the month, customers (mostly their accountants)
+    trying to download invoices older than about three months get "Download
+    failed". Recent invoices work. It's quarter-end next week and we'll get
+    hundreds of these.
+
+environment: |
+  The customer portal serves invoice PDFs from the S3 bucket acme-invoices
+  (prefix invoices/), read with s3:GetObject by the portal's role. On 09-01,
+  a cost-saving change added a lifecycle rule to the bucket. Old invoices are
+  rarely downloaded, but when a customer asks, they expect the file straight
+  away.
+
+diagram:
+  nodes:
+    - { id: portal, label: "customer portal", col: 0, row: 0, status: degraded }
+    - { id: bucket, label: "S3: acme-invoices", col: 1, row: 0, status: ok }
+  edges:
+    - { from: portal, to: bucket }
+
+logs:
+  - name: "portal download errors"
+    evidence: invalid-state
+    lines: |
+      10:11:52 GET invoices/2026/05/INV-2026-0514-1182.pdf -> InvalidObjectState: Object is archived and inaccessible until restored.
+      10:12:30 GET invoices/2026/09/INV-2026-0918-0411.pdf -> 200 OK
+  - name: "change log"
+    evidence: lifecycle-change
+    lines: |
+      2026-09-01 CHG-2207 acme-invoices: lifecycle rule archive-old-invoices, prefix invoices/, transition to S3 Glacier Flexible Retrieval after 90 days (cut storage costs)
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws s3api head-object --bucket acme-invoices --key invoices/2026/05/INV-2026-0514-1182.pdf --query StorageClass"
+      when_actions: [convert-existing]
+      output: |
+        "GLACIER_IR"
+    - match: "aws s3api head-object --bucket acme-invoices --key invoices/2026/05/INV-2026-0514-1182.pdf --query StorageClass"
+      evidence: storage-glacier
+      output: |
+        "GLACIER"
+    - match: "aws s3api get-bucket-lifecycle-configuration --bucket acme-invoices"
+      when_actions: [rule-to-ir]
+      output: |
+        {
+            "Rules": [
+                { "ID": "archive-old-invoices", "Filter": { "Prefix": "invoices/" }, "Status": "Enabled",
+                  "Transitions": [ { "Days": 90, "StorageClass": "GLACIER_IR" } ] }
+            ]
+        }
+    - match: "aws s3api get-bucket-lifecycle-configuration --bucket acme-invoices"
+      evidence: rule-glacier
+      output: |
+        {
+            "Rules": [
+                { "ID": "archive-old-invoices", "Filter": { "Prefix": "invoices/" }, "Status": "Enabled",
+                  "Transitions": [ { "Days": 90, "StorageClass": "GLACIER" } ] }
+            ]
+        }
+
+hypotheses:
+  - id: archived
+    text: "The lifecycle rule moved old invoices to S3 Glacier Flexible Retrieval, which archives them: they can't be read until restored."
+    correct: true
+  - id: permissions
+    text: "The portal lost permission to read old invoices."
+    feedback: "A permission problem would be AccessDenied. InvalidObjectState means the object is there and allowed, but archived."
+  - id: deleted
+    text: "The lifecycle rule deleted the old invoices."
+    feedback: "head-object finds them, with storage class GLACIER. They exist; they're just archived."
+  - id: portal-bug
+    text: "A portal bug breaks downloads for old dates."
+    feedback: "The error comes from S3, and lines up exactly with objects older than 90 days since the 09-01 lifecycle change."
+
+actions:
+  - id: rule-to-ir
+    label: "Change the lifecycle rule to transition to S3 Glacier Instant Retrieval (GLACIER_IR) instead"
+    kind: fix
+    feedback: "Glacier Instant Retrieval is for rarely accessed data that still needs millisecond retrieval: still much cheaper to store, with a retrieval fee per GB. Invoices that reach 90 days from now on stay downloadable."
+  - id: convert-existing
+    label: "Restore the invoices already in GLACIER (Batch Operations, Standard tier) and copy each one in place as GLACIER_IR"
+    kind: fix
+    feedback: "Archived objects can't be read until they're restored, so the ones already moved need a restore (Standard retrievals typically finish in 3-5 hours) and a copy into the new class. Start now, well before quarter-end."
+  - id: expedited-each-time
+    label: "Have support request an Expedited restore whenever a customer asks"
+    kind: wrong
+    feedback: "Expedited restores are typically available in 1-5 minutes and cost extra each time. Every customer still gets \"try again later\", and at quarter-end that's hundreds of manual restores. Pick a storage class that fits the access pattern."
+  - id: grant-get
+    label: "Re-grant s3:GetObject on invoices/* to the portal's role"
+    kind: wrong
+    feedback: "It already has it. Permissions aren't the issue: the objects are archived."
+  - id: delete-archived
+    label: "Delete the archived invoices and regenerate PDFs from the database on demand"
+    kind: destructive
+    feedback: "Invoices are records that were issued to customers; regenerated PDFs won't be identical (numbering, VAT rules, templates change). You'd destroy the originals to avoid a restore."
+
+solution_paths:
+  - [rule-to-ir, convert-existing]
+
+key_evidence: [invalid-state, storage-glacier, rule-glacier, lifecycle-change]
+
+evidence_labels:
+  invalid-state: "Old invoices fail with InvalidObjectState: archived until restored"
+  storage-glacier: "The failing object's storage class is GLACIER (Flexible Retrieval)"
+  rule-glacier: "The lifecycle rule moves invoices to GLACIER after 90 days"
+  lifecycle-change: "The rule was added on 09-01 to cut storage costs"
+
+hints:
+  nudge: "The error isn't AccessDenied. What does InvalidObjectState mean for an object?"
+  direction: "Check the failing object's storage class and the bucket's lifecycle rule."
+  answer: "The 09-01 rule moves invoices to S3 Glacier Flexible Retrieval, which needs a restore before reading. Switch the rule to Glacier Instant Retrieval, and restore and convert the invoices already archived."
+
+analogy:
+  title: "The archive warehouse across town"
+  text: |
+    To save shelf space, old files are now sent to an off-site archive.
+    That's fine for things nobody asks for, but customers ask for old
+    invoices without warning, and getting a box back takes hours. Use the
+    cheap back room on site instead: it costs a little each time you fetch
+    something, but the file is in your hand straight away.
+
+debrief:
+  root_cause: |
+    The lifecycle rule added on 09-01 transitions invoices older than 90
+    days to S3 Glacier Flexible Retrieval. Objects in that class are
+    archived and not available for real-time access: a GetObject returns
+    InvalidObjectState until someone restores a temporary copy, which takes
+    minutes to hours depending on the tier. Old invoices are rare but
+    customers expect them instantly, so the class didn't fit the access
+    pattern; S3 Glacier Instant Retrieval gives similar storage savings with
+    millisecond access.
+  ideal_path:
+    - "Read the error: InvalidObjectState (archived), not AccessDenied."
+    - "Confirm the failing object's storage class: GLACIER."
+    - "Find the cause: the 09-01 lifecycle rule."
+    - "Point the rule at GLACIER_IR so future invoices stay instantly readable."
+    - "Restore and convert the invoices already archived, before quarter-end."
+  real_world: |
+    Choosing a storage class by age alone is a common way to make data
+    unreadable. Ask how it's accessed: rarely but instantly (Glacier Instant
+    Retrieval), rarely and can wait hours (Glacier Flexible Retrieval), or
+    almost never (Deep Archive). And mind retrieval fees and minimum storage
+    durations when estimating savings.
+
+concepts:
+  - term: "S3 storage classes"
+    text: "Different price and access trade-offs for objects: Standard, Infrequent Access, Intelligent-Tiering, and the Glacier classes for archives."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html"
+  - term: "Glacier Instant vs Flexible Retrieval"
+    text: "Instant Retrieval reads in milliseconds (with a retrieval fee). Flexible Retrieval archives objects: you must restore them, which takes minutes to hours, before reading."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html"
+  - term: "Lifecycle transition"
+    text: "A lifecycle rule that moves objects to another storage class automatically once they reach an age."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html"
+  - term: "Restore"
+    text: "Creating a temporary readable copy of an archived object for a number of days. Retrieval tiers trade speed for cost."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects.html"
+
+sources:
+  - title: "Amazon S3: Understanding and managing storage classes (Glacier classes, archived objects)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html"
+    retrieved: 2026-10-01
+  - title: "Amazon S3: Understanding archive retrieval options (Expedited, Standard, Bulk timings)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects-retrieval-options.html"
+    retrieved: 2026-10-01
+  - title: "Amazon S3: Restoring an archived object"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects.html"
+    retrieved: 2026-10-01
+  - title: "Amazon S3 API: GetObject (InvalidObjectState)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html"
+    retrieved: 2026-10-01

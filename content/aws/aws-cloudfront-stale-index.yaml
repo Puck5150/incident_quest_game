@@ -1,0 +1,180 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-cloudfront-stale-index
+track: aws
+difficulty: 2
+title: "After the release, some customers get a blank white page"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P1
+  body: |
+    Since this morning's frontend release, some customers see a completely
+    blank page on shop.example.com. Others are fine. We can't reproduce it in
+    the office. The release looked perfect in staging.
+
+environment: |
+  The shop's frontend is a single-page app: index.html plus JavaScript
+  bundles with a content hash in their names (like app.81ab.js). It's
+  served from the S3 bucket acme-web through the CloudFront distribution
+  E2SHOP. The distribution uses legacy cache settings with the default TTL,
+  and the deploy job uploads with "aws s3 sync dist/ s3://acme-web --delete".
+  No Cache-Control headers are set on any file.
+
+diagram:
+  nodes:
+    - { id: users, label: "customers", col: 0, row: 0, status: degraded }
+    - { id: cf, label: "CloudFront E2SHOP (edge caches)", col: 1, row: 0, status: ok }
+    - { id: s3, label: "S3: acme-web", col: 2, row: 0, status: ok }
+  edges:
+    - { from: users, to: cf }
+    - { from: cf, to: s3 }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "curl -s https://shop.example.com/ | grep script"
+      when_actions: [invalidate-index]
+      output: |
+        <script src="/assets/app.3f9c.js"></script>
+    - match: "curl -s https://shop.example.com/ | grep script"
+      evidence: old-index
+      output: |
+        <script src="/assets/app.81ab.js"></script>
+    - match: "curl -sI https://shop.example.com/ | grep -iE 'x-cache|age|cache-control'"
+      evidence: cached-hit
+      output: |
+        x-cache: Hit from cloudfront
+        age: 21480
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://shop.example.com/assets/app.81ab.js"
+      evidence: bundle-gone
+      output: |
+        403
+    - match: "aws s3 ls s3://acme-web/assets/"
+      output: |
+        2026-10-01 09:02:11     841233 app.3f9c.js
+        2026-10-01 09:02:11      52310 app.3f9c.css
+    - match: "aws cloudfront get-distribution-config --id E2SHOP --query DistributionConfig.DefaultCacheBehavior.[DefaultTTL,MinTTL,MaxTTL]"
+      evidence: default-ttl
+      output: |
+        [
+            86400,
+            0,
+            31536000
+        ]
+
+logs:
+  - name: "deploy job, 09:02"
+    lines: |
+      upload: dist/index.html to s3://acme-web/index.html
+      upload: dist/assets/app.3f9c.js to s3://acme-web/assets/app.3f9c.js
+      delete: s3://acme-web/assets/app.81ab.js
+      deploy complete
+
+hypotheses:
+  - id: stale-index
+    text: "CloudFront edges still serve yesterday's cached index.html, which loads a bundle the deploy just deleted."
+    correct: true
+  - id: release-bug
+    text: "The new release has a JavaScript error."
+    feedback: "Customers who get the new index.html (with app.3f9c.js) are fine. The broken ones are being sent the old index.html, pointing at a bundle that no longer exists."
+  - id: browser-cache
+    text: "Customers' browsers are caching the old page."
+    feedback: "The office gets the old page too when it hits an edge that cached it: CloudFront answers \"Hit from cloudfront\" with an age of almost six hours. The stale copy is at the edge."
+  - id: s3-permissions
+    text: "The new deploy broke the bucket's permissions."
+    feedback: "The new files load fine. The 403 is only for app.81ab.js, which the deploy deleted; a missing object comes back as 403 when the reader can't list the bucket."
+
+actions:
+  - id: invalidate-index
+    label: "aws cloudfront create-invalidation --distribution-id E2SHOP --paths /index.html /"
+    kind: fix
+    match_regex: "^aws cloudfront create-invalidation --distribution-id E2SHOP --paths (\"?/index\\.html\"?( \"?/\"?)?|\"?/\\*\"?)$"
+    feedback: "The invalidation removes the stale page from the edge caches, so the next request fetches the new index.html from S3, which loads app.3f9c.js. Blank pages stop within minutes."
+  - id: cache-headers
+    label: "In the deploy job: upload index.html with Cache-Control: no-cache, hashed assets with a long max-age, and stop deleting the previous release's assets straight away"
+    kind: fix
+    feedback: "The file that changes on every release (index.html) is revalidated each time, while the versioned bundles can be cached for a long time. Keeping the old bundles a little longer means nobody's half-loaded page breaks mid-deploy."
+  - id: clear-browser
+    label: "Tell affected customers to clear their browser cache"
+    kind: wrong
+    feedback: "Their browser asks again and gets the same stale index.html from the CloudFront edge. The cache to clear is CloudFront's."
+  - id: redeploy
+    label: "Re-run the deploy job"
+    kind: wrong
+    feedback: "S3 already has the right files. CloudFront keeps serving its cached index.html until it expires (the default TTL is 24 hours) or is invalidated."
+  - id: recreate-distribution
+    label: "Delete the distribution and create a new one to get a clean cache"
+    kind: destructive
+    feedback: "The new distribution gets a new domain name, so DNS and certificates have to move, and the shop is down while that happens. An invalidation clears the cache in minutes."
+
+solution_paths:
+  - [invalidate-index, cache-headers]
+
+key_evidence: [old-index, cached-hit, bundle-gone, default-ttl]
+
+evidence_labels:
+  old-index: "Some requests still get an index.html that loads app.81ab.js"
+  cached-hit: "That page comes from CloudFront's cache, almost six hours old"
+  bundle-gone: "app.81ab.js no longer exists: the deploy deleted it"
+  default-ttl: "With no Cache-Control headers, CloudFront caches for the 24-hour default TTL"
+
+hints:
+  nudge: "Which index.html are the broken customers getting, and where did it come from?"
+  direction: "Look at the cached response's headers and the script it loads, then at what the deploy did to that script."
+  answer: "Edges cached yesterday's index.html for the 24-hour default TTL; it loads app.81ab.js, which the deploy deleted. Invalidate /index.html now, and set no-cache on index.html (long caching on hashed assets) going forward."
+
+analogy:
+  title: "The old menu still on some tables"
+  text: |
+    The restaurant printed a new menu and threw out the old dishes'
+    ingredients. But some waiters still hand out yesterday's menus, so
+    customers order dishes the kitchen can no longer make. Collect the old
+    menus now, and in future print the menu on a card that's checked each
+    morning.
+
+debrief:
+  root_cause: |
+    The deploy replaced index.html and deleted the previous bundle,
+    app.81ab.js, from S3. But CloudFront edges had cached the old index.html:
+    with no Cache-Control headers, legacy cache settings use the default
+    TTL of 24 hours. Customers routed to those edges got the old page, which
+    asked for app.81ab.js, which no longer existed, so the app never started
+    and they saw a blank page. Edges that hadn't cached the old page served
+    the new one, which is why only some customers were affected.
+  ideal_path:
+    - "Compare what broken customers get: an old index.html loading app.81ab.js."
+    - "Check where it comes from: a CloudFront cache hit, hours old."
+    - "Check the bundle it needs: deleted by the deploy."
+    - "Invalidate /index.html so edges fetch the new one."
+    - "Fix the deploy: no-cache on index.html, long cache on hashed files, keep old assets for a while."
+  real_world: |
+    Stale entry points after a deploy are a classic CDN incident. AWS
+    recommends version identifiers in file names so new versions don't wait
+    for expiry or invalidations; the file that can't be versioned (the HTML
+    entry point) needs a short or no-cache policy.
+
+concepts:
+  - term: "CloudFront edge cache"
+    text: "CloudFront keeps copies of your files at edge locations near users and serves them without asking the origin until they expire."
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Expiration.html"
+  - term: "TTL and Cache-Control"
+    text: "How long a file stays cached. The origin's Cache-Control header sets it (within the distribution's minimum and maximum); without one, the default TTL applies (24 hours unless you change it)."
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Expiration.html"
+  - term: "Invalidation"
+    text: "Tells CloudFront to drop cached copies of specific paths so the next request fetches them from the origin."
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html"
+  - term: "Versioned file names"
+    text: "Putting a version or hash in file names (app.3f9c.js), so a new version is simply a new file and never needs invalidating."
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/UpdatingExistingObjects.html"
+
+sources:
+  - title: "Amazon CloudFront: Manage how long content stays in the cache (default TTL 24 hours, Cache-Control)"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Expiration.html"
+    retrieved: 2026-10-01
+  - title: "Amazon CloudFront: Invalidate files to remove content"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html"
+    retrieved: 2026-10-01
+  - title: "Amazon CloudFront: Update existing files using versioned file names"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/UpdatingExistingObjects.html"
+    retrieved: 2026-10-01

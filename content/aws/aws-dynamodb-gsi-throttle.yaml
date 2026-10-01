@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-dynamodb-gsi-throttle
+track: aws
+difficulty: 3
+title: "Order writes are throttled, but the table is only at 75% capacity"
+par_minutes: 12
+
+ticket:
+  from: "On-call alert"
+  priority: P1
+  body: |
+    ALERT 18:04: orders-api error rate 22% during the autumn promotion.
+    Errors are ProvisionedThroughputExceededException from DynamoDB. But the
+    orders table has 2,000 write capacity units with auto scaling, and its
+    consumed writes are only about 1,500. Why is it throttling?
+
+environment: |
+  orders-api writes every order to the DynamoDB table orders, in provisioned
+  capacity mode with auto scaling on the table. The table has one global
+  secondary index, customer-index (partition key customerId), added months
+  ago for the support team's "orders by customer" screen. Every new order
+  creates an entry in that index.
+
+diagram:
+  nodes:
+    - { id: api, label: "orders-api", col: 0, row: 0, status: degraded }
+    - { id: table, label: "DynamoDB orders (2,000 WCU)", col: 1, row: 0, status: ok }
+    - { id: gsi, label: "GSI customer-index", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: api, to: table }
+    - { from: table, to: gsi }
+
+metrics:
+  - name: "Write capacity: table vs index"
+    unit: WCU
+    evidence: gsi-capped
+    series:
+      - label: "orders ConsumedWriteCapacityUnits"
+        points: [["17:40", 310], ["17:50", 640], ["18:00", 1490], ["18:05", 1520], ["18:10", 1510]]
+      - label: "customer-index ConsumedWriteCapacityUnits"
+        points: [["17:40", 95], ["17:50", 100], ["18:00", 100], ["18:05", 100], ["18:10", 100]]
+  - name: "WriteThrottleEvents (customer-index)"
+    unit: events/min
+    evidence: gsi-throttles
+    series:
+      - label: "throttles"
+        points: [["17:40", 0], ["17:50", 380], ["18:00", 14200], ["18:05", 15800], ["18:10", 15100]]
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws dynamodb describe-table --table-name orders --query \"Table.{table:ProvisionedThroughput.WriteCapacityUnits, gsi:GlobalSecondaryIndexes[0].ProvisionedThroughput.WriteCapacityUnits}\""
+      when_actions: [raise-gsi]
+      output: |
+        {
+            "table": 2000,
+            "gsi": 2000
+        }
+    - match: "aws dynamodb describe-table --table-name orders --query \"Table.{table:ProvisionedThroughput.WriteCapacityUnits, gsi:GlobalSecondaryIndexes[0].ProvisionedThroughput.WriteCapacityUnits}\""
+      evidence: gsi-100
+      output: |
+        {
+            "table": 2000,
+            "gsi": 100
+        }
+    - match: "aws application-autoscaling describe-scalable-targets --service-namespace dynamodb --query ScalableTargets[].[ResourceId,ScalableDimension]"
+      evidence: no-gsi-scaling
+      output: |
+        [
+            [ "table/orders", "dynamodb:table:ReadCapacityUnits" ],
+            [ "table/orders", "dynamodb:table:WriteCapacityUnits" ]
+        ]
+
+hypotheses:
+  - id: gsi-underprovisioned
+    text: "Every order also writes to customer-index, which has only 100 WCU and no auto scaling, so the index throttles the table's writes."
+    correct: true
+  - id: table-too-small
+    text: "The table needs more write capacity."
+    feedback: "The table is using about 1,500 of its 2,000 WCU. It's the index that's pinned at its 100 WCU limit, with all the throttle events."
+  - id: hot-key
+    text: "A hot partition key is concentrating writes."
+    feedback: "Orders are keyed by order ID, spread evenly, and the throttles are reported on customer-index, whose total capacity is simply far too low for the write rate."
+  - id: autoscaling-slow
+    text: "Table auto scaling is reacting too slowly."
+    feedback: "Table auto scaling is fine: the table has headroom. The index has no auto scaling configured at all; only the table is registered."
+
+actions:
+  - id: raise-gsi
+    label: "Raise customer-index's provisioned write capacity to match the table (update-table --global-secondary-index-updates, WriteCapacityUnits 2000)"
+    kind: fix
+    feedback: "A table write only succeeds if the table and every global secondary index it updates have capacity for it. With the index at 2,000 WCU, the throttles stop and orders go through."
+  - id: autoscale-gsi
+    label: "Register customer-index with Application Auto Scaling, with the same target as the table"
+    kind: fix
+    feedback: "Now the index scales with the table instead of sitting at a number someone typed months ago. AWS recommends an index's write capacity be at least the table's."
+  - id: on-demand
+    label: "Switch the orders table to on-demand capacity mode"
+    kind: fix
+    feedback: "Global secondary indexes inherit the table's capacity mode, so the table and its index both scale with demand. A valid alternative: it changes how you pay, so check the cost for steady traffic later."
+  - id: raise-table
+    label: "Raise the table's write capacity to 4,000 WCU"
+    kind: wrong
+    feedback: "The table isn't the bottleneck; it has 500 WCU spare. The index still caps every write at 100 WCU worth of index updates."
+  - id: retry-faster
+    label: "Make orders-api retry throttled writes immediately, without backoff"
+    kind: wrong
+    feedback: "More immediate retries hit the same capped index harder and add load. The SDK's backoff exists for a reason; the capacity is the problem."
+  - id: drop-index
+    label: "Delete customer-index to stop the throttling"
+    kind: destructive
+    feedback: "Writes recover, and the support team's orders-by-customer screen breaks until an index is rebuilt over every existing order. You'd delete a feature to avoid changing a number."
+
+solution_paths:
+  - [raise-gsi, autoscale-gsi]
+  - [on-demand]
+
+key_evidence: [gsi-capped, gsi-throttles, gsi-100, no-gsi-scaling]
+
+evidence_labels:
+  gsi-capped: "The table uses ~1,500 of 2,000 WCU; the index is pinned at 100"
+  gsi-throttles: "The write throttle events are on customer-index"
+  gsi-100: "customer-index has 100 WCU provisioned"
+  no-gsi-scaling: "Only the table is registered for auto scaling, not the index"
+
+hints:
+  nudge: "The table has spare capacity. What else must have capacity for an order write to succeed?"
+  direction: "Compare write capacity used and provisioned for the table and for its global secondary index, and check what auto scaling manages."
+  answer: "Each order also writes to customer-index, provisioned at 100 WCU with no auto scaling, so the index throttles table writes. Raise the index's WCU and add it to auto scaling (or move the table to on-demand)."
+
+analogy:
+  title: "The second form that has to be filed too"
+  text: |
+    Every order at the counter has to be stamped in the main ledger and also
+    copied into the customer index book. The main ledger has three clerks;
+    the index book has one, hired back when orders were few. On a busy day
+    the queue isn't at the ledger, it's at the index book, and no order is
+    finished until both are done. Hire for the index book too.
+
+debrief:
+  root_cause: |
+    In DynamoDB, a write to a table also writes to every global secondary
+    index it affects, and the write only succeeds if the table and each of
+    those indexes have enough write capacity. customer-index was created with
+    100 WCU for a small support screen and was never added to auto scaling,
+    unlike the table. When the promotion pushed order writes to about 1,500
+    WCU, every order also needed index capacity the index didn't have, so
+    the index throttled the table's writes even though the table had
+    headroom.
+  ideal_path:
+    - "Read the error: throttling, while the table isn't at its limit."
+    - "Compare capacity per index: customer-index pinned at 100 WCU with all the throttle events."
+    - "Check auto scaling: only the table is registered."
+    - "Raise the index's write capacity to match the table, and register it for auto scaling."
+    - "Or switch the table (and so its indexes) to on-demand."
+  real_world: |
+    Under-provisioned global secondary indexes are a classic DynamoDB
+    surprise because the throttles look like they come from the table.
+    Provision indexes at least as high as the table's writes (AWS's own
+    guidance), scale them together, and alarm on throttle events per index.
+
+concepts:
+  - term: "DynamoDB capacity modes"
+    text: "Provisioned mode: you set read and write capacity units (optionally with auto scaling). On-demand mode: DynamoDB scales with traffic and bills per request."
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/capacity-mode.html"
+  - term: "Global secondary index (GSI)"
+    text: "An extra copy of selected attributes with a different key, so you can query by something else (like customer). It has its own capacity, and table writes also write to it."
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html"
+  - term: "Throttling"
+    text: "When a request needs more capacity than is available, DynamoDB rejects it with ProvisionedThroughputExceededException; the SDK retries with backoff."
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TroubleshootingThrottling.html"
+
+sources:
+  - title: "Amazon DynamoDB: Using global secondary indexes (provisioned throughput, write throttling from GSIs)"
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html"
+    retrieved: 2026-10-01
+  - title: "Amazon DynamoDB: Read/write capacity mode"
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/capacity-mode.html"
+    retrieved: 2026-10-01
+  - title: "Amazon DynamoDB: Troubleshooting throttling"
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TroubleshootingThrottling.html"
+    retrieved: 2026-10-01

@@ -1,0 +1,185 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-files-port-445
+track: azure
+difficulty: 2
+title: "The new cloud file share works everywhere except the office"
+par_minutes: 10
+
+ticket:
+  from: "Finance team"
+  priority: P2
+  body: |
+    The old office file server was switched off on Friday and the finance
+    share moved to Azure Files. From Azure VMs it works perfectly. From our
+    office PCs, mapping the drive fails with "System error 53 has occurred.
+    The network path was not found." Month-end close starts Monday.
+
+environment: |
+  The share is finance on the storage account stacmefiles (Azure Files,
+  SMB). Office PCs reach the internet through the corporate firewall, which
+  security manages with a baseline rule set. The storage account allows
+  public network access from all networks. The company already has a
+  site-to-site VPN from the office to its Azure virtual network.
+
+diagram:
+  nodes:
+    - { id: pcs, label: "office PCs", col: 0, row: 0, status: degraded }
+    - { id: fw, label: "corporate firewall", col: 1, row: 0, status: ok }
+    - { id: files, label: "Azure Files: stacmefiles/finance", col: 2, row: 0, status: ok }
+    - { id: vm, label: "Azure VMs", col: 2, row: 1, status: ok }
+  edges:
+    - { from: pcs, to: fw }
+    - { from: fw, to: files }
+    - { from: vm, to: files }
+
+terminal:
+  prompt: "PS C:\\Users\\maria (office PC)>"
+  commands:
+    - match_regex: "^net use [A-Z]: \\\\\\\\stacmefiles\\.file\\.core\\.windows\\.net\\\\finance( .*)?$"
+      when_actions: [vpn-private-endpoint]
+      output: |
+        The command completed successfully.
+    - match_regex: "^net use [A-Z]: \\\\\\\\stacmefiles\\.file\\.core\\.windows\\.net\\\\finance( .*)?$"
+      evidence: error-53
+      output: |
+        System error 53 has occurred.
+
+        The network path was not found.
+    - match: "Test-NetConnection -ComputerName stacmefiles.file.core.windows.net -Port 445"
+      when_actions: [vpn-private-endpoint]
+      output: |
+        ComputerName     : stacmefiles.file.core.windows.net
+        RemoteAddress    : 10.40.2.5
+        RemotePort       : 445
+        TcpTestSucceeded : True
+    - match: "Test-NetConnection -ComputerName stacmefiles.file.core.windows.net -Port 445"
+      evidence: tcp-445-fails
+      output: |
+        WARNING: TCP connect to stacmefiles.file.core.windows.net:445 failed
+        ComputerName     : stacmefiles.file.core.windows.net
+        RemoteAddress    : 20.38.104.68
+        RemotePort       : 445
+        TcpTestSucceeded : False
+    - match: "Test-NetConnection -ComputerName stacmefiles.file.core.windows.net -Port 443"
+      output: |
+        ComputerName     : stacmefiles.file.core.windows.net
+        RemoteAddress    : 20.38.104.68
+        RemotePort       : 443
+        TcpTestSucceeded : True
+
+logs:
+  - name: "corporate firewall: outbound baseline (excerpt)"
+    evidence: fw-blocks-smb
+    lines: |
+      rule 120  deny   outbound  tcp/445  any -> internet   "Block SMB to the internet (security baseline)"
+      rule 200  allow  outbound  tcp/443  any -> internet
+      rule 900  allow  outbound  any      any -> vpn-azure  "Site-to-site VPN to Azure"
+  - name: "from an Azure VM, same command"
+    lines: |
+      Test-NetConnection stacmefiles.file.core.windows.net -Port 445  ->  TcpTestSucceeded : True
+
+hypotheses:
+  - id: port-445-blocked
+    text: "Azure Files uses SMB on port 445, and the office firewall blocks outbound 445 to the internet."
+    correct: true
+  - id: share-permissions
+    text: "The finance team's accounts don't have permission on the share."
+    feedback: "A permission problem gives \"access denied\" after connecting. Error 53 is the network path not being found: the PCs can't even open a connection on port 445."
+  - id: storage-firewall
+    text: "The storage account's firewall blocks the office."
+    feedback: "The storage account allows all networks, and port 443 to the same name connects fine from the office. Only 445 fails, which points at something filtering that port on the way out."
+  - id: dns
+    text: "The office can't resolve the storage account's name."
+    feedback: "Test-NetConnection resolves it to an address and connects on 443. The name resolves; the port is blocked."
+
+actions:
+  - id: vpn-private-endpoint
+    label: "Give stacmefiles a private endpoint in the Azure virtual network and let the office reach it over the existing site-to-site VPN (with DNS resolving to the private IP)"
+    kind: fix
+    feedback: "SMB now travels through the VPN tunnel to a private address, not across the internet, so the baseline rule stays in place. This is one of Microsoft's documented solutions, and keeps the share off the internet entirely."
+  - id: open-445-azure
+    label: "Ask security to allow outbound 445 only to Azure's published IP ranges for this region's storage"
+    kind: fix
+    feedback: "Microsoft lists this as a solution too: it works and is narrow. It does send SMB across the internet, which is why the baseline blocks it, so security has to accept the exception and keep the IP ranges updated."
+  - id: reboot-pcs
+    label: "Restart the office PCs"
+    kind: wrong
+    feedback: "The firewall still drops port 445 after the restart."
+  - id: recreate-share
+    label: "Recreate the share on a new storage account"
+    kind: wrong
+    feedback: "The new share also uses port 445, and the office firewall still blocks it."
+  - id: allow-445-any
+    label: "Remove firewall rule 120 so SMB can go anywhere on the internet"
+    kind: destructive
+    feedback: "That lets every office PC speak SMB to any server on the internet, which is how credential-leak and worm attacks spread. It was blocked on purpose; route SMB over the VPN instead."
+
+solution_paths:
+  - [vpn-private-endpoint]
+  - [open-445-azure]
+
+key_evidence: [error-53, tcp-445-fails, fw-blocks-smb]
+
+evidence_labels:
+  error-53: "Mapping the share fails with System error 53: the network path was not found"
+  tcp-445-fails: "From the office, TCP 445 to the storage account fails while 443 works"
+  fw-blocks-smb: "The office firewall's baseline denies outbound 445 to the internet"
+
+hints:
+  nudge: "It works from Azure and not from the office. What does a file share need from the network that a website doesn't?"
+  direction: "Test port 445 from an office PC, then read the office firewall's outbound rules."
+  answer: "Azure Files uses SMB on port 445, and the office firewall denies outbound 445 to the internet. Reach the share over the site-to-site VPN through a private endpoint (or get a narrow 445 exception to Azure's IP ranges)."
+
+analogy:
+  title: "The loading bay door that's bricked up"
+  text: |
+    The company moved its archive to a new warehouse. Vans from the other
+    depot load and unload fine, but the office's own vans can't get in: the
+    office bricked up its loading bay door to the main road years ago, for
+    safety. You don't knock the wall down; you use the private service road
+    the office already has to the warehouse.
+
+debrief:
+  root_cause: |
+    Azure Files is reached over SMB, which uses TCP port 445. The office's
+    corporate firewall has a baseline rule denying outbound 445 to the
+    internet, a common security control. From Azure VMs nothing blocks it,
+    so the share worked there, but office PCs couldn't open a connection,
+    and Windows reported System error 53. Microsoft's documented options are
+    to route SMB over a VPN or ExpressRoute to a private endpoint, use Azure
+    File Sync (which uses 443), open 445 only to Azure's IP ranges, or use
+    REST-based tools.
+  ideal_path:
+    - "Read the error: 53 is \"network path not found\", a connectivity failure."
+    - "Test port 445 from an office PC: fails, while 443 to the same name succeeds."
+    - "Find what filters it: the office firewall's baseline denies outbound 445."
+    - "Use the existing VPN: a private endpoint for the storage account, with DNS for the office."
+    - "Or, with security's agreement, a narrow 445 exception to Azure's ranges."
+  real_world: |
+    Port 445 is blocked outbound by many ISPs and corporate firewalls, so
+    "works from Azure, not from the office" is the most common Azure Files
+    support case. Plan office access (VPN, ExpressRoute, private endpoints,
+    or Azure File Sync) before moving a share, not after the old server is
+    switched off.
+
+concepts:
+  - term: "Azure Files"
+    text: "Managed file shares in a storage account that clients mount over SMB (or NFS), like a network drive."
+    url: "https://learn.microsoft.com/en-us/azure/storage/files/storage-how-to-use-files-windows"
+  - term: "SMB and port 445"
+    text: "SMB is the Windows file-sharing protocol and uses TCP port 445, which many networks block outbound to the internet."
+    url: "https://learn.microsoft.com/en-us/troubleshoot/azure/azure-storage/files/connectivity/files-troubleshoot-smb-connectivity"
+  - term: "Private endpoint over VPN"
+    text: "Gives the storage account a private IP in your virtual network, so offices connected by VPN or ExpressRoute reach it without crossing the internet."
+    url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-private-endpoints"
+
+sources:
+  - title: "Azure Files: Troubleshoot SMB connectivity (System error 53/67, port 445 blocked, solutions)"
+    url: "https://learn.microsoft.com/en-us/troubleshoot/azure/azure-storage/files/connectivity/files-troubleshoot-smb-connectivity"
+    retrieved: 2026-10-01
+  - title: "Azure Files: Mount an SMB file share on Windows"
+    url: "https://learn.microsoft.com/en-us/azure/storage/files/storage-how-to-use-files-windows"
+    retrieved: 2026-10-01
+  - title: "Azure Storage: Use private endpoints"
+    url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-private-endpoints"
+    retrieved: 2026-10-01
