@@ -201,6 +201,11 @@ from your own experience and tick them off.
 - [ ] azure-front-door-host-header: App Service answering 404 for an unknown host name is from experience (not
       printed in the docs); `az afd origin show` / `az webapp config hostname list` output: representative.
 
+## google cloud basics (Phase D: firewall-network-tag, service-account-no-role, alert-retest-window, bigquery-full-scan)
+- [ ] Kept representative output minimal (no Google Cloud experience to check against). Remaining items:
+      gcloud `--format` output shapes, the bucket IAM policy's legacy bindings, and the INFORMATION_SCHEMA.JOBS
+      summary table. The 403 text, dry-run message and retest-window behaviour are from the docs.
+
 ## cloud-design (design challenges, all three)
 - [ ] aws-vpc-network-layout and azure-vnet-network-layout: costs are scenario units; "S3/storage traffic via NAT"
       at 8 units stands in for per-GB processing charges on several TB a month.

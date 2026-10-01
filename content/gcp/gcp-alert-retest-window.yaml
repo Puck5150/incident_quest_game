@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-alert-retest-window
+track: gcp
+difficulty: 2
+title: "40 minutes of checkout errors and the alert stayed quiet"
+par_minutes: 9
+
+ticket:
+  from: "Head of engineering"
+  priority: P2
+  body: |
+    Yesterday 14:00 to 14:40, about 30% of checkouts failed. We have an
+    alerting policy for exactly this, "checkout 5xx > 5%", with on-call
+    notifications that we tested last week. It never fired. Why, and fix it.
+
+environment: |
+  Checkout runs on Cloud Run in project shop-prod. Alerting policies are
+  created with Terraform from a shared module the platform team wrote last
+  quarter, first used for budget and cost alerts. The checkout error-rate
+  policy was added last month using the same module.
+
+diagram:
+  nodes:
+    - { id: run, label: "Cloud Run checkout", col: 0, row: 0, status: ok }
+    - { id: policy, label: "alerting policy: checkout 5xx > 5%", col: 1, row: 0, status: ok }
+    - { id: oncall, label: "on-call notification channel", col: 2, row: 0, status: ok }
+  edges:
+    - { from: run, to: policy }
+    - { from: policy, to: oncall }
+
+metrics:
+  - name: "checkout 5xx ratio (yesterday)"
+    unit: "%"
+    evidence: errors-high
+    threshold: { value: 5, label: "policy threshold: 5%" }
+    series:
+      - label: "5xx ratio"
+        points: [["13:55", 0.3], ["14:00", 24], ["14:10", 31], ["14:20", 29], ["14:22", 3], ["14:25", 33], ["14:35", 30], ["14:40", 0.4]]
+
+terminal:
+  prompt: "you@cloudshell:~ (shop-prod)$"
+  commands:
+    - match: "gcloud monitoring policies list --filter=displayName:checkout --format=yaml(displayName,conditions[].conditionThreshold.duration,conditions[].conditionThreshold.thresholdValue)"
+      when_actions: [set-duration]
+      output: |
+        displayName: checkout 5xx > 5%
+        conditions:
+        - conditionThreshold:
+            duration: 300s
+            thresholdValue: 0.05
+    - match: "gcloud monitoring policies list --filter=displayName:checkout --format=yaml(displayName,conditions[].conditionThreshold.duration,conditions[].conditionThreshold.thresholdValue)"
+      evidence: duration-3600
+      output: |
+        displayName: checkout 5xx > 5%
+        conditions:
+        - conditionThreshold:
+            duration: 3600s
+            thresholdValue: 0.05
+
+files:
+  - path: "infra/modules/alert-policy/variables.tf (excerpt)"
+    language: hcl
+    evidence: module-default
+    content: |
+      variable "duration" {
+        description = "How long the condition must hold before alerting"
+        type        = string
+        default     = "3600s"   # cost alerts: ignore short spikes
+      }
+  - path: "infra/alerts.tf (excerpt)"
+    language: hcl
+    content: |
+      module "checkout_5xx" {
+        source       = "./modules/alert-policy"
+        display_name = "checkout 5xx > 5%"
+        filter       = "metric.type=\"run.googleapis.com/request_count\" ..."
+        threshold    = 0.05
+        # duration not set: uses the module default
+      }
+
+hypotheses:
+  - id: retest-window
+    text: "The policy's retest window (duration) is an hour, so the error rate had to stay above 5% for a full hour without a break before it would fire."
+    correct: true
+  - id: channel-broken
+    text: "The notification channel is broken."
+    feedback: "The channel was tested last week and works. The policy never fired, so there was nothing to send."
+  - id: wrong-metric
+    text: "The policy watches the wrong metric."
+    feedback: "The metric clearly shows the errors, well above the 5% threshold. The policy was watching the right thing; it just wasn't allowed to fire that soon."
+  - id: monitoring-delay
+    text: "Cloud Monitoring data was delayed during the outage."
+    feedback: "The data arrived on time and shows the whole outage. The condition didn't hold for 3600 seconds, and the dip at 14:22 restarted the window anyway."
+
+actions:
+  - id: set-duration
+    label: "Set duration = \"300s\" on the checkout_5xx module call and apply"
+    kind: fix
+    feedback: "The condition now fires after 5 minutes above 5%, which still ignores one-off blips. Yesterday it would have paged at about 14:05."
+  - id: fix-module
+    label: "Remove the module's 3600s default so every policy has to choose its duration (and set it on the cost alerts explicitly)"
+    kind: fix
+    feedback: "A default that makes sense for budget alerts is dangerous for error rates. Making it required means the next policy can't inherit an hour by accident."
+  - id: lower-threshold
+    label: "Lower the threshold from 5% to 1%"
+    kind: wrong
+    feedback: "The error rate was already six times the threshold. The problem is how long it had to stay there: an hour, without a single dip."
+  - id: more-channels
+    label: "Add more notification channels to the policy"
+    kind: wrong
+    feedback: "The policy never fired, so every channel would have stayed silent too."
+  - id: disable-policy
+    label: "Disable the policy until someone has time to review it"
+    kind: destructive
+    feedback: "Now checkout has no error-rate alert at all. The fix is one setting, and leaving it off means the next outage is found by customers again."
+
+solution_paths:
+  - [set-duration, fix-module]
+
+key_evidence: [errors-high, duration-3600, module-default]
+
+evidence_labels:
+  errors-high: "Errors were above 5% for 40 minutes, with a brief dip at 14:22"
+  duration-3600: "The policy's retest window (duration) is 3600 seconds"
+  module-default: "The duration came from the module's default, written for cost alerts"
+
+hints:
+  nudge: "Being above the threshold isn't enough on its own. For how long does it have to stay there?"
+  direction: "Look at the policy condition's duration and where that value came from."
+  answer: "duration is 3600s (inherited from a module default meant for cost alerts), so the error rate had to stay above 5% for an hour without a break. Set 300s on this policy and make duration a required input."
+
+analogy:
+  title: "The smoke alarm that waits an hour"
+  text: |
+    The alarm in the server room was copied from the one in the kitchen,
+    which waits a long time so burnt toast doesn't set it off. Wait an hour
+    of continuous smoke, and restart the count if the smoke thins for a
+    moment. The room filled with smoke for 40 minutes and the alarm never
+    sounded. A server room alarm needs a much shorter wait.
+
+debrief:
+  root_cause: |
+    A Cloud Monitoring condition is only met when it's true throughout its
+    retest window (the duration field), and the window restarts whenever a
+    measurement doesn't satisfy the condition. The checkout policy was
+    created with a shared Terraform module whose default duration, 3600s,
+    was meant to make cost alerts ignore short spikes. So the 5xx ratio had
+    to stay above 5% for a full hour without a break; the outage lasted 40
+    minutes and dipped below once, so the policy never fired.
+  ideal_path:
+    - "Confirm the errors crossed the threshold: above 5% for 40 minutes."
+    - "Read the policy condition: duration 3600s."
+    - "Trace it to the module default, written for cost alerts."
+    - "Set a short duration for error rates (here 300s)."
+    - "Make duration a required module input so no policy inherits it by accident."
+  real_world: |
+    The retest window trades speed for noise: longer windows ignore blips
+    but delay or miss real incidents. Choose it per signal, short for
+    customer-facing error rates, long for costs, and test policies by
+    checking when they would have fired on past incidents.
+
+concepts:
+  - term: "Alerting policy"
+    text: "Describes when Cloud Monitoring should create an alert (its conditions) and who to notify (notification channels)."
+    url: "https://cloud.google.com/monitoring/alerts"
+  - term: "Metric-threshold condition"
+    text: "Compares a metric with a threshold, for example \"5xx ratio greater than 5%\"."
+    url: "https://cloud.google.com/monitoring/alerts/concepts-indepth"
+  - term: "Retest window (duration)"
+    text: "How long the condition must stay true before it's met. It restarts whenever a measurement doesn't satisfy the condition, and it delays alerts by at least its length."
+    url: "https://cloud.google.com/monitoring/alerts/concepts-indepth"
+
+sources:
+  - title: "Cloud Monitoring: Alerting behavior (retest window, duration field, resets)"
+    url: "https://cloud.google.com/monitoring/alerts/concepts-indepth"
+    retrieved: 2026-10-01
+  - title: "Cloud Monitoring: Alerting overview (policies, notification channels)"
+    url: "https://cloud.google.com/monitoring/alerts"
+    retrieved: 2026-10-01

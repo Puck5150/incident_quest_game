@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-firewall-network-tag
+track: gcp
+difficulty: 1
+title: "The new app server can't be reached, its twins can"
+par_minutes: 8
+
+ticket:
+  from: "Platform team"
+  priority: P3
+  body: |
+    We added a third app server, app-3, last night to take load off app-1 and
+    app-2. The frontends can reach app-1 and app-2 on port 8080, but
+    connections to app-3 time out. Same image, same subnet, same service
+    running. app-3 was created by hand in the console in a hurry.
+
+environment: |
+  The app servers are Compute Engine VMs in the VPC network shop-vpc, subnet
+  app-subnet (us-central1). The frontends call them on TCP 8080. Firewall
+  rules in shop-vpc are managed by the platform team; there's no deny rule
+  for 8080.
+
+diagram:
+  nodes:
+    - { id: fe, label: "frontends", col: 0, row: 0, status: ok }
+    - { id: app12, label: "app-1, app-2", col: 1, row: 0, status: ok }
+    - { id: app3, label: "app-3 (new)", col: 1, row: 1, status: down }
+  edges:
+    - { from: fe, to: app12 }
+    - { from: fe, to: app3 }
+
+terminal:
+  prompt: "you@cloudshell:~ (shop-prod)$"
+  commands:
+    - match: "gcloud compute instances describe app-1 --zone us-central1-a --format=value(tags.items)"
+      output: |
+        app
+    - match: "gcloud compute instances describe app-3 --zone us-central1-a --format=value(tags.items)"
+      when_actions: [add-tag]
+      output: |
+        app
+    - match: "gcloud compute instances describe app-3 --zone us-central1-a --format=value(tags.items)"
+      evidence: no-tag
+      output: |
+
+    - match: "gcloud compute firewall-rules describe allow-app-8080 --format=yaml(direction,priority,sourceRanges,allowed,targetTags)"
+      evidence: rule-targets-tag
+      output: |
+        allowed:
+        - IPProtocol: tcp
+          ports:
+          - '8080'
+        direction: INGRESS
+        priority: 1000
+        sourceRanges:
+        - 10.10.1.0/24
+        targetTags:
+        - app
+
+hypotheses:
+  - id: missing-tag
+    text: "The firewall rule that allows 8080 only applies to VMs with the network tag \"app\", and app-3 doesn't have it, so the implied deny-ingress rule drops the traffic."
+    correct: true
+  - id: service-down
+    text: "The service on app-3 isn't running."
+    feedback: "The ticket says it's running with the same image. The connections time out rather than being refused, which is what a firewall dropping packets looks like."
+  - id: deny-rule
+    text: "A deny rule blocks app-3."
+    feedback: "There's no deny rule for 8080. Nothing has to deny it: in a VPC network, ingress is denied unless a rule allows it, and the allow rule doesn't apply to app-3."
+  - id: different-subnet
+    text: "app-3 is in a different subnet."
+    feedback: "It's in app-subnet like the others. Google Cloud firewall rules select VMs by target (tags or service accounts), not by subnet."
+
+actions:
+  - id: add-tag
+    label: "gcloud compute instances add-tags app-3 --zone us-central1-a --tags app"
+    kind: fix
+    match_regex: "^gcloud compute instances add-tags app-3 --zone[ =]us-central1-a --tags[ =]app$"
+    feedback: "app-3 now matches allow-app-8080's target tag, so the rule applies to it and the frontends get through. Tags can be added while the VM is running."
+  - id: template
+    label: "Create app servers from the instance template the others use, not by hand"
+    kind: fix
+    feedback: "The template includes the network tag (and everything else the others have), so the next server can't miss it."
+  - id: restart
+    label: "Restart app-3"
+    kind: wrong
+    feedback: "Firewall rules are enforced outside the VM. It comes back with no tag and the same result."
+  - id: frontend-egress
+    label: "Add an egress rule on the frontends allowing 8080 to app-3"
+    kind: wrong
+    feedback: "The frontends can already send: egress is allowed by the implied allow-egress rule. It's app-3's ingress that's denied."
+  - id: allow-all
+    label: "Create a rule allowing TCP 8080 from 0.0.0.0/0 to all instances in the network"
+    kind: destructive
+    feedback: "That opens 8080 on every VM in shop-vpc to the whole internet, including any with external IPs. app-3 only needed one tag."
+
+solution_paths:
+  - [add-tag, template]
+
+key_evidence: [no-tag, rule-targets-tag]
+
+evidence_labels:
+  no-tag: "app-3 has no network tags; app-1 has the tag \"app\""
+  rule-targets-tag: "allow-app-8080 only applies to VMs tagged \"app\""
+
+hints:
+  nudge: "In Google Cloud, how does a firewall rule decide which VMs it applies to?"
+  direction: "Compare app-3's network tags with app-1's, and look at the allow rule's targets."
+  answer: "allow-app-8080 targets the tag \"app\". app-3 has no tags, so the rule doesn't apply and the implied deny-ingress rule drops the traffic. Add the tag, and create servers from the template."
+
+analogy:
+  title: "The missing wristband"
+  text: |
+    At the event, the door staff let in anyone wearing a blue wristband.
+    Two staff members got theirs at registration; the third arrived late,
+    went straight in through the side, and never got one. Same uniform, same
+    job, but every time they come back through the door they're turned away.
+    Give them a wristband, and send latecomers through registration.
+
+debrief:
+  root_cause: |
+    In a VPC network, incoming traffic is denied unless a firewall rule
+    allows it (the implied deny-ingress rule). The rule allow-app-8080 allows
+    TCP 8080 from the frontends, but only to VMs that have a network tag
+    matching its target tag, "app". app-3 was created by hand without any
+    tags, so the allow rule didn't apply to it, and every connection from
+    the frontends was silently dropped.
+  ideal_path:
+    - "Notice the pattern: same image and subnet, only the hand-made VM fails, with timeouts."
+    - "Read the allow rule: it targets the network tag \"app\"."
+    - "Compare tags: app-1 has \"app\", app-3 has none."
+    - "Add the tag to app-3, and build future servers from the instance template."
+  real_world: |
+    Missing network tags are among the most common reasons a new Google
+    Cloud VM is unreachable. Creating VMs from templates (or managed instance
+    groups) keeps tags consistent; target service accounts are an
+    alternative to tags that's harder to forget.
+
+concepts:
+  - term: "VPC firewall rules"
+    text: "Rules that allow or deny traffic to and from VMs in a VPC network. Each rule has a direction, a priority (0 to 65535, lower wins), a target and the traffic it matches."
+    url: "https://cloud.google.com/firewall/docs/firewalls"
+  - term: "Implied rules"
+    text: "Every VPC network has an implied rule that denies all incoming traffic and one that allows all outgoing traffic, unless other rules say otherwise."
+    url: "https://cloud.google.com/firewall/docs/firewalls"
+  - term: "Network tags"
+    text: "Labels on a VM that firewall rules (and routes) use to pick which VMs they apply to. A rule with a target tag only applies to VMs that have that tag."
+    url: "https://cloud.google.com/vpc/docs/add-remove-network-tags"
+
+sources:
+  - title: "Cloud NGFW: VPC firewall rules (implied rules, priority, target network tags)"
+    url: "https://cloud.google.com/firewall/docs/firewalls"
+    retrieved: 2026-10-01
+  - title: "Google Cloud VPC: Add network tags (add-tags while running)"
+    url: "https://cloud.google.com/vpc/docs/add-remove-network-tags"
+    retrieved: 2026-10-01

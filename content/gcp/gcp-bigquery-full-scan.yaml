@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-bigquery-full-scan
+track: gcp
+difficulty: 2
+title: "BigQuery spend is up 25x and the data hasn't grown"
+par_minutes: 10
+
+ticket:
+  from: "Finance"
+  priority: P3
+  body: |
+    BigQuery is on track to cost 25 times what it did last month. The
+    analytics team says the data is about the same size as always. The only
+    new thing we know of is the "live sales" dashboard marketing launched on
+    the 15th. Is that it? It only shows the last 1,000 orders.
+
+environment: |
+  The project shop-analytics uses BigQuery on-demand pricing. The table
+  analytics.events holds three years of order events (about 18 TiB),
+  partitioned by day on the event_ts column. The live sales dashboard runs
+  its query every 15 minutes, around the clock.
+
+diagram:
+  nodes:
+    - { id: dash, label: "live sales dashboard (every 15 min)", col: 0, row: 0, status: ok }
+    - { id: bq, label: "BigQuery analytics.events (18 TiB)", col: 1, row: 0, status: ok }
+    - { id: bill, label: "on-demand bill", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: dash, to: bq }
+    - { from: bq, to: bill }
+
+logs:
+  - name: "INFORMATION_SCHEMA.JOBS: top queries by bytes billed, this month"
+    evidence: dashboard-bytes
+    lines: |
+      query (first 60 chars)                                         runs    bytes billed per run
+      SELECT order_id, total, event_ts FROM analytics.events ORDE...   1,536   ~18.1 TiB
+      SELECT DATE(event_ts) d, SUM(total) FROM analytics.events WH...      30   ~22 GiB
+  - name: "dashboard query"
+    evidence: no-partition-filter
+    lines: |
+      SELECT order_id, total, event_ts
+      FROM analytics.events
+      ORDER BY event_ts DESC
+      LIMIT 1000
+
+terminal:
+  prompt: "you@cloudshell:~ (shop-analytics)$"
+  commands:
+    - match: "bq query --dry_run --use_legacy_sql=false 'SELECT order_id, total, event_ts FROM analytics.events ORDER BY event_ts DESC LIMIT 1000'"
+      evidence: dry-run-full
+      output: |
+        Query successfully validated. Assuming the tables are not modified, running this query will process 19901375283200 bytes of data.
+    - match: "bq query --dry_run --use_legacy_sql=false 'SELECT order_id, total, event_ts FROM analytics.events WHERE event_ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY) ORDER BY event_ts DESC LIMIT 1000'"
+      output: |
+        Query successfully validated. Assuming the tables are not modified, running this query will process 36507222016 bytes of data.
+    - match: "bq show --format=prettyjson analytics.events"
+      output: |
+        {
+          "numBytes": "19901375283200",
+          "timePartitioning": { "type": "DAY", "field": "event_ts" },
+          "requirePartitionFilter": false
+        }
+
+hypotheses:
+  - id: full-scan
+    text: "The dashboard query has no filter on the partitioning column, so every run scans all 18 TiB; LIMIT doesn't reduce what's read."
+    correct: true
+  - id: data-growth
+    text: "The events table has grown a lot."
+    feedback: "The table is about 18 TiB, as it has been. What changed is how often it's read in full: 96 times a day."
+  - id: limit-protects
+    text: "It can't be the dashboard: LIMIT 1000 keeps it small."
+    feedback: "For a non-clustered table, LIMIT doesn't change how much data is read; it only trims the result. The dry run shows the query processes the whole table."
+  - id: pricing-change
+    text: "BigQuery's prices went up."
+    feedback: "The bill grew 25 times. One query running 1,536 times this month at ~18 TiB each accounts for nearly all of it."
+
+actions:
+  - id: filter-dashboard
+    label: "Add WHERE event_ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY) to the dashboard query"
+    kind: fix
+    feedback: "With a filter on the partitioning column, BigQuery prunes every partition but the last day's: the dry run drops from about 18 TiB to about 34 GiB a run."
+  - id: require-filter
+    label: "bq update --require_partition_filter shop-analytics:analytics.events"
+    kind: fix
+    match_regex: "^bq update --require_partition_filter (shop-analytics:)?analytics\\.events$"
+    feedback: "From now on, any query on events must filter on event_ts, or BigQuery rejects it instead of scanning three years of data. The next dashboard can't make the same mistake."
+  - id: smaller-limit
+    label: "Change LIMIT 1000 to LIMIT 100"
+    kind: wrong
+    feedback: "On a non-clustered table LIMIT doesn't reduce the data read, so each run still scans the whole table."
+  - id: refresh-hourly
+    label: "Make the dashboard refresh hourly instead of every 15 minutes"
+    kind: wrong
+    feedback: "That cuts the bill by four, and every run still scans all 18 TiB to show a day's orders. Fix the query and you can keep refreshing every 15 minutes."
+  - id: delete-history
+    label: "Delete partitions older than 30 days to shrink the table"
+    kind: destructive
+    feedback: "That permanently throws away almost three years of order history the analytics team relies on, to fix a query that only needed a WHERE clause."
+
+solution_paths:
+  - [filter-dashboard, require-filter]
+
+key_evidence: [dashboard-bytes, no-partition-filter, dry-run-full]
+
+evidence_labels:
+  dashboard-bytes: "One query, run 1,536 times this month, bills ~18 TiB each time"
+  no-partition-filter: "The dashboard query has no WHERE on event_ts, only ORDER BY and LIMIT"
+  dry-run-full: "A dry run confirms the query processes the entire table"
+
+hints:
+  nudge: "On-demand BigQuery charges for bytes processed. How many bytes does one dashboard refresh process?"
+  direction: "Check the job history and do a dry run of the dashboard query. Does LIMIT reduce what's read?"
+  answer: "The query has no filter on event_ts, so each refresh scans all 18 TiB (LIMIT doesn't help). Add a filter on event_ts for the last day, and require a partition filter on the table."
+
+analogy:
+  title: "Reading the whole archive for today's post"
+  text: |
+    To find today's last thousand letters, the clerk reads every letter the
+    company has received in three years, then keeps the last thousand, and
+    does it every 15 minutes. The archive is filed by day; just open today's
+    drawer. And put a sign on the archive: "say which days you need".
+
+debrief:
+  root_cause: |
+    With on-demand pricing, BigQuery bills for the bytes a query processes.
+    The events table is partitioned by day on event_ts, but the dashboard's
+    query never filters on event_ts, so BigQuery can't prune any partitions
+    and reads all 18 TiB on every run. LIMIT 1000 only trims the result;
+    on a non-clustered table it doesn't reduce the data read. Running every
+    15 minutes, that's about 96 full scans a day.
+  ideal_path:
+    - "Find the expensive query in the job history: ~18 TiB billed per run, over 1,500 runs."
+    - "Read it: no filter on the partitioning column; only ORDER BY and LIMIT."
+    - "Dry-run it to confirm the bytes processed, then dry-run a version with a filter on event_ts."
+    - "Fix the dashboard query to filter on event_ts."
+    - "Require a partition filter on the table, so no query can scan it all by accident."
+  real_world: |
+    Unfiltered queries on large partitioned tables are a classic BigQuery
+    bill shock, often from dashboards that refresh on a timer. Require
+    partition filters on big tables, set a maximum bytes billed on
+    scheduled and dashboard queries, and dry-run anything that runs
+    repeatedly.
+
+concepts:
+  - term: "On-demand pricing"
+    text: "BigQuery's pay-per-query model: you're billed for the number of bytes each query processes, whatever it returns."
+    url: "https://cloud.google.com/bigquery/pricing"
+  - term: "Partitioned table"
+    text: "A table split into segments, for example one per day. A query that filters on the partitioning column only reads the matching partitions (partition pruning)."
+    url: "https://cloud.google.com/bigquery/docs/querying-partitioned-tables"
+  - term: "Require partition filter"
+    text: "A table option that makes BigQuery reject queries that don't filter on the partitioning column."
+    url: "https://cloud.google.com/bigquery/docs/managing-partitioned-tables"
+  - term: "Dry run"
+    text: "Validates a query and reports how many bytes it would process, without running it or billing for it."
+    url: "https://cloud.google.com/bigquery/docs/best-practices-costs"
+
+sources:
+  - title: "BigQuery: Optimize query computation and costs (LIMIT doesn't reduce data read, maximum bytes billed, dry runs)"
+    url: "https://cloud.google.com/bigquery/docs/best-practices-costs"
+    retrieved: 2026-10-01
+  - title: "BigQuery: Query partitioned tables (partition pruning)"
+    url: "https://cloud.google.com/bigquery/docs/querying-partitioned-tables"
+    retrieved: 2026-10-01
+  - title: "BigQuery: Manage partitioned tables (update the partition filter requirement)"
+    url: "https://cloud.google.com/bigquery/docs/managing-partitioned-tables"
+    retrieved: 2026-10-01
+  - title: "BigQuery pricing (on-demand: bytes processed)"
+    url: "https://cloud.google.com/bigquery/pricing"
+    retrieved: 2026-10-01

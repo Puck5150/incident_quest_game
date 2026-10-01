@@ -1,6 +1,6 @@
 # Plan: Cloud coverage on AWS, Azure and Google Cloud
 
-Status: **approved 2026-10-01** (all four defaults in §4). Phases A (6 AWS basics), B (6 Azure basics) and C (4 AWS/Azure depth incidents + 2 networking design challenges) done; Phase D (Google Cloud basics) next. Requested 2026-10-01: a comprehensive suite of
+Status: **approved 2026-10-01** (all four defaults in §4). **All four phases done** (A: 6 AWS basics; B: 6 Azure basics; C: 4 AWS/Azure depth incidents + 2 networking design challenges; D: 4 Google Cloud basics). Phase D swapped "alerting with no channels" for the retest window, which the docs actually describe. Requested 2026-10-01: a comprehensive suite of
 incidents and design challenges on all three platforms, with each platform's basics
 covered. Priority: **AWS, then Azure, then Google Cloud**.
 
