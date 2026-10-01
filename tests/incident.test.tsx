@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 // Click-through of the incident loop, through the real UI.
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import App from '../src/App.tsx'
 import content from 'virtual:content'
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  location.hash = ''
+})
 afterEach(cleanup)
 
 // Play and debrief screens load lazily, so the first query after a screen change awaits.
@@ -58,6 +61,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   // The XP counts up visually; screen readers (and this test) get the final value.
   expect(await screen.findByText('115', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Root cause' })).toBeTruthy()
+  expect(location.hash).toBe('#/done/full-disk') // a reload opens the queue, not a fresh run
   expect(screen.getByText(/Promoted to Support Engineer/)).toBeTruthy()
   // Linux was Containers' only prerequisite.
   expect(screen.getByRole('button', { name: /Track unlocked: Containers & Kubernetes/ })).toBeTruthy()
@@ -100,12 +104,12 @@ it('shuffles hypotheses so the right answer is not always first', async () => {
   spy.mockRestore()
 })
 
-it('skill tree shows only tracks with content, with lock state and requirements', () => {
+it('skill tree shows only tracks with content, with lock state and requirements', async () => {
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: 'Skill tree' }))
-  expect(document.activeElement?.id).toBe('screen-title') // focus follows the screen change
   // (The phone layout renders the same nodes; jsdom doesn't apply the CSS that hides it.)
-  const tracks = within(screen.getByRole('list', { name: 'Tracks' }))
+  const tracks = within(await screen.findByRole('list', { name: 'Tracks' })) // navigation goes through the URL
+  expect(document.activeElement?.id).toBe('screen-title') // focus follows the screen change
   const withContent = content.tracks.filter((t) => content.items.some((s) => s.track === t.id))
   expect(tracks.getAllByRole('listitem')).toHaveLength(withContent.length)
   const micro = tracks.getByRole('button', { name: /Microservices/ })
@@ -113,7 +117,7 @@ it('skill tree shows only tracks with content, with lock state and requirements'
   expect(micro.textContent).toMatch(/Locked/)
   // Selecting a track opens the queue at that track.
   fireEvent.click(tracks.getByRole('button', { name: /^Linux Admin/ }))
-  expect(document.activeElement?.id).toBe('track-linux')
+  await waitFor(() => expect(document.activeElement?.id).toBe('track-linux'))
 })
 
 it('reduce motion setting persists and marks the document', () => {

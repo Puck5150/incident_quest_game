@@ -14,6 +14,7 @@ globalThis.ResizeObserver ??= class {
 
 beforeEach(() => {
   localStorage.clear()
+  location.hash = ''
   localStorage.setItem(
     'incident-quest:v1',
     JSON.stringify({

@@ -24,8 +24,8 @@ const CanvasScreen = lazy(() => import('./screens/CanvasScreen.tsx'))
 const CanvasDebrief = lazy(() => import('./screens/CanvasDebrief.tsx'))
 const PickCloudScreen = lazy(() => import('./screens/PickCloudScreen.tsx'))
 
-// A handful of screens don't need a router (see PARKING_LOT.md). `run`
-// remounts the incident screen on replay so it starts from a clean session.
+// Screens are plain state; the routable ones mirror the URL hash (see `go`).
+// `run` remounts the incident screen on replay so it starts from a clean session.
 type Screen =
   | { name: 'home'; track?: string }
   | { name: 'tree' }
@@ -79,22 +79,60 @@ export default function App() {
     document.getElementById('screen-title')?.focus()
   }, [screen])
 
-  async function play(id: string) {
-    const loaded = await loadItem(id)
+  // Routes live in the URL hash, so deep links work on GitHub Pages (no server
+  // rewrites) and the back button moves between screens:
+  //   #/  #/tree  #/track/<id>  #/play/<id>  #/play/<id>/<provider>  #/done/<id>
+  // Debriefs aren't routable (they show one run's results): finishing replaces
+  // the play URL with #/done/<id>, which opens that track's queue on reload.
+  const go = (hash: string) => (location.hash === hash ? navigate(hash) : location.assign(hash))
+  const play = (id: string) => go(`#/play/${id}`)
+
+  // Latest navigation wins if an item is still loading when another starts.
+  const navSeq = useRef(0)
+  async function navigate(hash: string) {
+    const seq = ++navSeq.current
+    const [route, id, extra] = hash.replace(/^#\/?/, '').split('/')
+    const meta = items.find((x) => x.id === id)
+    if (route === 'tree') return setScreen({ name: 'tree' })
+    if (route === 'track' && id) return setScreen({ name: 'home', track: id })
+    if (route !== 'play' || !meta) return setScreen({ name: 'home', track: meta?.track })
+    if (!unlocks(progress).has(meta.track)) return setScreen({ name: 'home', track: meta.track })
+    const loaded = await loadItem(meta.id)
+    if (seq !== navSeq.current) return
     setItem(loaded)
+    const run = seq // unique per navigation, so a replay remounts the screen
+    if (loaded.kind === 'multi') {
+      const provider = loaded.multi.providers.find((p) => p === extra)
+      if (!provider) return setScreen({ name: 'pick-cloud', id: meta.id })
+      return setScreen(
+        loaded.multi.kind === 'canvas'
+          ? { name: 'canvas', id: meta.id, run, provider }
+          : { name: 'challenge', id: meta.id, run, provider },
+      )
+    }
     setScreen(
-      loaded.kind === 'multi'
-        ? { name: 'pick-cloud', id }
-        : loaded.kind === 'canvas'
-          ? { name: 'canvas', id, run: Date.now() }
-          : loaded.kind === 'challenge'
-            ? { name: 'challenge', id, run: Date.now() }
-            : { name: 'incident', id, run: Date.now() },
+      loaded.kind === 'canvas'
+        ? { name: 'canvas', id: meta.id, run }
+        : loaded.kind === 'challenge'
+          ? { name: 'challenge', id: meta.id, run }
+          : { name: 'incident', id: meta.id, run },
     )
   }
+  // The listener is registered once, so it calls the current render's navigate.
+  const navigateRef = useRef(navigate)
+  useEffect(() => {
+    navigateRef.current = navigate
+  })
+  useEffect(() => {
+    const onHashChange = () => navigateRef.current(location.hash)
+    onHashChange()
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   // Save a finished incident or challenge and work out what it changed.
   function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }, provider?: Provider): Outcome {
+    history.replaceState(null, '', `#/done/${id}`)
     const result = recordResult(progress, id, s, new Date(), provider)
     const newRank = rankFor(result.progress.xp).rank
     const before = unlocks(progress)
@@ -127,9 +165,9 @@ export default function App() {
   const setting = (patch: Partial<Progress['settings']>) =>
     setProgress((p) => ({ ...p, settings: { ...p.settings, ...patch } }))
 
-  const navButton = (label: string, target: Screen, current: boolean) => (
+  const navButton = (label: string, target: string, current: boolean) => (
     <button
-      onClick={() => setScreen(target)}
+      onClick={() => go(target)}
       aria-current={current ? 'page' : undefined}
       className="rounded-md px-2.5 py-1 text-sm text-muted hover:text-fg focus-visible:outline-2 focus-visible:outline-accent aria-[current=page]:bg-bg aria-[current=page]:text-fg"
     >
@@ -153,8 +191,8 @@ export default function App() {
             Incident <span className="text-accent">Quest</span>
           </span>
           <nav aria-label="Main" className="flex gap-1">
-            {navButton('Queue', { name: 'home' }, screen.name === 'home')}
-            {navButton('Skill tree', { name: 'tree' }, screen.name === 'tree')}
+            {navButton('Queue', '#/', screen.name === 'home')}
+            {navButton('Skill tree', '#/tree', screen.name === 'tree')}
           </nav>
           <dl className="flex flex-wrap gap-x-5 text-sm">
             <div className="flex gap-1.5">
@@ -203,7 +241,7 @@ export default function App() {
               scenarios={items}
               progress={progress}
               unlocked={unlocks(progress)}
-              onOpenTrack={(track) => setScreen({ name: 'home', track })}
+              onOpenTrack={(track) => go(`#/track/${track}`)}
             />
           )}
           {screen.name === 'incident' && (
@@ -222,13 +260,7 @@ export default function App() {
               providers={multi.providers}
               summary={(p) => cloudSummary(multi, p)}
               completedOn={progress.completed[multi.id]?.providers ?? []}
-              onPick={(provider) =>
-                setScreen(
-                  multi.kind === 'canvas'
-                    ? { name: 'canvas', id: multi.id, run: Date.now(), provider }
-                    : { name: 'challenge', id: multi.id, run: Date.now(), provider },
-                )
-              }
+              onPick={(provider) => go(`#/play/${multi.id}/${provider}`)}
             />
           )}
           {screen.name === 'canvas' && (
@@ -245,9 +277,9 @@ export default function App() {
               score={screen.score}
               outcome={screen}
               streak={progress.streak.current}
-              onHome={() => setScreen({ name: 'home' })}
-              onTree={() => setScreen({ name: 'tree' })}
-              onReplay={() => play(screen.id)}
+              onHome={() => go('#/')}
+              onTree={() => go('#/tree')}
+              onReplay={() => go(`#/play/${screen.id}${'provider' in screen && screen.provider ? `/${screen.provider}` : ''}`)}
               crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.design) : undefined}
             />
           )}
@@ -258,9 +290,9 @@ export default function App() {
               score={screen.score}
               outcome={screen}
               streak={progress.streak.current}
-              onHome={() => setScreen({ name: 'home' })}
-              onTree={() => setScreen({ name: 'tree' })}
-              onReplay={() => play(screen.id)}
+              onHome={() => go('#/')}
+              onTree={() => go('#/tree')}
+              onReplay={() => go(`#/play/${screen.id}${'provider' in screen && screen.provider ? `/${screen.provider}` : ''}`)}
               crossCloud={multi && screen.provider ? crossCloud(multi, screen.provider, screen.runs.at(-1)!.picks) : undefined}
             />
           )}
@@ -273,9 +305,9 @@ export default function App() {
               rankUp={screen.rankUp}
               unlocked={screen.unlocked}
               streak={progress.streak.current}
-              onHome={() => setScreen({ name: 'home' })}
-              onTree={() => setScreen({ name: 'tree' })}
-              onReplay={() => play(screen.id)}
+              onHome={() => go('#/')}
+              onTree={() => go('#/tree')}
+              onReplay={() => go(`#/play/${screen.id}${'provider' in screen && screen.provider ? `/${screen.provider}` : ''}`)}
             />
           )}
         </Suspense>

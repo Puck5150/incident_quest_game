@@ -23,6 +23,7 @@ const seed = (motion: 'reduce' | 'system') => {
 }
 beforeEach(() => {
   localStorage.clear()
+  location.hash = ''
   seed('reduce')
 })
 afterEach(() => {

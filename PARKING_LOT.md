@@ -7,7 +7,6 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - Multiplayer / team incidents
 - Leaderboards
 - AI-generated scenarios
-- URL routing / deep links to a specific incident / back-button support
 
 ## Performance
 - Bundle: zod is build-time only, play/debrief screens load lazily, and each
