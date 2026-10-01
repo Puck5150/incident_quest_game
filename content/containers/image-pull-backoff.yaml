@@ -1,0 +1,286 @@
+id: image-pull-backoff
+track: containers
+difficulty: 1
+title: "New prices announced, old prices still showing"
+par_minutes: 8
+
+ticket:
+  from: "Product manager"
+  priority: P3
+  body: |
+    Release notes for pricing-api 2.3.0 went out at 09:00 saying the autumn
+    prices are live. The shop still shows the old prices. Nothing looks broken,
+    the site is fast. Did the release actually go out?
+
+environment: |
+  pricing-api runs as a Kubernetes Deployment (3 replicas) in the "shop"
+  namespace, behind a Service. It uses the default RollingUpdate strategy.
+  CI builds the image, pushes it to registry.example.internal, then runs
+  kubectl apply on k8s/pricing-api.yaml from Git and waits for the rollout.
+
+diagram:
+  nodes:
+    - { id: ingress, label: "ingress", col: 0, row: 0, status: ok }
+    - { id: svc, label: "Service pricing-api", col: 1, row: 0, status: ok }
+    - { id: registry, label: "image registry", col: 1, row: 1, status: ok }
+  edges:
+    - { from: ingress, to: svc }
+    - { from: svc, to: registry }
+
+terminal:
+  prompt: "you@laptop:~/shop-deploy$"
+  commands:
+    - match_regex: "^kubectl get pods( -n shop)?$"
+      when_actions: [fix-manifest]
+      output: |
+        NAME                           READY   STATUS    RESTARTS   AGE
+        pricing-api-5b8c7d9f6-7lq2m    1/1     Running   0          50s
+        pricing-api-5b8c7d9f6-d4w8n    1/1     Running   0          38s
+        pricing-api-5b8c7d9f6-rp9xk    1/1     Running   0          27s
+    - match_regex: "^kubectl get pods( -n shop)?$"
+      when_actions: [set-image]
+      output: |
+        NAME                           READY   STATUS    RESTARTS   AGE
+        pricing-api-5b8c7d9f6-7lq2m    1/1     Running   0          50s
+        pricing-api-5b8c7d9f6-d4w8n    1/1     Running   0          38s
+        pricing-api-5b8c7d9f6-rp9xk    1/1     Running   0          27s
+    - match_regex: "^kubectl get pods( -n shop)?$"
+      evidence: pull-backoff
+      output: |
+        NAME                           READY   STATUS             RESTARTS   AGE
+        pricing-api-6f4d9c7b8-2hjkt    1/1     Running            0          6d
+        pricing-api-6f4d9c7b8-9xq4r    1/1     Running            0          6d
+        pricing-api-6f4d9c7b8-mw7zp    1/1     Running            0          6d
+        pricing-api-7c9d8f6b4-x2kqp    0/1     ImagePullBackOff   0          14m
+    - match_regex: "^kubectl get (rs|replicasets?)( -n shop)?$"
+      output: |
+        NAME                     DESIRED   CURRENT   READY   AGE
+        pricing-api-6f4d9c7b8    3         3         3       6d
+        pricing-api-7c9d8f6b4    1         1         0       14m
+    - match_regex: "^kubectl describe pods? pricing-api-7c9d8f6b4-x2kqp( -n shop)?$"
+      evidence: tag-not-found
+      output: |
+        Name:             pricing-api-7c9d8f6b4-x2kqp
+        Namespace:        shop
+        Node:             node-2/10.0.3.12
+        Status:           Pending
+        Containers:
+          pricing-api:
+            Image:          registry.example.internal/shop/pricing-api:v2.3.0
+            State:          Waiting
+              Reason:       ImagePullBackOff
+            Ready:          False
+            Restart Count:  0
+        Events:
+          Type     Reason     Age                 From               Message
+          ----     ------     ----                ----               -------
+          Normal   Scheduled  14m                 default-scheduler  Successfully assigned shop/pricing-api-7c9d8f6b4-x2kqp to node-2
+          Normal   Pulling    12m (x4 over 14m)   kubelet            Pulling image "registry.example.internal/shop/pricing-api:v2.3.0"
+          Warning  Failed     12m (x4 over 14m)   kubelet            Failed to pull image "registry.example.internal/shop/pricing-api:v2.3.0": registry.example.internal/shop/pricing-api:v2.3.0: not found
+          Warning  Failed     12m (x4 over 14m)   kubelet            Error: ErrImagePull
+          Normal   BackOff    4m (x41 over 14m)   kubelet            Back-off pulling image "registry.example.internal/shop/pricing-api:v2.3.0"
+          Warning  Failed     4m (x41 over 14m)   kubelet            Error: ImagePullBackOff
+    - match_regex: "^kubectl rollout status deployment/pricing-api( -n shop)?$"
+      when_actions: [fix-manifest]
+      output: |
+        deployment "pricing-api" successfully rolled out
+    - match_regex: "^kubectl rollout status deployment/pricing-api( -n shop)?$"
+      when_actions: [set-image]
+      output: |
+        deployment "pricing-api" successfully rolled out
+    - match_regex: "^kubectl rollout status deployment/pricing-api( -n shop)?$"
+      output: |
+        Waiting for rollout to finish: 1 out of 3 new replicas have been updated...
+    - match_regex: "^kubectl describe deployments?( pricing-api)?( -n shop)?$"
+      output: |
+        Name:                   pricing-api
+        Namespace:              shop
+        Replicas:               3 desired | 1 updated | 4 total | 3 available | 1 unavailable
+        StrategyType:           RollingUpdate
+        RollingUpdateStrategy:  25% max unavailable, 25% max surge
+        Pod Template:
+          Containers:
+           pricing-api:
+            Image:      registry.example.internal/shop/pricing-api:v2.3.0
+        Conditions:
+          Type           Status  Reason
+          ----           ------  ------
+          Available      True    MinimumReplicasAvailable
+          Progressing    False   ProgressDeadlineExceeded
+        OldReplicaSets:  pricing-api-6f4d9c7b8 (3/3 replicas created)
+        NewReplicaSet:   pricing-api-7c9d8f6b4 (1/1 replicas created)
+    - match_regex: "^(cat|less) k8s/pricing-api\\.ya?ml$"
+      output: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: pricing-api
+            namespace: shop
+          spec:
+            replicas: 3
+            selector:
+              matchLabels: { app: pricing-api }
+            template:
+              metadata:
+                labels: { app: pricing-api }
+              spec:
+                containers:
+                  - name: pricing-api
+                    image: registry.example.internal/shop/pricing-api:v2.3.0   # bumped for 2.3.0
+                    ports:
+                      - containerPort: 8080
+
+pipeline:
+  name: "release · run #318"
+  trigger: "tag 2.3.0 · \"Autumn prices\" · Priya"
+  stages:
+    - name: "build / Build image"
+      status: success
+      duration_s: 74
+      log: |
+        Successfully built 3e1f0a7c9b2d
+    - name: "build / Push image"
+      status: success
+      duration_s: 11
+      evidence: pushed-tag
+      log: |
+        The push refers to repository [registry.example.internal/shop/pricing-api]
+        2.3.0: digest: sha256:9c1e4f0b7a2d... size: 1785
+        pushed registry.example.internal/shop/pricing-api:2.3.0
+    - name: "deploy / kubectl apply"
+      status: success
+      duration_s: 2
+      log: |
+        $ kubectl apply -f k8s/pricing-api.yaml
+        deployment.apps/pricing-api configured
+    - name: "deploy / Wait for rollout"
+      status: failure
+      duration_s: 600
+      evidence: rollout-stuck
+      log: |
+        $ kubectl rollout status deployment/pricing-api -n shop
+        Waiting for rollout to finish: 1 out of 3 new replicas have been updated...
+        error: deployment "pricing-api" exceeded its progress deadline
+        Error: Process completed with exit code 1.
+
+files:
+  - path: "k8s/pricing-api.yaml"
+    language: yaml
+    evidence: manifest-tag
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: pricing-api
+        namespace: shop
+      spec:
+        replicas: 3
+        selector:
+          matchLabels: { app: pricing-api }
+        template:
+          metadata:
+            labels: { app: pricing-api }
+          spec:
+            containers:
+              - name: pricing-api
+                image: registry.example.internal/shop/pricing-api:v2.3.0   # bumped for 2.3.0
+                ports:
+                  - containerPort: 8080
+
+hypotheses:
+  - id: wrong-tag
+    text: "The new pods can't pull their image, so the rollout never finished and the old version is still serving."
+    correct: true
+  - id: cdn-cache
+    text: "A cache in front of the shop is still serving the old prices."
+    feedback: "kubectl shows the old ReplicaSet's three pods still Running and the only new pod stuck in ImagePullBackOff. Version 2.3.0 never started, so there's nothing newer to cache."
+  - id: no-capacity
+    text: "The cluster has no room for the new pods."
+    feedback: "A pod that can't be scheduled stays Pending with scheduler messages. This one was scheduled to node-2 (see the Scheduled event); it's waiting on its image."
+  - id: app-bug
+    text: "2.3.0 has a bug in the new pricing logic."
+    feedback: "2.3.0 has never run: its only pod has no container started. Look at why the container can't start before blaming its code."
+
+actions:
+  - id: fix-manifest
+    label: "Fix the tag in k8s/pricing-api.yaml (v2.3.0 → 2.3.0), commit, and re-run the deploy job"
+    kind: fix
+    feedback: "The registry has 2.3.0, not v2.3.0. With the manifest fixed in Git, the next apply matches what CI pushed, the new pods start, and the rollout completes."
+  - id: set-image
+    label: "kubectl set image deployment/pricing-api pricing-api=registry.example.internal/shop/pricing-api:2.3.0 -n shop"
+    kind: fix
+    feedback: "This changes the Pod template, so the rollout continues with an image that exists. But Git still says v2.3.0: fix the manifest too, or the next kubectl apply puts the bad tag back."
+  - id: rollout-undo
+    label: "kubectl rollout undo deployment/pricing-api -n shop"
+    kind: wrong
+    feedback: "Safe, but it doesn't help. The old pods were serving all traffic the whole time, so customers see no change, and the release still isn't out. The next deploy from Git fails the same way."
+  - id: purge-cdn
+    label: "Purge the CDN cache"
+    kind: wrong
+    feedback: "The old prices come from the old pods, which are still the only ones running. There's no new version to show yet."
+  - id: recreate-deployment
+    label: "Delete the pricing-api Deployment and kubectl apply the manifest again"
+    kind: destructive
+    feedback: "Deleting the Deployment deletes its ReplicaSets and their pods, including the three healthy ones. Re-applying the same manifest creates pods that can't pull v2.3.0 either, so pricing goes from \"old prices\" to fully down."
+
+solution_paths:
+  - [fix-manifest]
+  - [set-image, fix-manifest]
+
+key_evidence: [pull-backoff, tag-not-found, pushed-tag]
+
+hints:
+  nudge: "The deploy job failed, but the site is fine. Which pods are actually serving traffic?"
+  direction: "List the pods, then describe the one that isn't Running. Compare the image it wants with the image CI pushed."
+  answer: "kubectl describe shows the pod pulling pricing-api:v2.3.0 and getting \"not found\". CI pushed pricing-api:2.3.0. Fix the tag in the manifest and redeploy."
+
+analogy:
+  title: "The wrong locker number"
+  text: |
+    The new uniforms arrived and were put in locker 230. The note for the
+    next shift says "collect your uniform from locker v230". Nobody can find
+    it, so the old shift keeps working in the old uniforms. Nothing looks
+    wrong from the shop floor; the change simply never happened.
+
+debrief:
+  root_cause: |
+    CI pushed the image as pricing-api:2.3.0, but the manifest asked for
+    pricing-api:v2.3.0. The kubelet couldn't pull a tag that doesn't exist, so
+    the first new pod sat in ImagePullBackOff, retrying with an increasing
+    delay. With three replicas and the default 25% max surge and 25% max
+    unavailable, the rollout added one new pod and removed no old ones, so
+    the old version kept serving everything. After the default 600-second
+    progress deadline, the Deployment reported ProgressDeadlineExceeded and
+    kubectl rollout status failed the CI job. Kubernetes doesn't roll back on
+    its own: it only reports the stalled condition.
+  ideal_path:
+    - "Read the failed CI stage: the rollout exceeded its progress deadline, so the new version never finished rolling out."
+    - "kubectl get pods: three old pods Running, one new pod in ImagePullBackOff."
+    - "kubectl describe pod: the image pricing-api:v2.3.0 is \"not found\"."
+    - "Compare with the CI push log: the tag that exists is 2.3.0."
+    - "Fix the tag in Git and redeploy (or set the image, then fix Git so the next apply doesn't revert it)."
+    - "Verify: kubectl rollout status reports success and all three pods run the new ReplicaSet."
+  real_world: |
+    A stuck rollout is often invisible to monitoring, because the old pods
+    keep serving. That's the rolling update doing its job. Make CI generate
+    the image reference from the same variable it pushes with, or deploy by
+    digest, so the tag in the manifest can't drift from the tag in the
+    registry. And treat a failed "wait for rollout" step as a failed release,
+    not a flaky job.
+
+sources:
+  - title: "Kubernetes: Images (ImagePullBackOff, image pull policy)"
+    url: "https://kubernetes.io/docs/concepts/containers/images/"
+    retrieved: 2026-10-01
+  - title: "Kubernetes: Deployments (rolling back, failed deployment, progress deadline, max surge/unavailable)"
+    url: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+    retrieved: 2026-10-01
+  - title: "Kubernetes: Debug Pods (Waiting pods and image pulls)"
+    url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+    retrieved: 2026-10-01
+  - title: "Kubernetes: Garbage Collection (background cascading deletion)"
+    url: "https://kubernetes.io/docs/concepts/architecture/garbage-collection/"
+    retrieved: 2026-10-01
+  - title: "kubectl rollout undo"
+    url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/"
+    retrieved: 2026-10-01

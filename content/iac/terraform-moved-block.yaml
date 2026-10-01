@@ -1,0 +1,279 @@
+id: terraform-moved-block
+track: iac
+difficulty: 3
+title: "A \"no-op refactor\" wants to delete the orders database"
+par_minutes: 12
+
+ticket:
+  from: "Platform reviewer"
+  priority: P1
+  body: |
+    PR #318 "refactor: move orders DB into a module" is described as a no-op,
+    but the plan CI posted says "1 to destroy". Merging to main applies
+    automatically. The author says the plan is just noisy and wants it in
+    before the 16:00 change freeze; "we have snapshots anyway". Can someone
+    check before this merges?
+
+environment: |
+  The infra-prod repository holds Terraform (v1.9) for production on AWS.
+  On every pull request, CI runs terraform plan and posts it. On merge to
+  main, CI runs terraform apply with the same configuration. State is
+  stored remotely. The orders database is an Amazon RDS instance,
+  orders-prod, holding every customer order.
+
+diagram:
+  nodes:
+    - { id: pr, label: "PR #318", col: 0, row: 0, status: degraded }
+    - { id: ci, label: "CI: plan / apply", col: 1, row: 0, status: ok }
+    - { id: db, label: "RDS orders-prod", col: 2, row: 0, status: ok }
+  edges:
+    - { from: pr, to: ci }
+    - { from: ci, to: db }
+
+pipeline:
+  name: "terraform · PR #318 plan"
+  trigger: "pull_request · refactor/orders-db-module · Jordan"
+  stages:
+    - name: "terraform init"
+      status: success
+      duration_s: 9
+    - name: "terraform validate"
+      status: success
+      duration_s: 2
+      log: |
+        Success! The configuration is valid.
+    - name: "terraform plan"
+      status: success
+      duration_s: 14
+      evidence: plan-destroy
+      log: |
+        Terraform used the selected providers to generate the following execution
+        plan. Resource actions are indicated with the following symbols:
+          + create
+          - destroy
+
+        Terraform will perform the following actions:
+
+          # aws_db_instance.orders will be destroyed
+          # (because aws_db_instance.orders is not in configuration)
+          - resource "aws_db_instance" "orders" {
+              - identifier     = "orders-prod" -> null
+              - engine         = "postgres" -> null
+              - instance_class = "db.r6g.large" -> null
+              # (41 unchanged attributes hidden)
+            }
+
+          # module.database.aws_db_instance.orders will be created
+          + resource "aws_db_instance" "orders" {
+              + identifier     = "orders-prod"
+              + engine         = "postgres"
+              + instance_class = "db.r6g.large"
+              + id             = (known after apply)
+              # (39 more attributes)
+            }
+
+        Plan: 1 to add, 0 to change, 1 to destroy.
+    - name: "post plan to PR"
+      status: success
+      duration_s: 1
+
+terminal:
+  prompt: "you@laptop:~/infra-prod (refactor/orders-db-module)$"
+  commands:
+    - match_regex: "^git diff (main|origin/main)( --stat)?$"
+      evidence: refactor-diff
+      output: |2
+         main.tf                   | 24 +-----------------------
+         modules/database/main.tf  | 22 ++++++++++++++++++++++
+         2 files changed, 26 insertions(+), 23 deletions(-)
+
+        -resource "aws_db_instance" "orders" {
+        -  identifier     = "orders-prod"
+        -  engine         = "postgres"
+        -  instance_class = "db.r6g.large"
+        -  ...
+        -}
+        +module "database" {
+        +  source = "./modules/database"
+        +}
+    - match: "terraform state list"
+      evidence: state-address
+      output: |
+        aws_db_instance.orders
+        aws_db_subnet_group.orders
+        aws_security_group.orders_db
+        aws_vpc.main
+    - match_regex: "^grep -rn moved( \\.)?$|^grep -rn \"moved\"( \\.)?$"
+      when_actions: [moved-block]
+      output: |
+        ./main.tf:5:moved {
+    - match_regex: "^grep -rn moved( \\.)?$|^grep -rn \"moved\"( \\.)?$"
+      output: |
+    - match: "terraform plan"
+      when_actions: [moved-block]
+      output: |
+        Terraform will perform the following actions:
+
+          # aws_db_instance.orders has moved to module.database.aws_db_instance.orders
+            resource "aws_db_instance" "orders" {
+                id         = "db-ORDERSPROD7Q2X"
+                identifier = "orders-prod"
+                # (43 unchanged attributes hidden)
+            }
+
+        Plan: 0 to add, 0 to change, 0 to destroy.
+    - match: "terraform plan"
+      output: |
+        Terraform used the selected providers to generate the following execution
+        plan. Resource actions are indicated with the following symbols:
+          + create
+          - destroy
+
+        Terraform will perform the following actions:
+
+          # aws_db_instance.orders will be destroyed
+          # (because aws_db_instance.orders is not in configuration)
+          - resource "aws_db_instance" "orders" {
+              - identifier     = "orders-prod" -> null
+              - engine         = "postgres" -> null
+              - instance_class = "db.r6g.large" -> null
+              # (41 unchanged attributes hidden)
+            }
+
+          # module.database.aws_db_instance.orders will be created
+          + resource "aws_db_instance" "orders" {
+              + identifier     = "orders-prod"
+              + engine         = "postgres"
+              + instance_class = "db.r6g.large"
+              + id             = (known after apply)
+              # (39 more attributes)
+            }
+
+        Plan: 1 to add, 0 to change, 1 to destroy.
+    - match: "terraform version"
+      output: |
+        Terraform v1.9.8
+        on darwin_arm64
+
+files:
+  - path: "main.tf (on the PR branch)"
+    language: hcl
+    content: |
+      terraform {
+        required_version = ">= 1.9"
+      }
+
+      module "database" {
+        source = "./modules/database"
+      }
+
+      resource "aws_vpc" "main" {
+        cidr_block = "10.40.0.0/16"
+      }
+  - path: "modules/database/main.tf (new on the PR branch)"
+    language: hcl
+    evidence: same-settings
+    content: |
+      resource "aws_db_instance" "orders" {
+        identifier     = "orders-prod"
+        engine         = "postgres"
+        instance_class = "db.r6g.large"
+        # ... identical settings, moved from main.tf
+      }
+
+logs:
+  - name: "PR #318 conversation"
+    lines: |
+      Jordan: Pure refactor, the settings are copy-pasted exactly. The plan is noisy, Terraform does that.
+      Jordan: We have nightly snapshots if anything goes wrong.
+      Ana (reviewer): "will be destroyed" is not noise on a database.
+
+hypotheses:
+  - id: address-changed
+    text: "The resource's address changed (from aws_db_instance.orders to module.database.aws_db_instance.orders), and nothing tells Terraform it's the same database."
+    correct: true
+  - id: forces-replacement
+    text: "One of the copied settings differs and forces the database to be replaced."
+    feedback: "A forced replacement shows one address with \"must be replaced\" and a \"forces replacement\" marker on the changed attribute. Here there are two different addresses: the old one is destroyed because it is \"not in configuration\", and a new one is created."
+  - id: drift
+    text: "Someone deleted or changed the database in the AWS console, so Terraform wants to recreate it."
+    feedback: "If the database were gone, the plan would only create it. It wants to destroy aws_db_instance.orders, which means the state still tracks it at that address, and the state list confirms it."
+  - id: noisy-plan
+    text: "Nothing: Terraform reshuffles resources in plans when code moves, and apply will sort it out."
+    feedback: "Terraform does exactly what the plan says. By default it treats a new address as an instruction to destroy the object at the old address and create one at the new address."
+
+actions:
+  - id: moved-block
+    label: "Add a moved block (from = aws_db_instance.orders, to = module.database.aws_db_instance.orders) to the PR and re-plan"
+    kind: fix
+    feedback: "Before planning, Terraform finds the existing object at the from address and records it at the to address, so the plan shows \"has moved to\" and 0 to destroy. It's reviewed in the PR and applied by the same merge, so state and code change together."
+  - id: state-mv
+    label: "Run terraform state mv aws_db_instance.orders module.database.aws_db_instance.orders against prod state now"
+    kind: wrong
+    feedback: "It changes production state before the code is merged. Until #318 merges, main's code still says aws_db_instance.orders, so any plan or apply from main now wants to destroy module.database.aws_db_instance.orders and create the old address. Terraform v1.1 and later has moved blocks so the move travels with the code."
+  - id: prevent-destroy
+    label: "Add lifecycle { prevent_destroy = true } to the resource in the new module"
+    kind: wrong
+    feedback: "Worth having on a database, but it doesn't stop this: prevent_destroy doesn't prevent Terraform from destroying a resource if you remove its configuration, and the object being destroyed is the old address, which has no configuration at all now."
+  - id: merge-with-snapshot
+    label: "Merge it: take a final snapshot first, then restore it into the new instance"
+    kind: destructive
+    feedback: "The apply deletes orders-prod and creates an empty database with the same name. Every order placed between the snapshot and the end of the restore is lost, and checkout is down for the whole restore. A one-line moved block avoids all of it."
+
+solution_paths:
+  - [moved-block]
+
+key_evidence: [plan-destroy, state-address, refactor-diff]
+
+hints:
+  nudge: "Read the destroy line's second comment. Why does Terraform think the database is not in configuration?"
+  direction: "Compare the address in state (terraform state list) with the address in the PR's code. How do you tell Terraform they're the same thing?"
+  answer: "The PR moved the resource into a module, so its address changed. Add moved { from = aws_db_instance.orders, to = module.database.aws_db_instance.orders } and re-plan: it shows \"has moved to\" and nothing to destroy."
+
+analogy:
+  title: "Moving the filing cabinet"
+  text: |
+    The office manager keeps a list of every cabinet and the room it's in.
+    You carry the orders cabinet from Room 1 to the new Records room without
+    telling them. At the next check, the list says "orders cabinet, Room 1":
+    missing, so it gets written off, and a brand-new, empty one is ordered
+    for Records. One note saying "moved from Room 1 to Records" would have
+    kept the real cabinet, and everything in it.
+
+debrief:
+  root_cause: |
+    PR #318 moved the aws_db_instance resource from the root module into
+    modules/database without changing any settings. Terraform tracks objects
+    by address, and the address changed from aws_db_instance.orders to
+    module.database.aws_db_instance.orders. By default Terraform treats a new
+    address as an instruction to destroy the existing resource and create a
+    new one, so the plan would have deleted orders-prod and created an empty
+    database. prevent_destroy wouldn't have stopped it, because it doesn't
+    apply once a resource's configuration is removed. A moved block tells
+    Terraform that the object at the old address now lives at the new one.
+  ideal_path:
+    - "Take \"will be destroyed\" on a database seriously, whatever the PR description says."
+    - "Read why: \"aws_db_instance.orders is not in configuration\" next to a create at a new module address."
+    - "Confirm with terraform state list: state tracks the database at the old address."
+    - "Add a moved block from the old address to the new one, in the same PR."
+    - "Re-plan: \"has moved to\" and Plan: 0 to add, 0 to change, 0 to destroy."
+  real_world: |
+    Refactors that move resources into modules are one of the most common
+    ways teams nearly delete production data. Make CI fail or require
+    explicit approval when a plan destroys stateful resources, keep moved
+    blocks in the code for as long as anyone might apply an older version,
+    and never accept "the plan is noisy" as a review comment.
+
+sources:
+  - title: "Terraform: Refactor modules (moved blocks)"
+    url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+    retrieved: 2026-10-01
+  - title: "Terraform: moved block reference"
+    url: "https://developer.hashicorp.com/terraform/language/block/moved"
+    retrieved: 2026-10-01
+  - title: "Terraform: lifecycle meta-argument (prevent_destroy)"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-01
+  - title: "Terraform CLI: terraform state mv"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/mv"
+    retrieved: 2026-10-01

@@ -1,0 +1,278 @@
+id: expired-tls-certificate
+track: networking
+difficulty: 2
+title: "Partners can't reach the API, browsers show a warning"
+par_minutes: 10
+
+ticket:
+  from: "Partner support"
+  priority: P1
+  body: |
+    Since about 00:10 UTC, three partners report their order sync to
+    api.example.com failing. One sent this from their logs:
+
+      curl: (60) SSL certificate problem: certificate has expired
+
+    Our own browser check shows a "Your connection is not private" page.
+    Nobody has touched the API servers this week.
+
+environment: |
+  One Ubuntu VM (edge-01) runs nginx as the TLS front door for
+  api.example.com, proxying to the API on a private network. The certificate
+  is from Let's Encrypt, issued and renewed by certbot with the nginx plugin
+  (HTTP-01 challenge). certbot's packaged timer runs "certbot renew" twice a
+  day. nginx redirects all plain HTTP to HTTPS. The host firewall is ufw.
+
+diagram:
+  nodes:
+    - { id: partners, label: "partners / browsers", col: 0, row: 0, status: degraded }
+    - { id: edge, label: "nginx (edge-01)", col: 1, row: 0, status: ok }
+    - { id: api, label: "API servers", col: 2, row: 0, status: ok }
+    - { id: le, label: "Let's Encrypt", col: 1, row: 1, status: ok }
+  edges:
+    - { from: partners, to: edge }
+    - { from: edge, to: api }
+    - { from: le, to: edge }
+
+terminal:
+  prompt: "ops@edge-01:~$"
+  commands:
+    - match_regex: "^openssl x509 -(enddate|dates) -noout -in /etc/letsencrypt/live/api\\.example\\.com/(fullchain|cert)\\.pem$"
+      when_actions: [renew]
+      output: |
+        notAfter=Dec 30 23:14:07 2026 GMT
+    - match_regex: "^openssl x509 -(enddate|dates) -noout -in /etc/letsencrypt/live/api\\.example\\.com/(fullchain|cert)\\.pem$"
+      evidence: cert-expired
+      output: |
+        notAfter=Oct  1 00:07:51 2026 GMT
+    - match_regex: "^(sudo )?certbot certificates$"
+      when_actions: [renew]
+      output: |
+        Found the following certs:
+          Certificate Name: api.example.com
+            Domains: api.example.com
+            Expiry Date: 2026-12-30 23:14:07+00:00 (VALID: 89 days)
+            Certificate Path: /etc/letsencrypt/live/api.example.com/fullchain.pem
+            Private Key Path: /etc/letsencrypt/live/api.example.com/privkey.pem
+    - match_regex: "^(sudo )?certbot certificates$"
+      evidence: cert-expired
+      output: |
+        Found the following certs:
+          Certificate Name: api.example.com
+            Domains: api.example.com
+            Expiry Date: 2026-10-01 00:07:51+00:00 (INVALID: EXPIRED)
+            Certificate Path: /etc/letsencrypt/live/api.example.com/fullchain.pem
+            Private Key Path: /etc/letsencrypt/live/api.example.com/privkey.pem
+    - match_regex: "^curl (-sS?I? )?https://api\\.example\\.com\\S*$"
+      when_actions: [renew]
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+        Content-Type: application/json
+    - match_regex: "^curl (-sS?I? )?https://api\\.example\\.com\\S*$"
+      output: |
+        curl: (60) SSL certificate problem: certificate has expired
+        More details here: https://curl.se/docs/sslcerts.html
+    - match_regex: "^(sudo )?ufw status( verbose| numbered)?$"
+      when_actions: [allow-80]
+      output: |
+        Status: active
+
+        To                         Action      From
+        --                         ------      ----
+        22/tcp                     ALLOW       10.0.0.0/8
+        443/tcp                    ALLOW       Anywhere
+        80/tcp                     ALLOW       Anywhere
+    - match_regex: "^(sudo )?ufw status( verbose| numbered)?$"
+      evidence: port-80-denied
+      output: |
+        Status: active
+
+        To                         Action      From
+        --                         ------      ----
+        22/tcp                     ALLOW       10.0.0.0/8
+        443/tcp                    ALLOW       Anywhere
+        80/tcp                     DENY        Anywhere
+    - match_regex: "^(sudo )?(tail|cat|less)( -n ?\\d+)? /var/log/letsencrypt/letsencrypt\\.log$"
+      evidence: renewal-failing
+      output: |
+        2026-09-30 12:31:04,118:INFO:certbot._internal.renewal:Certificate is due for renewal, auto-renewing...
+        2026-09-30 12:31:04,902:INFO:certbot._internal.auth_handler:Performing the following challenges:
+        2026-09-30 12:31:04,902:INFO:certbot._internal.auth_handler:http-01 challenge for api.example.com
+        2026-09-30 12:31:15,377:INFO:certbot._internal.auth_handler:Challenge failed for domain api.example.com
+        2026-09-30 12:31:15,378:INFO:certbot._internal.auth_handler:http-01 challenge for api.example.com
+        2026-09-30 12:31:15,379:ERROR:certbot._internal.auth_handler:Certbot failed to authenticate some domains (authenticator: nginx). The Certificate Authority reported these problems:
+          Domain: api.example.com
+          Type:   connection
+          Detail: 203.0.113.40: Fetching http://api.example.com/.well-known/acme-challenge/kXw3...: Timeout during connect (likely firewall problem)
+        2026-09-30 12:31:15,380:ERROR:certbot._internal.renewal:Failed to renew certificate api.example.com with error: Some challenges have failed.
+    - match_regex: "^(sudo )?certbot renew --dry-run$"
+      when_actions: [allow-80]
+      output: |
+        Processing /etc/letsencrypt/renewal/api.example.com.conf
+        Simulating renewal of an existing certificate for api.example.com
+
+        Congratulations, all simulated renewals succeeded:
+          /etc/letsencrypt/live/api.example.com/fullchain.pem (success)
+    - match_regex: "^(sudo )?certbot renew --dry-run$"
+      output: |
+        Processing /etc/letsencrypt/renewal/api.example.com.conf
+        Simulating renewal of an existing certificate for api.example.com
+
+        Certbot failed to authenticate some domains (authenticator: nginx). The Certificate Authority reported these problems:
+          Domain: api.example.com
+          Type:   connection
+          Detail: 203.0.113.40: Fetching http://api.example.com/.well-known/acme-challenge/Zr8q...: Timeout during connect (likely firewall problem)
+
+        All simulated renewals failed. The following certificates could not be renewed:
+          /etc/letsencrypt/live/api.example.com/fullchain.pem (failure)
+    - match_regex: "^(sudo )?systemctl (status|list-timers) (certbot\\.timer|certbot)$"
+      output: |
+        ● certbot.timer - Run certbot twice daily
+             Loaded: loaded (/usr/lib/systemd/system/certbot.timer; enabled; preset: enabled)
+             Active: active (waiting) since Mon 2026-08-03 09:12:40 UTC
+            Trigger: Thu 2026-10-01 12:31:00 UTC
+
+logs:
+  - name: "change log (#infra-changes)"
+    evidence: hardening-change
+    lines: |
+      2026-08-12 14:02 CHG-2291 "HTTPS only on edge hosts": ufw deny 80/tcp on edge-01, edge-02 (Sam)
+      2026-08-12 14:05 CHG-2291 verified: http://api.example.com no longer answers, https OK
+      2026-09-14 10:20 CHG-2340 nginx 1.28 security update on edge-01 (Ana)
+  - name: "monitoring: certificate checks"
+    lines: |
+      (none configured for api.example.com)
+
+files:
+  - path: "/etc/nginx/sites-enabled/api.example.com"
+    language: nginx
+    content: |
+      server {
+          listen 80;
+          server_name api.example.com;
+          # managed by Certbot
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl;
+          server_name api.example.com;
+          ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;  # managed by Certbot
+          ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;    # managed by Certbot
+
+          location / {
+              proxy_pass http://10.20.0.10:8080;
+          }
+      }
+  - path: "/etc/letsencrypt/renewal/api.example.com.conf"
+    content: |
+      version = 4.2.0
+      archive_dir = /etc/letsencrypt/archive/api.example.com
+      cert = /etc/letsencrypt/live/api.example.com/cert.pem
+      privkey = /etc/letsencrypt/live/api.example.com/privkey.pem
+      chain = /etc/letsencrypt/live/api.example.com/chain.pem
+      fullchain = /etc/letsencrypt/live/api.example.com/fullchain.pem
+
+      [renewalparams]
+      authenticator = nginx
+      installer = nginx
+
+hypotheses:
+  - id: renewal-blocked
+    text: "Automatic renewal has been failing because Let's Encrypt can't reach port 80, so the certificate expired."
+    correct: true
+  - id: clock-skew
+    text: "edge-01's clock is wrong, so a valid certificate looks expired."
+    feedback: "Partners on their own machines see the same error, and openssl shows the notAfter date really is 00:07 UTC today. The certificate is expired by anyone's clock."
+  - id: renewal-not-scheduled
+    text: "certbot's renewal timer isn't running."
+    feedback: "The timer is active and certbot's log shows it trying twice a day. Renewal runs; it fails at the challenge."
+  - id: partner-ca-bundle
+    text: "The partners have an outdated CA bundle."
+    feedback: "That would give a different verification error, and our own browser check fails too. The error says the certificate has expired, and its notAfter date agrees."
+
+actions:
+  - id: allow-80
+    label: "Reopen port 80: ufw delete deny 80/tcp, then ufw allow 80/tcp"
+    kind: fix
+    feedback: "Let's Encrypt's HTTP-01 challenge can only be done on port 80. nginx already redirects every other plain-HTTP request to HTTPS, so this doesn't make the API reachable without TLS."
+  - id: renew
+    label: "Run certbot renew (after a successful --dry-run)"
+    kind: fix
+    feedback: "With port 80 reachable, the challenge passes and certbot installs the new certificate through its nginx installer. Then check what nginx actually serves: curl from outside, or openssl x509 on the live file."
+  - id: restart-nginx
+    label: "Restart nginx"
+    kind: wrong
+    feedback: "nginx reloads the same expired files from /etc/letsencrypt/live. Nothing on disk changed, so nothing gets better."
+  - id: dns-switch
+    label: "Change the renewal to a DNS-01 challenge"
+    kind: wrong
+    feedback: "DNS-01 would avoid port 80, but there's no DNS plugin or API credential set up here, so it isn't a quick fix during an outage. Reopening port 80 is the change that undoes what broke."
+  - id: skip-verify
+    label: "Ask partners to add curl -k (skip certificate checks) until it's fixed"
+    kind: destructive
+    feedback: "That tells partners to accept any certificate, including an attacker's, on a connection carrying order data. Partners will forget to remove it. Fix the certificate instead."
+
+solution_paths:
+  - [allow-80, renew]
+
+key_evidence: [cert-expired, renewal-failing, port-80-denied]
+
+hints:
+  nudge: "The error message is unusually honest. When does the certificate say it expires?"
+  direction: "Check the certificate's dates, then why automatic renewal didn't replace it: certbot's log, and the firewall."
+  answer: "The certificate expired at 00:07 UTC. certbot has failed every renewal since August with \"Timeout during connect (likely firewall problem)\". CHG-2291 denied port 80 in ufw. Reopen port 80 and run certbot renew."
+
+analogy:
+  title: "The locked letterbox"
+  text: |
+    Your ID card is renewed by post: the office sends a letter to your front
+    door and waits for you to answer it. Someone sealed the letterbox to stop
+    junk mail, so every renewal letter bounced. Nobody noticed until the day
+    the old card ran out and the bank refused it at the counter.
+
+debrief:
+  root_cause: |
+    In August, CHG-2291 made the edge hosts "HTTPS only" by denying port 80 in
+    ufw. certbot renews this certificate with the HTTP-01 challenge, which
+    can only be done on port 80, so from the moment the certificate was due
+    for renewal, every twice-daily attempt failed with "Timeout during
+    connect". Nothing alerted on the failures or on the shrinking expiry
+    date. At 00:07 UTC the certificate's notAfter date passed, and every
+    client that verifies certificates rejected the connection (curl error 60).
+    nginx's port-80 redirect already gave "HTTPS only" for users; closing the
+    port added nothing but this failure.
+  ideal_path:
+    - "Read the client error: curl error 60 and \"certificate has expired\" point at the certificate, not the network."
+    - "Confirm with openssl x509 -enddate or certbot certificates: it expired at 00:07 UTC."
+    - "Ask why renewal didn't happen: the timer runs, but letsencrypt.log shows every HTTP-01 challenge timing out."
+    - "Find the block: ufw denies 80/tcp, added by CHG-2291."
+    - "Reopen port 80 (nginx still redirects users to HTTPS), dry-run, then renew."
+    - "Verify: a new notAfter date, and curl to https://api.example.com succeeds without -k."
+  real_world: |
+    Expired certificates cause outages at companies of every size, and the
+    cause is almost always a renewal that had been failing quietly for weeks.
+    Monitor the expiry date of what you actually serve (openssl x509
+    -checkend in a check works), alert on renewal failures, and remember that
+    HTTP-01 needs port 80 open even when users never use it.
+
+sources:
+  - title: "Let's Encrypt: Challenge Types (HTTP-01 only on port 80)"
+    url: "https://letsencrypt.org/docs/challenge-types/"
+    retrieved: 2026-10-01
+  - title: "Certbot User Guide (renewal, certbot certificates, plugins and challenge ports)"
+    url: "https://eff-certbot.readthedocs.io/en/stable/using.html"
+    retrieved: 2026-10-01
+  - title: "libcurl error codes (CURLE_PEER_FAILED_VERIFICATION, 60)"
+    url: "https://curl.se/libcurl/c/libcurl-errors.html"
+    retrieved: 2026-10-01
+  - title: "openssl-x509(1): -enddate, -checkend"
+    url: "https://docs.openssl.org/master/man1/openssl-x509/"
+    retrieved: 2026-10-01
+  - title: "openssl-verify(1): X509_V_ERR_CERT_HAS_EXPIRED"
+    url: "https://docs.openssl.org/master/man1/openssl-verify/"
+    retrieved: 2026-10-01
+  - title: "ufw(8) — Ubuntu manual page (deleting and allowing rules)"
+    url: "https://manpages.ubuntu.com/manpages/noble/en/man8/ufw.8.html"
+    retrieved: 2026-10-01

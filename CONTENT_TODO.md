@@ -27,11 +27,40 @@ from your own experience and tick them off.
 - [ ] Ansible INI inventory: group syntax matches the docs. Whether `#` comments are
       allowed isn't stated there, so the scenario avoids them.
 
+## containers/image-pull-backoff
+- [ ] `kubectl describe pod` Events for a missing tag (Pulling / Failed to pull image
+      ... not found / ErrImagePull / Back-off pulling image / ImagePullBackOff): the
+      docs describe the states but don't print these event messages; the "not found"
+      text varies by container runtime and registry.
+- [ ] `kubectl rollout status` "Waiting for rollout to finish" and "exceeded its
+      progress deadline" lines are from the Deployments page; the CI log framing
+      (`Error: Process completed with exit code 1.`) and registry push output are representative.
+
 ## containers/crashloopbackoff
 - [ ] `kubectl get pods` RESTARTS column `6 (82s ago)`: the docs' example shows a bare count.
 - [ ] `kubectl describe pod` `Environment:` line `<set to the key 'url' in secret 'orders-db'>`: representative.
 - [ ] `kubectl top pods` output: representative.
 - [ ] `kubectl rollout history` with `<none>` change-cause: representative.
+
+## networking/expired-tls-certificate
+- [ ] `certbot certificates` "(INVALID: EXPIRED)" marker: the user guide shows
+      "VALID: 30 days" and "INVALID: TEST_CERT"; the expired wording is from experience.
+- [ ] letsencrypt.log lines and the dry-run failure text, including
+      "Timeout during connect (likely firewall problem)": representative of certbot
+      and Let's Encrypt output, not printed in their docs.
+- [ ] `curl: (60) SSL certificate problem: certificate has expired` plus the
+      "More details here" line: error 60 is documented; the CLI message format is representative.
+- [ ] `ufw status` column layout and `systemctl status certbot.timer`: representative.
+
+## linux/oom-killed-service
+- [ ] systemd journal lines ("A process of this unit has been killed by the OOM
+      killer.", "Failed with result 'oom-kill'.", "Scheduled restart job, restart
+      counter is at N."): the oom-kill result is documented; the exact messages are from experience.
+- [ ] Kernel OOM report (`Memory cgroup out of memory: Killed process ...`,
+      `oom-kill:constraint=CONSTRAINT_MEMCG,...`): representative; field order varies by kernel version.
+- [ ] `systemctl status` "Memory: ... (high: ... max: ... available: ... peak: ...)"
+      line: format varies by systemd version.
+- [ ] `free -h` layout: representative.
 
 ## iac/terraform-state-lock
 - [ ] The `Error acquiring the state lock` block (box-drawing borders, Lock Info
@@ -51,12 +80,33 @@ from your own experience and tick them off.
 - [ ] setup-node log lines and `Error: Process completed with exit code 1.`: representative.
 - [ ] `gh run list` column layout: representative.
 
+## iac/terraform-moved-block
+- [ ] Plan output: "will be destroyed", "(because ... is not in configuration)",
+      "has moved to", and the "Plan: X to add" summary are Terraform's wording from
+      experience; the refactoring docs describe the behavior but don't print a plan.
+- [ ] Forced-replacement wording ("must be replaced", "# forces replacement")
+      used in hypothesis feedback: from experience.
+
+## cicd/github-token-permissions
+- [ ] "GITHUB_TOKEN Permissions" section in the Set up job log: representative.
+- [ ] `gh pr edit` failure text with 'Resource not accessible by integration':
+      the API message is widely seen but not quoted in GitHub's docs; the gh CLI
+      framing is representative.
+
 ## microservices/cascading-failure
 - [ ] All traces, metrics and logs are synthetic: realistic shapes built from the
       SRE book's and Azure Circuit Breaker pattern's descriptions, not copied from
       a real system.
 - [ ] Amazon Builders' Library "Timeouts, retries and backoff with jitter" would be a
       good extra source, but the page is now JavaScript-rendered and couldn't be fetched.
+
+## microservices/poison-message-loop
+- [ ] `rabbitmqctl list_queues` / `list_policies` / `rabbitmq-diagnostics cluster_status`
+      output layouts: representative.
+- [ ] Message rates, CPU and the consumer code are scenario data. The behavior
+      claims (requeue to original position, redelivery loops, nack not counting
+      toward delivery-limit in 4.3, dead-lettering on reject without requeue,
+      purge removes all messages) are sourced.
 
 ## cloud/aws-single-az-database
 - [ ] AWS Health Dashboard event wording: representative, modeled on typical AZ

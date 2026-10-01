@@ -1,0 +1,258 @@
+id: oom-killed-service
+track: linux
+difficulty: 3
+title: "September invoices never went out"
+par_minutes: 14
+
+ticket:
+  from: "Billing team"
+  priority: P2
+  body: |
+    The month-end invoice run should have emailed every customer their
+    September invoice overnight. Nobody got one. The invoice worker's
+    dashboard says it has restarted more than 40 times since midnight.
+    The invoice API (same server) is working fine.
+
+environment: |
+  One Ubuntu VM (worker-02, 16 GB RAM) runs two services under systemd:
+  invoice-api (a small Python web app) and report-worker (a Python job that
+  renders invoice PDFs, with Restart=on-failure). Both are configured by the
+  team's config management, which writes systemd drop-in files and runs
+  systemctl daemon-reload when they change. Nothing was deployed to
+  report-worker this month.
+
+diagram:
+  nodes:
+    - { id: api, label: "invoice-api", col: 0, row: 0, status: ok }
+    - { id: worker, label: "report-worker", col: 1, row: 0, status: degraded }
+    - { id: mail, label: "email service", col: 2, row: 0, status: ok }
+  edges:
+    - { from: worker, to: mail }
+
+terminal:
+  prompt: "ops@worker-02:~$"
+  commands:
+    - match_regex: "^(sudo )?systemctl status report-worker(\\.service)?$"
+      when_actions: [raise-limit]
+      output: |
+        ● report-worker.service - Invoice PDF worker
+             Loaded: loaded (/etc/systemd/system/report-worker.service; enabled; preset: enabled)
+            Drop-In: /etc/systemd/system/report-worker.service.d
+                     └─limits.conf
+             Active: active (running) since Thu 2026-10-01 08:52:10 UTC; 6min ago
+           Main PID: 51877 (python3)
+             Memory: 604.2M (high: 768.0M max: 1.0G available: 163.8M peak: 611.5M)
+    - match_regex: "^(sudo )?systemctl status report-worker(\\.service)?$"
+      evidence: result-oom-kill
+      output: |
+        ● report-worker.service - Invoice PDF worker
+             Loaded: loaded (/etc/systemd/system/report-worker.service; enabled; preset: enabled)
+            Drop-In: /etc/systemd/system/report-worker.service.d
+                     └─limits.conf
+             Active: activating (auto-restart) (Result: oom-kill) since Thu 2026-10-01 08:41:03 UTC; 4s ago
+            Process: 50912 ExecStart=/opt/report-worker/bin/run (code=killed, signal=KILL)
+           Main PID: 50912 (code=killed, signal=KILL)
+             Memory: 256.0M (max: 256.0M available: 0B peak: 256.0M)
+    - match_regex: "^(sudo )?journalctl (-u report-worker(\\.service)?|-xeu report-worker(\\.service)?)( -n ?\\d+| --since.*)?$"
+      evidence: oom-journal
+      output: |
+        Oct 01 08:40:31 worker-02 systemd[1]: Started report-worker.service - Invoice PDF worker.
+        Oct 01 08:40:33 worker-02 run[50912]: INFO  month-end run: 18,412 invoices for 2026-09
+        Oct 01 08:40:58 worker-02 run[50912]: INFO  loaded line items (2,906,551 rows)
+        Oct 01 08:41:03 worker-02 systemd[1]: report-worker.service: A process of this unit has been killed by the OOM killer.
+        Oct 01 08:41:03 worker-02 systemd[1]: report-worker.service: Main process exited, code=killed, status=9/KILL
+        Oct 01 08:41:03 worker-02 systemd[1]: report-worker.service: Failed with result 'oom-kill'.
+        Oct 01 08:41:08 worker-02 systemd[1]: report-worker.service: Scheduled restart job, restart counter is at 43.
+    - match_regex: "^(sudo )?(dmesg( -T)?|journalctl -k)( \\| (grep|tail).*)?$"
+      evidence: cgroup-oom
+      output: |
+        [Thu Oct  1 08:41:03 2026] python3 invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=0
+        [Thu Oct  1 08:41:03 2026] memory: usage 262144kB, limit 262144kB, failcnt 1187
+        [Thu Oct  1 08:41:03 2026] oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/system.slice/report-worker.service,task_memcg=/system.slice/report-worker.service,task=python3,pid=50912,uid=998
+        [Thu Oct  1 08:41:03 2026] Memory cgroup out of memory: Killed process 50912 (python3) total-vm:921344kB, anon-rss:259872kB, file-rss:4120kB, shmem-rss:0kB, UID:998 pgtables:812kB oom_score_adj:0
+    - match: "free -h"
+      evidence: host-has-memory
+      output: |2
+                       total        used        free      shared  buff/cache   available
+        Mem:            15Gi       3.1Gi       8.2Gi        12Mi       4.1Gi        11Gi
+        Swap:             0B          0B          0B
+    - match_regex: "^(sudo )?systemctl cat report-worker(\\.service)?$"
+      when_actions: [raise-limit]
+      output: |
+        # /etc/systemd/system/report-worker.service
+        [Unit]
+        Description=Invoice PDF worker
+
+        [Service]
+        User=reports
+        ExecStart=/opt/report-worker/bin/run
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+
+        # /etc/systemd/system/report-worker.service.d/limits.conf
+        # Managed by config management (role: worker-limits). Do not edit by hand.
+        [Service]
+        MemoryHigh=768M
+        MemoryMax=1G
+    - match_regex: "^(sudo )?systemctl cat report-worker(\\.service)?$"
+      evidence: drop-in-limit
+      output: |
+        # /etc/systemd/system/report-worker.service
+        [Unit]
+        Description=Invoice PDF worker
+
+        [Service]
+        User=reports
+        ExecStart=/opt/report-worker/bin/run
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+
+        # /etc/systemd/system/report-worker.service.d/limits.conf
+        # Managed by config management (role: worker-limits). Do not edit by hand.
+        [Service]
+        MemoryMax=256M
+    - match_regex: "^(sudo )?systemctl show (-p |--property=)MemoryMax report-worker(\\.service)?$"
+      when_actions: [raise-limit]
+      output: |
+        MemoryMax=1073741824
+    - match_regex: "^(sudo )?systemctl show (-p |--property=)MemoryMax report-worker(\\.service)?$"
+      output: |
+        MemoryMax=268435456
+    - match_regex: "^(sudo )?systemctl status invoice-api(\\.service)?$"
+      output: |
+        ● invoice-api.service - Invoice API
+             Loaded: loaded (/etc/systemd/system/invoice-api.service; enabled; preset: enabled)
+             Active: active (running) since Mon 2026-09-14 06:02:18 UTC; 2 weeks 3 days ago
+           Main PID: 1204 (python3)
+             Memory: 142.7M (max: 256.0M available: 113.2M peak: 171.0M)
+
+metrics:
+  - name: "report-worker memory (cgroup)"
+    unit: MB
+    evidence: memory-history
+    threshold: { value: 256, label: "MemoryMax since 09-29: 256 MB" }
+    series:
+      - label: "peak per run"
+        points: [["09-24", 598], ["09-25", 604], ["09-26", 591], ["09-27", 607], ["09-28", 602], ["09-29", 256], ["09-30", 256], ["10-01", 256]]
+  - name: "worker-02 available memory"
+    unit: GB
+    series:
+      - label: "available"
+        points: [["09-24", 11.2], ["09-25", 11.1], ["09-26", 11.3], ["09-27", 11.2], ["09-28", 11.1], ["09-29", 11.4], ["09-30", 11.3], ["10-01", 11.2]]
+
+logs:
+  - name: "config management runs (worker-02)"
+    evidence: limits-rollout
+    lines: |
+      2026-09-14 06:01 role app-base: no changes
+      2026-09-29 13:20 role worker-limits (new, PR #77 "Cap memory on all worker services, copied from invoice-api"): wrote /etc/systemd/system/report-worker.service.d/limits.conf (MemoryMax=256M); ran systemctl daemon-reload
+      2026-09-29 13:20 role worker-limits: report-worker restarted to apply limits
+  - name: "report-worker deploys"
+    lines: |
+      2026-09-02 v4.8.0 (PDF fonts)
+      (no deploys since)
+
+hypotheses:
+  - id: unit-memory-limit
+    text: "report-worker's new 256 MB memory limit is lower than the job needs, so the kernel kills it inside its own cgroup."
+    correct: true
+  - id: host-oom
+    text: "worker-02 is running out of memory."
+    feedback: "free -h shows 11 GB available, and the kernel's message is \"Memory cgroup out of memory\" with oom_memcg=/system.slice/report-worker.service. The limit that was hit belongs to the service, not the machine."
+  - id: memory-leak
+    text: "A memory leak in report-worker."
+    feedback: "There's been no deploy since 09-02, and every run before 09-29 peaked at about 600 MB and finished. Since 09-29 it dies at exactly 256 MB, the moment the new limit appeared."
+  - id: bad-data
+    text: "Something in the September data crashes the PDF renderer."
+    feedback: "systemd records the result as oom-kill: the process was killed by the OOM killer, not crashed by bad input. It dies at the same memory level every time."
+
+actions:
+  - id: raise-limit
+    label: "In config management, set report-worker to MemoryHigh=768M and MemoryMax=1G, apply it (writes the drop-in, runs daemon-reload), then restart report-worker"
+    kind: fix
+    feedback: "The job needs about 600 MB at month end. MemoryHigh throttles it before the hard limit, and MemoryMax stays as the last line of defense, as systemd recommends. Changing it in config management means the next run doesn't put 256M back."
+  - id: restart-only
+    label: "systemctl restart report-worker"
+    kind: wrong
+    feedback: "It starts, loads the month's line items, reaches 256 MB and is killed again. systemd has already restarted it 43 times."
+  - id: oom-policy-continue
+    label: "Add OOMPolicy=continue so systemd stops failing the unit"
+    kind: wrong
+    feedback: "With OOMPolicy=continue the kill is logged and the unit keeps running, but the process that was rendering invoices is still killed. It hides the failure without producing a single invoice."
+  - id: edit-drop-in-by-hand
+    label: "Edit /etc/systemd/system/report-worker.service.d/limits.conf by hand and restart"
+    kind: wrong
+    feedback: "It works until config management runs again and writes MemoryMax=256M back, probably in the middle of the next run. The file says it's managed: change it at the source."
+  - id: kill-python
+    label: "Free memory: pkill -9 python3"
+    kind: destructive
+    feedback: "invoice-api is also python3, so you just took down the API customers were using. And the host had 11 GB available anyway: the limit is per service, so freeing host memory changes nothing."
+
+solution_paths:
+  - [raise-limit]
+
+key_evidence: [result-oom-kill, cgroup-oom, drop-in-limit, host-has-memory]
+
+hints:
+  nudge: "It's being killed, not crashing. Who's killing it, and is the whole machine short of memory?"
+  direction: "Compare systemctl status, the kernel log and free -h. Then see where the unit's memory limit comes from with systemctl cat."
+  answer: "The kernel log says \"Memory cgroup out of memory\" for report-worker's cgroup while the host has 11 GB free. systemctl cat shows a drop-in with MemoryMax=256M, added on 09-29 by config management. The job needs ~600 MB: raise the limit at the source and restart."
+
+analogy:
+  title: "The small tray"
+  text: |
+    A new kitchen rule gives every cook the same small tray to work on,
+    sized for the cook who makes salads. The pastry cook rolls out a big
+    sheet of dough, it doesn't fit, and the supervisor throws it in the bin.
+    There's plenty of counter space in the kitchen. The tray is the problem.
+
+debrief:
+  root_cause: |
+    On 09-29 a new config-management role added MemoryMax=256M to every
+    worker service, copying invoice-api's limit. MemoryMax is a hard limit
+    (memory.max for the service's cgroup): when usage reaches it and can't be
+    reduced, the kernel's OOM killer is invoked inside that cgroup.
+    report-worker needs about 600 MB to render a month's invoices, so every
+    run was killed at 256 MB, systemd recorded the result as oom-kill, and
+    Restart=on-failure started it again, over 40 times, with nothing sent.
+    The host itself had 11 GB available the whole time.
+  ideal_path:
+    - "systemctl status: Result: oom-kill, and memory at its 256M max."
+    - "Kernel log: \"Memory cgroup out of memory\" inside report-worker.service's cgroup, not a system-wide OOM."
+    - "free -h: the host has plenty of memory, so the limit is per service."
+    - "systemctl cat: a managed drop-in sets MemoryMax=256M; the config-management log dates it to 09-29."
+    - "Size the limit from the job's real peak (~600 MB): MemoryHigh=768M, MemoryMax=1G, changed in config management."
+    - "Restart, rerun the September invoices, and watch the peak stay under MemoryHigh."
+  real_world: |
+    Memory limits are good practice, and copying one service's limit to
+    another is how they go wrong. Size each limit from that service's
+    observed peak plus headroom, use MemoryHigh as the main control and
+    MemoryMax as the backstop, and alert on oom-kill results rather than
+    letting Restart= hide them.
+
+sources:
+  - title: "systemd.resource-control(5): MemoryMax=, MemoryHigh="
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html"
+    retrieved: 2026-10-01
+  - title: "systemd.service(5): OOMPolicy=, Restart="
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html"
+    retrieved: 2026-10-01
+  - title: "systemd.exec(5): $SERVICE_RESULT \"oom-kill\""
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html"
+    retrieved: 2026-10-01
+  - title: "systemd.unit(5): drop-in directories"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html"
+    retrieved: 2026-10-01
+  - title: "systemctl(1): cat, show, daemon-reload"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html"
+    retrieved: 2026-10-01
+  - title: "Linux kernel: Control Group v2 (memory.max)"
+    url: "https://docs.kernel.org/admin-guide/cgroup-v2.html"
+    retrieved: 2026-10-01
+  - title: "free(1) — Linux manual page"
+    url: "https://man7.org/linux/man-pages/man1/free.1.html"
+    retrieved: 2026-10-01

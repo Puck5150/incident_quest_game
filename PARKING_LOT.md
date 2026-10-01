@@ -42,7 +42,7 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
   latency, IAM least privilege, DNS failover TTLs.
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - Tracks beyond the six MVP scenarios: Fundamentals, Windows/identity, Scripting and code, Cloud (AWS/Azure), Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
-- More scenarios per track and difficulty levels 3–5
+- More scenarios per track (each original track has two as of 2026-10-01) and difficulty 5
 
 ## Authoring tooling
 - JSON Schema generated from the Zod schema, for YAML autocomplete and validation in VS Code

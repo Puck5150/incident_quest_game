@@ -1,0 +1,242 @@
+id: poison-message-loop
+track: microservices
+difficulty: 4
+title: "No order confirmation emails, and everything looks healthy"
+par_minutes: 16
+
+ticket:
+  from: "Customer support"
+  priority: P1
+  body: |
+    Since about 09:40, customers who place orders don't get a confirmation
+    email. Orders themselves are fine: they show up in the admin panel and
+    payments are captured. Support has 200+ tickets asking "did my order go
+    through?". Every dashboard tile is green.
+
+environment: |
+  order-svc publishes an order.placed message for every order to a RabbitMQ
+  4.3 cluster, into the quorum queue qq.order-emails. email-worker (3
+  replicas, prefetch 10 each) consumes it, renders the email, sends it
+  through the email provider's API, and acknowledges the message. There is
+  no dead-letter configuration on the queue. Ops sometimes replay old order
+  events with an internal tool, replay-orders.
+
+diagram:
+  nodes:
+    - { id: orders, label: "order-svc", col: 0, row: 0, status: ok }
+    - { id: rabbit, label: "RabbitMQ qq.order-emails", col: 1, row: 0, status: ok }
+    - { id: worker, label: "email-worker ×3", col: 2, row: 0, status: ok }
+    - { id: provider, label: "email provider", col: 3, row: 0, status: ok }
+  edges:
+    - { from: orders, to: rabbit }
+    - { from: rabbit, to: worker }
+    - { from: worker, to: provider }
+
+metrics:
+  - name: "qq.order-emails: messages ready"
+    unit: messages
+    evidence: backlog
+    series:
+      - label: "ready"
+        points: [["09:30", 3], ["09:35", 5], ["09:40", 412], ["09:45", 2810], ["09:50", 6950], ["09:55", 11400], ["10:00", 15820], ["10:05", 20140], ["10:10", 24610]]
+  - name: "qq.order-emails: message rates"
+    unit: msg/s
+    evidence: redeliver-loop
+    series:
+      - label: "publish"
+        points: [["09:30", 14], ["09:35", 15], ["09:40", 15], ["09:45", 14], ["09:50", 15], ["09:55", 16], ["10:00", 15], ["10:05", 14], ["10:10", 15]]
+      - label: "deliver (incl. redeliver)"
+        points: [["09:30", 14], ["09:35", 15], ["09:40", 2940], ["09:45", 3110], ["09:50", 3080], ["09:55", 3150], ["10:00", 3090], ["10:05", 3120], ["10:10", 3070]]
+      - label: "ack"
+        points: [["09:30", 14], ["09:35", 15], ["09:40", 1.2], ["09:45", 0.4], ["09:50", 0.3], ["09:55", 0.2], ["10:00", 0.3], ["10:05", 0.2], ["10:10", 0.2]]
+  - name: "email-worker CPU"
+    unit: "%"
+    series:
+      - label: "avg of 3 pods"
+        points: [["09:30", 6], ["09:35", 7], ["09:40", 91], ["09:45", 96], ["09:50", 95], ["09:55", 96], ["10:00", 95], ["10:05", 96], ["10:10", 95]]
+
+logs:
+  - name: "email-worker (pod email-worker-7d9c-2xq)"
+    evidence: same-messages-failing
+    lines: |
+      10:10:41.002 ERROR order 771023 (msg 0a6f…): KeyError: 'currency' while rendering template; nack requeue=true (redelivered=true, x-acquired-count=48211)
+      10:10:41.003 ERROR order 771027 (msg 3c11…): KeyError: 'currency' while rendering template; nack requeue=true (redelivered=true, x-acquired-count=48190)
+      10:10:41.003 ERROR order 771031 (msg 9be2…): KeyError: 'currency' while rendering template; nack requeue=true (redelivered=true, x-acquired-count=48207)
+      10:10:41.004 ERROR order 771023 (msg 0a6f…): KeyError: 'currency' while rendering template; nack requeue=true (redelivered=true, x-acquired-count=48212)
+      10:10:41.004 ERROR order 771040 (msg 51d8…): KeyError: 'currency' while rendering template; nack requeue=true (redelivered=true, x-acquired-count=48199)
+      10:10:41.005 ERROR order 771027 (msg 3c11…): KeyError: 'currency' while rendering template; nack requeue=true (redelivered=true, x-acquired-count=48191)
+  - name: "ops audit log"
+    evidence: replay
+    lines: |
+      09:12 deploy order-svc v5.4.1 (no message format change)
+      09:38 replay-orders --from-archive 2026-08 --to qq.order-emails --count 420  (Sam: "resend August confirmations for the ticket backlog")
+      09:38 replay-orders: published 420 messages (archive schema v1)
+  - name: "email provider status"
+    lines: |
+      All systems operational. API p99 180 ms. No incidents today.
+
+files:
+  - path: "email-worker/consumer.py"
+    language: python
+    evidence: nack-requeue
+    content: |
+      def on_message(ch, method, properties, body):
+          event = json.loads(body)
+          try:
+              email = render_confirmation(event)   # needs event["currency"] (schema v2)
+              provider.send(email)
+              ch.basic_ack(method.delivery_tag)
+          except Exception as e:
+              log.error("order %s: %r; nack requeue=true", event.get("order_id"), e)
+              # Never lose an email: put it back and try again.
+              ch.basic_nack(method.delivery_tag, requeue=True)
+
+      ch.basic_qos(prefetch_count=10)
+      ch.basic_consume("qq.order-emails", on_message)
+  - path: "events/order-placed.schema.md"
+    content: |
+      v2 (since 2026-09-01): adds "currency" (required). Producers: order-svc >= 5.0.
+      v1: no "currency" field; amounts assumed USD.
+
+terminal:
+  prompt: "ops@bastion:~$"
+  commands:
+    - match_regex: "^(sudo )?rabbitmqctl list_queues( name)?( \\S+)*$"
+      when_actions: [reject-permanent]
+      output: |
+        name                     type     messages_ready  messages_unacknowledged  consumers
+        qq.order-emails          quorum   1840            30                       3
+        qq.order-emails.dead     quorum   420             0                        0
+    - match_regex: "^(sudo )?rabbitmqctl list_queues( name)?( \\S+)*$"
+      evidence: queue-state
+      output: |
+        name                     type     messages_ready  messages_unacknowledged  consumers
+        qq.order-emails          quorum   24610           30                       3
+    - match_regex: "^(sudo )?rabbitmqctl list_policies$"
+      when_actions: [add-dlx]
+      output: |
+        vhost  name          pattern              apply-to       definition                                                    priority
+        /      order-emails  ^qq\.order-emails$   quorum_queues  {"dead-letter-exchange":"order-emails.dlx"}                   10
+    - match_regex: "^(sudo )?rabbitmqctl list_policies$"
+      evidence: no-dlx
+      output: |
+        vhost  name  pattern  apply-to  definition  priority
+    - match_regex: "^kubectl get pods( -l app=email-worker)?( -n shop)?$"
+      output: |
+        NAME                     READY   STATUS    RESTARTS   AGE
+        email-worker-7d9c-2xq    1/1     Running   0          3d
+        email-worker-7d9c-8kn    1/1     Running   0          3d
+        email-worker-7d9c-tz4    1/1     Running   0          3d
+    - match_regex: "^(sudo )?rabbitmq-diagnostics (status|cluster_status|check_running)$"
+      output: |
+        Cluster status of node rabbit@mq-1 ...
+        Running Nodes
+        rabbit@mq-1
+        rabbit@mq-2
+        rabbit@mq-3
+        Network Partitions
+        (none)
+
+hypotheses:
+  - id: poison-loop
+    text: "A batch of messages the worker can never process is being nacked and requeued forever, so the workers spend all their time on them and new orders' emails wait behind them."
+    correct: true
+  - id: provider-down
+    text: "The email provider is failing."
+    feedback: "The provider reports no incidents, and the worker never gets as far as sending: it fails rendering the template with KeyError: 'currency'."
+  - id: broker-unhealthy
+    text: "The RabbitMQ cluster is unhealthy."
+    feedback: "All three nodes are running with no partitions, publishing is normal at ~15 msg/s, and the broker is delivering over 3,000 messages a second. It's working hard, on the wrong messages."
+  - id: workers-crashing
+    text: "email-worker pods are crashing."
+    feedback: "All three pods are Running with 0 restarts. They catch the exception and nack, so nothing crashes; that's why every dashboard is green."
+  - id: delivery-limit-bug
+    text: "RabbitMQ's default delivery limit of 20 should have dropped these messages, so the broker must have a bug."
+    feedback: "Since RabbitMQ 4.3 the delivery limit counts failed deliveries (delivery-count). A basic.nack with requeue is an explicit return and doesn't increment it, so unlimited nack-requeue loops are allowed by design. x-acquired-count is in the 48,000s; the limit never applies."
+
+actions:
+  - id: add-dlx
+    label: "Declare exchange order-emails.dlx bound to a new quorum queue qq.order-emails.dead, and apply a policy setting dead-letter-exchange on qq.order-emails"
+    kind: fix
+    feedback: "Now a message rejected without requeue is republished to the dead-letter exchange and kept in qq.order-emails.dead instead of being discarded. Set this up before changing the worker."
+  - id: reject-permanent
+    label: "Change email-worker to basic.reject(requeue=false) on errors that will never succeed (like a schema-v1 message), keep retries for temporary errors, and deploy"
+    kind: fix
+    feedback: "The 420 replayed v1 messages go to the dead-letter queue on their first failure, the backlog drains at normal speed, and the dead-lettered ones can be fixed up and republished later. basic.reject also counts toward the delivery limit, so the broker's safety net works again."
+  - id: lower-delivery-limit
+    label: "Set a policy with delivery-limit: 5 on qq.order-emails"
+    kind: wrong
+    feedback: "On RabbitMQ 4.3, basic.nack with requeue doesn't increment the delivery count that the limit checks. The loop carries on exactly as before."
+  - id: scale-workers
+    label: "Scale email-worker from 3 to 12 replicas"
+    kind: wrong
+    feedback: "Requeued messages go back near the head of the queue and are immediately ready again, so the new consumers join the same redelivery loop. RabbitMQ's docs warn these loops are costly in network and CPU: you've quadrupled the cost and fixed nothing."
+  - id: rollback-order-svc
+    label: "Roll back order-svc 5.4.1"
+    kind: wrong
+    feedback: "order-svc's messages are fine (schema v2, with currency). The bad messages came from the 09:38 replay of August's v1 archive."
+  - id: purge-queue
+    label: "rabbitmqctl purge_queue qq.order-emails"
+    kind: destructive
+    feedback: "Purging removes all messages in the queue: the 420 bad ones and over 24,000 real order confirmations from this morning. Those customers will never get their email, and you'll have to reconstruct them from the orders database."
+
+solution_paths:
+  - [add-dlx, reject-permanent]
+
+key_evidence: [redeliver-loop, same-messages-failing, nack-requeue, replay]
+
+hints:
+  nudge: "The broker is delivering 3,000 messages a second and the workers are acknowledging almost none. What are they doing with the rest?"
+  direction: "Read the worker's errors and its code. Are the failing messages new ones, or the same ones again and again? Where did they come from?"
+  answer: "The 09:38 replay published 420 schema-v1 messages without currency. The worker fails on them and nacks with requeue=true, they come straight back, forever (nacks don't count toward the delivery limit). Add a dead-letter exchange, then reject unprocessable messages without requeue."
+
+analogy:
+  title: "The letter nobody can deliver"
+  text: |
+    A sorting office gets a sack of letters with no postcode. Each sorter
+    picks one up, can't route it, and puts it back on top of the pile
+    "so it isn't lost". The next sorter picks up the same letter. All day,
+    every sorter is busy and nothing goes out. The office needed one
+    "return to sender" tray.
+
+debrief:
+  root_cause: |
+    At 09:38, replay-orders republished 420 August order events from the
+    archive in schema v1, which has no currency field. email-worker failed
+    to render every one of them and, by design, nacked with requeue=true.
+    RabbitMQ puts a requeued message back at its original position if it
+    can, where it's immediately ready for redelivery, so the three workers'
+    30 prefetch slots filled with the same failing messages over and over:
+    a requeue/redelivery loop. New orders' messages queued up behind them.
+    The safety net didn't fire: since RabbitMQ 4.3, the quorum queue
+    delivery limit counts failed deliveries, and a nack with requeue is an
+    explicit return that doesn't count. Nothing crashed and every health
+    check passed.
+  ideal_path:
+    - "Notice the rates: deliveries near 3,000/s, acks near zero, ready messages climbing."
+    - "Read the worker errors: the same few order ids failing with KeyError: 'currency', over and over."
+    - "Read the consumer: every error is nacked with requeue=true."
+    - "Find the source: the 09:38 replay of schema-v1 messages (order-svc's own messages are v2)."
+    - "Add a dead-letter exchange and queue first, so nothing rejected is lost."
+    - "Change the worker to reject unprocessable messages without requeue; keep delayed retries for temporary errors."
+    - "Verify: the poison messages land in the dead-letter queue, acks recover, the backlog drains, then repair and republish the 420."
+  real_world: |
+    "Requeue on any error" feels safe and is one of the most common ways a
+    message pipeline stalls. Separate errors that might succeed later
+    (timeouts, rate limits) from ones that never will (bad data), give every
+    queue a dead-letter destination, and alert on ack rate and redelivery
+    rate, not just on whether the consumers are up.
+
+sources:
+  - title: "RabbitMQ: Quorum Queues (poison message handling, delivery-limit, x-delivery-count, x-acquired-count)"
+    url: "https://www.rabbitmq.com/docs/quorum-queues#poison-message-handling"
+    retrieved: 2026-10-01
+  - title: "RabbitMQ: Consumer Acknowledgements (basic.nack, basic.reject, requeue position, redelivery loops)"
+    url: "https://www.rabbitmq.com/docs/confirms"
+    retrieved: 2026-10-01
+  - title: "RabbitMQ: Dead Letter Exchanges"
+    url: "https://www.rabbitmq.com/docs/dlx"
+    retrieved: 2026-10-01
+  - title: "rabbitmqctl(8): purge_queue, list_queues, set_policy"
+    url: "https://www.rabbitmq.com/docs/man/rabbitmqctl.8"
+    retrieved: 2026-10-01

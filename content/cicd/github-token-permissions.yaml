@@ -1,0 +1,200 @@
+id: github-token-permissions
+track: cicd
+difficulty: 2
+title: "Every PR is red, but the tests pass"
+par_minutes: 10
+
+ticket:
+  from: "Frontend team"
+  priority: P2
+  body: |
+    Since late morning every pull request on shop-web fails the "test" check,
+    so nothing can merge (it's a required check). The tests themselves pass:
+    it's the last step that goes red. Re-running doesn't help. We have a
+    hotfix waiting.
+
+environment: |
+  shop-web is a private GitHub repository. Its CI workflow runs on every
+  pull request (from branches in the same repository; there are no forks).
+  The "test" job checks out the code, runs the tests, and then labels the
+  pull request by size with the GitHub CLI, using the workflow's
+  GITHUB_TOKEN. Branch protection on main requires the "test" check.
+
+diagram:
+  nodes:
+    - { id: pr, label: "pull request", col: 0, row: 0, status: degraded }
+    - { id: actions, label: "GitHub Actions: test", col: 1, row: 0, status: down }
+    - { id: api, label: "GitHub API", col: 2, row: 0, status: ok }
+  edges:
+    - { from: pr, to: actions }
+    - { from: actions, to: api }
+
+pipeline:
+  name: "CI · pull request #412, run #2207"
+  trigger: "pull_request · branch fix/cart-rounding · \"Fix cart rounding\" · Lee"
+  stages:
+    - name: "test / Set up job"
+      status: success
+      duration_s: 2
+      evidence: token-permissions
+      log: |
+        Current runner version: '2.329.0'
+        GITHUB_TOKEN Permissions
+          Contents: read
+          Metadata: read
+        Secret source: Actions
+    - name: "test / Run actions/checkout@v6"
+      status: success
+      duration_s: 2
+    - name: "test / Run npm ci"
+      status: success
+      duration_s: 21
+    - name: "test / Run npm test"
+      status: success
+      duration_s: 48
+      log: |
+        Test Files  64 passed (64)
+             Tests  611 passed (611)
+    - name: "test / Label PR by size"
+      status: failure
+      duration_s: 1
+      evidence: label-forbidden
+      log: |
+        Run gh pr edit "$PR" --add-label "size/S"
+        failed to update https://github.com/example-shop/shop-web/pull/412: 'Resource not accessible by integration'
+        Error: Process completed with exit code 1.
+
+files:
+  - path: ".github/workflows/ci.yml"
+    language: yaml
+    evidence: workflow-permissions
+    content: |
+      name: CI
+      on:
+        pull_request:
+
+      # Least privilege for the GITHUB_TOKEN (a3c9e21)
+      permissions:
+        contents: read
+
+      jobs:
+        test:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v6
+            - run: npm ci
+            - run: npm test
+            - name: Label PR by size
+              run: gh pr edit "$PR" --add-label "size/$(./scripts/pr-size.sh)"
+              env:
+                GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                PR: ${{ github.event.pull_request.number }}
+
+logs:
+  - name: "git log --oneline .github/workflows/ci.yml"
+    evidence: hardening-commit
+    lines: |
+      a3c9e21 ci: least-privilege GITHUB_TOKEN (security review SR-88)
+      77d0b14 ci: label PRs by size
+      1c5e9a2 ci: cache npm
+  - name: "Organization Actions settings (unchanged since March)"
+    lines: |
+      Workflow permissions: Read and write permissions
+      Allow GitHub Actions to create and approve pull requests: off
+
+hypotheses:
+  - id: workflow-permissions
+    text: "The new top-level permissions block gives the token contents: read only, so it lost the right to label pull requests."
+    correct: true
+  - id: org-default
+    text: "The organization switched the default GITHUB_TOKEN to read-only."
+    feedback: "The org settings haven't changed since March, and the default is read and write. The workflow's own permissions block overrides the default anyway; that's what a3c9e21 added."
+  - id: fork-pr
+    text: "The pull requests come from forks, which only get a read-only token."
+    feedback: "There are no forks: these are branches in the same repository. And the run's token shows only Contents and Metadata, which matches the workflow file, not a fork downgrade."
+  - id: gh-cli-broken
+    text: "A new GitHub CLI version on the runner broke gh pr edit."
+    feedback: "\"Resource not accessible by integration\" is the API refusing the token, not the CLI crashing. The step worked until the commit that changed permissions."
+
+actions:
+  - id: job-permissions
+    label: "Give the test job its own permissions: contents: read and pull-requests: write"
+    kind: fix
+    feedback: "pull-requests: write is what lets an action label a pull request. Setting it on the one job that needs it, with contents: read kept for checkout, stays least-privilege."
+  - id: only-pr-write
+    label: "Give the test job permissions: pull-requests: write (nothing else)"
+    kind: wrong
+    feedback: "When you specify any permission, every one you don't specify is set to none, and job-level permissions replace the workflow-level ones for that job. Without contents: read, checkout of this private repository fails before the tests even run."
+  - id: write-all
+    label: "Change the workflow to permissions: write-all"
+    kind: wrong
+    feedback: "It turns green, and undoes the security review: every job and every action in this workflow gets write access to everything the token can touch. Grant the one permission the one job needs."
+  - id: personal-token
+    label: "Swap GITHUB_TOKEN for a maintainer's personal access token stored as a secret"
+    kind: wrong
+    feedback: "That token carries the maintainer's access to everything they can reach, and breaks when they leave. The built-in token can label pull requests once it's given pull-requests: write."
+  - id: pull-request-target
+    label: "Switch the trigger to pull_request_target so the token gets write access, and check out the PR's head commit"
+    kind: destructive
+    feedback: "GitHub's secure-use guidance warns that pull_request_target combined with checking out pull request code exposes the repository to compromise: the code under review runs with a privileged token and secrets. It's a well-known way to get a repository taken over."
+  - id: rerun
+    label: "Re-run the failed jobs"
+    kind: wrong
+    feedback: "The re-run gets a token with the same permissions from the same workflow file, and fails the same way."
+
+solution_paths:
+  - [job-permissions]
+
+key_evidence: [label-forbidden, token-permissions, workflow-permissions]
+
+hints:
+  nudge: "The tests pass. What is different about the one step that fails?"
+  direction: "Compare what the token was allowed to do (Set up job) with what the failing step asks for, then look at the workflow's recent history."
+  answer: "a3c9e21 added permissions: contents: read at the top of the workflow, so everything else, including pull-requests, became none. Give the test job contents: read and pull-requests: write."
+
+analogy:
+  title: "The tidied-up key ring"
+  text: |
+    After a security review, the caretaker took every key off the cleaners'
+    ring except the front door. Good idea. But one cleaner's job is putting
+    notices on the meeting-room door, and that key went too. The fix isn't to
+    hand back the whole ring; it's to add the one key that job needs.
+
+debrief:
+  root_cause: |
+    Commit a3c9e21 added a top-level permissions block with only
+    contents: read. When a workflow specifies any permission, every
+    permission it doesn't specify is set to none, so the GITHUB_TOKEN lost
+    pull-requests access. The tests still passed, but the labeling step's
+    API call was refused ("Resource not accessible by integration"), the
+    "test" job failed, and branch protection blocked every merge.
+  ideal_path:
+    - "Read the failing step: the API refused the token; the tests passed."
+    - "Check the token's permissions in Set up job: only Contents and Metadata."
+    - "Read the workflow and its history: a3c9e21 added permissions: contents: read."
+    - "Grant what the job needs at job level: contents: read (for checkout) plus pull-requests: write (for labels)."
+    - "Verify: the PR's test check passes, the label appears, and the token permissions list shows PullRequests: write for that job only."
+  real_world: |
+    Least-privilege tokens are the right default, and adopting them always
+    breaks a step or two. Read each job's steps before tightening, and set
+    permissions per job so a job that needs write access doesn't widen
+    everyone else's. Never "fix" a permission error by switching to
+    pull_request_target or a personal token without understanding what
+    that exposes.
+
+sources:
+  - title: "GitHub Docs: Workflow syntax, permissions (unspecified permissions are set to none; how permissions are calculated)"
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions"
+    retrieved: 2026-10-01
+  - title: "GitHub Docs: Use GITHUB_TOKEN for authentication in workflows"
+    url: "https://docs.github.com/en/actions/tutorials/authenticate-with-github_token"
+    retrieved: 2026-10-01
+  - title: "GitHub Docs: GITHUB_TOKEN"
+    url: "https://docs.github.com/en/actions/concepts/security/github_token"
+    retrieved: 2026-10-01
+  - title: "actions/checkout README: recommended permissions (contents: read)"
+    url: "https://github.com/actions/checkout#recommended-permissions"
+    retrieved: 2026-10-01
+  - title: "GitHub Docs: Secure use reference (pull_request_target and untrusted checkouts)"
+    url: "https://docs.github.com/en/actions/reference/security/secure-use"
+    retrieved: 2026-10-01

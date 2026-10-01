@@ -5,9 +5,11 @@ incident ticket, investigate with a simulated terminal, logs, config files,
 traces, metrics and CI pipeline views, name the root cause, fix it, and get a
 debrief with the ideal path, a non-IT analogy, and links to the official docs.
 
-Current incidents cover DNS, Linux disk space, Kubernetes CrashLoopBackOff,
-Terraform state locking, GitHub Actions, a microservices cascading failure, and
-cloud architecture failures on AWS (single-AZ database), Azure (Application
+Current incidents cover DNS, an expired TLS certificate, Linux disk space and
+a systemd memory limit, Kubernetes CrashLoopBackOff and a stuck image pull,
+Terraform state locking and an unsafe refactor, GitHub Actions (a stale lock
+file and token permissions), a microservices cascading failure and a message
+queue poison-message loop, and cloud architecture failures on AWS (single-AZ database), Azure (Application
 Gateway health probes) and Google Cloud (Cloud Run vs. Cloud SQL connections).
 
 **Design challenges** flip it around: you build an architecture from a brief
