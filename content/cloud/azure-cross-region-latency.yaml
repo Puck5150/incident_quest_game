@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-cross-region-latency
+track: cloud
+difficulty: 3
+title: "We moved closer to our customers and checkout got 10x slower"
+par_minutes: 14
+
+ticket:
+  from: "EU customer success"
+  priority: P2
+  body: |
+    Since Monday, European customers say checkout "hangs" for 2 to 3 seconds
+    before confirming. US customers too. The whole point of last week's move
+    to West Europe was to make the site faster for Europe. Nothing is down,
+    it's just slow.
+
+environment: |
+  shop-api runs on Azure App Service. On 09-28 it moved from East US to West
+  Europe to be closer to EU customers; the old East US deployment is still
+  running, scaled down, and Azure Front Door can route to either. The orders
+  database is Azure Database for PostgreSQL flexible server, orders-pg, still
+  in East US ("the database moves in Q4"). A read replica, orders-pg-weu, was
+  created in West Europe for EU reporting.
+
+diagram:
+  nodes:
+    - { id: fd, label: "Front Door", col: 0, row: 0, status: ok }
+    - { id: api, label: "shop-api (West Europe)", col: 1, row: 0, status: ok }
+    - { id: db, label: "orders-pg (East US)", col: 2, row: 0, status: ok }
+    - { id: replica, label: "orders-pg-weu (read replica)", col: 2, row: 1, status: ok }
+  edges:
+    - { from: fd, to: api }
+    - { from: api, to: db }
+    - { from: db, to: replica }
+
+traces:
+  - name: "POST /api/checkout after the move, 10-01 10:12 (trace 7c41e9)"
+    evidence: sequential-queries
+    spans:
+      - { id: root, service: "shop-api", operation: "POST /api/checkout", start_ms: 0, duration_ms: 2214, note: "24 database calls, one after another" }
+      - { id: cart, parent: root, service: "orders-pg", operation: "SELECT cart", start_ms: 4, duration_ms: 87 }
+      - { id: p1, parent: root, service: "orders-pg", operation: "SELECT price, stock WHERE product_id = $1 (item 1 of 22)", start_ms: 92, duration_ms: 86 }
+      - { id: p2, parent: root, service: "orders-pg", operation: "SELECT price, stock WHERE product_id = $1 (item 2 of 22)", start_ms: 179, duration_ms: 88 }
+      - { id: pn, parent: root, service: "orders-pg", operation: "... items 3 to 22, same query, ~86 ms each", start_ms: 268, duration_ms: 1852 }
+      - { id: insert, parent: root, service: "orders-pg", operation: "INSERT order", start_ms: 2122, duration_ms: 88, note: "query execution 0.4 ms; the rest is the network round trip" }
+  - name: "POST /api/checkout before the move, 09-25 10:07 (trace 2a90f3)"
+    spans:
+      - { id: root, service: "shop-api", operation: "POST /api/checkout", start_ms: 0, duration_ms: 141, note: "same 24 database calls" }
+      - { id: cart, parent: root, service: "orders-pg", operation: "SELECT cart", start_ms: 3, duration_ms: 2 }
+      - { id: p1, parent: root, service: "orders-pg", operation: "SELECT price, stock WHERE product_id = $1 (item 1 of 22)", start_ms: 6, duration_ms: 2 }
+      - { id: pn, parent: root, service: "orders-pg", operation: "... items 2 to 22, ~2 ms each", start_ms: 9, duration_ms: 44 }
+      - { id: insert, parent: root, service: "orders-pg", operation: "INSERT order", start_ms: 55, duration_ms: 2 }
+
+metrics:
+  - name: "POST /api/checkout p95 latency"
+    unit: ms
+    evidence: latency-step
+    series:
+      - label: "p95"
+        points: [["09-24", 238], ["09-25", 241], ["09-26", 236], ["09-27", 244], ["09-28", 2290], ["09-29", 2310], ["09-30", 2285], ["10-01", 2301]]
+  - name: "orders-pg CPU"
+    unit: "%"
+    series:
+      - label: "CPU"
+        points: [["09-24", 13], ["09-25", 12], ["09-26", 12], ["09-27", 14], ["09-28", 12], ["09-29", 13], ["09-30", 12], ["10-01", 12]]
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az webapp show -n shop-api -g rg-shop --query location"
+      evidence: regions-split
+      output: |
+        "West Europe"
+    - match: "az postgres flexible-server show -n orders-pg -g rg-shop --query location"
+      output: |
+        "East US"
+    - match: "az postgres flexible-server replica list --name orders-pg -g rg-shop --query [].{name:name,location:location,role:replicationRole}"
+      output: |
+        [
+          { "name": "orders-pg-weu", "location": "West Europe", "role": "AsyncReplica" }
+        ]
+    - match_regex: "^psql .*orders-pg\\.postgres\\.database\\.azure\\.com.*select 1.*$"
+      evidence: round-trip
+      output: |
+        Timing is on.
+         ?column?
+        ----------
+                1
+        (1 row)
+
+        Time: 86.214 ms
+
+files:
+  - path: "shop-api/checkout/pricing.py"
+    language: python
+    evidence: per-item-query
+    content: |
+      def price_cart(db, cart):
+          lines = []
+          for item in cart.items:  # one round trip per item
+              row = db.fetch_one(
+                  "SELECT price, stock FROM products WHERE product_id = %s",
+                  (item.product_id,),
+              )
+              lines.append(Line(item, row.price, row.stock))
+          return lines
+
+logs:
+  - name: "change log"
+    evidence: move-change
+    lines: |
+      2026-09-28 CHG-2299 Move shop-api App Service East US -> West Europe (closer to EU customers). Database stays in East US until the Q4 migration.
+      2026-09-28 CHG-2299 East US shop-api kept running at 1 instance as fallback; Front Door origin disabled
+      2026-09-12 CHG-2241 Create read replica orders-pg-weu in West Europe for EU reporting
+
+hypotheses:
+  - id: chatty-cross-region
+    text: "Checkout makes two dozen database calls one after another, and each now crosses the Atlantic: the round trips add up."
+    correct: true
+  - id: db-overloaded
+    text: "The database is overloaded."
+    feedback: "orders-pg's CPU is flat at about 12%, and the trace shows each query executing in under a millisecond. The time is spent travelling, not computing."
+  - id: region-network-issue
+    text: "There's a network problem in West Europe."
+    feedback: "86 ms is normal for this route: Microsoft's published median round trip between East US and West Europe is 85 ms. The network is fine; the design now crosses it 24 times per checkout."
+  - id: app-release
+    text: "A slow code release went out with the move."
+    feedback: "The same code ran before the move at about 240 ms. The trace shows the app mostly waiting on database calls, each one about 86 ms instead of about 2."
+
+actions:
+  - id: route-back
+    label: "Scale the East US shop-api back up and route Front Door to it, so the app sits next to its database again"
+    kind: fix
+    feedback: "Each query is back to a millisecond or two, and checkout returns to about 240 ms within minutes. Moving next to the users only helps if what the app talks to most comes too."
+  - id: batch-queries
+    label: "Change price_cart to fetch every item's price and stock in one query (WHERE product_id = ANY(%s))"
+    kind: fix
+    feedback: "24 round trips become 3. That helps in any region, and it's what makes the West Europe move safe to try again once the database migration is planned."
+  - id: scale-app
+    label: "Scale the App Service plan up to bigger instances"
+    kind: wrong
+    feedback: "The app's CPU isn't the bottleneck; it spends checkout waiting on the network. Faster instances wait just as long."
+  - id: scale-db
+    label: "Scale orders-pg up to a larger compute tier"
+    kind: wrong
+    feedback: "The queries already execute in under a millisecond, and the database is at 12% CPU. A bigger server is the same 85 ms away."
+  - id: connection-pooling
+    label: "Enable connection pooling (PgBouncer) on orders-pg"
+    kind: wrong
+    feedback: "Pooling saves the cost of opening connections, but every query on an open connection still makes its own round trip. 24 queries still cost 24 round trips."
+  - id: use-replica
+    label: "Point shop-api at the West Europe read replica, orders-pg-weu, for speed"
+    kind: destructive
+    feedback: "Replicas are read-only. Reads get fast, and every checkout fails at INSERT order: you've turned a slow checkout into no checkout. The replica is also updated asynchronously, so prices and stock can be stale."
+
+solution_paths:
+  - [route-back, batch-queries]
+
+key_evidence: [sequential-queries, latency-step, regions-split, round-trip]
+
+evidence_labels:
+  sequential-queries: "Checkout makes 24 database calls one after another, about 86 ms each (about 2 ms before the move)"
+  latency-step: "Checkout p95 jumped from about 240 ms to 2.3 s on 09-28, the day of the move"
+  regions-split: "The app now runs in West Europe while its database is in East US"
+  round-trip: "A trivial query from the app to the database takes 86 ms"
+
+hints:
+  nudge: "Compare a slow checkout trace with one from before the move. Is the work different, or just slower?"
+  direction: "Look at how many database calls checkout makes, how long each one takes now, and where the app and the database are."
+  answer: "Checkout makes 24 sequential queries. The app moved to West Europe and the database stayed in East US (85 ms apart), so 24 × ~86 ms is ~2 s. Route back to East US now, and batch the per-item queries into one."
+
+analogy:
+  title: "The shop that moved away from its stockroom"
+  text: |
+    A shop moves to a busier street to be closer to customers, but leaves its
+    stockroom across town. The shopkeeper still fetches each item on a list
+    one at a time, so every list of 22 items means 22 trips across town.
+    Customers wait longer than ever. Move back next to the stockroom for now,
+    and learn to fetch the whole list in one trip.
+
+debrief:
+  root_cause: |
+    On 09-28 shop-api moved from East US to West Europe, but its database,
+    orders-pg, stayed in East US. Microsoft's measured median round trip
+    between those regions is 85 ms. Checkout's pricing code queries the
+    database once per cart item, one after another (chatty I/O), so a
+    typical checkout made 24 sequential round trips. In the same region each
+    cost about 2 ms (about 50 ms in total); across the Atlantic each cost
+    about 86 ms (about 2 s). Nothing was overloaded or broken: the latency
+    was the design, multiplied by the distance.
+  ideal_path:
+    - "Compare traces before and after the move: the same 24 calls, each about 40 times slower."
+    - "Rule out load: database CPU is flat and queries execute in under a millisecond."
+    - "Find the distance: the app is in West Europe, the database in East US; a trivial query takes 86 ms."
+    - "Restore service by routing back to the East US deployment, next to the database."
+    - "Fix the chattiness: one query for the whole cart instead of one per item."
+    - "Plan the move again with the database, not after it, and measure checkout's round trips first."
+  real_world: |
+    Keeping an app and the data it talks to most in the same region matters
+    more than being close to users, especially for code that makes many
+    small calls. Before moving any tier, count round trips per request and
+    multiply by the round-trip time between regions; Azure publishes those
+    figures. Read replicas move reads closer, but writes always go to the
+    primary.
+
+sources:
+  - title: "Azure network round-trip latency statistics (East US to West Europe P50, 30 days ending July 30, 2026)"
+    url: "https://learn.microsoft.com/en-us/azure/networking/azure-network-latency"
+    retrieved: 2026-10-01
+  - title: "Azure Architecture Center: Chatty I/O antipattern"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/antipatterns/chatty-io/"
+    retrieved: 2026-10-01
+  - title: "Azure Database for PostgreSQL flexible server: Read replicas (read-only, asynchronous, cross-region)"
+    url: "https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-read-replicas"
+    retrieved: 2026-10-01
+  - title: "psql: \\timing"
+    url: "https://www.postgresql.org/docs/current/app-psql.html"
+    retrieved: 2026-10-01

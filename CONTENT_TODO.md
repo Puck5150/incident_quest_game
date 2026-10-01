@@ -163,6 +163,14 @@ from your own experience and tick them off.
 - [ ] The autoscaler status message is verbatim from the docs; showing it with a timestamp
       in a log view is representative (the console shows it on the instance group pages).
 
+## cloud/azure-cross-region-latency
+- [ ] The 85 ms East US to West Europe figure is Microsoft's published P50 for the 30 days
+      ending July 30, 2026; re-check it when the table updates. The ~2 ms in-region query
+      time and the 86 ms measured from the app are scenario numbers.
+- [ ] `az webapp show`, `az postgres flexible-server show` / `replica list` output and the
+      `replicationRole` value "AsyncReplica": representative.
+- [ ] psql output with `\timing` on: format from the psql docs; the values are scenario data.
+
 ## cloud-design (design challenges, all three)
 - [ ] Cost units are illustrative by design (PLAN_DESIGN_CHALLENGES.md §2). Check
       that the relative ordering feels right to you.
