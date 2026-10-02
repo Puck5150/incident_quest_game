@@ -91,6 +91,8 @@ it('hints reveal one tier at a time, analogy with the second', async () => {
   // The ticket stays open after accepting; folding it by hand sticks across re-renders.
   const ticket = () => screen.getByText(/^Ticket from/).closest('details')!
   expect(ticket().open).toBe(true)
+  // Its body is height-capped and scrolls once work starts; keyboard users can focus it to scroll.
+  expect(screen.getByRole('region', { name: 'Ticket details' }).tabIndex).toBe(0)
   ticket().open = false
   fireEvent.click(screen.getByRole('button', { name: /Show nudge hint/ }))
   expect(screen.getByText(/Errno 28 mean/)).toBeTruthy()

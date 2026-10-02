@@ -176,7 +176,9 @@ export default function IncidentScreen({
 
       {/* The ticket starts open and stays open after accepting; the player can
           fold it to one line. React sets `open` only on mount, so their choice
-          sticks. A multi-stage reopen (new key) opens it again to show the update. */}
+          sticks. A multi-stage reopen (new key) opens it again to show the update.
+          Once work starts its body is height-capped and scrolls, so the tools
+          stay near the top; focusable so keyboard users can scroll it too. */}
       <details key={stage} open className="group rounded-lg border border-line bg-panel p-4">
         <summary className="cursor-pointer text-sm text-muted hover:text-fg">
           Ticket from {scenario.ticket.from}
@@ -184,28 +186,33 @@ export default function IncidentScreen({
             {(updates.at(-1)?.text ?? scenario.ticket.body).replace(/\s+/g, ' ')}
           </span>
         </summary>
-        <Prose className="mt-2" text={scenario.ticket.body} />
-        {updates.length > 0 && (
-          <>
-            <h2 className="mt-4 text-sm text-muted">Updates</h2>
-            <ol className="mt-2 space-y-2">
-              {updates.map((u, i) => (
-                <li key={i} className="border-l-2 border-crit pl-3">
-                  <span className="font-mono text-xs text-muted tabular-nums">+{mmss(u.at)} · stage {i + 2}</span>
-                  <Prose text={u.text} />
-                </li>
-              ))}
-            </ol>
-          </>
-        )}
-        <h2 className="mt-4 text-sm text-muted">Environment</h2>
-        <Prose className="mt-2" text={scenario.environment} />
-        {view.diagram && (
-          <div className="mt-4">
-            <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
-            <Diagram diagram={view.diagram} />
-          </div>
-        )}
+        <div
+          {...(phase !== 'briefing' && { tabIndex: 0, role: 'region', 'aria-label': 'Ticket details' })}
+          className={`mt-2 ${phase === 'briefing' ? '' : 'max-h-72 overflow-y-auto pr-2 focus-visible:outline-2 focus-visible:outline-accent'}`}
+        >
+          <Prose text={scenario.ticket.body} />
+          {updates.length > 0 && (
+            <>
+              <h2 className="mt-4 text-sm text-muted">Updates</h2>
+              <ol className="mt-2 space-y-2">
+                {updates.map((u, i) => (
+                  <li key={i} className="border-l-2 border-crit pl-3">
+                    <span className="font-mono text-xs text-muted tabular-nums">+{mmss(u.at)} · stage {i + 2}</span>
+                    <Prose text={u.text} />
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+          <h2 className="mt-4 text-sm text-muted">Environment</h2>
+          <Prose className="mt-2" text={scenario.environment} />
+          {view.diagram && (
+            <div className="mt-4">
+              <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
+              <Diagram diagram={view.diagram} />
+            </div>
+          )}
+        </div>
       </details>
 
       {/* The accept moment: a brief alert card over the workspace. Purely
