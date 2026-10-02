@@ -1,0 +1,63 @@
+# A minimal two-stage incident for the engine tests (not game content).
+id: two-stage-fixture
+track: linux
+difficulty: 3
+title: "Targets unhealthy, twice"
+par_minutes: 20
+ticket: { from: "Support", priority: P1, body: "The site is down." }
+environment: "One web server behind a load balancer."
+diagram:
+  nodes: [{ id: web, label: "web", col: 0, row: 0, status: down }]
+  edges: []
+terminal:
+  prompt: "$"
+  commands:
+    - match: "curl -I http://web"
+      when_actions: [open-port]
+      output: "HTTP/1.1 404 Not Found"
+    - match: "curl -I http://web"
+      evidence: timeout
+      output: "curl: (28) Connection timed out"
+    - match: "show sg"
+      evidence: sg-closed
+      output: "port 8080: not allowed"
+logs:
+  - { name: "deploy log", lines: "deployed v2 at 10:00" }
+hypotheses:
+  - { id: sg, text: "The security group blocks 8080.", correct: true }
+  - { id: dns, text: "DNS is wrong." }
+actions:
+  - { id: open-port, label: "Allow 8080 from the load balancer", kind: fix, feedback: "Port open.", match_regex: "^allow 8080$" }
+  - { id: reboot, label: "Reboot", kind: wrong, feedback: "No change." }
+solution_paths: [[open-port]]
+key_evidence: [timeout, sg-closed]
+evidence_labels: { timeout: "Connections time out", sg-closed: "8080 isn't allowed" }
+hints: { nudge: "n1", direction: "d1", answer: "a1" }
+analogy: { title: "A locked door", text: "The door is locked." }
+debrief: { root_cause: "The port was closed.", ideal_path: ["Check the port"] }
+sources: [{ title: "Docs", url: "https://example.com/docs", retrieved: 2026-10-02 }]
+stages:
+  - id: health-path
+    update: "Reopened: health checks now fail with 404."
+    diagram_status: { web: degraded }
+    terminal:
+      commands:
+        - match: "show health-check"
+          when_actions: [fix-path]
+          output: "path: /health"
+        - match: "show health-check"
+          evidence: wrong-path
+          output: "path: /healthz"
+    logs:
+      - { name: "app routes", evidence: routes, lines: "GET /health" }
+    hypotheses:
+      - { id: path, text: "The health check path is wrong.", correct: true }
+      - { id: sg-again, text: "The security group again." }
+    actions:
+      - { id: fix-path, label: "Set the path to /health", kind: fix, feedback: "Path fixed.", match_regex: "^set path /health$" }
+      - { id: delete-lb, label: "Delete the load balancer", kind: destructive, feedback: "Everything is down." }
+    solution_paths: [[fix-path]]
+    key_evidence: [wrong-path, routes]
+    evidence_labels: { wrong-path: "The check asks for /healthz", routes: "The app serves /health" }
+    hints: { nudge: "n2", direction: "d2", answer: "a2" }
+    debrief: { root_cause: "The health check path was wrong.", ideal_path: ["Compare the path with the routes"] }

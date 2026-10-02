@@ -14,6 +14,7 @@ import Tabs from '../components/Tabs.tsx'
 import Prose from '../components/Prose.tsx'
 import Icon, { type IconName } from '../components/Icon.tsx'
 import { missionId } from '../game/mission.ts'
+import { atStage, sinceStageStart, stageAt } from '../schema/stages.ts'
 import { play } from '../game/sound.ts'
 
 // Status is never shown by color alone: every tone also has a text label.
@@ -21,6 +22,7 @@ const TONE: Record<Feedback['tone'], { label: string; className: string; icon: I
   good: { label: 'Correct', className: 'border-ok/60 text-ok', icon: 'check' },
   bad: { label: 'Not quite', className: 'border-warn/60 text-warn', icon: 'alert' },
   danger: { label: 'Harmful', className: 'border-crit/60 text-crit', icon: 'x' },
+  reopened: { label: 'Reopened', className: 'border-crit/60 text-crit', icon: 'alert' },
 }
 
 // The phase pill doubles as the incident's status light.
@@ -61,8 +63,11 @@ export default function IncidentScreen({
   // Authors list the right answer first; shuffle so order isn't a tell. Seeded
   // by when the incident was taken, so the order survives a remount.
   const seed = session.log.find((e) => e.type === 'START')?.at ?? 0
-  const hypotheses = useMemo(() => shuffle(scenario.hypotheses, seed), [scenario, seed])
-  const actions = useMemo(() => shuffle(scenario.actions, seed + 1), [scenario, seed])
+  // Multi-stage incidents show the current stage: its causes, actions, hints,
+  // and the artifacts revealed so far (schema/stages.ts).
+  const view = useMemo(() => atStage(scenario, stageAt(session.log)), [scenario, session.log])
+  const hypotheses = useMemo(() => shuffle(view.hypotheses, seed), [view, seed])
+  const actions = useMemo(() => shuffle(view.actions, seed + 1), [view, seed])
   const taken = actionsTaken(session.log)
   const { phase, feedback } = session
 
@@ -79,47 +84,47 @@ export default function IncidentScreen({
       label: 'Terminal',
       panel: <Terminal scenario={scenario} log={session.log} onRun={(input) => send({ type: 'RUN_COMMAND', input })} />,
     },
-    scenario.logs && {
+    view.logs && {
       id: 'logs',
       label: 'Logs',
       panel: (
         <Browser
           noun="log"
           onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'log', name })}
-          items={scenario.logs.map((l) => ({ name: l.name, render: () => <TextView content={l.lines} isLog /> }))}
+          items={view.logs.map((l) => ({ name: l.name, render: () => <TextView content={l.lines} isLog /> }))}
         />
       ),
     },
-    scenario.files && {
+    view.files && {
       id: 'files',
       label: 'Files',
       panel: (
         <Browser
           noun="file"
           onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'file', name })}
-          items={scenario.files.map((f) => ({ name: f.path, render: () => <TextView content={f.content} /> }))}
+          items={view.files.map((f) => ({ name: f.path, render: () => <TextView content={f.content} /> }))}
         />
       ),
     },
-    scenario.traces && {
+    view.traces && {
       id: 'traces',
       label: 'Traces',
       panel: (
         <Browser
           noun="trace"
           onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'trace', name })}
-          items={scenario.traces.map((t) => ({ name: t.name, render: () => <TraceWaterfall spans={t.spans} /> }))}
+          items={view.traces.map((t) => ({ name: t.name, render: () => <TraceWaterfall spans={t.spans} /> }))}
         />
       ),
     },
-    scenario.metrics && {
+    view.metrics && {
       id: 'metrics',
       label: 'Metrics',
       panel: (
         <Browser
           noun="metric"
           onOpen={(name) => send({ type: 'OPEN_ARTIFACT', kind: 'metric', name })}
-          items={scenario.metrics.map((m) => ({ name: m.name, render: () => <MetricChart metric={m} /> }))}
+          items={view.metrics.map((m) => ({ name: m.name, render: () => <MetricChart metric={m} /> }))}
         />
       ),
     },
@@ -158,10 +163,10 @@ export default function IncidentScreen({
         <Prose className="mt-2" text={scenario.ticket.body} />
         <h2 className="mt-4 text-sm text-muted">Environment</h2>
         <Prose className="mt-2" text={scenario.environment} />
-        {scenario.diagram && (
+        {view.diagram && (
           <div className="mt-4">
             <h3 className="mb-2 text-sm text-muted">System diagram (current monitoring status)</h3>
-            <Diagram diagram={scenario.diagram} />
+            <Diagram diagram={view.diagram} />
           </div>
         )}
       </details>
@@ -246,7 +251,7 @@ export default function IncidentScreen({
                     )
                   })}
                 </ul>
-                {fixComplete(scenario, session.log) && (
+                {fixComplete(view, session.log) && (
                   <button className={`${button} mt-4 w-full bg-ok text-bg`} onClick={close}>
                     Close out
                   </button>
@@ -271,7 +276,7 @@ export default function IncidentScreen({
             </div>
 
             <FieldGuide mode="incident" phase={phase} concepts={scenario.concepts} />
-            <HintPanel scenario={scenario} used={hintsUsed(session.log)} onRequest={() => send({ type: 'REQUEST_HINT' })} />
+            <HintPanel scenario={view} used={hintsUsed(sinceStageStart(session.log))} onRequest={() => send({ type: 'REQUEST_HINT' })} />
           </div>
         </div>
       )}

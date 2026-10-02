@@ -1,6 +1,9 @@
 # Plan: Multi-stage incidents
 
-Status: **draft, awaiting approval** (2026-10-02). From PARKING_LOT.md:
+Status: **approved 2026-10-02 with the defaults in section 10; M1 done.** The
+stage is derived from the log (one per accepted close-out), so `Session` didn't
+change; `when_actions` may name any action in the incident. JSON Schema already
+regenerated. From PARKING_LOT.md:
 "Multi-stage incidents (fix reveals a second problem)".
 
 ## 1. The idea
@@ -89,7 +92,8 @@ On top of today's checks, for each stage:
 
 - Exactly one correct hypothesis; every fix is in a solution path; solution
   paths use only that stage's actions.
-- `when_actions` may name actions from the same or earlier stages only.
+- `when_actions` may name any action in the incident (a stage 1 command can
+  react to a stage 2 fix, for verification).
 - Key evidence must be visible **after the earlier stages' fixes and before this
   stage's own fixes** (today's rule, "visible before any action", generalised).
 - Typed-fix regexes can't overlap scripted commands or other stages' typed fixes.
@@ -97,8 +101,9 @@ On top of today's checks, for each stage:
 
 ## 6. Engine and scoring
 
-- **Session** gains `stage` (0-based). The log stays one list of events, so
-  replays, the transcript rebuild and shifts keep working unchanged.
+- **Stage** is derived from the log: the number of accepted close-outs. The log
+  stays one list of events, so replays, the transcript rebuild and shifts keep
+  working unchanged.
 - `CLOSE_INCIDENT` with the current stage fixed: if there's another stage,
   advance (phase back to investigating, feedback shows the update); otherwise
   resolve. Closing before the stage is fixed behaves as today.

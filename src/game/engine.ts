@@ -8,6 +8,7 @@
 
 import { artifacts } from '../schema/constants.ts'
 import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
+import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
@@ -20,7 +21,8 @@ export type GameEvent =
   | { type: 'TAKE_ACTION'; id: string; at: number }
   | { type: 'CLOSE_INCIDENT'; at: number }
 
-export type Feedback = { tone: 'good' | 'bad' | 'danger'; text: string }
+// `reopened`: a multi-stage incident moved to its next stage on close-out.
+export type Feedback = { tone: 'good' | 'bad' | 'danger' | 'reopened'; text: string }
 
 export type Session = {
   phase: Phase
@@ -37,10 +39,14 @@ export const HINT_TIERS = [
 
 export const newSession = (): Session => ({ phase: 'briefing', log: [] })
 
+// Multi-stage incidents: everything below works on the current stage as a
+// plain scenario (schema/stages.ts); the stage itself comes from the log.
 export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
   // Events that don't fit the current phase are ignored rather than thrown:
   // a double-click shouldn't crash the game.
   const working = s.phase === 'investigating' || s.phase === 'acting'
+  const stage = stageAt(s.log)
+  const cur = atStage(scenario, stage)
   switch (e.type) {
     case 'START':
       if (s.phase !== 'briefing') return s
@@ -52,7 +58,7 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
     case 'RUN_COMMAND': {
       if (!working) return s
       const ran = { ...s, log: [...s.log, e] }
-      const a = actionFor(scenario, e.input)
+      const a = actionFor(cur, e.input)
       if (!a) return ran
       if (s.phase === 'investigating') return { ...ran, feedback: { tone: 'bad', text: NOT_YET } }
       return step(scenario, ran, { type: 'TAKE_ACTION', id: a.id, at: e.at })
@@ -61,11 +67,12 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       return working ? { ...s, log: [...s.log, e] } : s
 
     case 'REQUEST_HINT':
-      return working && hintsUsed(s.log) < HINT_TIERS.length ? { ...s, log: [...s.log, e] } : s
+      // Each stage has its own three tiers.
+      return working && hintsUsed(sinceStageStart(s.log)) < HINT_TIERS.length ? { ...s, log: [...s.log, e] } : s
 
     case 'DECLARE_HYPOTHESIS': {
       if (s.phase !== 'investigating') return s
-      const h = scenario.hypotheses.find((x) => x.id === e.id)
+      const h = cur.hypotheses.find((x) => x.id === e.id)
       if (!h) return s
       const log = [...s.log, e]
       // The hypothesis gate: fix actions stay locked until the player names
@@ -77,20 +84,25 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
 
     case 'TAKE_ACTION': {
       if (s.phase !== 'acting') return s
-      const a = scenario.actions.find((x) => x.id === e.id)
+      const a = cur.actions.find((x) => x.id === e.id)
       if (!a) return s
       const log = [...s.log, e]
       const tone = a.kind === 'fix' ? 'good' : a.kind === 'wrong' ? 'bad' : 'danger'
-      const done = fixComplete(scenario, log) && !fixComplete(scenario, s.log)
+      const done = fixComplete(cur, log) && !fixComplete(cur, s.log)
       const text = done ? `${a.feedback} All fixes applied. Verify, then close the incident.` : a.feedback
       return { ...s, log, feedback: { tone, text } }
     }
 
     // Fixing doesn't auto-resolve: the player closes the ticket themselves,
-    // which leaves room to verify the fix first (rewarded in scoring).
-    case 'CLOSE_INCIDENT':
-      if (s.phase !== 'acting' || !fixComplete(scenario, s.log)) return s
-      return { ...s, phase: 'resolved', log: [...s.log, e], feedback: undefined }
+    // which leaves room to verify the fix first (rewarded in scoring). In a
+    // multi-stage incident, closing a stage reopens it into the next one.
+    case 'CLOSE_INCIDENT': {
+      if (s.phase !== 'acting' || !fixComplete(cur, s.log)) return s
+      const log = [...s.log, e]
+      if (stage + 1 < stageCount(scenario))
+        return { phase: 'investigating', log, feedback: { tone: 'reopened', text: scenario.stages![stage].update } }
+      return { ...s, phase: 'resolved', log, feedback: undefined }
+    }
   }
 }
 
@@ -183,11 +195,14 @@ export const hintsUsed = (log: GameEvent[]) => log.filter((e) => e.type === 'REQ
 export function evidenceSeen(scenario: Scenario, log: GameEvent[]): Set<string> {
   const seen = new Set<string>()
   const taken = new Set<string>()
+  let cur = scenario
+  let stage = 0
   for (const e of log) {
     let tag: string | undefined
     if (e.type === 'TAKE_ACTION') taken.add(e.id)
-    if (e.type === 'RUN_COMMAND') tag = runCommand(scenario, e.input, taken).evidence
-    if (e.type === 'OPEN_ARTIFACT') tag = artifacts(scenario).find((a) => a.kind === e.kind && a.name === e.name)?.evidence
+    if (e.type === 'CLOSE_INCIDENT') cur = atStage(scenario, ++stage)
+    if (e.type === 'RUN_COMMAND') tag = runCommand(cur, e.input, taken).evidence
+    if (e.type === 'OPEN_ARTIFACT') tag = artifacts(cur).find((a) => a.kind === e.kind && a.name === e.name)?.evidence
     if (tag) seen.add(tag)
   }
   return seen
@@ -199,12 +214,15 @@ export function terminalOutput(scenario: Scenario, input: string, before: GameEv
   const cmd = normalize(input)
   if (cmd === 'history')
     return [...commandsRun(before), cmd].map((h, i) => `${String(i + 1).padStart(5)}  ${h}`).join('\n')
-  const ran = runCommand(scenario, cmd, actionsTaken(before))
+  const cur = atStage(scenario, stageAt(before))
+  const ran = runCommand(cur, cmd, actionsTaken(before))
   // A command that takes an action reports the result in the terminal, so
   // it's visible without looking away.
-  const action = ran.scripted ? undefined : actionFor(scenario, cmd)
+  const action = ran.scripted ? undefined : actionFor(cur, cmd)
   if (!action) return ran.output
-  const named = before.some((e) => e.type === 'DECLARE_HYPOTHESIS' && scenario.hypotheses.find((h) => h.id === e.id)?.correct)
+  const named = sinceStageStart(before).some(
+    (e) => e.type === 'DECLARE_HYPOTHESIS' && cur.hypotheses.find((h) => h.id === e.id)?.correct,
+  )
   return named ? action.feedback : NOT_YET
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
+import { atStage, stageAt } from '../schema/stages.ts'
 import { commandsRun, complete, normalize, terminalOutput, transcript, type GameEvent } from '../game/engine.ts'
 
 type Line = { input: string; output: string; completions?: boolean } // completions: Tab's list, not a run command
@@ -45,7 +46,7 @@ export default function Terminal({
     // traps keyboard users.
     if (e.key === 'Tab' && !e.shiftKey && input.trim()) {
       e.preventDefault()
-      const c = complete(scenario, input)
+      const c = complete(atStage(scenario, stageAt(log)), input)
       setInput(c.input)
       if (c.options) setLines((l) => [...l, { input, output: c.options!.join('  '), completions: true }])
     } else if (e.key === 'Enter') {
@@ -73,7 +74,7 @@ export default function Terminal({
       <div ref={out} role="log" aria-label="Terminal output" className="flex-1 overflow-auto p-3">
         <p className="text-muted">
           Type <span className="text-fg">help</span> to see some commands. Tab completes, ↑/↓ for history.
-          {scenario.actions.some((x) => x.match_regex) && ' Once you have named the root cause, you can type fixes here too.'}
+          {[scenario, ...(scenario.stages ?? [])].some((x) => x.actions.some((a) => a.match_regex)) && ' Once you have named the root cause, you can type fixes here too.'}
         </p>
         {lines.map((l, i) =>
           l.completions ? (

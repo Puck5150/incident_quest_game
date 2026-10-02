@@ -8,6 +8,7 @@
 
 import { z } from 'zod'
 import { artifacts } from './constants.ts'
+import { atStage } from './stages.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
 
@@ -60,6 +61,104 @@ export const TrackSchema = z.strictObject({
     .optional(),
 })
 
+const LogsSchema = z
+  .array(z.strictObject({ name: z.string().min(1), evidence: evidenceTag, lines: z.string() }))
+const FilesSchema = z
+  .array(
+    z.strictObject({
+      path: z.string().min(1),
+      language: z.string().default('text'),
+      evidence: evidenceTag,
+      content: z.string(),
+    }),
+  )
+const TracesSchema = z
+  .array(
+    z.strictObject({
+      name: z.string().min(1),
+      evidence: evidenceTag,
+      spans: z
+        .array(
+          z.strictObject({
+            id,
+            parent: id.optional(),
+            service: z.string().min(1),
+            operation: z.string().min(1),
+            start_ms: z.number().min(0),
+            duration_ms: z.number().min(0),
+            status: z.enum(['ok', 'error']).default('ok'),
+            note: z.string().optional(), // e.g. an attribute or event worth showing
+          }),
+        )
+        .min(1),
+    }),
+  )
+const MetricsSchema = z
+  .array(
+    z.strictObject({
+      name: z.string().min(1),
+      unit: z.string().min(1),
+      evidence: evidenceTag,
+      threshold: z.strictObject({ value: z.number(), label: z.string().min(1) }).optional(),
+      // Every series shares the same x labels (usually clock times).
+      series: z
+        .array(
+          z.strictObject({
+            label: z.string().min(1),
+            points: z.array(z.tuple([z.string(), z.number()])).min(2),
+          }),
+        )
+        .min(1)
+        .max(3), // the chart palette has 3 validated colors
+    }),
+  )
+const HypothesesSchema = z
+  .array(
+    z.strictObject({
+      id,
+      text: z.string().min(1),
+      correct: z.boolean().default(false),
+      feedback: z.string().optional(),
+    }),
+  )
+  .min(2)
+const ActionsSchema = z
+  .array(
+    z.strictObject({
+      id,
+      label: z.string().min(1),
+      kind: z.enum(['fix', 'wrong', 'destructive']),
+      feedback: z.string().min(1),
+      // Typing a matching command in the terminal takes this action too.
+      match_regex: z.string().min(1).optional(),
+    }),
+  )
+  .min(2)
+const SolutionPathsSchema = z.array(z.array(id).min(1)).min(1)
+// What each key evidence tag shows, in plain words, for the debrief.
+const EvidenceLabelsSchema = z.record(id, z.string().min(1))
+
+// Stage 2 onwards of a multi-stage incident (PLAN_MULTI_STAGE.md). The top
+// level is stage 1. Artifacts and commands listed here appear from this
+// stage on; everything else is this stage's own.
+const StageSchema = z.strictObject({
+  id,
+  update: z.string().min(1), // shown when the incident reopens into this stage
+  diagram_status: z.record(id, z.enum(['ok', 'degraded', 'down'])).optional(),
+  terminal: z.strictObject({ commands: z.array(terminalCommand).min(1) }).optional(),
+  logs: LogsSchema.optional(),
+  files: FilesSchema.optional(),
+  traces: TracesSchema.optional(),
+  metrics: MetricsSchema.optional(),
+  hypotheses: HypothesesSchema,
+  actions: ActionsSchema,
+  solution_paths: SolutionPathsSchema,
+  key_evidence: z.array(id).min(1),
+  evidence_labels: EvidenceLabelsSchema,
+  hints: HintsSchema,
+  debrief: z.strictObject({ root_cause: z.string().min(1), ideal_path: z.array(z.string().min(1)).min(1) }),
+})
+
 export const ScenarioSchema = z
   .strictObject({
     type: z.literal('incident').optional(), // the default; challenges say `type: challenge`
@@ -83,19 +182,8 @@ export const ScenarioSchema = z
         unknown_output: z.string().optional(),
       })
       .optional(),
-    logs: z
-      .array(z.strictObject({ name: z.string().min(1), evidence: evidenceTag, lines: z.string() }))
-      .optional(),
-    files: z
-      .array(
-        z.strictObject({
-          path: z.string().min(1),
-          language: z.string().default('text'),
-          evidence: evidenceTag,
-          content: z.string(),
-        }),
-      )
-      .optional(),
+    logs: LogsSchema.optional(),
+    files: FilesSchema.optional(),
     diagram: z
       .strictObject({
         nodes: z.array(
@@ -113,48 +201,8 @@ export const ScenarioSchema = z
 
     // Distributed-systems views. Each trace, metric and pipeline stage is an
     // artifact the player opens, so each can carry an evidence tag.
-    traces: z
-      .array(
-        z.strictObject({
-          name: z.string().min(1),
-          evidence: evidenceTag,
-          spans: z
-            .array(
-              z.strictObject({
-                id,
-                parent: id.optional(),
-                service: z.string().min(1),
-                operation: z.string().min(1),
-                start_ms: z.number().min(0),
-                duration_ms: z.number().min(0),
-                status: z.enum(['ok', 'error']).default('ok'),
-                note: z.string().optional(), // e.g. an attribute or event worth showing
-              }),
-            )
-            .min(1),
-        }),
-      )
-      .optional(),
-    metrics: z
-      .array(
-        z.strictObject({
-          name: z.string().min(1),
-          unit: z.string().min(1),
-          evidence: evidenceTag,
-          threshold: z.strictObject({ value: z.number(), label: z.string().min(1) }).optional(),
-          // Every series shares the same x labels (usually clock times).
-          series: z
-            .array(
-              z.strictObject({
-                label: z.string().min(1),
-                points: z.array(z.tuple([z.string(), z.number()])).min(2),
-              }),
-            )
-            .min(1)
-            .max(3), // the chart palette has 3 validated colors
-        }),
-      )
-      .optional(),
+    traces: TracesSchema.optional(),
+    metrics: MetricsSchema.optional(),
     pipeline: z
       .strictObject({
         name: z.string().min(1),
@@ -173,32 +221,11 @@ export const ScenarioSchema = z
       })
       .optional(),
 
-    hypotheses: z
-      .array(
-        z.strictObject({
-          id,
-          text: z.string().min(1),
-          correct: z.boolean().default(false),
-          feedback: z.string().optional(),
-        }),
-      )
-      .min(2),
-    actions: z
-      .array(
-        z.strictObject({
-          id,
-          label: z.string().min(1),
-          kind: z.enum(['fix', 'wrong', 'destructive']),
-          feedback: z.string().min(1),
-          // Typing a matching command in the terminal takes this action too.
-          match_regex: z.string().min(1).optional(),
-        }),
-      )
-      .min(2),
-    solution_paths: z.array(z.array(id).min(1)).min(1),
+    hypotheses: HypothesesSchema,
+    actions: ActionsSchema,
+    solution_paths: SolutionPathsSchema,
     key_evidence: z.array(id).min(1),
-    // What each key evidence tag shows, in plain words, for the debrief.
-    evidence_labels: z.record(id, z.string().min(1)),
+    evidence_labels: EvidenceLabelsSchema,
 
     hints: HintsSchema,
     analogy: AnalogySchema,
@@ -215,6 +242,7 @@ export const ScenarioSchema = z
       .max(4)
       .optional(),
     sources: SourcesSchema,
+    stages: z.array(StageSchema).min(1).max(2).optional(), // up to 3 stages in all
   })
   // Cross-references inside one file. These catch typos that would otherwise
   // produce an incident nobody can finish.
@@ -222,83 +250,113 @@ export const ScenarioSchema = z
     const issue = (message: string, path: (string | number)[]) =>
       ctx.addIssue({ code: 'custom', message, path, input: s })
 
-    const actionIds = new Set(s.actions.map((a) => a.id))
-    const fixIds = new Set(s.actions.filter((a) => a.kind === 'fix').map((a) => a.id))
-    const evidence = new Set(
-      [...(s.terminal?.commands ?? []), ...artifacts(s)].map((a) => a.evidence).filter(Boolean),
+    const stages = s.stages ?? []
+    const everyAction = [s.actions, ...stages.map((x) => x.actions)].flat()
+    const actionIds = new Set(everyAction.map((a) => a.id))
+    dupes(everyAction.map((a) => a.id)).forEach((d) => issue(`duplicate action id "${d}" (ids are unique across stages)`, ['actions']))
+    dupes([s.hypotheses, ...stages.map((x) => x.hypotheses)].flat().map((h) => h.id)).forEach((d) =>
+      issue(`duplicate hypothesis id "${d}" (ids are unique across stages)`, ['hypotheses']),
     )
+    dupes(stages.map((x) => x.id)).forEach((d) => issue(`duplicate stage id "${d}"`, ['stages']))
 
-    dupes(s.actions.map((a) => a.id)).forEach((d) => issue(`duplicate action id "${d}"`, ['actions']))
-    dupes(s.hypotheses.map((h) => h.id)).forEach((d) => issue(`duplicate hypothesis id "${d}"`, ['hypotheses']))
-
-    const correct = s.hypotheses.filter((h) => h.correct).length
-    if (correct !== 1) issue(`exactly one hypothesis must be correct (found ${correct})`, ['hypotheses'])
-
-    s.solution_paths.forEach((path, i) =>
-      path.forEach((a, j) => {
-        if (!fixIds.has(a)) issue(`"${a}" is not an action with kind: fix`, ['solution_paths', i, j])
+    // Commands anywhere may react to any action in the incident (a stage 1
+    // command can show the stage 2 symptom once stage 1 is fixed).
+    const commandLists: [(string | number)[], z.infer<typeof terminalCommand>[]][] = [
+      [['terminal', 'commands'], s.terminal?.commands ?? []],
+      ...stages.map((x, k): [(string | number)[], z.infer<typeof terminalCommand>[]] => [['stages', k, 'terminal', 'commands'], x.terminal?.commands ?? []]),
+    ]
+    commandLists.forEach(([path, commands]) =>
+      commands.forEach((c, i) => {
+        c.when_actions?.forEach((a) => {
+          if (!actionIds.has(a)) issue(`unknown action "${a}"`, [...path, i, 'when_actions'])
+        })
+        if (c.match_regex !== undefined) {
+          try {
+            new RegExp(c.match_regex)
+          } catch (e) {
+            issue(`invalid regex: ${(e as Error).message}`, [...path, i, 'match_regex'])
+          }
+        }
       }),
     )
-    const inSomePath = new Set(s.solution_paths.flat())
-    fixIds.forEach((f) => {
-      if (!inSomePath.has(f)) issue(`fix action "${f}" is not in any solution path`, ['actions'])
+    stages.forEach((x, k) => {
+      if (x.terminal && !s.terminal) issue('stage commands need a terminal at the top level', ['stages', k, 'terminal'])
+      const nodes = new Set(s.diagram?.nodes.map((n) => n.id) ?? [])
+      Object.keys(x.diagram_status ?? {}).forEach((n) => {
+        if (!nodes.has(n)) issue(`unknown diagram node "${n}"`, ['stages', k, 'diagram_status', n])
+      })
     })
 
-    s.terminal?.commands.forEach((c, i) => {
-      c.when_actions?.forEach((a) => {
-        if (!actionIds.has(a)) issue(`unknown action "${a}"`, ['terminal', 'commands', i, 'when_actions'])
+    // Each stage is checked as the plain scenario the player sees at that stage.
+    for (let k = 0; k <= stages.length; k++) {
+      const v = atStage(s, k)
+      const at = (...path: (string | number)[]) => (k === 0 ? path : ['stages', k - 1, ...path])
+      // Actions of the stages before this one (their fixes are in by now).
+      const earlier = new Set(k === 0 ? [] : [s, ...stages.slice(0, k - 1)].flatMap((x) => x.actions.map((a) => a.id)))
+      const fixIds = new Set(v.actions.filter((a) => a.kind === 'fix').map((a) => a.id))
+
+      const correct = v.hypotheses.filter((h) => h.correct).length
+      if (correct !== 1) issue(`exactly one hypothesis must be correct (found ${correct})`, at('hypotheses'))
+
+      v.solution_paths.forEach((path, i) =>
+        path.forEach((a, j) => {
+          if (!fixIds.has(a)) issue(`"${a}" is not an action with kind: fix in this stage`, at('solution_paths', i, j))
+        }),
+      )
+      const inSomePath = new Set(v.solution_paths.flat())
+      fixIds.forEach((f) => {
+        if (!inSomePath.has(f)) issue(`fix action "${f}" is not in any solution path`, at('actions'))
       })
-      if (c.match_regex !== undefined) {
+
+      v.actions.forEach((a, i) => {
+        if (a.match_regex === undefined) return
+        if (!v.terminal) issue('match_regex needs a terminal to type into', at('actions', i, 'match_regex'))
+        let rx: RegExp
         try {
-          new RegExp(c.match_regex)
+          rx = new RegExp(a.match_regex)
         } catch (e) {
-          issue(`invalid regex: ${(e as Error).message}`, ['terminal', 'commands', i, 'match_regex'])
+          return issue(`invalid regex: ${(e as Error).message}`, at('actions', i, 'match_regex'))
         }
-      }
-    })
-    s.actions.forEach((a, i) => {
-      if (a.match_regex === undefined) return
-      if (!s.terminal) issue('match_regex needs a terminal to type into', ['actions', i, 'match_regex'])
-      let rx: RegExp
-      try {
-        rx = new RegExp(a.match_regex)
-      } catch (e) {
-        return issue(`invalid regex: ${(e as Error).message}`, ['actions', i, 'match_regex'])
-      }
-      // A typed command either shows scripted output or takes an action, never both.
-      s.terminal?.commands.forEach((c) => {
-        if (c.match && rx.test(c.match.trim().replace(/\s+/g, ' ')))
-          issue(`also matches the scripted command "${c.match}"`, ['actions', i, 'match_regex'])
+        // A typed command either shows scripted output or takes an action, never both.
+        v.terminal?.commands.forEach((c) => {
+          if (c.match && rx.test(c.match.trim().replace(/\s+/g, ' ')))
+            issue(`also matches the scripted command "${c.match}"`, at('actions', i, 'match_regex'))
+        })
       })
-    })
 
-    // Key evidence must be findable BEFORE any fix, or the methodical bonus
-    // (evidence before hypothesis) would be impossible to earn.
-    const beforeFix = new Set(
-      [...(s.terminal?.commands ?? []).filter((c) => !c.when_actions?.length), ...artifacts(s)]
-        .map((a) => a.evidence)
-        .filter(Boolean),
-    )
-    Object.keys(s.evidence_labels).forEach((e) => {
-      if (!s.key_evidence.includes(e)) issue(`"${e}" is labelled but not in key_evidence`, ['evidence_labels', e])
-    })
-    s.key_evidence.forEach((e, i) => {
-      if (!evidence.has(e)) issue(`no artifact is tagged with evidence "${e}"`, ['key_evidence', i])
-      else if (!beforeFix.has(e)) issue(`key evidence "${e}" is only visible after an action`, ['key_evidence', i])
-      if (!s.evidence_labels[e]) issue(`key evidence "${e}" needs a label in evidence_labels`, ['evidence_labels'])
-    })
-
-    s.traces?.forEach((t, i) => {
-      const spans = new Set(t.spans.map((x) => x.id))
-      t.spans.forEach((x, j) => {
-        if (x.parent && !spans.has(x.parent)) issue(`unknown parent span "${x.parent}"`, ['traces', i, 'spans', j])
+      // Key evidence must be findable after the earlier stages' fixes and
+      // BEFORE this stage's own, or the methodical bonus (evidence before
+      // hypothesis) would be impossible to earn.
+      const evidence = new Set([...(v.terminal?.commands ?? []), ...artifacts(v)].map((a) => a.evidence).filter(Boolean))
+      const beforeFix = new Set(
+        [...(v.terminal?.commands ?? []).filter((c) => (c.when_actions ?? []).every((a) => earlier.has(a))), ...artifacts(v)]
+          .map((a) => a.evidence)
+          .filter(Boolean),
+      )
+      Object.keys(v.evidence_labels).forEach((e) => {
+        if (!v.key_evidence.includes(e)) issue(`"${e}" is labelled but not in key_evidence`, at('evidence_labels', e))
       })
-    })
-    s.metrics?.forEach((m, i) => {
-      const xs = JSON.stringify(m.series[0].points.map((p) => p[0]))
-      m.series.forEach((ser, j) => {
-        if (JSON.stringify(ser.points.map((p) => p[0])) !== xs)
-          issue('every series must use the same x labels', ['metrics', i, 'series', j])
+      v.key_evidence.forEach((e, i) => {
+        if (!evidence.has(e)) issue(`no artifact is tagged with evidence "${e}"`, at('key_evidence', i))
+        else if (!beforeFix.has(e)) issue(`key evidence "${e}" is only visible after one of this stage's actions`, at('key_evidence', i))
+        if (!v.evidence_labels[e]) issue(`key evidence "${e}" needs a label in evidence_labels`, at('evidence_labels'))
+      })
+    }
+
+    ;[s, ...stages].forEach((part, k) => {
+      const at = (...path: (string | number)[]) => (k === 0 ? path : ['stages', k - 1, ...path])
+      part.traces?.forEach((t, i) => {
+        const spans = new Set(t.spans.map((x) => x.id))
+        t.spans.forEach((x, j) => {
+          if (x.parent && !spans.has(x.parent)) issue(`unknown parent span "${x.parent}"`, at('traces', i, 'spans', j))
+        })
+      })
+      part.metrics?.forEach((m, i) => {
+        const xs = JSON.stringify(m.series[0].points.map((p) => p[0]))
+        m.series.forEach((ser, j) => {
+          if (JSON.stringify(ser.points.map((p) => p[0])) !== xs)
+            issue('every series must use the same x labels', at('metrics', i, 'series', j))
+        })
       })
     })
 

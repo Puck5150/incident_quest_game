@@ -12,6 +12,7 @@ import {
   runCommand,
   type GameEvent,
 } from './engine.ts'
+import { atStage, stageCount } from '../schema/stages.ts'
 
 export type ScoreLine = { label: string; xp: number }
 
@@ -57,28 +58,48 @@ export function score(scenario: Scenario, log: GameEvent[], relaxed = false, inS
   else if (relaxed) lines.push({ label: 'Time bonus: off (relaxed mode)', xp: 0 })
   else add(elapsedMs <= par ? 'Time bonus (under par)' : 'Time bonus (partial)', Math.round(pct(TIME_BONUS) * timeFactor))
 
-  const isCorrect = (id: string) => scenario.hypotheses.find((h) => h.id === id)?.correct
-  const correctAt = log.findIndex((e) => e.type === 'DECLARE_HYPOTHESIS' && isCorrect(e.id))
-  const seenBefore = correctAt < 0 ? new Set<string>() : evidenceSeen(scenario, log.slice(0, correctAt))
-  const methodical = correctAt >= 0 && scenario.key_evidence.every((t) => seenBefore.has(t))
-  if (methodical) add('Methodical: found all key evidence before deciding', pct(METHODICAL_BONUS))
+  // Multi-stage incidents (PLAN_MULTI_STAGE.md): methodical, verified and hints
+  // are judged per stage; the bonuses are shared out evenly across stages.
+  const n = stageCount(scenario)
+  const closes = log.flatMap((e, i) => (e.type === 'CLOSE_INCIDENT' ? [i] : []))
+  const stages = Array.from({ length: n }, (_, k) => {
+    const view = atStage(scenario, k)
+    const from = k === 0 ? 0 : closes[k - 1] + 1
+    const to = closes[k] ?? log.length // this stage's events are log[from..to)
+    const inStage = (i: number) => i >= from && i < to
+    const correctAt = log.findIndex((e, i) => inStage(i) && e.type === 'DECLARE_HYPOTHESIS' && view.hypotheses.some((h) => h.id === e.id && h.correct))
+    const seenBefore = correctAt < 0 ? new Set<string>() : evidenceSeen(scenario, log.slice(0, correctAt))
+    const methodical = correctAt >= 0 && view.key_evidence.every((t) => seenBefore.has(t))
+    // Verified = after this stage's fix was complete, ran a command the scenario
+    // scripts (typos and `help` don't count), before closing the stage.
+    const fixedAt = log.findIndex((_, i) => inStage(i) && fixComplete(view, log.slice(0, i + 1)))
+    const verified =
+      fixedAt >= 0 &&
+      log.some(
+        (e, i) =>
+          i > fixedAt && inStage(i) && e.type === 'RUN_COMMAND' && runCommand(view, e.input, actionsTaken(log.slice(0, i))).scripted,
+      )
+    return { methodical, verified, hints: hintsUsed(log.slice(from, to)) }
+  })
+  const share = (count: number, label: string, all: string, bonus: number) => {
+    if (!count) return
+    add(n === 1 || count === n ? all : `${label}: ${count} of ${n} stages`, Math.round((pct(bonus) * count) / n))
+  }
+  const methodical = stages.every((x) => x.methodical)
+  const verified = stages.every((x) => x.verified)
+  share(stages.filter((x) => x.methodical).length, 'Methodical', 'Methodical: found all key evidence before deciding', METHODICAL_BONUS)
+  share(stages.filter((x) => x.verified).length, 'Verified the fix', 'Verified the fix before closing', VERIFY_BONUS)
 
-  // Verified = after the fix was complete, ran a command the scenario scripts
-  // (typos and `help` don't count).
-  const fixedAt = log.findIndex((_, i) => fixComplete(scenario, log.slice(0, i + 1)))
-  const verified =
-    fixedAt >= 0 &&
-    log.some(
-      (e, i) =>
-        i > fixedAt && e.type === 'RUN_COMMAND' && runCommand(scenario, e.input, actionsTaken(log.slice(0, i))).scripted,
-    )
-  if (verified) add('Verified the fix before closing', pct(VERIFY_BONUS))
+  const hints = stages.reduce((t, x) => t + x.hints, 0)
+  stages.forEach((x, k) =>
+    HINT_TIERS.slice(0, x.hints).forEach((t) => add(`Hint: ${t.label.toLowerCase()}${n > 1 ? ` (stage ${k + 1})` : ''}`, -pct(t.cost))),
+  )
 
-  const hints = hintsUsed(log)
-  HINT_TIERS.slice(0, hints).forEach((t) => add(`Hint: ${t.label.toLowerCase()}`, -pct(t.cost)))
-
+  const allHypotheses = [scenario, ...(scenario.stages ?? [])].flatMap((x) => x.hypotheses)
+  const allActions = [scenario, ...(scenario.stages ?? [])].flatMap((x) => x.actions)
+  const isCorrect = (id: string) => allHypotheses.find((h) => h.id === id)?.correct
   const count = (pred: (e: GameEvent) => boolean) => log.filter(pred).length
-  const kindOf = (id: string) => scenario.actions.find((a) => a.id === id)?.kind
+  const kindOf = (id: string) => allActions.find((a) => a.id === id)?.kind
   const wrongHyp = count((e) => e.type === 'DECLARE_HYPOTHESIS' && !isCorrect(e.id))
   const wrongAct = count((e) => e.type === 'TAKE_ACTION' && kindOf(e.id) === 'wrong')
   const destructive = count((e) => e.type === 'TAKE_ACTION' && kindOf(e.id) === 'destructive')
