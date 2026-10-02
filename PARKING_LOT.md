@@ -25,4 +25,5 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - `concepts` for design challenges (PLAN_GUIDANCE.md G4; option facts stand in for now)
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - More tracks: Fundamentals, Windows/identity, Scripting and code, Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
-- More scenarios per track (each original track has two as of 2026-10-01) and difficulty 5
+- Bring every track to at least 8 incidents (2026-10-02: CI/CD, Containers, IaC and Microservices have 2;
+  Google Cloud 7; Linux, Networking and Databases done) and add difficulty-5 incidents
