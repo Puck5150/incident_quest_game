@@ -1,0 +1,526 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-cross-account-replication-dr
+track: aws
+difficulty: 5
+title: "Disaster recovery has no usable copy of four days of customer documents"
+par_minutes: 30
+
+ticket:
+  from: "Compliance and DR lead"
+  priority: P1
+  body: |
+    On Monday (09-29) the platform team turned on replication of our customer
+    documents bucket to the DR account in us-west-2. The DR account's nightly
+    restore check has failed every night since. Regulation says every customer
+    document must have a usable copy in the DR region, and the audit is
+    Friday. Also: there's been a 4xx alarm on the documents bucket since the
+    weekend. Maybe related?
+
+environment: |
+  Production account 111122223333 (us-east-1) owns acme-orders-docs, where
+  the orders app stores invoices and contracts, encrypted with SSE-KMS using
+  a key in that account. CHG-2417 (09-29) added a replication rule copying
+  every object to acme-dr-orders-docs in the DR account 444455556666
+  (us-west-2), using the IAM role s3-replication-orders. Replicas are
+  encrypted with a customer managed key in the DR account. A job writes
+  healthcheck/replication-canary.txt every 5 minutes. In the DR account,
+  dr-restore-verify (role dr-restore) reads replicas nightly.
+  Your CLI's default profile is the production account; --profile dr uses
+  the DR account. Canonical user IDs: production 7e1c4f0a9b2d...,
+  DR 3b9d82e6c1f4...
+
+diagram:
+  nodes:
+    - { id: app, label: "orders app", col: 0, row: 0, status: ok }
+    - { id: src, label: "S3 acme-orders-docs (prod, us-east-1)", col: 1, row: 0, status: ok }
+    - { id: dst, label: "S3 acme-dr-orders-docs (DR, us-west-2)", col: 2, row: 0, status: down }
+    - { id: drkey, label: "KMS key (DR account)", col: 2, row: 1, status: ok }
+    - { id: verify, label: "dr-restore-verify", col: 3, row: 0, status: down }
+  edges:
+    - { from: app, to: src }
+    - { from: src, to: dst }
+    - { from: dst, to: drkey }
+    - { from: verify, to: dst }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws s3api get-bucket-replication --bucket acme-orders-docs"
+      output: |
+        {
+            "ReplicationConfiguration": {
+                "Role": "arn:aws:iam::111122223333:role/s3-replication-orders",
+                "Rules": [
+                    {
+                        "ID": "all-to-dr",
+                        "Priority": 1,
+                        "Filter": {},
+                        "Status": "Enabled",
+                        "SourceSelectionCriteria": { "SseKmsEncryptedObjects": { "Status": "Enabled" } },
+                        "Destination": {
+                            "Bucket": "arn:aws:s3:::acme-dr-orders-docs",
+                            "Account": "444455556666",
+                            "EncryptionConfiguration": {
+                                "ReplicaKmsKeyID": "arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321"
+                            },
+                            "Metrics": { "Status": "Enabled" }
+                        },
+                        "DeleteMarkerReplication": { "Status": "Disabled" }
+                    }
+                ]
+            }
+        }
+    - match: "aws s3api head-object --bucket acme-orders-docs --key healthcheck/replication-canary.txt --query [ReplicationStatus,ServerSideEncryption]"
+      when_actions: [grant-key]
+      output: |
+        [
+            "COMPLETED",
+            "aws:kms"
+        ]
+    - match: "aws s3api head-object --bucket acme-orders-docs --key healthcheck/replication-canary.txt --query [ReplicationStatus,ServerSideEncryption]"
+      evidence: canary-failed
+      output: |
+        [
+            "FAILED",
+            "aws:kms"
+        ]
+    - match: "aws iam get-role-policy --role-name s3-replication-orders --policy-name replicate-to-dr --query PolicyDocument.Statement"
+      evidence: role-ok
+      output: |
+        [
+            { "Effect": "Allow",
+              "Action": [ "s3:GetReplicationConfiguration", "s3:ListBucket" ],
+              "Resource": "arn:aws:s3:::acme-orders-docs" },
+            { "Effect": "Allow",
+              "Action": [ "s3:GetObjectVersionForReplication", "s3:GetObjectVersionAcl", "s3:GetObjectVersionTagging" ],
+              "Resource": "arn:aws:s3:::acme-orders-docs/*" },
+            { "Effect": "Allow",
+              "Action": [ "s3:ReplicateObject", "s3:ReplicateDelete", "s3:ReplicateTags" ],
+              "Resource": "arn:aws:s3:::acme-dr-orders-docs/*" },
+            { "Effect": "Allow", "Action": "kms:Decrypt",
+              "Resource": "arn:aws:kms:us-east-1:111122223333:key/1a2b3c4d-1111-2222-3333-444455556666" },
+            { "Effect": "Allow", "Action": "kms:Encrypt",
+              "Resource": "arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321" }
+        ]
+    - match: "aws s3api get-bucket-policy --bucket acme-dr-orders-docs --profile dr --query Policy --output text"
+      output: |
+        {"Version":"2012-10-17","Statement":[
+          {"Sid":"AllowProdReplication","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::111122223333:role/s3-replication-orders"},
+           "Action":["s3:ReplicateObject","s3:ReplicateDelete","s3:ReplicateTags"],
+           "Resource":"arn:aws:s3:::acme-dr-orders-docs/*"},
+          {"Sid":"AllowProdVersioningCheck","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::111122223333:role/s3-replication-orders"},
+           "Action":["s3:GetBucketVersioning","s3:PutBucketVersioning"],
+           "Resource":"arn:aws:s3:::acme-dr-orders-docs"}]}
+    - match: "aws kms get-key-policy --key-id arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321 --policy-name default --profile dr --query Policy --output text"
+      when_actions: [grant-key]
+      output: |
+        {"Version":"2012-10-17","Statement":[
+          {"Sid":"EnableIAMPolicies","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::444455556666:root"},"Action":"kms:*","Resource":"*"},
+          {"Sid":"AllowRestoreDecrypt","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::444455556666:role/dr-restore"},
+           "Action":"kms:Decrypt","Resource":"*"},
+          {"Sid":"AllowProdReplicationRole","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::111122223333:role/s3-replication-orders"},
+           "Action":["kms:Encrypt","kms:GenerateDataKey*"],"Resource":"*"}]}
+    - match: "aws kms get-key-policy --key-id arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321 --policy-name default --profile dr --query Policy --output text"
+      evidence: key-policy-local
+      output: |
+        {"Version":"2012-10-17","Statement":[
+          {"Sid":"EnableIAMPolicies","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::444455556666:root"},"Action":"kms:*","Resource":"*"},
+          {"Sid":"AllowRestoreDecrypt","Effect":"Allow",
+           "Principal":{"AWS":"arn:aws:iam::444455556666:role/dr-restore"},
+           "Action":"kms:Decrypt","Resource":"*"}]}
+
+logs:
+  - name: "SQS s3-replication-failures (latest messages)"
+    evidence: dst-put-denied
+    lines: |
+      2026-10-02T08:05:02Z Replication:OperationFailedReplication key=healthcheck/replication-canary.txt destinationBucket=arn:aws:s3:::acme-dr-orders-docs s3Operation=OBJECT_PUT failureReason=DstPutObjectNotPermitted
+      2026-10-02T08:04:41Z Replication:OperationFailedReplication key=invoices/2026-10-02/INV-88530.pdf destinationBucket=arn:aws:s3:::acme-dr-orders-docs s3Operation=OBJECT_PUT failureReason=DstPutObjectNotPermitted
+      2026-10-02T08:03:17Z Replication:OperationFailedReplication key=contracts/2026-10-02/C-20417.pdf destinationBucket=arn:aws:s3:::acme-dr-orders-docs s3Operation=OBJECT_PUT failureReason=DstPutObjectNotPermitted
+      ... every message since 2026-09-29T14:12Z has failureReason=DstPutObjectNotPermitted
+  - name: "CHG-2417 change record (09-29)"
+    lines: |
+      CHG-2417  2026-09-29  Platform team
+      Enable cross-account replication acme-orders-docs -> acme-dr-orders-docs.
+      - prod: replication role s3-replication-orders (S3 + KMS permissions), replication rule, metrics on
+      - DR: bucket from the dr-bucket Terraform module (v1.4), bucket policy allowing the prod role
+      - DR: customer managed key for replicas, key policy from the DR baseline template
+      Test: canary object written, replication configured without errors.
+
+metrics:
+  - name: "acme-orders-docs: 4xxErrors (requests per hour)"
+    unit: requests
+    evidence: partner-404s
+    series:
+      - label: "4xxErrors"
+        points: [["09-26", 3], ["09-27", 412], ["09-28", 398], ["09-29", 405], ["09-30", 420], ["10-01", 409], ["10-02", 415]]
+  - name: "acme-orders-docs: OperationsFailedReplication (per hour)"
+    unit: operations
+    series:
+      - label: "OperationsFailedReplication"
+        points: [["09-26", 0], ["09-27", 0], ["09-28", 0], ["09-29", 96], ["09-30", 201], ["10-01", 197], ["10-02", 188]]
+
+files:
+  - path: "s3-access-log sample (4xx, acme-orders-docs)"
+    content: |
+      partner-sync [27/Sep/2026:03:12:44 +0000] 198.51.100.24 arn:aws:iam::777788889999:role/partner-sync REST.GET.OBJECT old/invoices/2023/INV-10023.pdf "GET /old/invoices/2023/INV-10023.pdf HTTP/1.1" 404 NoSuchKey
+      partner-sync [02/Oct/2026:07:58:10 +0000] 198.51.100.24 arn:aws:iam::777788889999:role/partner-sync REST.GET.OBJECT old/invoices/2023/INV-10871.pdf "GET /old/invoices/2023/INV-10871.pdf HTTP/1.1" 404 NoSuchKey
+
+hypotheses:
+  - id: key-policy
+    text: "The DR key's policy doesn't let the production replication role use it, so S3 can't encrypt replicas in the DR account."
+    correct: true
+  - id: role-policy
+    text: "The replication role's IAM policy is missing kms:Encrypt on the DR key."
+    feedback: "It has it, on exactly that key. Across accounts that's only half: the key's own policy in the DR account must also allow the role, and it doesn't."
+  - id: dst-bucket-policy
+    text: "The DR bucket policy doesn't allow the replication role to write replicas."
+    feedback: "It allows s3:ReplicateObject, ReplicateDelete and ReplicateTags for exactly that role. DstPutObjectNotPermitted also covers a key policy that won't let the role use the destination key; check that side."
+  - id: partner-4xx
+    text: "The partner's 4xx errors are failing the replication."
+    feedback: "They started on 09-27, two days before replication was turned on, and they're GETs for old/ keys that don't exist (404 NoSuchKey). Replication failures are reported as failure events, not as client errors."
+  - id: rule-off
+    text: "The replication rule is disabled."
+    feedback: "The rule says Enabled, and S3 is attempting every object: each attempt produces a failure event with a reason."
+
+actions:
+  - id: grant-key
+    label: "In the DR account, add a key policy statement allowing arn:aws:iam::111122223333:role/s3-replication-orders kms:Encrypt and kms:GenerateDataKey* (aws kms put-key-policy --profile dr)"
+    kind: fix
+    match_regex: "^aws kms put-key-policy --key-id \\S+ --policy-name default --policy file://\\S+ --profile dr$"
+    feedback: "The DR key now trusts the production replication role, alongside its existing statements. The next canary should replicate."
+  - id: aws-managed-key
+    label: "Change ReplicaKmsKeyID to the DR account's AWS managed key, aws/s3"
+    kind: wrong
+    feedback: "AWS managed keys don't allow cross-account use, so they can't be used for cross-account replication. It has to be a customer managed key whose policy allows the source account's role."
+  - id: role-kms-star
+    label: "Give the replication role kms:* on all keys (\"Resource\": \"*\")"
+    kind: wrong
+    feedback: "The role already allows kms:Encrypt on the DR key. A cross-account key also needs its own key policy to allow the role, and broadening the IAM side doesn't change that."
+  - id: disable-kms-replication
+    label: "Turn off SseKmsEncryptedObjects in the replication rule so it stops failing"
+    kind: destructive
+    feedback: "S3 doesn't replicate SSE-KMS objects by default; turning that off doesn't fix anything, it just stops trying. Every document here is SSE-KMS, so nothing would reach DR at all."
+  - id: open-key
+    label: "Set the DR key policy's principal to \"*\" for kms:Encrypt"
+    kind: destructive
+    feedback: "That lets any AWS principal anywhere use the DR key. Name the one role that needs it."
+
+solution_paths:
+  - [grant-key]
+
+key_evidence: [dst-put-denied, canary-failed, role-ok, key-policy-local]
+
+evidence_labels:
+  dst-put-denied: "Every replication attempt since 09-29 fails with DstPutObjectNotPermitted"
+  canary-failed: "The canary's replication status is FAILED"
+  role-ok: "The role's own policy allows kms:Encrypt on the DR key"
+  key-policy-local: "The DR key's policy only trusts principals in the DR account"
+
+red_herrings:
+  - evidence: partner-404s
+    label: "A 4xx alarm on the documents bucket since the weekend"
+    why: "It started on 09-27, two days before replication existed, and the access log shows a partner's role GETting old/ keys that don't exist (404 NoSuchKey). Annoying, worth telling the partner, unrelated."
+
+hints:
+  nudge: "Replication reports why each attempt fails. What does the reason point at, and which account owns that piece?"
+  direction: "DstPutObjectNotPermitted means writing into the destination: either its bucket policy or the destination KMS key. The role's IAM side looks right. Read the DR bucket policy and the DR key's policy."
+  answer: "The DR key's policy only trusts DR-account principals. Add a statement allowing the production role s3-replication-orders kms:Encrypt (and GenerateDataKey*)."
+
+analogy:
+  title: "The courier has a pass, but the vault won't accept the seal"
+  text: |
+    A courier carries sealed copies to a vault in another city. The courier's
+    own company says they're allowed to use the vault's seal, and the vault's
+    front desk lets them in. But the seal belongs to the vault, and the
+    vault's rules only let its own staff use it, so every delivery is turned
+    away at the last step. When that's fixed, you'll find the vault's staff
+    can't open the boxes, because the courier still owns them, and nobody has
+    gone back for the deliveries that were turned away.
+
+debrief:
+  root_cause: |
+    Cross-account replication of SSE-KMS objects needs permission on both
+    sides: the replication role's IAM policy (production) must allow
+    kms:Encrypt on the replica key, and that key's policy (DR account) must
+    allow the role. CHG-2417 built the DR key from the DR baseline template,
+    which only trusts DR-account principals, so every replica write failed
+    with DstPutObjectNotPermitted from the first object on 09-29.
+  ideal_path:
+    - "Read the replication failure events: every attempt fails with DstPutObjectNotPermitted."
+    - "Confirm with the canary's replication status: FAILED."
+    - "Check the role's side (it allows kms:Encrypt on the DR key) and the DR bucket policy (it allows the role)."
+    - "Read the DR key's policy: no statement for the production role."
+    - "Add one, then check the next canary replicates."
+  real_world: |
+    The production half (role policy) and the DR half (bucket policy, key
+    policy) are usually owned by different teams and different Terraform
+    stacks; a replication test that only checks "configured without errors"
+    passes, because PutBucketReplication doesn't validate keys or
+    permissions. Test by writing an object and reading its replication status.
+
+concepts:
+  - term: "Replicating SSE-KMS objects"
+    text: "S3 replicates SSE-KMS objects only when the rule opts in. The role needs kms:Decrypt on the source key and kms:Encrypt on the replica key; across accounts, the replica key's policy must also allow the role."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-config-for-kms-objects.html"
+  - term: "Replication status"
+    text: "Source objects report PENDING, COMPLETED or FAILED (replicas report REPLICA). A FAILED object is never retried automatically."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-status.html"
+  - term: "Object Ownership"
+    text: "Bucket owner enforced (the default) disables ACLs and makes the bucket owner own every object; with Object writer, the uploading account owns what it writes."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/about-object-ownership.html"
+  - term: "S3 Batch Replication"
+    text: "Replicates existing objects on demand: ones that predate the rule, failed, or need copying again. Filter by replication status, such as NONE and FAILED."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-batch-replication-batch.html"
+
+sources:
+  - title: "Amazon S3: Replicating encrypted objects (SSE-KMS permissions, cross-account keys, AWS managed keys)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-config-for-kms-objects.html"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Configuring replication for buckets in different accounts"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-walkthrough-2.html"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Replication failure events and failure reasons (DstPutObjectNotPermitted)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-metrics-events.html"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Getting replication status information (FAILED can't be retried)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-status.html"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Controlling ownership of objects and disabling ACLs"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/about-object-ownership.html"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Changing the replica owner"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-change-owner.html"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Replicating existing objects with Batch Replication"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-batch-replication-batch.html"
+    retrieved: 2026-10-02
+
+stages:
+  - id: replica-ownership
+    update: |
+      15:20: the key policy is fixed and the canary replicates (COMPLETED).
+      Tonight's restore check was run early to confirm, and it still fails:
+      the DR account gets AccessDenied reading the replica it just received.
+    diagram_status: { dst: degraded, verify: down }
+    terminal:
+      commands:
+        - match: "aws s3api get-object --bucket acme-dr-orders-docs --key healthcheck/replication-canary.txt canary.txt --profile dr"
+          when_actions: [enforce-owner]
+          output: |
+            {
+                "ContentLength": 37,
+                "ContentType": "text/plain",
+                "ServerSideEncryption": "aws:kms",
+                "SSEKMSKeyId": "arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321",
+                "ReplicationStatus": "REPLICA"
+            }
+        - match: "aws s3api get-object --bucket acme-dr-orders-docs --key healthcheck/replication-canary.txt canary.txt --profile dr"
+          evidence: dr-read-denied
+          output: |
+            An error occurred (AccessDenied) when calling the GetObject operation: Access Denied
+        - match: "aws s3api list-objects-v2 --bucket acme-dr-orders-docs --prefix healthcheck/ --fetch-owner --profile dr --query Contents[].[Key,Owner.ID]"
+          when_actions: [enforce-owner]
+          output: |
+            [
+                [ "healthcheck/replication-canary.txt", "3b9d82e6c1f4..." ]
+            ]
+        - match: "aws s3api list-objects-v2 --bucket acme-dr-orders-docs --prefix healthcheck/ --fetch-owner --profile dr --query Contents[].[Key,Owner.ID]"
+          evidence: replica-owner-prod
+          output: |
+            [
+                [ "healthcheck/replication-canary.txt", "7e1c4f0a9b2d..." ]
+            ]
+        - match: "aws s3api get-bucket-ownership-controls --bucket acme-dr-orders-docs --profile dr"
+          when_actions: [enforce-owner]
+          output: |
+            {
+                "OwnershipControls": { "Rules": [ { "ObjectOwnership": "BucketOwnerEnforced" } ] }
+            }
+        - match: "aws s3api get-bucket-ownership-controls --bucket acme-dr-orders-docs --profile dr"
+          evidence: object-writer
+          output: |
+            {
+                "OwnershipControls": { "Rules": [ { "ObjectOwnership": "ObjectWriter" } ] }
+            }
+    files:
+      - path: "dr-bucket Terraform module v1.4: main.tf (excerpt)"
+        evidence: module-object-writer
+        content: |
+          resource "aws_s3_bucket_ownership_controls" "this" {
+            bucket = aws_s3_bucket.this.id
+            rule {
+              # Kept from v1.0 (2021) for the legacy uploader that sets ACLs.
+              object_ownership = "ObjectWriter"
+            }
+          }
+    hypotheses:
+      - id: replica-owned-by-prod
+        text: "The DR bucket uses Object writer, so replicas are owned by the production account, and the DR account can't grant itself access to objects it doesn't own."
+        correct: true
+      - id: restore-kms
+        text: "dr-restore can't decrypt with the DR key."
+        feedback: "The key policy allows dr-restore kms:Decrypt, and a KMS refusal names KMS in the error. This is S3's own AccessDenied, before any decryption."
+      - id: bucket-policy-read
+        text: "The DR bucket policy doesn't grant dr-restore s3:GetObject."
+        feedback: "Even if it did, a bucket policy only applies to objects the bucket owner owns. These replicas belong to the production account, so access is decided by their ACLs."
+      - id: still-key
+        text: "Replication is still failing."
+        feedback: "The canary's status is COMPLETED and the replica is listed in the DR bucket. It arrived; it just isn't the DR account's."
+    actions:
+      - id: enforce-owner
+        label: "Set Object Ownership on acme-dr-orders-docs to Bucket owner enforced (aws s3api put-bucket-ownership-controls ... BucketOwnerEnforced --profile dr), and fix the module default"
+        kind: fix
+        match_regex: "^aws s3api put-bucket-ownership-controls --bucket acme-dr-orders-docs --ownership-controls (Rules=\\[\\{ObjectOwnership=BucketOwnerEnforced\\}\\]|'Rules=\\[\\{ObjectOwnership=BucketOwnerEnforced\\}\\]'|'\\{\"Rules\":\\[\\{\"ObjectOwnership\":\"BucketOwnerEnforced\"\\}\\]\\}') --profile dr$"
+        feedback: "ACLs are off and the DR account now owns every object in the bucket, including replicas already there; access is decided by its own policies."
+      - id: owner-override
+        label: "Add AccessControlTranslation (owner override) to the replication rule"
+        kind: wrong
+        feedback: "A valid way to make new replicas belong to the DR account, but it needs s3:ObjectOwnerOverrideToBucketOwner on both sides and doesn't change replicas already delivered. Bucket owner enforced does the same job for every object, old and new."
+      - id: grant-get-policy
+        label: "Add s3:GetObject for dr-restore to the DR bucket policy"
+        kind: wrong
+        feedback: "Bucket policies can't grant access to objects owned by another account; those use ACLs. The replicas belong to production."
+      - id: public-read
+        label: "Turn off Block Public Access and add a public-read ACL to the replicas"
+        kind: destructive
+        feedback: "That makes customer documents readable by anyone on the internet. Make the DR account own them instead."
+    solution_paths:
+      - [enforce-owner]
+    key_evidence: [dr-read-denied, replica-owner-prod, object-writer]
+    evidence_labels:
+      dr-read-denied: "The DR account gets AccessDenied reading the replica"
+      replica-owner-prod: "The replica is owned by the production account's canonical ID"
+      object-writer: "The DR bucket's Object Ownership is ObjectWriter"
+    hints:
+      nudge: "The replica arrived. Whose is it?"
+      direction: "List the replica with its owner, and read the DR bucket's Object Ownership setting."
+      answer: "With Object writer, replicas belong to the production account, and the DR account's policies can't grant access to them. Set Bucket owner enforced on the DR bucket."
+    debrief:
+      root_cause: |
+        By default a replica is owned by the source object's owner. The DR
+        bucket came from an old Terraform module that sets Object Ownership
+        to ObjectWriter (ACLs on), so every replica belonged to the production
+        account, and objects owned by another account are controlled by
+        their ACLs: the DR account's bucket policy and roles couldn't grant
+        access. Bucket owner enforced disables ACLs and makes the bucket owner
+        own every object, existing and new, without owner override.
+      ideal_path:
+        - "Read the replica from the DR account: AccessDenied."
+        - "List it with its owner: the production account's canonical ID."
+        - "Read the DR bucket's Object Ownership: ObjectWriter."
+        - "Set Bucket owner enforced (and fix the module), then read the replica again."
+
+  - id: backfill
+    update: |
+      16:05: new documents replicate and the restore check passes on them.
+      The auditor's question is "every customer document". What about the
+      18,000 that failed since Monday, and everything from before Monday?
+    diagram_status: { dst: degraded, verify: ok }
+    terminal:
+      commands:
+        - match: "aws s3api head-object --bucket acme-orders-docs --key invoices/2026-10-01/INV-88412.pdf --query [ReplicationStatus,ServerSideEncryption]"
+          when_actions: [batch-none-failed]
+          output: |
+            [
+                "COMPLETED",
+                "aws:kms"
+            ]
+        - match: "aws s3api head-object --bucket acme-orders-docs --key invoices/2026-10-01/INV-88412.pdf --query [ReplicationStatus,ServerSideEncryption]"
+          evidence: still-failed
+          output: |
+            [
+                "FAILED",
+                "aws:kms"
+            ]
+        - match: "aws s3api head-object --bucket acme-orders-docs --key invoices/2026-08-14/INV-71230.pdf --query [ReplicationStatus,ServerSideEncryption]"
+          when_actions: [batch-none-failed]
+          output: |
+            [
+                "COMPLETED",
+                "aws:kms"
+            ]
+        - match: "aws s3api head-object --bucket acme-orders-docs --key invoices/2026-08-14/INV-71230.pdf --query [ReplicationStatus,ServerSideEncryption]"
+          evidence: never-replicated
+          output: |
+            [
+                null,
+                "aws:kms"
+            ]
+        - match: "aws s3control describe-job --account-id 111122223333 --job-id 7c1d2e3f-backfill --query Job.[Status,ProgressSummary]"
+          when_actions: [batch-none-failed]
+          output: |
+            [
+                "Complete",
+                { "TotalNumberOfTasks": 412377, "NumberOfTasksSucceeded": 412377, "NumberOfTasksFailed": 0 }
+            ]
+        - match: "aws s3control describe-job --account-id 111122223333 --job-id 7c1d2e3f-backfill --query Job.[Status,ProgressSummary]"
+          output: |
+            An error occurred (NoSuchJob) when calling the DescribeJob operation: The specified job does not exist
+    metrics:
+      - name: "acme-orders-docs: replicas missing in DR (estimate)"
+        unit: objects
+        evidence: failed-total
+        series:
+          - label: "FAILED since 09-29"
+            points: [["09-29", 2304], ["09-30", 7128], ["10-01", 11856], ["10-02", 18406]]
+          - label: "Never in scope (before 09-29)"
+            points: [["09-29", 393971], ["09-30", 393971], ["10-01", 393971], ["10-02", 393971]]
+    hypotheses:
+      - id: needs-batch
+        text: "Live replication only handles new writes. Objects that FAILED aren't retried, and objects from before the rule were never in scope: both need S3 Batch Replication."
+        correct: true
+      - id: retries
+        text: "S3 will retry the failed objects now that permissions are fixed."
+        feedback: "Failures from permissions go to FAILED, and a FAILED object isn't retried: you re-upload it or use Batch Replication. Only temporary failures stay PENDING and resume."
+      - id: only-failed
+        text: "Only the 18,406 failed objects are missing."
+        feedback: "INV-71230 from August has no replication status at all: it predates the rule, so live replication never considered it. That's about 394,000 more."
+    actions:
+      - id: batch-none-failed
+        label: "Create an S3 Batch Replication job on acme-orders-docs with an S3-generated manifest, filtered to ObjectReplicationStatuses NONE and FAILED (aws s3control create-job ...)"
+        kind: fix
+        match_regex: "^aws s3control create-job .*S3ReplicateObject.*$"
+        feedback: "Batch Replication works through every object that was never replicated or failed, using the same rule (and now-working permissions). Check the job's completion report."
+      - id: batch-failed-only
+        label: "Create a Batch Replication job filtered to FAILED only"
+        kind: wrong
+        feedback: "That catches the 18,406 since Monday, but not the ~394,000 objects from before the rule existed (status NONE). The auditor asked for every document."
+      - id: s3-sync
+        label: "aws s3 sync s3://acme-orders-docs s3://acme-dr-orders-docs from a laptop"
+        kind: wrong
+        feedback: "That makes ordinary copies, not replicas: the source objects stay FAILED (and S3 Lifecycle blocks expiring or transitioning FAILED objects), and you've made new versions on your own credentials. Batch Replication fixes the status too."
+      - id: recreate-bucket
+        label: "Delete and recreate the DR bucket to restart replication from scratch"
+        kind: destructive
+        feedback: "Recreating the destination doesn't start replication of anything, and you'd destroy the replicas made today."
+    solution_paths:
+      - [batch-none-failed]
+    key_evidence: [still-failed, never-replicated, failed-total]
+    evidence_labels:
+      still-failed: "A document from 10-01 is still FAILED after the fixes"
+      never-replicated: "A document from August has no replication status: never in scope"
+      failed-total: "18,406 failed since 09-29, plus ~394,000 from before the rule"
+    hints:
+      nudge: "Fixing the permissions changed what happens to new objects. What about the old ones?"
+      direction: "Check the replication status of a document from Tuesday and one from August."
+      answer: "FAILED objects aren't retried and pre-rule objects were never in scope. Run S3 Batch Replication with ObjectReplicationStatuses NONE and FAILED."
+    debrief:
+      root_cause: |
+        Live replication copies new writes. Objects that failed for
+        permission reasons are marked FAILED and never retried, and objects
+        that existed before the rule have no replication status at all. So
+        after both fixes the DR bucket was still missing 18,406 documents
+        from this week and about 394,000 older ones. S3 Batch Replication
+        replicates both, filtered on NONE and FAILED, and leaves their
+        status COMPLETED.
+      ideal_path:
+        - "Check a document from this week: still FAILED."
+        - "Check an older one: no replication status."
+        - "Size the gap from the failure metrics."
+        - "Run Batch Replication for NONE and FAILED, then confirm the job and the statuses."

@@ -274,6 +274,7 @@
     - { token: "--policy-name default", meaning: "Key policies are always named default." }
     - { token: "--query Policy", meaning: "Just the policy document." }
     - { token: "--output text", meaning: "Print it as plain text rather than a JSON string." }
+    - { token: "--profile dr", meaning: "(If given) run with the credentials of the named profile, here the account that owns the key." }
   why: "The key policy decides whether IAM policies in the account can grant use of the key at all."
   alternatives:
     - { command: "aws kms list-grants --key-id ID", note: "Grants, the other way access to a key is given." }
@@ -363,6 +364,53 @@
     - { command: "aws s3 ls s3://NAME", note: "Also needs list permission." }
   docs: { title: "AWS CLI: head-bucket", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/head-bucket.html" }
 
+- id: aws-s3api-bucket-replication
+  match: "^aws s3api get-bucket-replication"
+  summary: "Prints a bucket's replication configuration: the role, each rule, and its destination."
+  parts:
+    - { token: "--bucket NAME", meaning: "The source bucket." }
+  why: "Shows what S3 is trying to do: which role it uses, whether SSE-KMS objects are included, which key encrypts replicas, and whether metrics (and failure events) are on."
+  alternatives:
+    - { command: "S3 console > bucket > Management > Replication rules", note: "The same rules." }
+  docs: { title: "AWS CLI: get-bucket-replication", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-replication.html" }
+
+- id: aws-s3api-ownership-controls
+  match: "^aws s3api get-bucket-ownership-controls"
+  summary: "Shows a bucket's Object Ownership setting."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+    - { token: "--profile dr", meaning: "(If given) run as the bucket owner's profile." }
+  why: "BucketOwnerEnforced means the bucket owner owns everything and ACLs are off; ObjectWriter means whoever wrote an object owns it, and the bucket owner's policies can't grant access to it."
+  alternatives:
+    - { command: "S3 console > bucket > Permissions > Object Ownership", note: "The same setting." }
+  docs: { title: "AWS CLI: get-bucket-ownership-controls", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-ownership-controls.html" }
+
+- id: aws-s3api-list-objects-owner
+  match: "^aws s3api list-objects-v2"
+  summary: "Lists objects in a bucket, optionally with each object's owner."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+    - { token: "--prefix healthcheck/", meaning: "Only keys starting with this." }
+    - { token: "--fetch-owner", meaning: "Include each object's owner (its canonical user ID)." }
+    - { token: "--profile dr", meaning: "Run as this profile's account." }
+    - { token: "--query Contents[].[Key,Owner.ID]", meaning: "For each object, just its key and owner." }
+  why: "Shows which account owns an object, which decides whether the bucket owner's policies apply to it."
+  alternatives:
+    - { command: "aws s3api get-object-acl --bucket B --key K", note: "The owner and grants of one object (needs permission to read its ACL)." }
+  docs: { title: "AWS CLI: list-objects-v2", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/list-objects-v2.html" }
+
+- id: aws-s3control-describe-job
+  match: "^aws s3control describe-job"
+  summary: "Shows an S3 Batch Operations job's status and progress."
+  parts:
+    - { token: "--account-id 111122223333", meaning: "The account that owns the job." }
+    - { token: "--job-id ID", meaning: "The job." }
+    - { token: "--query Job.[Status,ProgressSummary]", meaning: "Just its status and how many tasks succeeded or failed." }
+  why: "Confirms a Batch Replication job finished and how many objects failed; the completion report lists each failure with its reason."
+  alternatives:
+    - { command: "aws s3control list-jobs --account-id ID", note: "Every recent job." }
+  docs: { title: "AWS CLI: s3control describe-job", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3control/describe-job.html" }
+
 - id: aws-s3-cp
   match: "^aws s3 cp "
   summary: "Copies a file to or from S3."
@@ -409,6 +457,8 @@
   summary: "Prints a bucket's resource policy."
   parts:
     - { token: "--bucket NAME", meaning: "The bucket." }
+    - { token: "--profile dr", meaning: "(If given) run as another account's profile, such as the bucket owner's." }
+    - { token: "--query Policy --output text", meaning: "(If given) print the policy document itself, not a JSON string wrapping it." }
   why: "A bucket policy can allow or deny on its own; check it alongside the caller's IAM policy."
   alternatives:
     - { command: "aws s3api get-bucket-policy-status --bucket NAME", note: "Whether the policy makes the bucket public." }
@@ -432,6 +482,7 @@
   parts:
     - { token: "--bucket B --key K", meaning: "The object." }
     - { token: "--query StorageClass", meaning: "Its storage class (missing means STANDARD)." }
+    - { token: "--query [ReplicationStatus,ServerSideEncryption]", meaning: "(Other form) its replication status (PENDING, COMPLETED, FAILED; null if no rule applies to it) and encryption type." }
     - { token: "--query ServerSideEncryption / SSEKMSKeyId", meaning: "How it's encrypted, and with which KMS key." }
   why: "Storage class and encryption decide whether and how an object can be read; head-object shows both."
   alternatives:
