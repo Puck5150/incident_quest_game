@@ -18,8 +18,8 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 ## Content
 - More cloud content: priority AWS, then Azure, then Google Cloud. Shipped: PLAN_CLOUD_COVERAGE.md
   phases A-D and design challenges on the exam-outline gaps (ingestion, caching, containers,
-  identity) for all three clouds. Candidates: Lambda timeouts, Azure DNS, canvas challenges
-  on the newer topics
+  identity) for all three clouds, and 4 multi-stage incidents. Candidates: Azure DNS, canvas
+  challenges on the newer topics; Google Cloud is thinnest (7 incidents)
 - `concepts` for design challenges (PLAN_GUIDANCE.md G4; option facts stand in for now)
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - More tracks: Fundamentals, Windows/identity, Scripting and code, Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
