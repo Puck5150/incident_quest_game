@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: gcp-iam-groups-access
+track: cloud-design
+difficulty: 2
+title: "Let the analysts query BigQuery, and nothing more"
+provider: gcp
+par_minutes: 10
+
+brief: |
+  Thirty data analysts need to run queries on the datasets in the project
+  analytics-prod. They shouldn't be able to change or delete anything
+  else in the project: last quarter someone with broad access deleted a
+  storage bucket by mistake. Analysts join and move teams every month, and
+  the company's directory (Cloud Identity Premium) already records each
+  person's department. Security also wants a second sign-in step for
+  everyone after a phishing scare.
+
+requirements:
+  - "New analysts get access without an IT ticket"
+  - "Analysts who move teams lose access automatically"
+  - "Analysts can run queries but can't delete or change other resources"
+  - "A phished password alone can't be used to sign in"
+  - "Stay within 4 cost units per month"
+budget: 4
+
+tiers:
+  - id: who
+    label: "Who the roles are granted to"
+    options:
+      - id: grant-users
+        short: "Each user"
+        label: "Grant the roles to each analyst's account individually"
+        cost: 0
+        facts:
+          - "Every joiner needs new bindings, and every mover needs theirs found and removed."
+          - "Google recommends granting roles to groups rather than to individual users."
+        capabilities: { survives: [blast-radius, phish, query] }
+      - id: grant-group
+        short: "Google group"
+        label: "Grant the roles to an analysts@ Google group; managers add and remove members"
+        cost: 0
+        facts:
+          - "The roles are granted once, to the group."
+          - "Members are added and removed by hand."
+        capabilities: { survives: [blast-radius, phish, query] }
+      - id: grant-dynamic
+        short: "Dynamic group"
+        label: "Grant the roles to a dynamic group whose query matches department == \"Analytics\""
+        cost: 2
+        facts:
+          - "A dynamic group's membership is kept up to date automatically from a query on user attributes, such as department."
+          - "The roles are granted once, to the group."
+          - "Dynamic groups need a premium edition, such as Cloud Identity Premium (which the company already has)."
+        capabilities: { survives: [joiner, mover, blast-radius, phish, query] }
+  - id: roles
+    label: "Which roles"
+    options:
+      - id: role-editor
+        short: "Editor (basic)"
+        label: "The basic Editor role on analytics-prod"
+        cost: 0
+        facts:
+          - "Basic roles (Owner, Editor, Viewer) include thousands of permissions across all Google Cloud services."
+          - "Editor can modify and delete most resources in the project. Google recommends against basic roles in production."
+        capabilities: { survives: [joiner, mover, phish, query] }
+      - id: role-viewer
+        short: "Viewer (basic)"
+        label: "The basic Viewer role on analytics-prod"
+        cost: 0
+        facts:
+          - "Viewer allows read-only actions that don't change state, across the project."
+          - "Running a BigQuery query creates a job, which needs the bigquery.jobs.create permission."
+        capabilities: { survives: [joiner, mover, blast-radius, phish] }
+      - id: role-bq
+        short: "BigQuery roles"
+        label: "BigQuery Data Viewer on the datasets, and BigQuery Job User on the project"
+        cost: 0
+        facts:
+          - "BigQuery Data Viewer lets members read datasets' tables and their data."
+          - "BigQuery Job User lets members run jobs, including queries, in the project."
+          - "Neither role allows changes to other resources."
+        capabilities: { survives: [joiner, mover, blast-radius, phish, query] }
+  - id: signin
+    label: "Sign-in protection"
+    options:
+      - id: signin-password
+        short: "Password only"
+        label: "Leave 2-Step Verification optional"
+        cost: 0
+        facts: ["Users who haven't turned it on sign in with a password alone."]
+        capabilities: { survives: [joiner, mover, blast-radius, query] }
+      - id: signin-2sv
+        short: "Enforce 2SV"
+        label: "Enforce 2-Step Verification for all users in the Admin console"
+        cost: 0
+        facts:
+          - "After enforcement, users must sign in with a second step, such as a security key or a prompt on their phone."
+        capabilities: { survives: [joiner, mover, blast-radius, phish, query] }
+
+stress_tests:
+  - id: joiner
+    label: "Five new analysts start on Monday"
+    requires: { every_tier_survives: joiner }
+  - id: mover
+    label: "An analyst moves to the Sales team"
+    requires: { every_tier_survives: mover }
+  - id: query
+    label: "An analyst runs the monthly revenue query"
+    requires: { every_tier_survives: query }
+  - id: blast-radius
+    label: "An analyst's cleanup script runs against the wrong project"
+    requires: { every_tier_survives: blast-radius }
+  - id: phish
+    label: "An analyst's password is phished"
+    requires: { every_tier_survives: phish }
+
+failure_feedback:
+  grant-users:
+    joiner: "Five people, two bindings each, by ticket. Some wait days to start work."
+    mover: "Nobody removed their bindings. They still query revenue data from the Sales team."
+  grant-group:
+    joiner: "Granting to a group is right, but someone still has to add five people by hand."
+    mover: "They're still in analysts@ until a manager remembers to remove them."
+  role-editor:
+    blast-radius: "With Editor, the script deletes buckets and VMs in analytics-prod. The same accident as last quarter."
+  role-viewer:
+    query: "Viewer is read-only: it can't create the query job, so the query is refused for missing bigquery.jobs.create."
+  signin-password:
+    phish: "With only a password, the attacker signs straight in."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { who: grant-dynamic, roles: role-bq, signin: signin-2sv }
+    why: "A dynamic group follows the department field the directory already keeps, so joiners and movers need no tickets. BigQuery Data Viewer plus Job User lets analysts run queries and nothing else, and enforced 2-Step Verification makes a phished password useless on its own."
+
+hints:
+  nudge: "There are three separate questions: who gets access, what they can do, and how they prove it's them."
+  direction: "Grant to a group that fills itself from the department field. Choose predefined roles that cover reading data and running queries; basic roles are either too much or not enough."
+  answer: "A dynamic group on the Analytics department, BigQuery Data Viewer on the datasets plus BigQuery Job User on the project, and enforced 2-Step Verification."
+
+analogy:
+  title: "A library card, not the building keys"
+  text: |
+    Analysts need to read the books and book a reading room, not the keys
+    to the whole building. The card should come with the job and stop
+    working when you change jobs, without the librarian doing anything.
+    And showing the card isn't enough on its own: you sign in at the desk
+    too.
+
+debrief:
+  summary: |
+    Google Cloud IAM grants roles to principals on resources. Grant to
+    groups, not individuals, so access is managed in one place; a dynamic
+    group in Cloud Identity Premium keeps itself up to date from user
+    attributes. Basic roles are blunt: Editor can change and delete almost
+    everything, while Viewer can't even run a query, because a query is a
+    job. Predefined roles are precise: BigQuery Data Viewer to read the
+    data, BigQuery Job User to run queries. Enforcing 2-Step Verification
+    means a stolen password alone isn't enough.
+  real_world: |
+    Grant BigQuery Data Viewer at the dataset level when only some data is
+    shared. Use IAM Recommender to find roles that are broader than what
+    people use, and keep Owner and Editor for a small break-glass group.
+
+sources:
+  - title: "IAM: Roles and permissions (basic, predefined and custom roles)"
+    url: "https://cloud.google.com/iam/docs/roles-overview"
+    retrieved: 2026-10-01
+  - title: "IAM: Use IAM securely (grant roles to groups)"
+    url: "https://cloud.google.com/iam/docs/using-iam-securely"
+    retrieved: 2026-10-01
+  - title: "BigQuery: Access control with IAM (Data Viewer, Job User, bigquery.jobs.create)"
+    url: "https://cloud.google.com/bigquery/docs/access-control"
+    retrieved: 2026-10-01
+  - title: "Cloud Identity: Creating dynamic groups"
+    url: "https://cloud.google.com/identity/docs/how-to/create-dynamic-groups"
+    retrieved: 2026-10-01
+  - title: "Google Workspace Admin Help: Deploy 2-Step Verification (enforce)"
+    url: "https://support.google.com/a/answer/9176657"
+    retrieved: 2026-10-01

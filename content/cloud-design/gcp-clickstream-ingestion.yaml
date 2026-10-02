@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: gcp-clickstream-ingestion
+track: cloud-design
+difficulty: 2
+title: "Stream every click into BigQuery on Google Cloud"
+provider: gcp
+par_minutes: 10
+
+brief: |
+  A media site wants every page view and video play recorded: about 3,000
+  small events a second, and up to ten times that when a story goes viral.
+  The analysts want the events in BigQuery within a minute or two. A
+  recommendations app will also read the same live events. If a bug
+  corrupts a day of results, the team wants to replay the last 24 hours.
+  Nobody wants to run servers for this.
+
+requirements:
+  - "Handle 10x normal event volume when a story goes viral"
+  - "Several apps can each receive every event"
+  - "Replay the last 24 hours of events after a bug"
+  - "Keep loading BigQuery if a server fails"
+  - "Stay within 7 cost units per month"
+budget: 7
+
+tiers:
+  - id: ingest
+    label: "Where events are sent first"
+    options:
+      - id: ingest-sql
+        short: "Cloud SQL table"
+        label: "Insert each event as a row in the site's Cloud SQL database"
+        cost: 2
+        facts:
+          - "Every event becomes a write on the database that serves the site."
+          - "Tens of thousands of extra writes a second compete with the site's own queries."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 1 }
+      - id: ingest-tasks
+        short: "Cloud Tasks queue"
+        label: "A Cloud Tasks queue, with each event dispatched as a task to the loader"
+        cost: 2
+        facts:
+          - "Each task is sent to one specific handler that the sender chooses (explicit invocation)."
+          - "Each queue has a maximum dispatch rate, of up to 500 tasks per second."
+        capabilities: { survives: [server-failure], scales: 1 }
+      - id: ingest-pubsub
+        short: "Pub/Sub topic"
+        label: "A Pub/Sub topic with default settings"
+        cost: 2
+        facts:
+          - "Publishers send messages to a topic; Pub/Sub scales automatically with the volume."
+          - "Each subscription to the topic receives its own copy of every message."
+          - "By default, a message is removed from a subscription once it's acknowledged."
+        capabilities: { survives: [fan-out, server-failure], scales: 10 }
+      - id: ingest-pubsub-retained
+        short: "Pub/Sub + retention"
+        label: "A Pub/Sub topic with 7 days of topic message retention"
+        cost: 3
+        facts:
+          - "Publishers send messages to a topic; Pub/Sub scales automatically with the volume."
+          - "Each subscription to the topic receives its own copy of every message."
+          - "With topic retention on, a subscription can seek back to a time within the retention window and receive those messages again, even ones already acknowledged."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+  - id: delivery
+    label: "Getting events into BigQuery"
+    options:
+      - id: delivery-vm
+        short: "VM writer"
+        label: "A small app on one Compute Engine VM that pulls messages and inserts them into BigQuery"
+        cost: 1
+        facts:
+          - "Runs on a single VM that you patch and monitor."
+          - "While the VM is down, nothing reaches BigQuery."
+        capabilities: { survives: [fan-out, replay], scales: 10 }
+      - id: delivery-bq-sub
+        short: "BigQuery subscription"
+        label: "A BigQuery subscription on the topic, writing straight into a table"
+        cost: 1
+        facts:
+          - "A BigQuery subscription writes messages to an existing BigQuery table as they're received, with no subscriber app to run."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+      - id: delivery-dataflow
+        short: "Dataflow job"
+        label: "A streaming Dataflow pipeline that reads the topic and writes to BigQuery"
+        cost: 4
+        facts:
+          - "A managed service for batch and streaming pipelines, with autoscaling workers."
+          - "Lets you transform, enrich and aggregate data on the way through."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+        overkill: "The brief only needs events copied into BigQuery as they arrive. Dataflow earns its cost when you transform or join data in flight."
+
+stress_tests:
+  - id: viral
+    label: "A story goes viral: events jump to 10x normal"
+    requires: { tier: ingest, min_scales: 10 }
+  - id: fan-out
+    label: "The recommendations app starts receiving every live event too"
+    requires: { every_tier_survives: fan-out }
+  - id: replay
+    label: "A bug in the loader: replay the last 24 hours of events"
+    requires: { every_tier_survives: replay }
+  - id: server-failure
+    label: "The machine running the BigQuery loader fails overnight"
+    requires: { every_tier_survives: server-failure }
+
+failure_feedback:
+  ingest-sql:
+    viral: "Thirty thousand inserts a second on the site's own database: pages slow down, and events back up."
+  ingest-tasks:
+    viral: "The queue dispatches at most 500 tasks a second, far below 30,000 events a second. The backlog grows by the minute."
+    fan-out: "Each task goes to the one handler it names. To feed the recommendations app too, every event would have to be enqueued twice."
+    replay: "A task is deleted once its handler succeeds. There's nothing to replay."
+  ingest-pubsub:
+    replay: "The events were acknowledged when they were loaded, so the subscription no longer has them, and topic retention was off. There's nothing to seek back to."
+  delivery-vm:
+    server-failure: "The only loader was down until morning. Messages piled up in the subscription, and BigQuery was hours behind."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { ingest: ingest-pubsub-retained, delivery: delivery-bq-sub }
+    why: "Pub/Sub scales with the viral spike and gives every subscription (BigQuery, recommendations) its own copy of each event. Topic retention lets you seek back 24 hours after a bug, and a BigQuery subscription loads the table with nothing to run."
+
+hints:
+  nudge: "One requirement asks for events you've already processed. What happens to a message after it's acknowledged?"
+  direction: "Pub/Sub handles the volume and the second reader, but only some settings let you go back in time. Then pick a way into BigQuery that isn't a single machine."
+  answer: "A Pub/Sub topic with topic message retention, and a BigQuery subscription writing into the table."
+
+analogy:
+  title: "A newsletter with an archive"
+  text: |
+    A newsletter goes to every subscriber, however many sign up, and
+    nobody has to share a copy. If the publisher also keeps last week's
+    issues in an archive, anyone who spilled coffee on theirs can ask for
+    it again. And the post office delivers it; you don't need your own van.
+
+debrief:
+  summary: |
+    Pub/Sub is Google Cloud's managed messaging service. Publishers send to
+    a topic; each subscription gets its own copy of every message, so adding
+    a reader is adding a subscription. Normally a subscription forgets a
+    message once it's acknowledged; topic message retention (or retaining
+    acknowledged messages on a subscription) lets you seek back to a point in
+    time and replay. A BigQuery subscription writes messages straight into a
+    table, and Dataflow is there for when data needs transforming on the way.
+  real_world: |
+    Pub/Sub is the usual front door for event data on Google Cloud. Plan
+    replay before you need it: retention costs storage, but it turns a bad
+    deploy into a seek instead of lost data. Use a schema on the topic so a
+    BigQuery subscription can map fields to columns.
+
+sources:
+  - title: "Pub/Sub: What is Pub/Sub?"
+    url: "https://cloud.google.com/pubsub/docs/overview"
+    retrieved: 2026-10-01
+  - title: "Pub/Sub: Replay and purge messages (seek, topic retention, retained acknowledged messages)"
+    url: "https://cloud.google.com/pubsub/docs/replay-overview"
+    retrieved: 2026-10-01
+  - title: "Pub/Sub: BigQuery subscriptions"
+    url: "https://cloud.google.com/pubsub/docs/bigquery"
+    retrieved: 2026-10-01
+  - title: "Cloud Tasks: Choose Cloud Tasks or Pub/Sub (explicit vs implicit invocation)"
+    url: "https://cloud.google.com/tasks/docs/comp-pub-sub"
+    retrieved: 2026-10-01
+  - title: "Cloud Tasks: Quotas and limits (maximum dispatch rate per queue)"
+    url: "https://cloud.google.com/tasks/docs/quotas"
+    retrieved: 2026-10-01
+  - title: "Dataflow: Dataflow overview"
+    url: "https://cloud.google.com/dataflow/docs/overview"
+    retrieved: 2026-10-01

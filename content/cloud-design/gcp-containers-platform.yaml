@@ -1,0 +1,184 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: gcp-containers-platform
+track: cloud-design
+difficulty: 2
+title: "Run the quotes API in containers on Google Cloud"
+provider: gcp
+par_minutes: 10
+
+brief: |
+  An insurance startup's quotes API is a container image that answers
+  HTTP requests. Traffic is close to zero overnight and jumps tenfold when
+  a price-comparison site features them. The two developers have never run
+  Kubernetes and don't want servers or clusters to look after. The API
+  must survive a zone outage, and its database password must never sit in
+  plain text in configuration.
+
+requirements:
+  - "Absorb 10x traffic within minutes"
+  - "Keep working if one zone fails"
+  - "No servers or cluster for the team to operate"
+  - "No database password in plain text in configuration"
+  - "Stay within 5 cost units per month"
+budget: 5
+
+tiers:
+  - id: platform
+    label: "Where the containers run"
+    options:
+      - id: run-vm
+        short: "1 VM + Docker"
+        label: "One Compute Engine VM running the container with Docker"
+        cost: 1
+        facts:
+          - "You patch and monitor the VM and Docker yourself."
+          - "The VM runs in one zone."
+        capabilities: { survives: [pulls, audit], scales: 1 }
+      - id: run-gke-standard
+        short: "GKE Standard"
+        label: "A regional GKE Standard cluster with node pools in three zones"
+        cost: 6
+        facts:
+          - "Kubernetes with the control plane run by Google. In Standard mode you configure and manage the node pools."
+          - "GKE charges a cluster management fee per cluster, plus the nodes."
+        capabilities: { survives: [zone-outage, pulls, audit], scales: 10 }
+      - id: run-gke-autopilot
+        short: "GKE Autopilot"
+        label: "A GKE Autopilot cluster"
+        cost: 6
+        facts:
+          - "Kubernetes where Google manages the nodes; you pay for the resources your pods request, plus the cluster management fee."
+          - "You still deploy and operate Kubernetes objects: Deployments, Services, autoscalers."
+        capabilities: { survives: [zone-outage, pulls, audit], scales: 10 }
+      - id: run-cloud-run
+        short: "Cloud Run"
+        label: "A Cloud Run service"
+        cost: 2
+        facts:
+          - "Serverless containers: Cloud Run adds instances as requests arrive and can scale to zero when idle."
+          - "Cloud Run is regional: Google runs a service redundantly across the zones in its region."
+        capabilities: { survives: [ops, zone-outage, pulls, audit], scales: 10 }
+  - id: registry
+    label: "Where the image is pulled from"
+    options:
+      - id: reg-dockerhub
+        short: "Docker Hub (anon)"
+        label: "A public Docker Hub repository, pulled without logging in"
+        cost: 0
+        facts:
+          - "Docker Hub limits how many images unauthenticated users can pull in a time window."
+          - "Anyone can pull the image, including your code inside it."
+        capabilities: { survives: [ops, zone-outage, audit], scales: 10 }
+      - id: reg-artifact
+        short: "Artifact Registry"
+        label: "A private Artifact Registry repository in the same region"
+        cost: 1
+        facts:
+          - "Google Cloud's managed registry for container images and packages; access is controlled with IAM."
+        capabilities: { survives: [ops, zone-outage, pulls, audit], scales: 10 }
+  - id: secrets
+    label: "How the API gets the database password"
+    options:
+      - id: secret-env
+        short: "Plain env var"
+        label: "Set it as a plain environment variable on the service"
+        cost: 0
+        facts: ["Anyone who can view the service's configuration can read it."]
+        capabilities: { survives: [ops, zone-outage, pulls], scales: 10 }
+      - id: secret-manager
+        short: "Secret Manager"
+        label: "Store it in Secret Manager and reference it from the service"
+        cost: 1
+        facts:
+          - "The service's configuration names the secret; its value is read at runtime."
+          - "The service's service account needs the Secret Manager Secret Accessor role on that secret."
+        capabilities: { survives: [ops, zone-outage, pulls, audit], scales: 10 }
+
+stress_tests:
+  - id: featured
+    label: "Featured on a comparison site: 10x traffic in minutes"
+    requires: { tier: platform, min_scales: 10 }
+  - id: zone-outage
+    label: "One zone in the region becomes unavailable"
+    requires: { every_tier_survives: zone-outage }
+  - id: ops
+    label: "Upgrade month: both developers are heads-down on features"
+    requires: { every_tier_survives: ops }
+  - id: pulls
+    label: "Twenty new instances all pull the image at once"
+    requires: { every_tier_survives: pulls }
+  - id: audit
+    label: "A security review reads every configuration for passwords"
+    requires: { every_tier_survives: audit }
+
+failure_feedback:
+  run-vm:
+    featured: "One VM can only handle so much. Adding more means creating and setting up VMs by hand, mid-spike."
+    zone-outage: "The VM was in that zone. The API is down."
+    ops: "The VM's operating system and Docker are the team's to patch."
+  run-gke-standard:
+    ops: "Node pools, upgrades and Kubernetes objects to manage: the cluster the team said it didn't want."
+  run-gke-autopilot:
+    ops: "Google manages the nodes, but the team still has to learn and run Kubernetes: Deployments, Services, autoscaling, upgrades."
+  reg-dockerhub:
+    pulls: "Anonymous pulls hit Docker Hub's rate limit, and some new instances fail to start. And the image was public."
+  secret-env:
+    audit: "The password is in the service's configuration in plain text."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { platform: run-cloud-run, registry: reg-artifact, secrets: secret-manager }
+    why: "Cloud Run scales with requests (and to zero overnight), runs across the region's zones, and has no cluster to manage. Images come from a private Artifact Registry repository, and the password from Secret Manager."
+
+hints:
+  nudge: "The app is a container that answers HTTP requests, and the team wants no cluster. Which option isn't Kubernetes at all?"
+  direction: "Cloud Run handles scaling and zones for you. Then check where twenty instances pull the image from at once, and where the password lives."
+  answer: "Cloud Run, a private Artifact Registry repository, and the password in Secret Manager."
+
+analogy:
+  title: "A taxi rank, not a fleet"
+  text: |
+    You could buy cars and hire mechanics, or lease a fleet and still
+    manage the drivers. Or you can use a taxi rank: cars appear when the
+    queue grows and disappear when it's empty, and you pay per ride. Keep
+    your luggage in your own locker, and the code for it with the
+    concierge, not written on the tag.
+
+debrief:
+  summary: |
+    Google Cloud runs containers three main ways. Compute Engine VMs are
+    yours to manage. GKE is Kubernetes: Standard mode leaves node pools to
+    you; Autopilot manages the nodes, but you still operate Kubernetes and
+    pay a cluster fee. Cloud Run runs a container per request load, scales
+    to zero, and is regional with no cluster at all, which suits HTTP APIs
+    and small teams. Artifact Registry keeps images private and in-region,
+    and Secret Manager keeps secrets out of configuration.
+  real_world: |
+    Start HTTP services on Cloud Run; move to GKE when you need Kubernetes
+    features, long-running background workloads with custom scheduling, or
+    an existing Kubernetes platform. Give each service its own service
+    account with only the roles it needs.
+
+sources:
+  - title: "Cloud Run: What is Cloud Run"
+    url: "https://cloud.google.com/run/docs/overview/what-is-cloud-run"
+    retrieved: 2026-10-01
+  - title: "Cloud Run: Cloud Run locations (regional, redundant across zones)"
+    url: "https://cloud.google.com/run/docs/locations"
+    retrieved: 2026-10-01
+  - title: "Cloud Run: Configure secrets for services"
+    url: "https://cloud.google.com/run/docs/configuring/services/secrets"
+    retrieved: 2026-10-01
+  - title: "Google Kubernetes Engine: Autopilot overview"
+    url: "https://cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview"
+    retrieved: 2026-10-01
+  - title: "Google Kubernetes Engine: Pricing (cluster management fee)"
+    url: "https://cloud.google.com/kubernetes-engine/pricing"
+    retrieved: 2026-10-01
+  - title: "Artifact Registry: Artifact Registry overview"
+    url: "https://cloud.google.com/artifact-registry/docs/overview"
+    retrieved: 2026-10-01
+  - title: "Docker Hub: Usage and limits (pull rate limits)"
+    url: "https://docs.docker.com/docker-hub/usage/"
+    retrieved: 2026-10-01

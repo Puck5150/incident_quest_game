@@ -302,3 +302,16 @@ from your own experience and tick them off.
       the fact says "non-administrators" for simplicity. Security defaults
       prompt for MFA "when needed", not at every sign-in; the `mfa` test
       checks that a second factor can be required.
+
+## GCP exam-outline design challenges (2026-10-01): gcp-clickstream-ingestion, gcp-catalog-cache, gcp-containers-platform, gcp-iam-groups-access
+- [ ] All costs, budgets and `scales` values are scenario numbers, not prices.
+- [x] Checked against docs on 2026-10-01: Cloud Tasks 500 tasks/s per queue;
+      Memorystore Basic (no replication, no failover) vs Standard (cross-zone
+      replica, automatic failover); Pub/Sub seek needs topic retention or
+      retained acknowledged messages.
+- [ ] Containers: GKE Autopilot failing the "no cluster to operate" test is a
+      judgment (Google manages nodes; the team still runs Kubernetes objects).
+- [ ] IAM: the "cleanup script in the wrong project" test is a stand-in for
+      blast radius; the Editor failure is plausible, not a documented case.
+- [ ] Many cloud.google.com source URLs now redirect to docs.cloud.google.com;
+      the link checker follows redirects, but the stored URLs could be updated.

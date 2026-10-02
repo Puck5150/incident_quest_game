@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: gcp-catalog-cache
+track: cloud-design
+difficulty: 2
+title: "Take the load off the database before the big launch"
+provider: gcp
+par_minutes: 10
+
+brief: |
+  A ticketing site's event pages read from Cloud SQL for MySQL. Each event
+  page is read hundreds of times for every change, and a big concert
+  launch next week will bring ten times the usual traffic. In the last
+  launch the database's CPU sat at 100% and pages timed out. The site must
+  also survive the loss of a zone in its region, and a cache server
+  failing mustn't dump the whole load back on the database.
+
+requirements:
+  - "Serve 10x normal page views during the launch"
+  - "Keep working if one zone fails"
+  - "Losing one cache node doesn't empty the cache"
+  - "Stay within 9 cost units per month"
+budget: 9
+
+tiers:
+  - id: database
+    label: "Database (Cloud SQL for MySQL)"
+    options:
+      - id: db-zonal
+        short: "Zonal"
+        label: "A zonal Cloud SQL instance"
+        cost: 3
+        facts:
+          - "The instance runs in a single zone."
+          - "If that zone has an outage, the instance is unavailable."
+        capabilities: { survives: [node-failure], scales: 1 }
+      - id: db-ha
+        short: "High availability"
+        label: "A high-availability (regional) Cloud SQL instance"
+        cost: 5
+        facts:
+          - "Cloud SQL keeps a standby in another zone of the same region and fails over to it automatically."
+          - "The standby can't be used for read queries: it's there for availability."
+        capabilities: { survives: [node-failure, zone-outage], scales: 1 }
+  - id: cache
+    label: "Cache in front of the database"
+    options:
+      - id: cache-none
+        short: "No cache"
+        label: "No cache: every page view queries Cloud SQL"
+        cost: 0
+        facts: ["Every page view runs the event queries on the database."]
+        capabilities: { survives: [node-failure, zone-outage], scales: 1 }
+      - id: cache-basic
+        short: "Redis Basic"
+        label: "Memorystore for Redis, Basic tier"
+        cost: 2
+        facts:
+          - "An in-memory key-value store the app checks before querying the database."
+          - "Basic tier is a standalone instance with no replication: if it fails, its data is lost."
+        capabilities: { survives: [], scales: 10 }
+      - id: cache-standard
+        short: "Redis Standard"
+        label: "Memorystore for Redis, Standard tier"
+        cost: 3
+        facts:
+          - "An in-memory key-value store the app checks before querying the database."
+          - "Standard tier keeps a replica in a different zone and fails over to it automatically."
+        capabilities: { survives: [node-failure, zone-outage], scales: 10 }
+
+stress_tests:
+  - id: launch
+    label: "Tickets go on sale: 10x normal page views"
+    requires: { tier: cache, min_scales: 10 }
+  - id: zone-outage
+    label: "One zone in the region becomes unavailable"
+    requires: { every_tier_survives: zone-outage }
+  - id: node-failure
+    label: "The cache's primary node fails mid-launch"
+    requires: { every_tier_survives: node-failure }
+
+failure_feedback:
+  cache-none:
+    launch: "Every view hits Cloud SQL, ten times as often. CPU pins at 100%, like last time."
+  cache-basic:
+    node-failure: "The Basic instance has no replica. It comes back empty, every request misses at once, and the database takes the full launch load."
+    zone-outage: "The Basic instance lived in that zone. The cache is gone, and so is the database's protection."
+  db-zonal:
+    zone-outage: "The database lived only in that zone. Every cache miss and every ticket purchase fails."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { database: db-ha, cache: cache-standard }
+    why: "Memorystore takes the repeated reads, so Cloud SQL only sees misses and changes. Standard tier's cross-zone replica keeps the cache through a node or zone failure, and the high-availability database survives the zone loss behind it."
+
+hints:
+  nudge: "The same event pages are read hundreds of times between changes. Does the database need to answer each one?"
+  direction: "Put a cache in front of Cloud SQL, then compare the two Memorystore tiers: what happens to the cached data when the only node fails?"
+  answer: "A high-availability Cloud SQL instance with Memorystore for Redis in Standard tier."
+
+analogy:
+  title: "The noticeboard by the box office"
+  text: |
+    If every fan asks the box-office manager what time the doors open, the
+    manager never gets to sell a ticket. Pin it on a noticeboard. Put up a
+    second board on the other side of the foyer, so if one falls down the
+    crowd doesn't all go back to the manager at once.
+
+debrief:
+  summary: |
+    A read-heavy site with popular, rarely changing pages is the classic
+    case for a cache. The app checks Memorystore first and queries Cloud
+    SQL only on a miss, so the database sees a fraction of the load. But a
+    Basic tier instance has no replica: when it fails, the cache comes back
+    empty and every request hits the database at once. Standard tier keeps
+    a replica in another zone with automatic failover. A high-availability
+    Cloud SQL instance survives a zone failure, but its standby doesn't
+    serve reads, so it doesn't add read capacity.
+  real_world: |
+    Basic tier is fine for development and caches you can lose; use
+    Standard tier for production. Set TTLs, decide how data is refreshed
+    when it changes, and alert on cache hit ratio and evictions.
+
+sources:
+  - title: "Memorystore for Redis: Redis tier capabilities (Basic and Standard)"
+    url: "https://cloud.google.com/memorystore/docs/redis/redis-tiers"
+    retrieved: 2026-10-01
+  - title: "Memorystore for Redis: Memorystore for Redis overview"
+    url: "https://cloud.google.com/memorystore/docs/redis/memorystore-for-redis-overview"
+    retrieved: 2026-10-01
+  - title: "Cloud SQL for MySQL: About high availability (standby can't serve reads)"
+    url: "https://cloud.google.com/sql/docs/mysql/high-availability"
+    retrieved: 2026-10-01
