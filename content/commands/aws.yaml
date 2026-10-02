@@ -8,6 +8,8 @@
   summary: "Lists the resources Application Auto Scaling manages for a service, and which dimension of each it scales."
   parts:
     - { token: "--service-namespace dynamodb", meaning: "Only targets for this service (dynamodb, ecs, lambda...)." }
+    - { token: "--resource-ids service/prod/checkout", meaning: "(If given) only this resource; for ECS, service/CLUSTER/SERVICE." }
+    - { token: "--query ScalableTargets[0].[MinCapacity,MaxCapacity]", meaning: "(Other form) just the target's minimum and maximum capacity." }
     - { token: "--query ScalableTargets[].[ResourceId,ScalableDimension]", meaning: "For each target, keep its resource (a table or index) and what's scaled (read or write capacity)." }
   why: "Shows what auto scaling actually covers, which is how you notice an index that isn't registered while its table is."
   alternatives:
@@ -350,6 +352,16 @@
   alternatives:
     - { command: "dig NAME", note: "What resolvers actually answer right now." }
   docs: { title: "AWS CLI: list-resource-record-sets", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/route53/list-resource-record-sets.html" }
+
+- id: aws-s3api-head-bucket
+  match: "^aws s3api head-bucket"
+  summary: "Checks that a bucket exists and you can access it, without listing it."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "Returns quietly with the bucket's Region if it exists and you have access; 404 means it doesn't exist (any more), 403 that it exists but you're denied."
+  alternatives:
+    - { command: "aws s3 ls s3://NAME", note: "Also needs list permission." }
+  docs: { title: "AWS CLI: head-bucket", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/head-bucket.html" }
 
 - id: aws-s3-cp
   match: "^aws s3 cp "

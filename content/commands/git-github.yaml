@@ -121,3 +121,25 @@
   alternatives:
     - { command: "git show HEAD -- FILE", note: "The full diff for one file." }
   docs: { title: "git show", url: "https://git-scm.com/docs/git-show" }
+
+- id: git-diff
+  match: "^git diff "
+  summary: "Shows changes between your working tree and another branch or commit."
+  parts:
+    - { token: "main", meaning: "Compare with the main branch." }
+    - { token: "-- db.tf", meaning: "(If given) only this file; -- separates paths from branch names." }
+  why: "Shows exactly what this branch changes compared with what's deployed, line by line."
+  alternatives:
+    - { command: "git diff --stat main", note: "Just files and line counts." }
+  docs: { title: "git diff", url: "https://git-scm.com/docs/git-diff" }
+
+- id: git-ls-files-grep
+  match: "^git ls-files"
+  summary: "Lists the files git tracks, here filtered to state files."
+  parts:
+    - { token: "ls-files", meaning: "Every tracked file in the repository." }
+    - { token: "| grep tfstate", meaning: "Keep names containing tfstate." }
+  why: "A committed terraform.tfstate holds secrets in plain text and goes stale the moment someone applies elsewhere."
+  alternatives:
+    - { command: "git log --all -- '*.tfstate'", note: "Whether one was ever committed, even if deleted since." }
+  docs: { title: "git ls-files", url: "https://git-scm.com/docs/git-ls-files" }

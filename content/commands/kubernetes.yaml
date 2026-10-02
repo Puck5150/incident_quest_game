@@ -5,12 +5,26 @@
   match: "^kubectl logs .*\\| grep -c "
   summary: "Counts how many recent log lines from a workload contain a message."
   parts:
-    - { token: "logs deploy/NAME", meaning: "Logs from a pod of this deployment." }
-    - { token: "--since=5m", meaning: "Only the last five minutes." }
+    - { token: "logs deploy/NAME", meaning: "Logs from a pod of this deployment (or job/NAME for a Job)." }
+    - { token: "-n shop", meaning: "(If given) in this namespace." }
+    - { token: "--since=5m", meaning: "(If given) only the last five minutes." }
     - { token: "| grep -c 'text'", meaning: "Count matching lines instead of printing them." }
   why: "A count is easy to compare before and after a fix."
   alternatives:
     - { command: "kubectl logs -l app=NAME --since=5m", note: "All pods with this label, not just one." }
+  docs: { title: "kubectl logs", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/" }
+
+- id: kubectl-logs-grep
+  match: "^kubectl logs .*\\| grep "
+  summary: "Prints a workload's logs and keeps only the lines with a message."
+  parts:
+    - { token: "logs deploy/NAME", meaning: "Logs from a pod of this deployment." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "--since=24h", meaning: "Only the last 24 hours." }
+    - { token: "| grep -m3 'text'", meaning: "Keep matching lines, stopping after the first 3 (-m is max count)." }
+  why: "A few examples are enough to see whether (and how) an event was logged, without flooding the screen."
+  alternatives:
+    - { command: "kubectl logs deploy/NAME -n NS --since=24h | grep -c 'text'", note: "Count them instead." }
   docs: { title: "kubectl logs", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/" }
 
 - id: kubectl-logs

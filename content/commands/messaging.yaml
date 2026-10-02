@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: message brokers. First matching entry wins.
+
+- id: rabbitmqctl-list-queues
+  match: "^(sudo )?rabbitmqctl list_queues"
+  summary: "Lists RabbitMQ queues with the columns you ask for."
+  parts:
+    - { token: "list_queues", meaning: "One line per queue." }
+    - { token: "name messages consumers", meaning: "Columns: queue name, messages waiting, and connected consumers." }
+  why: "Messages piling up with zero consumers means nobody is reading; with consumers, they're reading too slowly or failing."
+  alternatives:
+    - { command: "rabbitmq-diagnostics list_queues ...", note: "Newer tool name, same output." }
+    - { command: "Management UI > Queues", note: "The same, with rates." }
+  docs: { title: "rabbitmqctl", url: "https://www.rabbitmq.com/docs/man/rabbitmqctl.8" }
+
+- id: rabbitmqctl-list-policies
+  match: "^(sudo )?rabbitmqctl list_policies"
+  summary: "Lists RabbitMQ policies: rules applied to matching queues, such as length limits, TTLs and dead-lettering."
+  parts:
+    - { token: "list_policies", meaning: "Each policy's name, pattern, what it applies to, and its settings." }
+  why: "A policy can silently cap a queue (max-length) or expire messages (message-ttl), dropping them unless a dead-letter exchange is set."
+  alternatives:
+    - { command: "Management UI > Admin > Policies", note: "The same." }
+  docs: { title: "RabbitMQ: policies", url: "https://www.rabbitmq.com/docs/policies" }

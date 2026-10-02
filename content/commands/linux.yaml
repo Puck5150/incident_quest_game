@@ -414,3 +414,27 @@
     - { command: "npm ls NAME", note: "The installed version and what depends on it." }
     - { command: "jq '.packages[\"node_modules/NAME\"].version' package-lock.json", note: "Exactly the version field." }
   docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
+
+- id: grep-recursive
+  match: "^grep -r"
+  summary: "Searches every file under a directory for a pattern."
+  parts:
+    - { token: "-r", meaning: "Recursive: search all files under the directory." }
+    - { token: "-n", meaning: "Show the line number of each match." }
+    - { token: "moved .", meaning: "The pattern (here the word moved, as in Terraform moved blocks) and where to search (. is the current directory)." }
+  why: "Finds every place something is declared, with file and line, in one go."
+  alternatives:
+    - { command: "git grep -n PATTERN", note: "Only tracked files, faster in a repository." }
+    - { command: "rg PATTERN", note: "ripgrep: recursive by default, skips ignored files." }
+  docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
+
+- id: run-local-script
+  match: "^\\./\\S+"
+  summary: "Runs a script from the current directory."
+  parts:
+    - { token: "./script.sh", meaning: "The ./ means \"this directory\": the shell doesn't search PATH for it. The file must be executable." }
+    - { token: "ARGS", meaning: "Arguments passed to the script, such as an id to replay." }
+  why: "A team's own reproduction or check script repeats the exact steps that fail, so you can confirm the fix the same way."
+  alternatives:
+    - { command: "bash -x ./script.sh ARGS", note: "Print each command as it runs." }
+  docs: { title: "Bash manual: shell scripts", url: "https://www.gnu.org/software/bash/manual/html_node/Shell-Scripts.html" }

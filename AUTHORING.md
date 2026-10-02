@@ -213,12 +213,13 @@ each incident:
 ```
 
 - **First match wins**, so put specific forms (`df -i`) before general ones (`df -h`).
+  Files are read in filename order (aws, azure, databases, ...), so an entry in an
+  earlier file beats one in a later file.
 - Explain short-flag clusters letter by letter (`-sh` as `-s` and `-h`); the tests
   check every flag in a matched command is explained.
 - An incident can add `command_notes` (keyed by a terminal command exactly as
   written) for "why this command, here".
-- The build warns about key-evidence or verification commands with no entry
-  (PLAN_COMMAND_BREAKDOWN.md); covered tracks are enforced by the tests.
+- The build fails if a key-evidence or verification command has no entry.
 
 ## Things the validator enforces for you
 

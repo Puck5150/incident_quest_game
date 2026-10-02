@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: Terraform. First matching entry wins.
+
+- id: terraform-plan-refresh-only
+  match: "^terraform plan -refresh-only"
+  summary: "Shows how real infrastructure differs from Terraform's state, without proposing changes to the infrastructure."
+  parts:
+    - { token: "plan", meaning: "Preview, change nothing." }
+    - { token: "-refresh-only", meaning: "Only compare state with reality: what changed outside Terraform (drift)." }
+  why: "Separates drift (someone changed it by hand) from the changes your configuration would make."
+  alternatives:
+    - { command: "terraform apply -refresh-only", note: "Accept the real values into state." }
+  docs: { title: "terraform plan", url: "https://developer.hashicorp.com/terraform/cli/commands/plan" }
+
+- id: terraform-plan
+  match: "^terraform plan"
+  summary: "Shows what Terraform would create, change, replace or destroy, without doing it."
+  parts:
+    - { token: "plan", meaning: "Refresh state, compare it with the configuration, and print the proposed actions." }
+  why: "Look for \"must be replaced\" and \"forces replacement\" next to an attribute: that's a destroy and re-create, which for a database means data loss."
+  alternatives:
+    - { command: "terraform plan -out=tfplan", note: "Save the plan so apply does exactly that." }
+    - { command: "terraform show tfplan", note: "Read a saved plan." }
+  docs: { title: "terraform plan", url: "https://developer.hashicorp.com/terraform/cli/commands/plan" }
+
+- id: terraform-state-list
+  match: "^terraform state list"
+  summary: "Lists every resource address in Terraform's state."
+  parts:
+    - { token: "state list", meaning: "All resources Terraform is tracking." }
+    - { token: "| grep NAME", meaning: "(If piped) keep only matching addresses." }
+  why: "A resource missing from state gets created again; one present under an old address gets destroyed. The list shows which."
+  alternatives:
+    - { command: "terraform state show ADDRESS", note: "One resource's recorded attributes." }
+  docs: { title: "terraform state list", url: "https://developer.hashicorp.com/terraform/cli/commands/state/list" }

@@ -139,19 +139,16 @@ describe('validator rejects', () => {
   })
 })
 
-// The after-action command breakdown (PLAN_COMMAND_BREAKDOWN.md). Tracks are
-// added here as their commands get library entries; B3 makes this every track.
+// The after-action command breakdown (PLAN_COMMAND_BREAKDOWN.md). loadContent
+// itself rejects key or verification commands with no library entry.
 describe('command breakdown', () => {
   const c = loadContent(CONTENT)
-  const COVERED = ['linux', 'aws', 'azure', 'gcp', 'networking', 'databases', 'containers', 'cicd']
-  it.each(c.scenarios.filter((s) => COVERED.includes(s.track)).map((s) => [s.id, s] as const))(
-    '%s: every key-evidence and verification command has a library entry',
-    (_id, s) => expect(uncovered(s, c.library)).toEqual([]),
-  )
+  it('the coverage check finds commands an empty library does not explain', () =>
+    expect(uncovered(c.scenarios[0], []).length).toBeGreaterThan(0))
 
   it('library entries list a part for every flag in the commands they explain', () => {
     const missing: string[] = []
-    for (const s of c.scenarios.filter((x) => COVERED.includes(x.track)))
+    for (const s of c.scenarios)
       for (const { command, entry } of breakdownFor(s, c.library).commands) {
         const tokens = c.library.find((e) => e.id === entry)!.parts.map((p) => p.token).join(' ')
         for (const flag of command.split(/\s+/).filter((t) => /^-{1,2}[A-Za-z]/.test(t))) {

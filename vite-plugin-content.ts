@@ -65,7 +65,12 @@ export function loadContent(dir: string): Content {
     if (seen.has(id)) errors.push(`${where}: duplicate id "${id}"`)
     seen.add(id)
 
-    if (item.kind === 'incident') content.scenarios.push(item.scenario)
+    if (item.kind === 'incident') {
+      content.scenarios.push(item.scenario)
+      // Every command that finds key evidence or verifies a fix is explained in the debrief.
+      for (const cmd of uncovered(item.scenario, content.library))
+        errors.push(`${where}: command "${cmd}" has no entry in content/commands/ (see AUTHORING.md, Command breakdown library)`)
+    }
     else if (item.kind === 'challenge') content.challenges.push(item.challenge)
     else if (item.kind === 'canvas') content.canvases.push(item.canvas)
     else content.multis.push(item.multi)
@@ -146,9 +151,6 @@ export function contentPlugin(dir: string): Plugin {
     load(id) {
       if (id === RESOLVED_ID) {
         const c = content()
-        // Until every track's commands are in the library (PLAN_COMMAND_BREAKDOWN.md B3), report gaps.
-        const gaps = c.scenarios.reduce((n, sc) => n + uncovered(sc, c.library).length, 0)
-        if (gaps) this.warn(`command breakdown: ${gaps} key or verification commands have no library entry yet`)
         const all = [...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis]
         const loaders = all.map((x) => `${JSON.stringify(x.id)}: () => import(${JSON.stringify(ITEM_PREFIX + x.id)})`)
         return [
