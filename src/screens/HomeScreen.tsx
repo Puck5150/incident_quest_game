@@ -27,6 +27,8 @@ export default function HomeScreen({
   unlocked,
   focusTrack,
   onPlay,
+  shiftNeeds,
+  onShift,
 }: {
   tracks: Track[]
   items: QueueItem[]
@@ -34,6 +36,8 @@ export default function HomeScreen({
   unlocked: Set<string>
   focusTrack?: string
   onPlay: (id: string) => void
+  shiftNeeds: number // resolved incidents still needed before shifts open
+  onShift: () => void
 }) {
   const name = (id: string) => tracks.find((t) => t.id === id)?.name ?? id
 
@@ -49,6 +53,20 @@ export default function HomeScreen({
       <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
         Ops board
       </h1>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          onClick={onShift}
+          disabled={shiftNeeds > 0}
+          className="rounded-md border border-crit px-4 py-2 font-mono text-sm tracking-widest text-crit uppercase hover:bg-crit/10 focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Start on-call shift
+        </button>
+        {shiftNeeds > 0 && (
+          <span className="text-sm text-muted">
+            Opens after {shiftNeeds} more resolved {shiftNeeds === 1 ? 'incident' : 'incidents'}.
+          </span>
+        )}
+      </div>
       <WorldMap
         sectors={tracks.flatMap((track) => {
           const mine = allItems.filter((s) => s.track === track.id)

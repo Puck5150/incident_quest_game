@@ -25,6 +25,7 @@ export type Score = {
   verified: boolean // re-checked the system after the fix, before closing
   clean: boolean // no hints and no destructive actions
   relaxed: boolean // played without the clock: no time bonus
+  inShift: boolean // part of an on-call shift: the shift's targets replace the time bonus
 }
 
 // All percentages are of the base XP.
@@ -99,5 +100,6 @@ export function score(scenario: Scenario, log: GameEvent[], relaxed = false, inS
     verified,
     clean: hints === 0 && destructive === 0,
     relaxed,
+    inShift,
   }
 }

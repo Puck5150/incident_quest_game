@@ -21,6 +21,7 @@ const result = (total: number, clean = true): Score => ({
   verified: true,
   clean,
   relaxed: false,
+  inShift: false,
 })
 const now = new Date('2026-09-30T12:00:00Z')
 

@@ -20,6 +20,7 @@ export default function DebriefScreen({
   onHome,
   onTree,
   onReplay,
+  homeLabel = 'Back to ops board',
 }: {
   scenario: Scenario
   log: GameEvent[]
@@ -31,7 +32,8 @@ export default function DebriefScreen({
   streak: number
   onHome: () => void
   onTree: () => void
-  onReplay: () => void
+  onReplay?: () => void // omitted inside a shift: replays happen from the ops board
+  homeLabel?: string
 }) {
   const seen = evidenceSeen(scenario, log)
   const start = log[0]?.at ?? 0
@@ -55,7 +57,7 @@ export default function DebriefScreen({
     <div className="space-y-6">
       <ResultHeader
         status={
-          score.relaxed ? (
+          score.relaxed || score.inShift ? (
             'Mission clear'
           ) : (
             <>
@@ -187,11 +189,13 @@ export default function DebriefScreen({
 
       <div className="flex flex-wrap gap-3">
         <button onClick={onHome} className="rounded-md bg-accent px-4 py-2 font-medium text-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-          Back to ops board
+          {homeLabel}
         </button>
-        <button onClick={onReplay} className="rounded-md border border-line px-4 py-2 hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">
-          Replay incident
-        </button>
+        {onReplay && (
+          <button onClick={onReplay} className="rounded-md border border-line px-4 py-2 hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">
+            Replay incident
+          </button>
+        )}
       </div>
     </div>
   )

@@ -16,6 +16,7 @@ import type { CrossCloud } from './components/CrossCloud.tsx'
 import Icon from './components/Icon.tsx'
 import Callsign from './components/Callsign.tsx'
 import { setSound } from './game/sound.ts'
+import { SHIFT_UNLOCK, type Priority } from './game/shift.ts'
 
 // Home and skill tree load up front; play and debrief screens load on first use.
 const IncidentScreen = lazy(() => import('./screens/IncidentScreen.tsx'))
@@ -26,6 +27,7 @@ const CanvasScreen = lazy(() => import('./screens/CanvasScreen.tsx'))
 const CanvasDebrief = lazy(() => import('./screens/CanvasDebrief.tsx'))
 const PickCloudScreen = lazy(() => import('./screens/PickCloudScreen.tsx'))
 const PreviewScreen = lazy(() => import('./screens/PreviewScreen.tsx'))
+const ShiftScreen = lazy(() => import('./screens/ShiftScreen.tsx'))
 
 // Screens are plain state; the routable ones mirror the URL hash (see `go`).
 // `run` remounts the incident screen on replay so it starts from a clean session.
@@ -38,6 +40,7 @@ type Screen =
   | ({ name: 'challenge-debrief'; id: string; runs: Run[]; score: ChallengeScore; provider?: Provider } & Outcome)
   | { name: 'pick-cloud'; id: string }
   | { name: 'preview' }
+  | { name: 'shift'; run: number }
   | { name: 'canvas'; id: string; run: number; provider?: Provider }
   | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore; provider?: Provider } & Outcome)
 
@@ -47,6 +50,7 @@ type Outcome = { gained: number; rankUp?: string; cleared?: string; unlocked: st
 // Everything playable, for the queue, the skill tree and unlocks.
 const items = content.items
 const unlocks = (p: Progress) => unlockedTracks(content.tracks, items, p.completed)
+const resolvedIncidents = (p: Progress) => items.filter((x) => x.kind === 'incident' && p.completed[x.id]).length
 
 export default function App() {
   const [progress, setProgress] = useState(loadProgress)
@@ -88,7 +92,7 @@ export default function App() {
 
   // Routes live in the URL hash, so deep links work on GitHub Pages (no server
   // rewrites) and the back button moves between screens:
-  //   #/  #/tree  #/track/<id>  #/play/<id>  #/play/<id>/<provider>  #/done/<id>  #/preview
+  //   #/  #/tree  #/track/<id>  #/play/<id>  #/play/<id>/<provider>  #/done/<id>  #/preview  #/shift
   // Debriefs aren't routable (they show one run's results): finishing replaces
   // the play URL with #/done/<id>, which opens that track's queue on reload.
   const go = (hash: string) => (location.hash === hash ? navigate(hash) : location.assign(hash))
@@ -103,6 +107,7 @@ export default function App() {
     const meta = items.find((x) => x.id === id)
     if (route === 'tree') return setScreen({ name: 'tree' })
     if (route === 'preview') return setScreen({ name: 'preview' })
+    if (route === 'shift') return setScreen(resolvedIncidents(progress) >= SHIFT_UNLOCK ? { name: 'shift', run: seq } : { name: 'home' })
     if (route === 'track' && id) return setScreen({ name: 'home', track: id })
     if (route !== 'play' || !meta) return setScreen({ name: 'home', track: meta?.track })
     if (!unlocks(progress).has(meta.track)) return setScreen({ name: 'home', track: meta.track })
@@ -150,9 +155,11 @@ export default function App() {
   }, [])
 
   // Save a finished incident or challenge and work out what it changed.
-  function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }, provider?: Provider): Outcome {
+  // `inShift`: the shift keeps its own URL; a reload ends the shift, and the
+  // incidents it recorded are already saved.
+  function record(id: string, s: { total: number; clean: boolean; hintsUsed: number }, provider?: Provider, inShift = false): Outcome {
     if (previewing) return { gained: 0, unlocked: [] }
-    history.replaceState(null, '', `#/done/${id}`)
+    if (!inShift) history.replaceState(null, '', `#/done/${id}`)
     const result = recordResult(progress, id, s, new Date(), provider)
     const newRank = rankFor(result.progress.xp).rank
     const before = unlocks(progress)
@@ -300,6 +307,8 @@ export default function App() {
               unlocked={unlocks(progress)}
               focusTrack={screen.track}
               onPlay={play}
+              shiftNeeds={Math.max(0, SHIFT_UNLOCK - resolvedIncidents(progress))}
+              onShift={() => go('#/shift')}
             />
           )}
           {screen.name === 'tree' && (
@@ -309,6 +318,20 @@ export default function App() {
               progress={progress}
               unlocked={unlocks(progress)}
               onOpenTrack={(track) => go(`#/track/${track}`)}
+            />
+          )}
+          {screen.name === 'shift' && (
+            <ShiftScreen
+              key={screen.run}
+              candidates={items
+                .filter((x) => x.kind === 'incident' && unlocks(progress).has(x.track))
+                .map((x) => ({ id: x.id, title: x.title, priority: x.tag as Priority, difficulty: x.difficulty, resolved: !!progress.completed[x.id] }))}
+              relaxed={relaxed}
+              streak={progress.streak.current}
+              onRecord={(id, s) => record(id, s, undefined, true)}
+              onBonus={(xp) => setProgress((p) => ({ ...p, xp: p.xp + xp }))}
+              onExit={() => go('#/')}
+              onTree={() => go('#/tree')}
             />
           )}
           {screen.name === 'incident' && (

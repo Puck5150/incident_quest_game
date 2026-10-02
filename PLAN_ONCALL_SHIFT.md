@@ -1,6 +1,6 @@
 # Plan: On-call shift mode
 
-Status: **approved 2026-10-01 with the defaults in section 9; S1 and S2 done.** Active-time
+Status: **approved 2026-10-01 with the defaults in section 9; S1–S3 done.** Active-time
 scoring moved from S1 to S2, where the shift first needs it. From PARKING_LOT.md: "Timed
 'on-call shift' mode: multiple incidents queued at once". Fits the Ops Center
 theme (PLAN_THEME.md).
@@ -96,8 +96,10 @@ lit by result.
 - **Shift state** is one reducer: pages, arrival schedule, focus, results.
   Pure and unit-tested like the engine. Not saved across reloads in v1: a
   reload ends the shift (completed incidents are already recorded).
-- **Routing:** `#/shift` for the shift, `#/shift/report` for its report. Back
-  from an incident goes to the queue, not out of the shift.
+- **Routing:** `#/shift` only. The report and each after-action report are shown
+  inside the shift screen (they need the shift's state, which isn't saved).
+  "Back to the queue" moves between incidents; the browser's Back leaves the
+  shift.
 - **Arrivals use shift time**, which pauses when the tab is hidden, so a shift
   doesn't run on while you're away.
 
