@@ -21,7 +21,7 @@ export default function ChallengeDebrief({
   challenge: Challenge
   runs: Run[]
   score: ChallengeScore
-  outcome: { gained: number; rankUp?: string; unlocked: string[] }
+  outcome: { gained: number; rankUp?: string; cleared?: string; unlocked: string[] }
   streak: number
   onHome: () => void
   onTree: () => void
@@ -51,6 +51,7 @@ export default function ChallengeDebrief({
         gained={outcome.gained}
         total={score.total}
         rankUp={outcome.rankUp}
+        cleared={outcome.cleared}
         unlocked={outcome.unlocked}
         streak={streak}
         onTree={onTree}

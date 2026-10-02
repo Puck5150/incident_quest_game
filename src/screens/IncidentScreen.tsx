@@ -13,6 +13,8 @@ import FieldGuide from '../components/FieldGuide.tsx'
 import Tabs from '../components/Tabs.tsx'
 import Prose from '../components/Prose.tsx'
 import Icon, { type IconName } from '../components/Icon.tsx'
+import { missionId } from '../game/mission.ts'
+import { play } from '../game/sound.ts'
 
 // Status is never shown by color alone: every tone also has a text label.
 const TONE: Record<Feedback['tone'], { label: string; className: string; icon: IconName }> = {
@@ -126,6 +128,9 @@ export default function IncidentScreen({
         <span className="rounded border border-crit px-2 py-0.5 font-mono text-sm text-crit">
           {scenario.ticket.priority}
         </span>
+        <span className="rounded border border-line px-2 py-0.5 font-mono text-sm text-muted">
+          {missionId(scenario.id, 'incident')}
+        </span>
         <span className="flex items-center gap-2 rounded border border-line px-2 py-0.5 text-sm text-muted">
           <span aria-hidden className={`h-2 w-2 rounded-full ${PHASE[phase].dot}`} />
           {PHASE[phase].label}
@@ -150,8 +155,25 @@ export default function IncidentScreen({
         )}
       </details>
 
+      {/* The accept moment: a brief alert card over the workspace. Purely
+          visual and click-through; hidden entirely when motion is reduced. */}
+      {phase !== 'briefing' && (
+        <div aria-hidden className="accept-flash pointer-events-none fixed inset-0 z-40 items-center justify-center">
+          <div className="rounded-lg border border-crit bg-panel px-8 py-6 text-center font-mono shadow-2xl">
+            <p className="tracking-[0.3em] text-crit uppercase">Mission accepted</p>
+            <p className="mt-2 text-sm text-muted">
+              {missionId(scenario.id, 'incident')} · {scenario.ticket.priority}
+            </p>
+          </div>
+        </div>
+      )}
+
       {phase === 'briefing' ? (
-        <button className={`${button} bg-accent text-bg`} onClick={() => send({ type: 'START' })}>
+        <button className={`${button} bg-accent text-bg`} onClick={() => {
+            play('accept')
+            send({ type: 'START' })
+          }}
+        >
           Accept mission
         </button>
       ) : (

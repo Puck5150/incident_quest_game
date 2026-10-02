@@ -15,6 +15,7 @@ import type { Design } from './schema/canvas.ts'
 import type { CrossCloud } from './components/CrossCloud.tsx'
 import Icon from './components/Icon.tsx'
 import Callsign from './components/Callsign.tsx'
+import { setSound } from './game/sound.ts'
 
 // Home and skill tree load up front; play and debrief screens load on first use.
 const IncidentScreen = lazy(() => import('./screens/IncidentScreen.tsx'))
@@ -41,7 +42,7 @@ type Screen =
   | ({ name: 'canvas-debrief'; id: string; runs: CanvasRun[]; score: ChallengeScore; provider?: Provider } & Outcome)
 
 // What finishing something changed, shown in the debrief header.
-type Outcome = { gained: number; rankUp?: string; unlocked: string[] }
+type Outcome = { gained: number; rankUp?: string; cleared?: string; unlocked: string[] }
 
 // Everything playable, for the queue, the skill tree and unlocks.
 const items = content.items
@@ -64,9 +65,10 @@ export default function App() {
   const canvas =
     multi?.kind === 'canvas' && provider ? multi.variants[provider] : item?.kind === 'canvas' ? item.canvas : undefined
   const { rank, next } = rankFor(progress.xp)
-  const { theme, motion = 'system', relaxed = false, callsign } = progress.settings
+  const { theme, motion = 'system', relaxed = false, callsign, sound = false } = progress.settings
 
   useEffect(() => saveProgress(progress), [progress])
+  useEffect(() => setSound(sound), [sound])
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     document.documentElement.classList.toggle('reduce-motion', motion === 'reduce')
@@ -155,10 +157,13 @@ export default function App() {
     const newRank = rankFor(result.progress.xp).rank
     const before = unlocks(progress)
     const after = unlocks(result.progress)
+    const track = items.find((x) => x.id === id)?.track
+    const allDone = (p: Progress) => items.every((x) => x.track !== track || p.completed[x.id])
     setProgress(result.progress)
     return {
       gained: result.gained,
       rankUp: newRank !== rank ? newRank.name : undefined,
+      cleared: !allDone(progress) && allDone(result.progress) ? content.tracks.find((t) => t.id === track)?.name : undefined,
       unlocked: content.tracks
         .filter((t) => !before.has(t.id) && after.has(t.id) && items.some((x) => x.track === t.id))
         .map((t) => t.name),
@@ -251,6 +256,9 @@ export default function App() {
               onClick={() => setting({ relaxed: !relaxed })}
             >
               Relaxed mode
+            </button>
+            <button className={toggle} aria-pressed={sound} title="Alert tones on accept and clear" onClick={() => setting({ sound: !sound })}>
+              Sound
             </button>
             <button className={toggle} aria-pressed={motion === 'reduce'} onClick={() => setting({ motion: motion === 'reduce' ? 'system' : 'reduce' })}>
               Reduce motion
@@ -362,6 +370,7 @@ export default function App() {
               score={screen.score}
               gained={screen.gained}
               rankUp={screen.rankUp}
+              cleared={screen.cleared}
               unlocked={screen.unlocked}
               streak={progress.streak.current}
               onHome={() => go('#/')}

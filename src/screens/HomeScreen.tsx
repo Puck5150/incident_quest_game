@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type { Track } from '../schema/scenario.ts'
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
+import { missionId } from '../game/mission.ts'
 
 // Incidents and design challenges share the queue.
 export type QueueItem = {
@@ -15,11 +16,6 @@ export type QueueItem = {
 }
 
 const CLOUD: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' }
-
-// A stable, ops-style reference for each mission (display only, so a rare
-// collision is harmless). Same id, same number, every visit.
-const missionId = (id: string, kind: QueueItem['kind']) =>
-  `${kind === 'challenge' ? 'BLD' : 'INC'}-${String([...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 10000, 7)).padStart(4, '0')}`
 
 // The incident queue: tracks that have content, in tracks.yaml order,
 // incidents easiest first. Locked tracks say what unlocks them.

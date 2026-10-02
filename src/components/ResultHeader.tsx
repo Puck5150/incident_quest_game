@@ -1,4 +1,5 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, type CSSProperties, type ReactNode } from 'react'
+import { play } from '../game/sound.ts'
 import Icon from './Icon.tsx'
 import CountUp from './CountUp.tsx'
 
@@ -10,6 +11,7 @@ export default function ResultHeader({
   gained,
   total,
   rankUp,
+  cleared,
   unlocked,
   streak,
   onTree,
@@ -19,13 +21,21 @@ export default function ResultHeader({
   gained: number
   total: number
   rankUp?: string
+  cleared?: string // a sector this finished
   unlocked: string[]
   streak: number
   onTree: () => void
 }) {
+  useEffect(() => play('clear'), [])
   return (
     <header className="relative overflow-hidden rounded-lg border border-ok bg-panel p-6">
       <div aria-hidden className="anim-sweep pointer-events-none absolute inset-0 bg-ok/10 opacity-0" />
+      <span
+        aria-hidden
+        className="stamp absolute top-5 right-5 hidden rounded border-2 border-ok px-3 py-1 font-mono text-lg font-semibold tracking-[0.25em] text-ok uppercase sm:block"
+      >
+        Clear
+      </span>
       <p className="flex items-center gap-1.5 text-sm text-ok">
         <Icon name="check" /> {status}
       </p>
@@ -47,6 +57,14 @@ export default function ResultHeader({
             style={{ '--delay': '1150ms' } as CSSProperties}
           >
             <Icon name="star" /> Clearance raised: {rankUp}
+          </strong>
+        )}
+        {cleared && (
+          <strong
+            className="anim-rise flex items-center gap-1.5 rounded-md border border-ok px-2.5 py-1 text-ok"
+            style={{ '--delay': '1250ms' } as CSSProperties}
+          >
+            <Icon name="check" /> Sector cleared: {cleared}
           </strong>
         )}
         {unlocked.map((t, i) => (

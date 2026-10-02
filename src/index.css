@@ -115,7 +115,26 @@ html {
   to { box-shadow: 0 0 0 14px transparent; }
 }
 
+@keyframes accept {
+  0% { opacity: 0; transform: scale(1.04); }
+  12%, 70% { opacity: 1; transform: none; }
+  to { opacity: 0; visibility: hidden; }
+}
+@keyframes stamp {
+  from { opacity: 0; transform: rotate(-8deg) scale(1.6); }
+  to { opacity: 1; transform: rotate(-8deg); }
+}
+.accept-flash { display: none; }
+.stamp { transform: rotate(-8deg); }
+
 @media (prefers-reduced-motion: no-preference) {
+  html:not(.reduce-motion) .accept-flash {
+    display: flex;
+    animation: accept 1300ms ease-out forwards;
+  }
+  html:not(.reduce-motion) .stamp {
+    animation: stamp 260ms cubic-bezier(0.2, 1.4, 0.4, 1) 700ms both;
+  }
   html:not(.reduce-motion) .anim-rise {
     animation: rise 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
     animation-delay: var(--delay, 0ms);

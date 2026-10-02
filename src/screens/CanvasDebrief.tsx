@@ -25,7 +25,7 @@ export default function CanvasDebrief({
   challenge: CanvasChallenge
   runs: CanvasRun[]
   score: ChallengeScore
-  outcome: { gained: number; rankUp?: string; unlocked: string[] }
+  outcome: { gained: number; rankUp?: string; cleared?: string; unlocked: string[] }
   streak: number
   onHome: () => void
   onTree: () => void
@@ -44,6 +44,7 @@ export default function CanvasDebrief({
         gained={outcome.gained}
         total={score.total}
         rankUp={outcome.rankUp}
+        cleared={outcome.cleared}
         unlocked={outcome.unlocked}
         streak={streak}
         onTree={onTree}

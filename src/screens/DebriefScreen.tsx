@@ -14,6 +14,7 @@ export default function DebriefScreen({
   score,
   gained,
   rankUp,
+  cleared,
   unlocked,
   streak,
   onHome,
@@ -25,6 +26,7 @@ export default function DebriefScreen({
   score: Score
   gained: number
   rankUp?: string
+  cleared?: string
   unlocked: string[]
   streak: number
   onHome: () => void
@@ -65,6 +67,7 @@ export default function DebriefScreen({
         gained={gained}
         total={score.total}
         rankUp={rankUp}
+        cleared={cleared}
         unlocked={unlocked}
         streak={streak}
         onTree={onTree}

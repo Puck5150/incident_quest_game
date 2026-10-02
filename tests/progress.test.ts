@@ -117,7 +117,7 @@ describe('storage', () => {
     xp: 40,
     completed: { a: { bestScore: 40, completedAt: '2026-09-30', hintsUsed: 0, clean: true, providers: ['aws'] } },
     streak: { current: 1, best: 1 },
-    settings: { theme: 'light', motion: 'reduce', relaxed: true, callsign: 'NIGHTOWL-7' },
+    settings: { theme: 'light', motion: 'reduce', relaxed: true, callsign: 'NIGHTOWL-7', sound: true },
   }
   const loads = (patch: (v: typeof valid & Record<string, unknown>) => void) => {
     const v = structuredClone(valid) as typeof valid & Record<string, unknown>
@@ -133,6 +133,7 @@ describe('storage', () => {
         delete (v.settings as Partial<typeof valid.settings>).motion
         delete (v.settings as Partial<typeof valid.settings>).relaxed
         delete (v.settings as Partial<typeof valid.settings>).callsign
+        delete (v.settings as Partial<typeof valid.settings>).sound
         delete (v.completed.a as Partial<typeof valid.completed.a>).providers
       }),
     ).toBe(true)
@@ -150,6 +151,7 @@ describe('storage', () => {
     ['unknown motion', (v: Record<string, unknown>) => ((v.settings as typeof valid.settings).motion = 'fast')],
     ['relaxed not a boolean', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).relaxed = 'yes')],
     ['callsign with markup', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).callsign = '<b>owl</b>')],
+    ['sound not a boolean', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).sound = 1)],
     ['empty callsign', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).callsign = '')],
     ['not an object', (v: Record<string, unknown>) => Object.keys(v).forEach((k) => delete v[k])],
   ])('rejects a save with %s', (_, patch) => {
