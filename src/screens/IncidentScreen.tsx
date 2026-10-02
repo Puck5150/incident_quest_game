@@ -14,7 +14,8 @@ import Tabs from '../components/Tabs.tsx'
 import Prose from '../components/Prose.tsx'
 import Icon, { type IconName } from '../components/Icon.tsx'
 import { missionId } from '../game/mission.ts'
-import { atStage, sinceStageStart, stageAt } from '../schema/stages.ts'
+import { mmss } from '../game/format.ts'
+import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
 import { play } from '../game/sound.ts'
 
 // Status is never shown by color alone: every tone also has a text label.
@@ -59,13 +60,23 @@ export default function IncidentScreen({
     dispatch(e)
     onChange?.(step(scenario, session, e))
   }
-  const [picked, setPicked] = useState<string>()
+  const [selected, setPicked] = useState<string>()
   // Authors list the right answer first; shuffle so order isn't a tell. Seeded
   // by when the incident was taken, so the order survives a remount.
   const seed = session.log.find((e) => e.type === 'START')?.at ?? 0
   // Multi-stage incidents show the current stage: its causes, actions, hints,
   // and the artifacts revealed so far (schema/stages.ts).
-  const view = useMemo(() => atStage(scenario, stageAt(session.log)), [scenario, session.log])
+  const stage = stageAt(session.log)
+  const stages = stageCount(scenario)
+  const view = useMemo(() => atStage(scenario, stage), [scenario, stage])
+  // A choice from an earlier stage's list doesn't carry over.
+  const picked = view.hypotheses.some((h) => h.id === selected) ? selected : undefined
+  // The ticket's update timeline: one entry per reopen so far, timed from the start.
+  const started = session.log.find((e) => e.type === 'START')?.at ?? 0
+  const updates = (scenario.stages ?? []).slice(0, stage).map((st, i) => ({
+    text: st.update,
+    at: session.log.filter((e) => e.type === 'CLOSE_INCIDENT')[i].at - started,
+  }))
   const hypotheses = useMemo(() => shuffle(view.hypotheses, seed), [view, seed])
   const actions = useMemo(() => shuffle(view.actions, seed + 1), [view, seed])
   const taken = actionsTaken(session.log)
@@ -73,9 +84,14 @@ export default function IncidentScreen({
 
   // Closing hands the finished log to App for scoring. `step` is pure, so
   // running it here too gives exactly the log the reducer will store.
+  // Closing either resolves the incident (handed to App for scoring) or, in a
+  // multi-stage incident, reopens it into the next stage.
   function close() {
-    const next = step(scenario, session, { type: 'CLOSE_INCIDENT', at: Date.now() })
-    if (next.phase === 'resolved') onResolved(next.log)
+    const e: GameEvent = { type: 'CLOSE_INCIDENT', at: Date.now() }
+    const next = step(scenario, session, e)
+    if (next.phase === 'resolved') return onResolved(next.log)
+    dispatch(e)
+    onChange?.(next)
   }
 
   const tools = [
@@ -151,6 +167,11 @@ export default function IncidentScreen({
           <span aria-hidden className={`h-2 w-2 rounded-full ${PHASE[phase].dot}`} />
           {PHASE[phase].label}
         </span>
+        {stages > 1 && (
+          <span className="rounded border border-warn px-2 py-0.5 font-mono text-sm text-warn">
+            Stage {stage + 1} of {stages}
+          </span>
+        )}
       </header>
 
       {/* Full context while briefing; once work starts the whole ticket folds
@@ -158,9 +179,24 @@ export default function IncidentScreen({
       <details open={phase === 'briefing'} className="group rounded-lg border border-line bg-panel p-4">
         <summary className="cursor-pointer text-sm text-muted hover:text-fg">
           Ticket from {scenario.ticket.from}
-          <span className="block truncate text-fg group-open:hidden">{scenario.ticket.body.replace(/\s+/g, ' ')}</span>
+          <span className="block truncate text-fg group-open:hidden">
+            {(updates.at(-1)?.text ?? scenario.ticket.body).replace(/\s+/g, ' ')}
+          </span>
         </summary>
         <Prose className="mt-2" text={scenario.ticket.body} />
+        {updates.length > 0 && (
+          <>
+            <h2 className="mt-4 text-sm text-muted">Updates</h2>
+            <ol className="mt-2 space-y-2">
+              {updates.map((u, i) => (
+                <li key={i} className="border-l-2 border-crit pl-3">
+                  <span className="font-mono text-xs text-muted tabular-nums">+{mmss(u.at)} · stage {i + 2}</span>
+                  <Prose text={u.text} />
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
         <h2 className="mt-4 text-sm text-muted">Environment</h2>
         <Prose className="mt-2" text={scenario.environment} />
         {view.diagram && (

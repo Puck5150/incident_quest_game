@@ -9,6 +9,8 @@ import { play } from '../game/sound.ts'
 import IncidentScreen from './IncidentScreen.tsx'
 import DebriefScreen from './DebriefScreen.tsx'
 import Card from '../components/Card.tsx'
+import { mmss } from '../game/format.ts'
+import { stageAt } from '../schema/stages.ts'
 import WorldMap, { type Sector } from '../components/WorldMap.tsx'
 
 // An on-call shift (PLAN_ONCALL_SHIFT.md): pick a length, then pages arrive
@@ -259,8 +261,12 @@ function Setup({ relaxed, available, onBegin }: { relaxed: boolean; available: n
   )
 }
 
-const STATUS = (p: Page) =>
-  p.result ? 'Resolved' : p.ackAt === undefined ? 'New' : p.session?.phase === 'acting' ? 'Fixing' : p.session?.phase === 'investigating' ? 'Investigating' : 'Acknowledged'
+const STATUS = (p: Page) => {
+  const base =
+    p.result ? 'Resolved' : p.ackAt === undefined ? 'New' : p.session?.phase === 'acting' ? 'Fixing' : p.session?.phase === 'investigating' ? 'Investigating' : 'Acknowledged'
+  const stage = p.session && !p.result ? stageAt(p.session.log) : 0 // a multi-stage page that reopened
+  return stage ? `${base} · stage ${stage + 1}` : base
+}
 
 function QueueRow({ page: p, shift, title, current, onOpen }: { page: Page; shift: Shift; title: string; current: boolean; onOpen: () => void }) {
   const waiting = p.ackAt === undefined && !p.result ? shift.clock - p.arrivedAt! : undefined
@@ -394,7 +400,3 @@ function sectors(candidates: Candidate[], pages: Page[]): Sector[] {
   })
 }
 
-const mmss = (ms: number) => {
-  const s = Math.round(ms / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}

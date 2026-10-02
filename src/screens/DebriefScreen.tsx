@@ -1,9 +1,11 @@
 import { artifacts } from '../schema/constants.ts'
 import type { Scenario } from '../schema/scenario.ts'
 import { evidenceSeen, type GameEvent } from '../game/engine.ts'
+import { atStage, stageCount } from '../schema/stages.ts'
 import Prose from '../components/Prose.tsx'
 import Icon from '../components/Icon.tsx'
 import Card from '../components/Card.tsx'
+import { mmss } from '../game/format.ts'
 import ScoreTable from '../components/ScoreTable.tsx'
 import ResultHeader from '../components/ResultHeader.tsx'
 import type { Score } from '../game/scoring.ts'
@@ -37,8 +39,14 @@ export default function DebriefScreen({
 }) {
   const seen = evidenceSeen(scenario, log)
   const start = log[0]?.at ?? 0
-  const steps = log.map((e) => ({ at: e.at - start, text: describe(scenario, e) }))
+  const closes: GameEvent[] = log.filter((e) => e.type === 'CLOSE_INCIDENT')
+  const steps = log.map((e) => ({ at: e.at - start, text: describe(scenario, e, closes.indexOf(e)) }))
   const { debrief, analogy } = scenario
+  // Multi-stage incidents: root cause, ideal path and evidence per stage.
+  const n = stageCount(scenario)
+  const parts = Array.from({ length: n }, (_, k) => ({ k, update: k > 0 ? scenario.stages![k - 1].update : undefined, view: atStage(scenario, k) }))
+  const everything = atStage(scenario, n - 1) // all artifacts and commands, for "Where:"
+  const stageHeading = (k: number) => n > 1 && <h3 className="mt-3 font-mono text-xs tracking-widest text-muted uppercase first:mt-0">Stage {k + 1}</h3>
 
   const wentWell = [
     score.methodical && 'You found all the key evidence before deciding on a cause.',
@@ -101,7 +109,13 @@ export default function DebriefScreen({
       </div>
 
       <Card title="Root cause">
-        <Prose text={debrief.root_cause} />
+        {parts.map(({ k, update, view }) => (
+          <div key={k}>
+            {stageHeading(k)}
+            {update && <Prose className="mb-1 text-sm text-muted" text={`Reopened: ${update}`} />}
+            <Prose text={view.debrief.root_cause} />
+          </div>
+        ))}
       </Card>
 
       {scenario.concepts && (
@@ -125,9 +139,14 @@ export default function DebriefScreen({
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-2">
         <Card title="Ideal path">
-          <ol className="list-decimal space-y-1.5 pl-5 text-sm">
-            {debrief.ideal_path.map((p) => <li key={p}>{p}</li>)}
-          </ol>
+          {parts.map(({ k, view }) => (
+            <div key={k}>
+              {stageHeading(k)}
+              <ol className="list-decimal space-y-1.5 pl-5 text-sm">
+                {view.debrief.ideal_path.map((p) => <li key={p}>{p}</li>)}
+              </ol>
+            </div>
+          ))}
         </Card>
         <Card title="Your path">
           <ol className="max-h-80 space-y-1 overflow-auto font-mono text-xs">
@@ -142,8 +161,11 @@ export default function DebriefScreen({
       </div>
 
       <Card title="Key evidence">
+        {parts.map(({ k, view }) => (
+        <div key={k}>
+        {stageHeading(k)}
         <ul className="space-y-1.5 text-sm">
-          {scenario.key_evidence.map((tag) => (
+          {view.key_evidence.map((tag) => (
             <li key={tag}>
               {seen.has(tag) ? (
                 <span className="inline-flex items-center gap-1 text-ok">
@@ -154,13 +176,15 @@ export default function DebriefScreen({
                   <Icon name="x" className="h-3.5 w-3.5" /> Missed
                 </span>
               )}{' '}
-              {scenario.evidence_labels[tag]}
+              {view.evidence_labels[tag]}
               <span className="block pl-5 text-muted">
-                Where: <span className="font-mono">{whereIs(scenario, tag).join(', ')}</span>
+                Where: <span className="font-mono">{whereIs(everything, tag).join(', ')}</span>
               </span>
             </li>
           ))}
         </ul>
+        </div>
+        ))}
       </Card>
 
       <Card title={`Analogy: ${analogy.title}`}>
@@ -201,13 +225,9 @@ export default function DebriefScreen({
   )
 }
 
-
-const mmss = (ms: number) => {
-  const s = Math.round(ms / 1000)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-function describe(scenario: Scenario, e: GameEvent): string {
+// `close`: which close-out this is (multi-stage incidents reopen on all but the last).
+function describe(scenario: Scenario, e: GameEvent, close: number): string {
+  const all = [scenario, ...(scenario.stages ?? [])]
   switch (e.type) {
     case 'START':
       return 'Took the incident'
@@ -218,15 +238,15 @@ function describe(scenario: Scenario, e: GameEvent): string {
     case 'REQUEST_HINT':
       return 'Asked for a hint'
     case 'DECLARE_HYPOTHESIS': {
-      const h = scenario.hypotheses.find((x) => x.id === e.id)
+      const h = all.flatMap((x) => x.hypotheses).find((x) => x.id === e.id)
       return `Hypothesis: ${h?.text} (${h?.correct ? 'correct' : 'wrong'})`
     }
     case 'TAKE_ACTION': {
-      const a = scenario.actions.find((x) => x.id === e.id)
+      const a = all.flatMap((x) => x.actions).find((x) => x.id === e.id)
       return `Action: ${a?.label}${a?.kind === 'fix' ? '' : ` (${a?.kind})`}`
     }
     case 'CLOSE_INCIDENT':
-      return 'Closed the incident'
+      return close < all.length - 1 ? `Closed stage ${close + 1}: reopened` : 'Closed the incident'
   }
 }
 
