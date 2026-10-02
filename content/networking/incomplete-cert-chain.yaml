@@ -45,7 +45,7 @@ terminal:
         Verify return code: 21 (unable to verify the first certificate)
     - match: "ssh api-01 grep ssl_certificate /etc/nginx/sites-enabled/api"
       evidence: leaf-only-config
-      output: |
+      output: |2
             ssl_certificate     /etc/ssl/api/api.example.com.crt;
             ssl_certificate_key /etc/ssl/api/api.example.com.key;
     - match: "ssh api-01 ls /etc/ssl/api"

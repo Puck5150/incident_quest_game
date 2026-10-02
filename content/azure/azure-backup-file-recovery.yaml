@@ -41,6 +41,14 @@ terminal:
         81432830219874     2026-09-29T23:03:58+00:00
         81432743986410     2026-09-28T23:04:30+00:00
 
+
+    - match: "az vm run-command invoke -g rg-finance -n fs-finance-01 --command-id RunPowerShellScript --scripts \"(Get-ChildItem D:\\Finance\\Contracts -Recurse -File).Count\" --query value[0].message -o tsv"
+      when_actions: [file-recovery]
+      output: |
+        1812
+    - match: "az vm run-command invoke -g rg-finance -n fs-finance-01 --command-id RunPowerShellScript --scripts \"(Get-ChildItem D:\\Finance\\Contracts -Recurse -File).Count\" --query value[0].message -o tsv"
+      output: |
+        Get-ChildItem : Cannot find path 'D:\Finance\Contracts' because it does not exist.
 logs:
   - name: "fs-finance-01: Security event log (object access), today"
     evidence: deleted-1040

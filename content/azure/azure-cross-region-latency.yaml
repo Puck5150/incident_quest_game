@@ -91,6 +91,18 @@ terminal:
 
         Time: 86.214 ms
 
+
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
+      when_actions: [route-back, batch-queries]
+      output: |
+        200 0.141
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
+      when_actions: [route-back]
+      output: |
+        200 0.236
+    - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
+      output: |
+        200 2.297
 files:
   - path: "shop-api/checkout/pricing.py"
     language: python

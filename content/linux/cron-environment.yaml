@@ -43,6 +43,16 @@ terminal:
         aws s3 cp /tmp/ledger-$(date +%F).tgz s3://acme-ledger-backups/
         rm -f /tmp/ledger-$(date +%F).tgz
 
+
+    - match: "tail -n 2 /home/ops/backup.log"
+      when_actions: [crontab-path]
+      output: |
+        2026-10-03T01:30:01 starting backup
+        upload: ../../tmp/ledger-2026-10-03.tgz to s3://acme-ledger-backups/ledger-2026-10-03.tgz
+    - match: "tail -n 2 /home/ops/backup.log"
+      output: |
+        2026-10-02T01:30:01 starting backup
+        /home/ops/bin/backup.sh: line 11: aws: command not found
 logs:
   - name: "/home/ops/backup.log"
     evidence: not-found

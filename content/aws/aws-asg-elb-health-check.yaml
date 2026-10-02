@@ -61,6 +61,15 @@ terminal:
             300
         ]
     - match: "aws autoscaling describe-auto-scaling-instances --query AutoScalingInstances[].[InstanceId,LifecycleState,HealthStatus]"
+      when_actions: [elb-health-check]
+      output: |
+        i-0a11  InService  HEALTHY
+        i-0b21  InService  HEALTHY
+        i-0c41  InService  HEALTHY
+        i-0c42  InService  HEALTHY
+        i-0c43  InService  HEALTHY
+        i-0c44  InService  HEALTHY
+    - match: "aws autoscaling describe-auto-scaling-instances --query AutoScalingInstances[].[InstanceId,LifecycleState,HealthStatus]"
       evidence: asg-thinks-healthy
       output: |
         i-0a11  InService  HEALTHY
@@ -69,6 +78,15 @@ terminal:
         i-0b21  InService  HEALTHY
         i-0b22  InService  HEALTHY
         i-0b23  InService  HEALTHY
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/shop-web/9a7c --query TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason]"
+      when_actions: [elb-health-check]
+      output: |
+        i-0a11  healthy
+        i-0c41  healthy
+        i-0c42  healthy
+        i-0b21  healthy
+        i-0c43  healthy
+        i-0c44  healthy
     - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/shop-web/9a7c --query TargetHealthDescriptions[].[Target.Id,TargetHealth.State,TargetHealth.Reason]"
       output: |
         i-0a11  healthy

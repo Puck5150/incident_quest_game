@@ -202,6 +202,9 @@ stages:
   multi-stage incident: after the earlier stages' fixes, before this stage's.
 - Every stage has exactly one correct hypothesis, and its solution paths use
   only its own fix actions. Ids are unique across all stages.
+- Every stage has at least one terminal command whose output changes after one
+  of its fixes (`when_actions`), so players can always verify the fix.
+- Every `match_regex` terminal command has an `example` that matches it.
 - Every solution path, of every stage, is played through the real engine in the
   test suite.
 - Hypotheses and actions are **shuffled** in the game, so list them in whatever

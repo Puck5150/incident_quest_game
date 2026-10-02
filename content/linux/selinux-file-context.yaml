@@ -42,6 +42,18 @@ terminal:
         time->Thu Oct  2 10:07:12 2026
         type=AVC msg=audit(1791367632.418:2291): avc:  denied  { read } for  pid=5129 comm="httpd" name="index.html" dev="dm-0" ino=3407921 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=0
 
+
+    - match: "curl -sI http://localhost/index.html"
+      when_actions: [restorecon]
+      output: |
+        HTTP/1.1 200 OK
+        Server: Apache
+        Content-Type: text/html; charset=UTF-8
+    - match: "curl -sI http://localhost/index.html"
+      output: |
+        HTTP/1.1 403 Forbidden
+        Server: Apache
+        Content-Type: text/html; charset=iso-8859-1
 logs:
   - name: "/var/log/httpd/error_log"
     evidence: ah00132

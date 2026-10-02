@@ -81,6 +81,30 @@ terminal:
             "IamInstanceProfileAssociations": []
         }
 
+
+    - match: "ssh db-backup-01 sudo -u backup /opt/backup/run.sh orders"
+      when_actions: [attach-role, remove-keys]
+      output: |
+        2026-10-02 10:31:02 starting pg_dump orders
+        2026-10-02 10:37:40 dump complete (2.1 GB)
+        2026-10-02 10:37:41 uploading to s3://acme-db-backups/orders/2026-10-02.sql.gz
+        upload: ./orders-2026-10-02.sql.gz to s3://acme-db-backups/orders/2026-10-02.sql.gz
+        2026-10-02 10:38:15 backup OK
+    - match: "ssh db-backup-01 sudo -u backup /opt/backup/run.sh orders"
+      when_actions: [attach-role]
+      output: |
+        2026-10-02 10:31:02 starting pg_dump orders
+        2026-10-02 10:37:40 dump complete (2.1 GB)
+        2026-10-02 10:37:41 uploading to s3://acme-db-backups/orders/2026-10-02.sql.gz
+        upload failed: ./orders-2026-10-02.sql.gz to s3://acme-db-backups/orders/2026-10-02.sql.gz An error occurred (InvalidAccessKeyId) when calling the PutObject operation: The AWS Access Key Id you provided does not exist in our records.
+        2026-10-02 10:37:42 backup FAILED (exit 1)
+    - match: "ssh db-backup-01 sudo -u backup /opt/backup/run.sh orders"
+      output: |
+        2026-10-02 10:31:02 starting pg_dump orders
+        2026-10-02 10:37:40 dump complete (2.1 GB)
+        2026-10-02 10:37:41 uploading to s3://acme-db-backups/orders/2026-10-02.sql.gz
+        upload failed: ./orders-2026-10-02.sql.gz to s3://acme-db-backups/orders/2026-10-02.sql.gz An error occurred (InvalidAccessKeyId) when calling the PutObject operation: The AWS Access Key Id you provided does not exist in our records.
+        2026-10-02 10:37:42 backup FAILED (exit 1)
 hypotheses:
   - id: deactivated-key
     text: "The backup authenticates with an IAM user's long-term access key, and that key was deactivated yesterday after it leaked."

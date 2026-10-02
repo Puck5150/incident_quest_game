@@ -321,6 +321,10 @@ export const ScenarioSchema = z
       fixIds.forEach((f) => {
         if (!inSomePath.has(f)) issue(`fix action "${f}" is not in any solution path`, at('actions'))
       })
+      // Continuity: the player must be able to check this stage's fix, so some
+      // terminal command's output has to change once a fix is applied.
+      if (!(v.terminal?.commands ?? []).some((c) => c.when_actions?.some((a) => fixIds.has(a))))
+        issue("no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix", at('solution_paths'))
 
       v.actions.forEach((a, i) => {
         if (a.match_regex === undefined) return

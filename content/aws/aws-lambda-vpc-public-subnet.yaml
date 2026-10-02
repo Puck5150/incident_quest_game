@@ -79,6 +79,21 @@ terminal:
             { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c" }
         ]
 
+
+    - match: "aws logs tail /aws/lambda/order-webhook --since 10m"
+      when_actions: [private-subnets]
+      output: |
+        10:41:07 START RequestId: 9d3e... Version: $LATEST
+        10:41:07 saved order 88519 to orders DB
+        10:41:07 calling https://api.payments.example.com/v1/charges
+        10:41:08 charge ch_3Pq... succeeded
+        10:41:08 REPORT RequestId: 9d3e... Duration: 812.40 ms
+    - match: "aws logs tail /aws/lambda/order-webhook --since 10m"
+      output: |
+        10:41:07 START RequestId: 5b20... Version: $LATEST
+        10:41:07 saved order 88519 to orders DB
+        10:41:07 calling https://api.payments.example.com/v1/charges
+        10:41:37 Task timed out after 30.03 seconds
 hypotheses:
   - id: public-subnet-no-ip
     text: "Attaching a function to a public subnet doesn't give it a public IP address, so its internet traffic goes nowhere. It needs private subnets with a NAT gateway route."

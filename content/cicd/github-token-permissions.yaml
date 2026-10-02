@@ -30,6 +30,55 @@ diagram:
     - { from: pr, to: actions }
     - { from: actions, to: api }
 
+terminal:
+  prompt: "you@laptop:~/shop-web$"
+  commands:
+    - match: "gh run list --workflow ci.yml --limit 3"
+      when_actions: [job-permissions]
+      output: |
+        STATUS  TITLE                         WORKFLOW  BRANCH              EVENT         ID    ELAPSED
+        ✓       ci: label PRs with PR write   CI        fix/ci-permissions  pull_request  2219  1m22s
+        ✓       Fix cart rounding             CI        fix/cart-rounding   pull_request  2218  1m19s
+        X       Fix cart rounding             CI        fix/cart-rounding   pull_request  2207  1m14s
+    - match: "gh run list --workflow ci.yml --limit 3"
+      output: |
+        STATUS  TITLE                         WORKFLOW  BRANCH              EVENT         ID    ELAPSED
+        X       Fix cart rounding             CI        fix/cart-rounding   pull_request  2207  1m14s
+        X       Update checkout copy          CI        copy/checkout       pull_request  2203  1m16s
+        X       Add gift card field           CI        feat/gift-card      pull_request  2199  1m18s
+    - match: "gh run view 2207 --log-failed"
+      output: |
+        test	Label PR by size	failed to update https://github.com/example-shop/shop-web/pull/412: 'Resource not accessible by integration'
+        test	Label PR by size	##[error]Process completed with exit code 1.
+    - match: "gh pr view 412 --json labels --jq .labels[].name"
+      when_actions: [job-permissions]
+      output: |
+        size/S
+    - match: "gh pr view 412 --json labels --jq .labels[].name"
+      output: ""
+    - match: "git log --oneline -3 -- .github/workflows/ci.yml"
+      output: |
+        a3c9e21 ci: least-privilege GITHUB_TOKEN (security review SR-88)
+        77d0b14 ci: label PRs by size
+        1c5e9a2 ci: cache npm
+    - match: "git show a3c9e21 -- .github/workflows/ci.yml"
+      output: |
+        commit a3c9e21
+        Author: Priya <priya@example.com>
+        Date:   Thu Oct 2 11:04:12 2026 +0000
+
+            ci: least-privilege GITHUB_TOKEN (security review SR-88)
+
+        @@ -2,6 +2,10 @@ name: CI
+         on:
+           pull_request:
+
+        +# Least privilege for the GITHUB_TOKEN (a3c9e21)
+        +permissions:
+        +  contents: read
+        +
+         jobs:
+
 pipeline:
   name: "CI · pull request #412, run #2207"
   trigger: "pull_request · branch fix/cart-rounding · \"Fix cart rounding\" · Lee"

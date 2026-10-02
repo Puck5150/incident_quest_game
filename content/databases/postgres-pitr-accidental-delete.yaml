@@ -28,6 +28,10 @@ terminal:
       output: |
         0000000100000A1F000000C4|2026-10-02 11:05:12.441+00|0
     - match: "sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM customers'"
+      when_actions: [restore-side, copy-back]
+      output: |
+        162115
+    - match: "sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM customers'"
       output: |
         113902
     - match: "sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM orders WHERE created_at >= now()::date'"
@@ -38,6 +42,14 @@ terminal:
       output: |
         2026-09-30T01:00  2026-10-01T01:00  2026-10-02T01:00
 
+
+    - match: "ssh db-restore sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM customers'"
+      when_actions: [restore-side]
+      output: |
+        162115
+    - match: "ssh db-restore sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM customers'"
+      output: |
+        psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
 logs:
   - name: "PostgreSQL log (statements that modify data)"
     evidence: delete-time

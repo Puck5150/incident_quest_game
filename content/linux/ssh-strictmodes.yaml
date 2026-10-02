@@ -42,6 +42,16 @@ terminal:
       output: |
         1
 
+
+    - match: "sudo tail -n 2 /var/log/auth.log"
+      when_actions: [fix-home]
+      output: |
+        Oct  2 12:52:40 app-03 sshd[48960]: Accepted publickey for deploy from 198.51.100.40 port 50611 ssh2: ED25519 SHA256:r4Wq...
+        Oct  2 12:52:40 app-03 sshd[48960]: pam_unix(sshd:session): session opened for user deploy(uid=1002) by deploy(uid=0)
+    - match: "sudo tail -n 2 /var/log/auth.log"
+      output: |
+        Oct  2 12:03:17 app-03 sshd[48211]: Authentication refused: bad ownership or modes for directory /home/deploy
+        Oct  2 12:03:17 app-03 sshd[48211]: Connection closed by authenticating user deploy 198.51.100.40 port 50532 [preauth]
 logs:
   - name: "/var/log/auth.log (sshd)"
     evidence: bad-modes

@@ -53,6 +53,23 @@ terminal:
         | transaction_isolation | REPEATABLE-READ |
         +-----------------------+-----------------+
 
+
+    - match: "SELECT name, count FROM information_schema.INNODB_METRICS WHERE name = 'lock_deadlocks';"
+      when_actions: [consistent-order, retry]
+      output: |
+        +----------------+-------+
+        | name           | count |
+        +----------------+-------+
+        | lock_deadlocks |   214 |
+        +----------------+-------+
+        (an hour after the fix: unchanged, no new deadlocks)
+    - match: "SELECT name, count FROM information_schema.INNODB_METRICS WHERE name = 'lock_deadlocks';"
+      output: |
+        +----------------+-------+
+        | name           | count |
+        +----------------+-------+
+        | lock_deadlocks |   214 |
+        +----------------+-------+
 logs:
   - name: "payments app log"
     evidence: err-1213

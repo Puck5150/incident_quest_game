@@ -18,7 +18,8 @@ environment: |
   The account service writes to the PostgreSQL primary and sends all reads
   to a streaming replica, to keep load off the primary. Replication is
   asynchronous. A nightly product import starts at 18:00 and writes heavily
-  for about three hours.
+  for about three hours. The team's smoke test, ./check-address-roundtrip.sh,
+  saves an address and reads the account page straight back.
 
 terminal:
   prompt: "postgres=# (on the primary)"
@@ -37,6 +38,16 @@ terminal:
 
         (1 row)
 
+
+    - match: "\\! ./check-address-roundtrip.sh"
+      when_actions: [read-your-writes]
+      output: |
+        19:12:04 POST /account/address "12 Mill Lane" -> 200 Saved!
+        19:12:04 GET  /account -> address: "12 Mill Lane"   (read from primary)
+    - match: "\\! ./check-address-roundtrip.sh"
+      output: |
+        19:12:04 POST /account/address "12 Mill Lane" -> 200 Saved!
+        19:12:04 GET  /account -> address: "4 Old Road"   (read from replica_1)
 files:
   - path: "account-service: database routing (excerpt)"
     evidence: reads-to-replica

@@ -65,6 +65,18 @@ terminal:
       output: |
         {"Version":"2012-10-17","Statement":[{"Sid":"Enable IAM User Permissions","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::111122223333:root"},"Action":"kms:*","Resource":"*"}]}
 
+
+    - match: "aws s3api get-object --bucket acme-reports --key 2026/09/30/sales.pdf sales.pdf --profile report-viewer"
+      when_actions: [grant-decrypt]
+      output: |
+        {
+            "ContentLength": 184211,
+            "ContentType": "application/pdf",
+            "ServerSideEncryption": "aws:kms"
+        }
+    - match: "aws s3api get-object --bucket acme-reports --key 2026/09/30/sales.pdf sales.pdf --profile report-viewer"
+      output: |
+        An error occurred (AccessDenied) when calling the GetObject operation: User: arn:aws:sts::111122223333:assumed-role/report-viewer-role/viewer-1 is not authorized to perform: kms:Decrypt on resource: arn:aws:kms:us-east-1:111122223333:key/7f2a9c1e-4b6d-4e8a-9c3f-2d1e0b5a6c7d because no identity-based policy allows the kms:Decrypt action
 logs:
   - name: "report viewer errors"
     evidence: kms-denied

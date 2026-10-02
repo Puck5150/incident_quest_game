@@ -141,6 +141,14 @@ terminal:
              Active: active (waiting) since Mon 2026-08-03 09:12:40 UTC
             Trigger: Thu 2026-10-01 12:31:00 UTC
 
+
+    - match: "openssl s_client -connect api.example.com:443 -servername api.example.com </dev/null 2>/dev/null | openssl x509 -noout -enddate"
+      when_actions: [renew]
+      output: |
+        notAfter=Dec 30 23:14:07 2026 GMT
+    - match: "openssl s_client -connect api.example.com:443 -servername api.example.com </dev/null 2>/dev/null | openssl x509 -noout -enddate"
+      output: |
+        notAfter=Oct  1 00:07:51 2026 GMT
 logs:
   - name: "change log (#infra-changes)"
     evidence: hardening-change

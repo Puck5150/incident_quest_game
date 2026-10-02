@@ -55,6 +55,14 @@ describe('schema', () => {
     ).toEqual([])
   })
 
+  it("every stage needs a terminal command whose output changes after its fix, so the fix can be verified", () => {
+    expect(
+      errors((r) => {
+        delete r.stages[0].terminal.commands[0].when_actions
+      }),
+    ).toContain("stages.0.solution_paths: no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix")
+  })
+
   it('ids are unique across stages; references must exist', () => {
     expect(errors((r) => (r.stages[0].actions[1].id = 'reboot'))).toEqual(
       expect.arrayContaining(['actions: duplicate action id "reboot" (ids are unique across stages)']),
