@@ -11,7 +11,11 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 ## Gameplay
 - Stateful terminal simulation (filesystem that actually changes, `cd`, pipes)
 - Daily-play streak (MVP uses a clean-resolution streak; see PLAN.md open question 3)
-- More multi-stage incidents (4 shipped: PLAN_MULTI_STAGE.md); Google Cloud ones; a difficulty-5 three-stage incident
+- More multi-stage incidents (4 two-stage shipped: PLAN_MULTI_STAGE.md; 10 three-stage difficulty-5 shipped: PLAN_DIFFICULTY_5.md)
+- SEV levels (raised 2026-10-02, on hold; scope undecided): use SEV1-SEV4 language instead of, or alongside,
+  today's two scales: ticket priority P1-P4 (tickets, board, shift response targets) and difficulty 1-5
+  (card bars, base score). Options: rename priority to SEV; map difficulty to SEV; merge both into one
+  scale; or only relabel the MAJOR INCIDENT badge as SEV1. Ask which before planning.
 - Shifts v2: save a shift across reloads; design challenges as "planned work" between pages
 - Postmortem-writing exercise after the debrief (SRE track)
 
