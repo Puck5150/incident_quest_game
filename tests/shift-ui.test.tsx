@@ -70,7 +70,8 @@ it('start a shift, work a page, switch away and back, resolve it, end early, rea
   fireEvent.click(screen.getByRole('button', { name: 'End shift now' }))
   expect(await screen.findByRole('heading', { name: 'Shift report' })).toBeTruthy()
   expect(screen.getByText('Handed over')).toBeTruthy() // the second page never arrived
-  expect(screen.getByRole('img', { name: 'Linux Admin, Helsinki station: all clear' })).toBeTruthy() // the shift wall
+  // The shift wall: Linux is clear unless the unanswered second page was Linux too (it's picked at random).
+  expect(screen.getByRole('img', { name: /^Linux Admin, Helsinki station: (all clear|1 of 2 missions open)$/ })).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: /^After-action report for Checkout returning 500s/ }))
   expect(await screen.findByRole('heading', { name: 'Root cause' })).toBeTruthy()
