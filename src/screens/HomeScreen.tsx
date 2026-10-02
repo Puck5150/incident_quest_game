@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type { Track } from '../schema/scenario.ts'
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
+import WorldMap from '../components/WorldMap.tsx'
 import { missionId } from '../game/mission.ts'
 
 // Incidents and design challenges share the queue.
@@ -48,6 +49,15 @@ export default function HomeScreen({
       <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
         Ops board
       </h1>
+      <WorldMap
+        sectors={tracks.flatMap((track) => {
+          const mine = allItems.filter((s) => s.track === track.id)
+          if (!mine.length) return []
+          const open = mine.filter((s) => !progress.completed[s.id]).length
+          return [{ track, open, total: mine.length, locked: !unlocked.has(track.id) }]
+        })}
+        onSelect={(id) => document.getElementById(`track-${id}`)?.focus()}
+      />
       {tracks.map((track) => {
         const items = allItems.filter((s) => s.track === track.id).sort((a, b) => a.difficulty - b.difficulty)
         if (!items.length) return null

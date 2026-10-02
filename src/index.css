@@ -127,7 +127,17 @@ html {
 .accept-flash { display: none; }
 .stamp { transform: rotate(-8deg); }
 
+@keyframes ping {
+  from { opacity: 0.9; transform: scale(1); }
+  to { opacity: 0; transform: scale(2.6); }
+}
+.map-ping { display: none; transform-box: fill-box; transform-origin: center; }
+
 @media (prefers-reduced-motion: no-preference) {
+  html:not(.reduce-motion) .map-ping {
+    display: inline;
+    animation: ping 1.6s ease-out infinite;
+  }
   html:not(.reduce-motion) .accept-flash {
     display: flex;
     animation: accept 1300ms ease-out forwards;

@@ -208,3 +208,11 @@ it('finishing the last mission in a sector says so', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
   expect(await screen.findByText(/Sector cleared: Linux/)).toBeTruthy()
 })
+
+it('the ops wall shows each sector station and jumps to its sector', () => {
+  render(<App />)
+  const linux = screen.getByRole('button', { name: /^Linux Admin, Helsinki station: 2 of 2 missions open/ })
+  expect(screen.getByRole('button', { name: /^Containers & Kubernetes, Seattle station: locked/ })).toBeTruthy()
+  fireEvent.keyDown(linux, { key: 'Enter' })
+  expect(document.activeElement?.id).toBe('track-linux')
+})

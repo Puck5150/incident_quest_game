@@ -1,13 +1,14 @@
 # Learning tracks. `requires` lists tracks that must have at least one
 # completed incident before this track unlocks (used by the skill tree).
 # Only tracks with at least one scenario are shown in the game.
-- { id: networking,    name: "Networking",             requires: [] }
-- { id: linux,         name: "Linux Admin",            requires: [] }
-- { id: containers,    name: "Containers & Kubernetes", requires: [linux] }
-- { id: iac,           name: "Infrastructure as Code", requires: [] }
-- { id: cicd,          name: "CI/CD",                  requires: [] }
-- { id: microservices, name: "Microservices",          requires: [networking, containers] }
-- { id: aws,           name: "AWS",                    requires: [networking] }
-- { id: azure,         name: "Azure",                  requires: [networking] }
-- { id: gcp,           name: "Google Cloud",           requires: [networking] }
-- { id: cloud-design,  name: "Cloud System Design",    requires: [aws, azure, gcp], requires_any: true }
+# `station` places the sector's ops station on the ops-board wall map.
+- { id: networking,    name: "Networking",             requires: [], station: { city: "São Paulo", lat: -23.5, lon: -46.6 } }
+- { id: linux,         name: "Linux Admin",            requires: [], station: { city: "Helsinki", lat: 60.2, lon: 24.9 } }
+- { id: containers,    name: "Containers & Kubernetes", requires: [linux], station: { city: "Seattle", lat: 47.6, lon: -122.3 } }
+- { id: iac,           name: "Infrastructure as Code", requires: [], station: { city: "Sydney", lat: -33.9, lon: 151.2, side: left } }
+- { id: cicd,          name: "CI/CD",                  requires: [], station: { city: "Bengaluru", lat: 13.0, lon: 77.6 } }
+- { id: microservices, name: "Microservices",          requires: [networking, containers], station: { city: "Cape Town", lat: -33.9, lon: 18.4, side: left } }
+- { id: aws,           name: "AWS",                    requires: [networking], station: { city: "Ashburn", lat: 39.0, lon: -77.5 } }
+- { id: azure,         name: "Azure",                  requires: [networking], station: { city: "Amsterdam", lat: 52.4, lon: 4.9 } }
+- { id: gcp,           name: "Google Cloud",           requires: [networking], station: { city: "Tokyo", lat: 35.7, lon: 139.7, side: left } }
+- { id: cloud-design,  name: "Cloud System Design",    requires: [aws, azure, gcp], requires_any: true, station: { city: "Singapore", lat: 1.4, lon: 103.8, side: left } }

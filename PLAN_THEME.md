@@ -1,6 +1,7 @@
 # Plan: Ops Center theme
 
-Status: **approved 2026-10-01; T1–T3 done.** (Promotion uses the existing
+Status: **approved 2026-10-01; T1–T4 done.** T4 places one station per sector
+(`station` in tracks.yaml), not per item: most items don't name a region. (Promotion uses the existing
 result-header line rather than a separate screen.) Shell-only theming, sound opt-in. Requested: "really feel like a
 game, not just a test prep tutorial". Theme picked: cyber ops command center.
 

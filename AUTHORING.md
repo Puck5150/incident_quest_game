@@ -6,6 +6,8 @@ Scenarios are data. You don't write any code to add an incident.
 
 1. Copy `content/_template.yaml` to `content/<track>/<id>.yaml`.
    - `<track>` must be a folder whose name is listed in `content/tracks.yaml`.
+     A new track can add a `station` (city, lat, lon, optional `side: left`) to
+     appear on the ops-board wall map; pick a spot whose label won't overlap another.
    - `<id>` must match the `id:` field exactly (kebab-case). Never rename it after
      release, because player progress is saved by id.
 2. Fill it in. The template has a comment on every field.

@@ -53,6 +53,11 @@ export const TrackSchema = z.strictObject({
   requires: z.array(id),
   // true: unlocks once ANY one required track has a completion (default: all of them).
   requires_any: z.boolean().optional(),
+  // Where the sector's ops station sits on the ops-board wall map (shown only if set);
+  // `side` puts its label left of the light when it would run off the map or into another.
+  station: z
+    .strictObject({ city: z.string().min(1), lat: z.number().min(-55).max(75), lon: z.number().min(-180).max(180), side: z.enum(['left', 'right']).optional() })
+    .optional(),
 })
 
 export const ScenarioSchema = z
