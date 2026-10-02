@@ -63,6 +63,27 @@ describe('schema', () => {
     ).toContain("stages.0.solution_paths: no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix")
   })
 
+  it('red herrings point at tagged evidence that is not key evidence', () => {
+    expect(errors((r) => (r.red_herrings[0].evidence = 'nope'))).toContain('red_herrings.0.evidence: no artifact or command is tagged with evidence "nope"')
+    expect(errors((r) => (r.red_herrings[0].evidence = 'timeout'))).toContain('red_herrings.0.evidence: "timeout" is key evidence, so it can\'t be a red herring')
+    expect(errors((r) => r.red_herrings.push({ ...r.red_herrings[0] }))).toContain('red_herrings: duplicate red herring "deploy"')
+  })
+
+  it('difficulty 5 is three stages, a red herring, par 25+ and P1', () => {
+    expect(
+      errors((r) => {
+        r.difficulty = 5
+        delete r.red_herrings
+        r.ticket.priority = 'P2'
+      }),
+    ).toEqual([
+      'difficulty: difficulty 5 needs three stages (two in `stages`)',
+      'difficulty: difficulty 5 needs at least one red herring',
+      'par_minutes: difficulty 5 needs par_minutes of at least 25',
+      'ticket.priority: difficulty 5 is a major incident: ticket priority must be P1',
+    ])
+  })
+
   it('ids are unique across stages; references must exist', () => {
     expect(errors((r) => (r.stages[0].actions[1].id = 'reboot'))).toEqual(
       expect.arrayContaining(['actions: duplicate action id "reboot" (ids are unique across stages)']),

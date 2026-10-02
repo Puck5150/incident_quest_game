@@ -1,6 +1,6 @@
 # Plan: Difficulty-5 incidents
 
-Status: **draft 2026-10-02, awaiting approval.** From PARKING_LOT.md: "Every track
+Status: **approved 2026-10-02 with the defaults; D1 done.** From PARKING_LOT.md: "Every track
 has at least 8 incidents. Next: difficulty-5 incidents."
 
 ## 1. Where we are
@@ -51,9 +51,10 @@ scores already earned.
   after-action report gains a **"What wasn't the cause"** section that explains
   each one. Teaching why something is irrelevant is half the skill, and today
   the game never does it.
-- **Validation for difficulty 5:** three stages, at least one red herring, and
-  `concepts` drawn from at least two categories. The build fails otherwise, like
-  the other content rules.
+- **Validation for difficulty 5:** three stages, at least one red herring,
+  `par_minutes` of 25 or more, and a P1 ticket; the build fails otherwise.
+  Crossing domains and the clean-up stage are checked by the author: concepts
+  have no categories to validate against.
 - **Map and board:** a difficulty-5 incident gets a "Major incident" badge.
   Under the ops-center theme it pages as P1 during a shift.
 

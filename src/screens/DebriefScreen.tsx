@@ -191,6 +191,23 @@ export default function DebriefScreen({
         ))}
       </Card>
 
+      {scenario.red_herrings && (
+        <Card title="What wasn't the cause">
+          <ul className="space-y-2 text-sm">
+            {scenario.red_herrings.map((r) => (
+              <li key={r.evidence}>
+                <span className="font-medium">{r.label}</span>
+                {seen.has(r.evidence) && <span className="ml-2 font-mono text-xs text-muted">[you checked it]</span>}
+                <span className="block">{r.why}</span>
+                <span className="block text-muted">
+                  Where: <span className="font-mono">{whereIs(everything, r.evidence).join(', ')}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       {breakdown && <CommandBreakdown breakdown={breakdown} notes={scenario.command_notes} ran={commandsHit(scenario, log)} />}
 
       <Card title={`Analogy: ${analogy.title}`}>

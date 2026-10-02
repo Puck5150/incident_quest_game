@@ -119,6 +119,7 @@ export default function HomeScreen({
                         <span className="flex gap-2 font-mono">
                           <span>{missionId(s.id, s.kind)}</span>
                           <span className={s.kind === 'challenge' ? 'text-accent' : ''}>{s.tag}</span>
+                          {s.kind === 'incident' && s.difficulty === 5 && <span className="text-crit">MAJOR INCIDENT</span>}
                         </span>
                         <span className="flex gap-1" role="img" aria-label={`Difficulty ${s.difficulty} of 5`}>
                           {[1, 2, 3, 4, 5].map((n) => (

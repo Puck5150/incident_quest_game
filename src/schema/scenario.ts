@@ -249,6 +249,13 @@ export const ScenarioSchema = z
     // Optional "why this command, here" for the after-action command breakdown,
     // keyed by a terminal command as written (its match, or its example).
     command_notes: z.record(z.string(), z.string().min(1)).optional(),
+    // Real anomalies in the evidence that aren't the cause (PLAN_DIFFICULTY_5.md).
+    // Each names an evidence tag that is not key evidence; the debrief's "What
+    // wasn't the cause" explains it. Required at difficulty 5.
+    red_herrings: z
+      .array(z.strictObject({ evidence: id, label: z.string().min(1), why: z.string().min(1) }))
+      .min(1)
+      .optional(),
   })
   // Cross-references inside one file. These catch typos that would otherwise
   // produce an incident nobody can finish.
@@ -384,6 +391,22 @@ export const ScenarioSchema = z
         })
       })
     })
+
+    const tagged = new Set([...allCommands, ...[s, ...stages].flatMap((x) => artifacts(x))].map((a) => a.evidence).filter(Boolean))
+    const key = new Set([s, ...stages].flatMap((x) => x.key_evidence))
+    dupes((s.red_herrings ?? []).map((r) => r.evidence)).forEach((d) => issue(`duplicate red herring "${d}"`, ['red_herrings']))
+    s.red_herrings?.forEach((r, i) => {
+      if (!tagged.has(r.evidence)) issue(`no artifact or command is tagged with evidence "${r.evidence}"`, ['red_herrings', i, 'evidence'])
+      if (key.has(r.evidence)) issue(`"${r.evidence}" is key evidence, so it can't be a red herring`, ['red_herrings', i, 'evidence'])
+    })
+
+    // Difficulty 5 is a major incident (PLAN_DIFFICULTY_5.md section 2).
+    if (s.difficulty === 5) {
+      if (stages.length !== 2) issue('difficulty 5 needs three stages (two in `stages`)', ['difficulty'])
+      if (!s.red_herrings) issue('difficulty 5 needs at least one red herring', ['difficulty'])
+      if (s.par_minutes < 25) issue('difficulty 5 needs par_minutes of at least 25', ['par_minutes'])
+      if (s.ticket.priority !== 'P1') issue('difficulty 5 is a major incident: ticket priority must be P1', ['ticket', 'priority'])
+    }
 
     if (s.diagram) {
       const nodes = new Set(s.diagram.nodes.map((n) => n.id))

@@ -22,7 +22,7 @@ terminal:
       evidence: sg-closed
       output: "port 8080: not allowed"
 logs:
-  - { name: "deploy log", lines: "deployed v2 at 10:00" }
+  - { name: "deploy log", evidence: deploy, lines: "deployed v2 at 10:00" }
 hypotheses:
   - { id: sg, text: "The security group blocks 8080.", correct: true }
   - { id: dns, text: "DNS is wrong." }
@@ -35,6 +35,8 @@ evidence_labels: { timeout: "Connections time out", sg-closed: "8080 isn't allow
 hints: { nudge: "n1", direction: "d1", answer: "a1" }
 analogy: { title: "A locked door", text: "The door is locked." }
 debrief: { root_cause: "The port was closed.", ideal_path: ["Check the port"] }
+red_herrings:
+  - { evidence: deploy, label: "A deploy just before the outage", why: "v2 changed no network settings." }
 sources: [{ title: "Docs", url: "https://example.com/docs", retrieved: 2026-10-02 }]
 stages:
   - id: health-path

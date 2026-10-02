@@ -1125,6 +1125,33 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "red_herrings": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "evidence": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "evidence",
+          "label",
+          "why"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

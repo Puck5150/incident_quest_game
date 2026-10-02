@@ -193,6 +193,42 @@ stages:
 - **Scoring:** the methodical and verified bonuses are shared across stages;
   each stage has its own three hint tiers.
 
+## Difficulty
+
+Rate by the shape of the problem, not by how obscure the tool is
+(PLAN_DIFFICULTY_5.md). Base score is `100 × difficulty`.
+
+| Level | Shape | Typical |
+|---|---|---|
+| 1 | One fault; the first obvious command shows it | Disk full, service stopped |
+| 2 | One fault; two or three pieces of evidence pin it down | Wrong health check path |
+| 3 | One fault hiding behind a plausible wrong answer, or two stages | Expired cert vs incomplete chain |
+| 4 | Two stages, or one fault that crosses two domains | DNS failover plus TTL |
+| 5 | Major incident: everything below | |
+
+**Difficulty 5** has three stages (each fix reveals the next fault), crosses at
+least two domains (say network, then identity, then data), has at least one red
+herring, and its last stage cleans up what the outage left behind (unreplicated
+objects, writes on the wrong disk, a backlog). The validator requires the three
+stages, a red herring, `par_minutes` of 25 or more and a P1 ticket; crossing
+domains and the clean-up stage are on you. It shows as MAJOR INCIDENT on the board.
+
+**Red herrings** (optional below 5): a real anomaly in the evidence that isn't
+the cause, such as a noisy alarm, an old error or a high but harmless metric.
+Tag its artifact or command with an `evidence` tag that is *not* in
+`key_evidence`, and explain it:
+
+```yaml
+red_herrings:
+  - evidence: cpu-alert
+    label: "CPU alert on the app plan"
+    why: "It fires every night during the batch job; requests were failing before it started."
+```
+
+The debrief's "What wasn't the cause" lists each one, where it was, and whether
+the player checked it. Make the anomaly genuinely tempting, and make `why` point
+at the evidence that rules it out.
+
 ## Command breakdown library
 
 After an incident, the after-action report explains the commands that found key

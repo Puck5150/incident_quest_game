@@ -74,6 +74,8 @@ it('play both stages: reopen, update timeline, new causes and logs, then the deb
   expect(card('Root cause').getByText(/The health check path was wrong/)).toBeTruthy()
   expect(card('Ideal path').getByText('Compare the path with the routes')).toBeTruthy()
   expect(card('Key evidence').getAllByText('Found')).toHaveLength(4)
+  expect(card("What wasn't the cause").getByText('A deploy just before the outage')).toBeTruthy()
+  expect(card("What wasn't the cause").getByText('v2 changed no network settings.')).toBeTruthy()
   expect(card('Your path').getByText('Closed stage 1: reopened')).toBeTruthy()
   expect(card('Score breakdown').getByText('Methodical: found all key evidence before deciding')).toBeTruthy()
 })
