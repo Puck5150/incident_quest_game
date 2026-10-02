@@ -126,12 +126,19 @@ it('Tab completes in the terminal, but moves focus on an empty prompt', async ()
 })
 
 it('shuffles hypotheses so the right answer is not always first', async () => {
-  const spy = vi.spyOn(Math, 'random').mockReturnValue(0)
-  render(<App />)
-  await openIncident()
-  const first = screen.getAllByRole('radio')[0].closest('label')!.textContent
-  expect(first).not.toMatch(/filesystem is full/) // listed first in the YAML
-  spy.mockRestore()
+  // The order is seeded by when the incident is accepted; try a few fixed times.
+  const firsts: string[] = []
+  for (const now of [1, 2, 3, 4, 5]) {
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(now)
+    const { unmount } = render(<App />)
+    await openIncident()
+    firsts.push(screen.getAllByRole('radio')[0].closest('label')!.textContent!)
+    unmount()
+    spy.mockRestore()
+    history.replaceState(null, '', location.pathname)
+  }
+  expect(firsts.some((f) => !/filesystem is full/.test(f))).toBe(true) // listed first in the YAML
+  expect(new Set(firsts).size).toBeGreaterThan(1)
 })
 
 it('skill tree shows only tracks with content, with lock state and requirements', async () => {
