@@ -51,6 +51,7 @@ metrics:
       - label: "ack"
         points: [["09:30", 14], ["09:35", 15], ["09:40", 1.2], ["09:45", 0.4], ["09:50", 0.3], ["09:55", 0.2], ["10:00", 0.3], ["10:05", 0.2], ["10:10", 0.2]]
   - name: "email-worker CPU"
+    evidence: worker-cpu
     unit: "%"
     series:
       - label: "avg of 3 pods"
@@ -198,6 +199,11 @@ evidence_labels:
   nack-requeue: "The worker nacks every failure with requeue=true"
   replay: "At 09:38 a replay published 420 old schema-v1 messages"
 
+
+red_herrings:
+  - evidence: worker-cpu
+    label: "email-worker CPU at 96%"
+    why: "The CPU is the loop itself: three pods rendering, failing and requeueing the same 420 replayed messages tens of thousands of times. More CPU or more pods would only spin faster."
 hints:
   nudge: "The broker is delivering 3,000 messages a second and the workers are acknowledging almost none. What are they doing with the rest?"
   direction: "Read the worker's errors and its code. Are the failing messages new ones, or the same ones again and again? Where did they come from?"

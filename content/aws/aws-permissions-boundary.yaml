@@ -115,6 +115,7 @@ logs:
       2026-09-29 16:02  #219 "Attach AppWorkloadBoundary to all workload roles" (Priya): caps every app role at the services apps use
       2026-09-24 11:40  #214 "Tag policy for cost centres" (Sam)
   - name: "orders-api deploys"
+    evidence: deploy-42
     lines: |
       2026-09-26 4.1.0 deployed (tasks started 09-26 14:10, still running)
       2026-10-01 4.2.0 deploying (no changes to config or secrets handling)
@@ -198,6 +199,11 @@ evidence_labels:
   boundary-policy: "AppWorkloadBoundary allows S3, DynamoDB, SQS, logs and KMS, but no Secrets Manager"
   boundary-rollout: "The boundary was attached to every workload role on 09-29, after the running tasks started"
 
+
+red_herrings:
+  - evidence: deploy-42
+    label: "4.2.0 was deploying when it broke"
+    why: "4.2.0 changed nothing about config or secrets. Any task started after 09-29, whatever its version, was denied the secret by the new permissions boundary; the 4.1 tasks only survive because they read it on 09-26."
 hints:
   nudge: "Read the whole error message: AWS says which kind of policy refused the request."
   direction: "Look at the role's permissions boundary and what that policy allows. Then ask why the old tasks still work."

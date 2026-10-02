@@ -42,6 +42,7 @@ metrics:
       - label: "connections"
         points: [["09:50", 78], ["09:55", 81], ["10:00", 176], ["10:02", 471], ["10:04", 497], ["10:06", 497], ["10:08", 497], ["10:10", 497], ["10:12", 497]]
   - name: "users-db CPU utilization"
+    evidence: db-cpu
     unit: "%"
     series:
       - label: "CPU"
@@ -148,6 +149,11 @@ evidence_labels:
   connections-capped: "users-db connections hit max_connections (500)"
   scaled-out: "signup-api scaled from 4 to 64 instances"
 
+
+red_herrings:
+  - evidence: db-cpu
+    label: "users-db CPU rose when the launch started"
+    why: "It went from 12% to about 35%: busier, nowhere near its limit. The errors are \"sorry, too many clients already\": the database is refusing new connections, not struggling to run queries."
 hints:
   nudge: "The database's CPU is calm, so what is it actually saying no to?"
   direction: "Compare how many instances Cloud Run started with how many connections each one can open, and with the database's limit."

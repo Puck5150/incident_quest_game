@@ -40,6 +40,7 @@ metrics:
       - label: "running VMs"
         points: [["11:50", 6], ["11:55", 6], ["12:00", 8], ["12:03", 10], ["12:06", 10], ["12:09", 10], ["12:12", 10]]
   - name: "shop-web-mig CPU utilization"
+    evidence: mig-cpu
     unit: "%"
     threshold: { value: 60, label: "autoscaler target: 60%" }
     series:
@@ -166,6 +167,11 @@ evidence_labels:
   quota-full: "us-central1 CPUS usage is 240 of 240"
   batch-started: "The data team scaled analytics-workers to 20 VMs (160 vCPUs) at 11:28"
 
+
+red_herrings:
+  - evidence: mig-cpu
+    label: "The web VMs are at 97% CPU"
+    why: "That's the result, not the cause: the sale's traffic is spread over 10 VMs because the group can't create the 26 it wants. The autoscaler asked for more; the regional quota said no."
 hints:
   nudge: "The autoscaler knows it needs more VMs. Why isn't it getting them?"
   direction: "Check the group's errors and the region's quota usage, then what else in the region uses the same quota."
