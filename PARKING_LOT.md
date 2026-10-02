@@ -11,7 +11,7 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 ## Gameplay
 - Stateful terminal simulation (filesystem that actually changes, `cd`, pipes)
 - Daily-play streak (MVP uses a clean-resolution streak; see PLAN.md open question 3)
-- Multi-stage incidents (fix reveals a second problem)
+- Multi-stage incidents (fix reveals a second problem) (planned: PLAN_MULTI_STAGE.md)
 - Shifts v2: save a shift across reloads; design challenges as "planned work" between pages
 - Postmortem-writing exercise after the debrief (SRE track)
 
