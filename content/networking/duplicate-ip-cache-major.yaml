@@ -1,0 +1,367 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: duplicate-ip-cache-major
+track: networking
+difficulty: 5
+title: "Customers' baskets keep emptying and coming back"
+par_minutes: 30
+
+ticket:
+  from: "Customer service lead"
+  priority: P1
+  body: |
+    Since the weekend, customers say items vanish from their basket and then
+    reappear a few clicks later, and some checkouts charge for the wrong
+    basket. It's random: refreshing sometimes fixes it. The network team
+    mentions a switch port flapping all week; could that be it?
+
+environment: |
+  Baskets live in Redis on the cache server at 10.20.5.10 (no persistence:
+  baskets are short-lived). Last Thursday that address moved from the old
+  server cache-01 (MAC 52:54:00:0a:00:01) to the new cache-02
+  (MAC 52:54:00:0b:00:02); cache-01 was shut down from the OS and left racked
+  for disposal. App servers app-01 and app-02 are in 10.20.4.0/24; app-03,
+  added on Monday, is in 10.20.6.0/24. Every server also has a management
+  interface on 10.99.0.0/24 (cache-01: 10.99.0.11, cache-02: 10.99.0.12).
+  You're on app-01.
+
+diagram:
+  nodes:
+    - { id: app1, label: "app-01 / app-02 (10.20.4.0/24)", col: 0, row: 0, status: degraded }
+    - { id: app3, label: "app-03 (10.20.6.0/24)", col: 0, row: 1, status: degraded }
+    - { id: ip, label: "10.20.5.10:6379", col: 1, row: 0, status: degraded }
+    - { id: new, label: "cache-02 (new)", col: 2, row: 0, status: ok }
+    - { id: old, label: "cache-01 (old)", col: 2, row: 1, status: degraded }
+  edges:
+    - { from: app1, to: ip }
+    - { from: app3, to: ip }
+    - { from: ip, to: new }
+    - { from: ip, to: old }
+
+terminal:
+  prompt: "ops@app-01:~$"
+  commands:
+    - match: "ip neigh show 10.20.5.10"
+      when_actions: [isolate-old]
+      output: |
+        10.20.5.10 dev eth0 lladdr 52:54:00:0b:00:02 REACHABLE
+    - match: "ip neigh show 10.20.5.10"
+      evidence: app01-old-mac
+      output: |
+        10.20.5.10 dev eth0 lladdr 52:54:00:0a:00:01 REACHABLE
+    - match: "ssh app-02 ip neigh show 10.20.5.10"
+      output: |
+        10.20.5.10 dev eth0 lladdr 52:54:00:0b:00:02 REACHABLE
+    - match: "sudo arping -D -I eth0 -c 2 10.20.5.10"
+      when_actions: [isolate-old]
+      output: |
+        ARPING 10.20.5.10 from 0.0.0.0 eth0
+        Unicast reply from 10.20.5.10 [52:54:00:0B:00:02]  0.402ms
+        Sent 2 probes (2 broadcast(s))
+        Received 1 response(s)
+    - match: "sudo arping -D -I eth0 -c 2 10.20.5.10"
+      evidence: two-macs
+      output: |
+        ARPING 10.20.5.10 from 0.0.0.0 eth0
+        Unicast reply from 10.20.5.10 [52:54:00:0B:00:02]  0.388ms
+        Unicast reply from 10.20.5.10 [52:54:00:0A:00:01]  0.611ms
+        Sent 2 probes (2 broadcast(s))
+        Received 2 response(s)
+    - match: "ssh cache-01-mgmt uptime"
+      evidence: old-up
+      output: |
+        10:42:17 up 1 day,  8:40,  1 user,  load average: 0.08, 0.05, 0.01
+    - match: "redis-cli -h 10.20.5.10 EXISTS cart:sess-8f2a91"
+      when_actions: [isolate-old, copy-carts]
+      output: |
+        (integer) 1
+    - match: "redis-cli -h 10.20.5.10 EXISTS cart:sess-8f2a91"
+      when_actions: [isolate-old]
+      evidence: cart-missing
+      output: |
+        (integer) 0
+    - match: "redis-cli -h 10.20.5.10 EXISTS cart:sess-8f2a91"
+      output: |
+        (integer) 1
+
+logs:
+  - name: "Facilities: power maintenance, row C (Sat 09-27)"
+    lines: |
+      01:30-02:10 PDU firmware upgrade, row C. Racks C3-C9 power-cycled.
+      Note: servers with BIOS "AC power recovery: Power On" restart when power returns.
+  - name: "Switch acc-sw-04 log"
+    evidence: port-flap
+    lines: |
+      Sep 26 08:14 %LINK-3-UPDOWN: Interface Gi1/0/22, changed state to down  (desc: PRINTER-FLOOR2)
+      Sep 26 08:14 %LINK-3-UPDOWN: Interface Gi1/0/22, changed state to up
+      ... repeats 30-40 times a day since Sep 22
+
+hypotheses:
+  - id: duplicate-ip
+    text: "cache-01 came back up after the power maintenance with the same address, so 10.20.5.10 exists twice and each app server talks to whichever box answered its ARP request."
+    correct: true
+  - id: port-flap
+    text: "The flapping switch port is dropping traffic to the cache."
+    feedback: "Gi1/0/22 is the second-floor printer, flapping since Sep 22, before any of this. And nothing is being dropped: app-01 gets answers, just from a different machine (a different MAC) than app-02."
+  - id: redis-eviction
+    text: "Redis is evicting baskets under memory pressure."
+    feedback: "Eviction would lose a basket for good. These come back on refresh, and two app servers see two different MAC addresses for the same IP."
+  - id: sticky-sessions
+    text: "The load balancer lost session stickiness."
+    feedback: "Baskets are in Redis, not on the app servers, so it shouldn't matter which app server you hit, unless the app servers reach different Redis servers. They do."
+
+actions:
+  - id: isolate-old
+    label: "Over the management network, take cache-01's data interface down (ssh cache-01-mgmt sudo ip link set eth0 down), leaving it running"
+    kind: fix
+    match_regex: "^ssh cache-01-mgmt sudo ip link set eth0 down$"
+    feedback: "Only cache-02 answers for 10.20.5.10 now. cache-01 keeps running, so what's in its memory isn't lost."
+  - id: power-off-old
+    label: "Power cache-01 off from its BMC"
+    kind: destructive
+    feedback: "That ends the duplicate address, but Redis runs without persistence: every basket written to cache-01 since Saturday disappears with it."
+  - id: flush-arp
+    label: "sudo ip neigh flush to 10.20.5.10 on every app server"
+    kind: wrong
+    feedback: "They'd just ask again, and both machines would answer again. The duplicate is still on the network."
+  - id: static-arp
+    label: "Add a static ARP entry for 10.20.5.10 -> cache-02's MAC on every app server"
+    kind: wrong
+    feedback: "It hides the problem on the hosts you remember, and cache-01 still claims the address for everything else, such as the router."
+
+solution_paths:
+  - [isolate-old]
+
+key_evidence: [app01-old-mac, two-macs, old-up]
+
+evidence_labels:
+  app01-old-mac: "app-01 reaches 10.20.5.10 at cache-01's MAC; app-02 at cache-02's"
+  two-macs: "Two different MACs answer ARP for 10.20.5.10"
+  old-up: "cache-01 is running again, up since Saturday's power maintenance"
+
+red_herrings:
+  - evidence: port-flap
+    label: "A switch port flapping all week"
+    why: "Gi1/0/22 is a printer and has flapped since Sep 22, days before the baskets problem. Nothing was being lost: each app server got answers, from two different machines."
+
+hints:
+  nudge: "Both app servers talk to 10.20.5.10. Are they talking to the same machine?"
+  direction: "Compare the MAC address each app server has for 10.20.5.10, and ask the network who answers for it."
+  answer: "cache-01 came back with the same IP. Take its data interface down over the management network, without powering it off."
+
+analogy:
+  title: "Two shops with the same address"
+  text: |
+    The shop moved across the street, but the old one reopened with the same
+    address on the door. Couriers deliver to whichever door they find
+    first, so half the orders go to the old shop. Close the old door, and
+    you'll find a courier from the new depot can't get into the new shop at
+    all, and the old shop's stockroom is full of parcels nobody has
+    collected.
+
+debrief:
+  root_cause: |
+    Saturday's power maintenance restarted cache-01, whose BIOS powers on
+    when AC returns, with its old configuration: 10.20.5.10. Two machines
+    answered ARP for one address, and each host used whichever reply it
+    had cached, so app servers wrote baskets to two unrelated Redis
+    servers. Refreshing switched app servers, and so switched baskets.
+  ideal_path:
+    - "Compare the MAC each app server has for 10.20.5.10: they differ."
+    - "Confirm with duplicate address detection: two MACs reply."
+    - "Find why: cache-01 is up again since the power maintenance."
+    - "Take cache-01's data interface down (keep it running), then check ARP again."
+  real_world: |
+    Decommissioning means removing the address too: wipe the network config
+    or unpatch the port, not just shut down the OS. Many hypervisors and
+    some switches can also alert on duplicate addresses.
+
+concepts:
+  - term: "ARP and the neighbour table"
+    text: "Hosts find the MAC for an IPv4 address with ARP and cache the answer; ip neigh shows the cache."
+    url: "https://man7.org/linux/man-pages/man8/ip-neighbour.8.html"
+  - term: "Duplicate address detection"
+    text: "arping -D asks who has an address without claiming it; any reply means it's already in use."
+    url: "https://man7.org/linux/man-pages/man8/arping.8.html"
+  - term: "nftables rules"
+    text: "A chain with policy drop only accepts what a rule matches: a new client subnet needs a rule of its own."
+    url: "https://wiki.nftables.org/wiki-nftables/index.php/Nftables_families"
+  - term: "Redis MIGRATE"
+    text: "Moves keys to another Redis server; COPY keeps them on the source, and without REPLACE a key that already exists on the target isn't overwritten."
+    url: "https://redis.io/docs/latest/commands/migrate/"
+
+sources:
+  - title: "arping(8): -D duplicate address detection"
+    url: "https://man7.org/linux/man-pages/man8/arping.8.html"
+    retrieved: 2026-10-02
+  - title: "ip-neighbour(8)"
+    url: "https://man7.org/linux/man-pages/man8/ip-neighbour.8.html"
+    retrieved: 2026-10-02
+  - title: "nftables wiki: families"
+    url: "https://wiki.nftables.org/wiki-nftables/index.php/Nftables_families"
+    retrieved: 2026-10-02
+  - title: "Redis: MIGRATE (COPY, REPLACE, KEYS)"
+    url: "https://redis.io/docs/latest/commands/migrate/"
+    retrieved: 2026-10-02
+
+stages:
+  - id: new-subnet
+    update: |
+      10:55: app-01 and app-02 agree on cache-02, and baskets stopped
+      flipping. But app-03 now can't reach the cache at all: every request
+      it serves fails after 5 seconds.
+    diagram_status: { app1: ok, old: down, app3: down }
+    terminal:
+      commands:
+        - match: "ssh app-03 nc -zv -w 5 10.20.5.10 6379"
+          when_actions: [allow-subnet]
+          output: |
+            Connection to 10.20.5.10 6379 port [tcp/redis] succeeded!
+        - match: "ssh app-03 nc -zv -w 5 10.20.5.10 6379"
+          evidence: app03-timeout
+          output: |
+            nc: connect to 10.20.5.10 port 6379 (tcp) timed out: Operation now in progress
+        - match: "ssh app-03 ip -br addr show eth0"
+          evidence: app03-subnet
+          output: |
+            eth0             UP             10.20.6.21/24
+        - match: "ssh cache-02-mgmt sudo nft list chain inet filter input"
+          when_actions: [allow-subnet]
+          output: |
+            table inet filter {
+                chain input {
+                    type filter hook input priority filter; policy drop;
+                    ct state established,related accept
+                    iif "lo" accept
+                    ip saddr 10.99.0.0/24 accept
+                    ip saddr 10.20.4.0/24 tcp dport 6379 accept
+                    ip saddr 10.20.6.0/24 tcp dport 6379 accept
+                }
+            }
+        - match: "ssh cache-02-mgmt sudo nft list chain inet filter input"
+          evidence: nft-4-only
+          output: |
+            table inet filter {
+                chain input {
+                    type filter hook input priority filter; policy drop;
+                    ct state established,related accept
+                    iif "lo" accept
+                    ip saddr 10.99.0.0/24 accept
+                    ip saddr 10.20.4.0/24 tcp dport 6379 accept
+                }
+            }
+        - match: "ssh app-03 ip route get 10.20.5.10"
+          output: |
+            10.20.5.10 via 10.20.6.1 dev eth0 src 10.20.6.21 uid 1000
+                cache
+    hypotheses:
+      - id: subnet-rule
+        text: "cache-02's firewall only accepts 6379 from 10.20.4.0/24. app-03 is in 10.20.6.0/24, and it only seemed to work before because its traffic was reaching cache-01, which has no firewall."
+        correct: true
+      - id: routing
+        text: "app-03 has no route to 10.20.5.0/24."
+        feedback: "It reaches cache-02's address through its gateway, and the connection times out rather than failing with \"No route to host\": packets arrive and are silently dropped."
+      - id: redis-bind
+        text: "Redis on cache-02 only listens on localhost."
+        feedback: "app-01 and app-02 use it fine over the network. Only the new subnet fails."
+    actions:
+      - id: allow-subnet
+        label: "Add 'ip saddr 10.20.6.0/24 tcp dport 6379 accept' to cache-02's input chain (and to its saved ruleset)"
+        kind: fix
+        match_regex: "^ssh cache-02-mgmt sudo nft add rule inet filter input ip saddr 10\\.20\\.6\\.0/24 tcp dport 6379 accept$"
+        feedback: "app-03's subnet may reach Redis, and nothing else changes."
+      - id: policy-accept
+        label: "Set cache-02's input policy to accept"
+        kind: destructive
+        feedback: "That opens Redis, which has no password here, and everything else on cache-02, to every network that can route to it."
+      - id: move-app03
+        label: "Re-address app-03 into 10.20.4.0/24"
+        kind: wrong
+        feedback: "The new subnet was planned for the new app servers. The firewall rule is the missing piece, not app-03's address."
+    solution_paths:
+      - [allow-subnet]
+    key_evidence: [app03-timeout, app03-subnet, nft-4-only]
+    evidence_labels:
+      app03-timeout: "app-03's connection to 6379 times out"
+      app03-subnet: "app-03 is in 10.20.6.0/24"
+      nft-4-only: "cache-02 accepts 6379 only from 10.20.4.0/24, policy drop"
+    hints:
+      nudge: "A timeout, not a refusal, from one subnet only. What drops packets silently?"
+      direction: "Compare app-03's address with what cache-02's firewall accepts on 6379."
+      answer: "cache-02's nftables accepts 6379 only from 10.20.4.0/24. Add a rule for 10.20.6.0/24."
+    debrief:
+      root_cause: |
+        cache-02 was built with an nftables policy of drop and a 6379 rule
+        for the app subnet as it was on Thursday, 10.20.4.0/24. app-03
+        joined in 10.20.6.0/24 on Monday, and nobody noticed because, from
+        Saturday, its ARP pointed at cache-01, which has no firewall.
+        Isolating cache-01 sent it to cache-02, which drops its packets.
+      ideal_path:
+        - "Test from app-03: a timeout on 6379."
+        - "Note app-03's subnet, 10.20.6.0/24."
+        - "Read cache-02's input chain: 6379 only from 10.20.4.0/24, policy drop."
+        - "Add a rule for 10.20.6.0/24 and test again."
+
+  - id: stranded-carts
+    update: |
+      11:10: every app server reaches cache-02. Customer service now has
+      dozens of customers whose baskets from the weekend are gone for good.
+    diagram_status: { app3: ok, ip: ok }
+    terminal:
+      commands:
+        - match: "redis-cli -h 10.99.0.11 --scan --pattern 'cart:*' | wc -l"
+          evidence: stranded-1842
+          output: |
+            1842
+        - match: "redis-cli -h 10.99.0.11 CONFIG GET save"
+          evidence: no-persistence
+          output: |
+            1) "save"
+            2) ""
+    hypotheses:
+      - id: copy-carts
+        text: "Baskets written to cache-01 since Saturday exist only in its memory; copy them to cache-02 with MIGRATE COPY and no REPLACE, so a basket a customer has since rebuilt on cache-02 isn't overwritten."
+        correct: true
+      - id: gone
+        text: "Those baskets are lost now that cache-01 is off the network."
+        feedback: "cache-01 is still running with its data interface down. Its Redis still holds 1,842 baskets, reachable on the management address."
+      - id: replace
+        text: "Copy them with REPLACE, so cache-01's version wins."
+        feedback: "Some customers rebuilt their basket since, on cache-02. REPLACE would overwrite the newer one with the weekend's."
+    actions:
+      - id: copy-carts
+        label: "From cache-01's Redis, MIGRATE every cart:* key to 10.99.0.12 with COPY and without REPLACE (./migrate-carts.sh 10.99.0.11 10.99.0.12)"
+        kind: fix
+        match_regex: "^\\./migrate-carts\\.sh 10\\.99\\.0\\.11 10\\.99\\.0\\.12$"
+        feedback: "1,790 baskets copied; 52 already existed on cache-02 and were left as they are. Then cache-01 can be wiped and removed for good."
+      - id: replace-all
+        label: "MIGRATE with REPLACE"
+        kind: wrong
+        feedback: "Overwrites baskets customers rebuilt on cache-02 since the weekend with older versions."
+      - id: wipe-old
+        label: "Wipe and dispose of cache-01 now"
+        kind: destructive
+        feedback: "Those 1,842 baskets exist nowhere else: Redis here has no persistence."
+    solution_paths:
+      - [copy-carts]
+    key_evidence: [cart-missing, stranded-1842, no-persistence]
+    evidence_labels:
+      cart-missing: "A customer's weekend basket isn't on cache-02"
+      stranded-1842: "cache-01 still holds 1,842 baskets"
+      no-persistence: "Redis on cache-01 has no persistence: they exist only in memory"
+    hints:
+      nudge: "Where did weekend writes go, and is that machine still running?"
+      direction: "Count cart keys on cache-01 over the management network, and check whether they'd survive a restart."
+      answer: "MIGRATE the cart:* keys from cache-01 to cache-02 with COPY and without REPLACE, then retire cache-01."
+    debrief:
+      root_cause: |
+        From Saturday until it was isolated, cache-01 took the writes of
+        every app server whose ARP cache pointed at it: 1,842 baskets.
+        Redis there keeps data only in memory, so powering it off would
+        have lost them. Isolating instead of powering off kept them, and
+        MIGRATE with COPY moves them across without touching keys that
+        already exist on cache-02.
+      ideal_path:
+        - "Check a customer's basket on cache-02: missing."
+        - "Count cart keys on cache-01 over the management network: 1,842."
+        - "Confirm they're only in memory (no save configured)."
+        - "MIGRATE with COPY, no REPLACE, then check the basket again."

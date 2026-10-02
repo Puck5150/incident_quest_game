@@ -186,3 +186,38 @@
   alternatives:
     - { command: "Azure portal > SQL database > Query editor", note: "Run the same query in the browser." }
   docs: { title: "sqlcmd utility", url: "https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility" }
+
+- id: redis-scan-count
+  match: "^redis-cli .*--scan .*\\| wc -l$"
+  summary: "Counts the keys in Redis that match a pattern, without blocking the server."
+  parts:
+    - { token: "-h 10.99.0.11", meaning: "The Redis server to connect to." }
+    - { token: "--scan", meaning: "Iterate keys with SCAN (incremental, unlike KEYS, which blocks the server)." }
+    - { token: "--pattern 'cart:*'", meaning: "Only keys matching this glob." }
+    - { token: "| wc -l", meaning: "Count the lines, one per key." }
+  why: "Sizes what's in a Redis server safely, even a busy one."
+  alternatives:
+    - { command: "redis-cli -h HOST DBSIZE", note: "Every key, not just one pattern." }
+  docs: { title: "redis-cli: scanning for keys", url: "https://redis.io/docs/latest/develop/tools/cli/" }
+
+- id: redis-config-get
+  match: "^redis-cli .*CONFIG GET "
+  summary: "Reads a Redis server's configuration setting."
+  parts:
+    - { token: "-h 10.99.0.11", meaning: "The Redis server." }
+    - { token: "CONFIG GET save", meaning: "The RDB snapshot schedule; an empty value means no snapshots." }
+  why: "Whether data survives a restart depends on persistence (save and appendonly); empty save and appendonly no means memory only."
+  alternatives:
+    - { command: "redis-cli -h HOST INFO persistence", note: "Persistence status, including the last save." }
+  docs: { title: "Redis persistence", url: "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/" }
+
+- id: redis-cli
+  match: "^redis-cli "
+  summary: "Runs one Redis command against a server."
+  parts:
+    - { token: "-h 10.20.5.10", meaning: "The Redis server." }
+    - { token: "EXISTS key", meaning: "1 if the key exists, 0 if not." }
+  why: "A direct check of what the server the app uses actually holds."
+  alternatives:
+    - { command: "redis-cli -h HOST TTL key", note: "Also how long until it expires." }
+  docs: { title: "Redis: EXISTS", url: "https://redis.io/docs/latest/commands/exists/" }

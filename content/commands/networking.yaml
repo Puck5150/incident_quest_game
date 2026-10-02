@@ -88,12 +88,14 @@
   docs: { title: "BIND 9: dig", url: "https://bind9.readthedocs.io/en/latest/manpages.html#dig-dns-lookup-utility" }
 
 - id: nc-port-check
-  match: "^nc -zv "
+  match: "^(ssh \\S+ )?nc -zv "
   summary: "Tests whether a TCP connection to a host and port succeeds, without sending data."
   parts:
     - { token: "nc", meaning: "netcat: raw TCP and UDP connections." }
     - { token: "-z", meaning: "Zero-I/O: just connect, then close." }
     - { token: "-v", meaning: "Verbose: say whether it succeeded or why not." }
+    - { token: "-w 5", meaning: "(If given) give up after 5 seconds." }
+    - { token: "ssh HOST", meaning: "(If given) run the test from that host, which is what matters for its firewall path." }
   why: "Separates the network from the application: if the TCP connection fails, no credential or setting in the app matters yet."
   alternatives:
     - { command: "Test-NetConnection HOST -Port N", note: "The PowerShell equivalent." }
@@ -134,7 +136,7 @@
   docs: { title: "nslookup", url: "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/nslookup" }
 
 - id: ip-brief-addr
-  match: "^ip -br addr"
+  match: "^(ssh \\S+ )?ip -br addr"
   summary: "Shows network interfaces with their state and addresses, one line each."
   parts:
     - { token: "ip", meaning: "iproute2: the Linux tool for interfaces, addresses and routes (replaces ifconfig and route)." }
@@ -158,7 +160,7 @@
   docs: { title: "ip-neighbour(8)", url: "https://man7.org/linux/man-pages/man8/ip-neighbour.8.html" }
 
 - id: ip-route-get
-  match: "^ip route get "
+  match: "^(ssh \\S+ )?ip route get "
   summary: "Asks the kernel which route, interface and source address it would use for one destination."
   parts:
     - { token: "route get 10.20.5.10", meaning: "Resolve the route for this address, as a real packet would." }
@@ -314,3 +316,27 @@
     - { command: "netstat -ltnp", note: "Older tool." }
     - { command: "lsof -iTCP -sTCP:LISTEN", note: "Also shows the process." }
   docs: { title: "ss(8)", url: "https://man7.org/linux/man-pages/man8/ss.8.html" }
+
+- id: arping-dad
+  match: "^(sudo )?arping -D "
+  summary: "Asks the local network who has an IPv4 address, without claiming it (duplicate address detection)."
+  parts:
+    - { token: "-D", meaning: "Duplicate address detection mode: send ARP requests from 0.0.0.0; success means nobody answered." }
+    - { token: "-I eth0", meaning: "Send on this interface." }
+    - { token: "-c 2", meaning: "Send 2 requests." }
+  why: "More than one MAC address in the replies proves two machines claim the same IP."
+  alternatives:
+    - { command: "ip neigh show ADDRESS (on several hosts)", note: "Different MACs on different hosts point the same way." }
+  docs: { title: "arping(8)", url: "https://man7.org/linux/man-pages/man8/arping.8.html" }
+
+- id: nft-list
+  match: "^(ssh \\S+ )?(sudo )?nft list "
+  summary: "Prints nftables rules: a whole ruleset, a table or one chain."
+  parts:
+    - { token: "ssh HOST", meaning: "(If given) run it on that host." }
+    - { token: "list chain inet filter input", meaning: "The input chain of the filter table in the inet family (IPv4 and IPv6)." }
+  why: "Shows the chain's policy (drop means anything unmatched is silently discarded) and exactly which sources each rule accepts."
+  alternatives:
+    - { command: "sudo nft list ruleset", note: "Everything." }
+    - { command: "sudo iptables -S", note: "On iptables-based hosts." }
+  docs: { title: "nftables wiki: listing rules", url: "https://wiki.nftables.org/wiki-nftables/index.php/Simple_rule_management" }
