@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: Google Cloud (gcloud, bq). First matching entry wins.
+# --format picks the output: value(...) prints bare values, table(...) columns,
+# yaml(...) or json(...) only the named fields. --filter keeps only matching
+# resources (field=value, field:value for "contains", AND/OR).
+
+- id: bq-dry-run
+  match: "^bq query --dry_run"
+  summary: "Validates a BigQuery query and reports how many bytes it would scan, without running it."
+  parts:
+    - { token: "--dry_run", meaning: "Don't run; just check the query and estimate bytes processed." }
+    - { token: "--use_legacy_sql=false", meaning: "Use GoogleSQL (standard SQL), not legacy SQL." }
+    - { token: "'SELECT ...'", meaning: "The query." }
+  why: "On-demand pricing charges by bytes scanned; the estimate shows whether a filter is pruning partitions or scanning the whole table (a LIMIT doesn't reduce it)."
+  alternatives:
+    - { command: "BigQuery console query validator", note: "Shows the same estimate as you type." }
+    - { command: "INFORMATION_SCHEMA.JOBS", note: "Bytes billed by queries that already ran." }
+  docs: { title: "bq command-line tool reference", url: "https://docs.cloud.google.com/bigquery/docs/reference/bq-cli-reference" }
+
+- id: bq-show
+  match: "^bq show "
+  summary: "Shows a BigQuery table's metadata: schema, partitioning, clustering and size."
+  parts:
+    - { token: "--format=prettyjson", meaning: "Print the full metadata as indented JSON." }
+    - { token: "analytics.events", meaning: "dataset.table" }
+  why: "Shows whether the table is partitioned or clustered, and on which column, which decides what a query can skip."
+  alternatives:
+    - { command: "SELECT * FROM analytics.INFORMATION_SCHEMA.COLUMNS", note: "Schema, including which column is the partitioning column." }
+  docs: { title: "bq command-line tool reference", url: "https://docs.cloud.google.com/bigquery/docs/reference/bq-cli-reference" }
+
+- id: gcloud-backend-health
+  match: "^gcloud compute backend-services get-health"
+  summary: "Shows the health of each backend instance behind a load balancer's backend service."
+  parts:
+    - { token: "portal-backend", meaning: "The backend service." }
+    - { token: "--global", meaning: "It's a global backend service (use --region for regional ones)." }
+    - { token: "--format=\"value(status.healthStatus[].healthState)\"", meaning: "Print just HEALTHY or UNHEALTHY for each instance." }
+  why: "Shows what the load balancer thinks right now; all UNHEALTHY with healthy instances usually means probes can't reach them or hit the wrong port or path."
+  alternatives:
+    - { command: "Console > Load balancing > backend > Health", note: "The same view." }
+  docs: { title: "gcloud compute backend-services get-health", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/backend-services/get-health" }
+
+- id: gcloud-firewall-describe
+  match: "^gcloud compute firewall-rules describe"
+  summary: "Shows one VPC firewall rule."
+  parts:
+    - { token: "allow-app-8080", meaning: "The rule." }
+    - { token: "--format=yaml(direction,priority,sourceRanges,allowed,targetTags)", meaning: "Only the fields that decide what it matches: direction, priority, sources, ports, and which instances (by network tag) it applies to." }
+  why: "A rule with targetTags only applies to instances carrying one of those tags; compare them with the instance's tags."
+  alternatives:
+    - { command: "gcloud compute instances describe VM --zone Z --format='value(tags.items)'", note: "The instance's tags." }
+  docs: { title: "gcloud compute firewall-rules describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/firewall-rules/describe" }
+
+- id: gcloud-firewall-list
+  match: "^gcloud compute firewall-rules list"
+  summary: "Lists VPC firewall rules."
+  parts:
+    - { token: "--filter=\"network=portal-vpc AND direction=INGRESS\"", meaning: "Only inbound rules in this VPC." }
+    - { token: "--format=\"table(name,sourceRanges.list(),allowed[].map().firewall_rule().list())\"", meaning: "A table of name, source ranges and allowed ports; list() joins values with commas, and firewall_rule() formats protocol:port." }
+  why: "Google's health check probes come from 35.191.0.0/16 and 130.211.0.0/22; if no rule allows them, every backend shows unhealthy."
+  alternatives:
+    - { command: "Connectivity Tests (Network Intelligence Center)", note: "Traces a packet and names the rule that blocks it." }
+  docs: { title: "gcloud compute firewall-rules list", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/firewall-rules/list" }
+
+- id: gcloud-health-check-describe
+  match: "^gcloud compute health-checks describe"
+  summary: "Shows a health check's settings."
+  parts:
+    - { token: "portal-hc", meaning: "The health check." }
+    - { token: "--format=\"value(httpHealthCheck.port,httpHealthCheck.requestPath)\"", meaning: "Just the port and path it probes." }
+  why: "The probe must hit a port and path the app actually serves with a 200."
+  alternatives:
+    - { command: "curl -s -o /dev/null -w '%{http_code}\\n' http://INSTANCE:PORT/PATH", note: "What the instance returns there." }
+  docs: { title: "gcloud compute health-checks describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/health-checks/describe" }
+
+- id: gcloud-mig-list-errors
+  match: "^gcloud compute instance-groups managed list-errors"
+  summary: "Lists the errors a managed instance group hit while creating or recreating instances."
+  parts:
+    - { token: "shop-web-mig", meaning: "The managed instance group." }
+    - { token: "--region us-central1", meaning: "It's a regional group, in this region (--zone for a zonal one)." }
+  why: "When a group can't reach its target size, the error says why, such as a zone out of resources or a quota."
+  alternatives:
+    - { command: "Console > Instance groups > group > Errors", note: "The same list." }
+  docs: { title: "gcloud compute instance-groups managed list-errors", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/list-errors" }
+
+- id: gcloud-mig-list
+  match: "^gcloud compute instance-groups managed list"
+  summary: "Lists managed instance groups with their size and target size."
+  parts:
+    - { token: "--filter=region:us-central1", meaning: "Only groups whose region contains us-central1." }
+  why: "A size below the target shows a group that's failing to create instances."
+  alternatives:
+    - { command: "gcloud compute instance-groups managed describe GROUP --region R", note: "One group's full status." }
+  docs: { title: "gcloud compute instance-groups managed list", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/list" }
+
+- id: gcloud-instance-describe
+  match: "^gcloud compute instances describe"
+  summary: "Shows a VM instance's properties."
+  parts:
+    - { token: "app-3", meaning: "The instance." }
+    - { token: "--zone us-central1-a", meaning: "Its zone." }
+    - { token: "--format=value(tags.items)", meaning: "Just its network tags." }
+  why: "Firewall rules target instances by tag, so a missing tag means the rule doesn't apply to this VM."
+  alternatives:
+    - { command: "gcloud compute instances list --format='table(name,tags.items.list())'", note: "Tags of every instance." }
+  docs: { title: "gcloud compute instances describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/instances/describe" }
+
+- id: gcloud-region-describe
+  match: "^gcloud compute regions describe"
+  summary: "Shows a region's zones, status and Compute Engine quotas with current usage."
+  parts:
+    - { token: "us-central1", meaning: "The region." }
+  why: "The quotas list shows a regional limit (such as CPUs) that's already used up."
+  alternatives:
+    - { command: "Console > IAM & Admin > Quotas", note: "Every quota, with requests for increases." }
+  docs: { title: "gcloud compute regions describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/regions/describe" }
+
+- id: gcloud-monitoring-policies
+  match: "^gcloud monitoring policies list"
+  summary: "Lists Cloud Monitoring alerting policies."
+  parts:
+    - { token: "--filter=displayName:checkout", meaning: "Only policies whose name contains \"checkout\"." }
+    - { token: "--format=yaml(displayName,conditions[].conditionThreshold.duration,...)", meaning: "Only the name, each condition's duration (how long it must be breached) and threshold." }
+  why: "A long duration means a short spike never fires the alert; the numbers are right there."
+  alternatives:
+    - { command: "Console > Monitoring > Alerting", note: "The same policies, with incident history." }
+  docs: { title: "gcloud monitoring policies list", url: "https://docs.cloud.google.com/sdk/gcloud/reference/monitoring/policies/list" }
+
+- id: gcloud-run-describe
+  match: "^gcloud run services describe"
+  summary: "Shows a Cloud Run service: its URL, current revision, traffic split and settings."
+  parts:
+    - { token: "signup-api", meaning: "The service." }
+    - { token: "--region us-central1", meaning: "Its region." }
+    - { token: "--format=value(spec.template.spec.serviceAccountName)", meaning: "(If given) just the service account the service runs as." }
+  why: "Concurrency, scaling limits, environment and which revision gets traffic are all in one place."
+  alternatives:
+    - { command: "gcloud run revisions list --service NAME --region R", note: "Every revision." }
+  docs: { title: "gcloud run services describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/run/services/describe" }
+
+- id: gcloud-storage-bucket-iam
+  match: "^gcloud storage buckets get-iam-policy"
+  summary: "Prints a Cloud Storage bucket's IAM policy."
+  parts:
+    - { token: "gs://bucket", meaning: "The bucket." }
+  why: "Shows who holds which role on the bucket, including allUsers (public) or a missing service account."
+  alternatives:
+    - { command: "Console > Cloud Storage > bucket > Permissions", note: "The same bindings." }
+  docs: { title: "gcloud storage buckets get-iam-policy", url: "https://docs.cloud.google.com/sdk/gcloud/reference/storage/buckets/get-iam-policy" }
+
+- id: gcloud-storage-bucket-describe
+  match: "^gcloud storage buckets describe"
+  summary: "Shows a Cloud Storage bucket's settings."
+  parts:
+    - { token: "gs://acme-user-docs", meaning: "The bucket." }
+    - { token: "--format=json(lifecycle_config,soft_delete_policy)", meaning: "Only the lifecycle rules and the soft delete retention." }
+  why: "Lifecycle rules delete objects automatically; soft delete keeps deleted objects restorable for its retention period."
+  alternatives:
+    - { command: "Console > Cloud Storage > bucket > Lifecycle / Protection", note: "The same settings." }
+  docs: { title: "gcloud storage buckets describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/storage/buckets/describe" }
+
+- id: gcloud-storage-ls
+  match: "^gcloud storage ls "
+  summary: "Lists Cloud Storage objects."
+  parts:
+    - { token: "\"gs://bucket/**\"", meaning: "Every object in the bucket, at any depth (quoted so the shell doesn't expand **)." }
+    - { token: "--soft-deleted", meaning: "List soft-deleted objects instead of live ones." }
+  why: "Shows whether deleted objects are still recoverable before you plan a restore."
+  alternatives:
+    - { command: "gcloud storage restore gs://bucket/OBJECT#GENERATION", note: "Restore one soft-deleted object." }
+  docs: { title: "gcloud storage ls", url: "https://docs.cloud.google.com/sdk/gcloud/reference/storage/ls" }
