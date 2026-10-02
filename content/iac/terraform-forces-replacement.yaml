@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-forces-replacement
+track: iac
+difficulty: 3
+title: "Turning on encryption fails: Terraform says the database can't be destroyed"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  priority: P3
+  body: |
+    Security asked for encryption at rest on every database. Our PR sets
+    storage_encrypted = true on the orders database, and the plan in CI fails
+    with "Instance cannot be destroyed". We're only turning on a setting. Can
+    we remove prevent_destroy for this one PR?
+
+environment: |
+  The orders database is an RDS for PostgreSQL instance managed by
+  Terraform, created years ago without encryption, with
+  lifecycle { prevent_destroy = true }. Applications connect through its
+  endpoint.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "terraform plan"
+      when_actions: [revert-and-migrate]
+      output: |
+        aws_db_instance.orders: Refreshing state... [id=db-ORDERS1234]
+
+        No changes. Your infrastructure matches the configuration.
+    - match: "terraform plan"
+      evidence: prevent-destroy
+      output: |
+        aws_db_instance.orders: Refreshing state... [id=db-ORDERS1234]
+
+        Error: Instance cannot be destroyed
+
+          on db.tf line 1:
+           1: resource "aws_db_instance" "orders" {
+
+        Resource aws_db_instance.orders has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed.
+    - match: "git diff main -- db.tf"
+      evidence: encryption-change
+      output: |2
+         resource "aws_db_instance" "orders" {
+           identifier        = "orders-db"
+           engine            = "postgres"
+        -  storage_encrypted = false
+        +  storage_encrypted = true
+           lifecycle {
+             prevent_destroy = true
+    - match: "aws rds describe-db-instances --db-instance-identifier orders-db --query DBInstances[0].StorageEncrypted"
+      evidence: unencrypted
+      output: |
+        false
+
+files:
+  - path: "AWS provider docs: aws_db_instance (excerpt, from the provider's schema)"
+    evidence: force-new
+    content: |
+      storage_encrypted (Optional, Forces new resource) Whether the DB instance
+      is encrypted.
+
+hypotheses:
+  - id: replacement
+    text: "storage_encrypted can't be changed on an existing instance, so Terraform plans to replace it (destroy and create an empty, encrypted one), and prevent_destroy correctly refuses."
+    correct: true
+  - id: lifecycle-bug
+    text: "prevent_destroy is misfiring on a simple setting change."
+    feedback: "For RDS, encryption can't be switched on in place: the change forces a new resource. A replacement destroys the database, which is exactly what prevent_destroy blocks."
+  - id: kms
+    text: "There's no KMS key for the encryption."
+    feedback: "Without kms_key_id, RDS uses the default AWS managed key. The plan fails on a destroy, not on a missing key."
+  - id: permissions
+    text: "CI isn't allowed to encrypt databases."
+    feedback: "The plan fails before any API call: it's Terraform's own lifecycle rule stopping a destroy."
+
+actions:
+  - id: revert-and-migrate
+    label: "Revert storage_encrypted in this PR, and plan a migration: snapshot, copy the snapshot with encryption, restore a new encrypted instance, cut applications over in a maintenance window, then bring the new instance into Terraform"
+    kind: fix
+    feedback: "The plan is clean again. The supported route to encryption (an encrypted snapshot copy restored to a new instance) moves the data, and the cutover is planned instead of an accidental delete."
+  - id: remove-guard
+    label: "Remove prevent_destroy for this PR and apply"
+    kind: destructive
+    feedback: "Terraform would destroy the production orders database and create a new, empty, encrypted one. The guard exists to stop exactly that."
+  - id: ignore-encryption
+    label: "Add storage_encrypted to ignore_changes"
+    kind: wrong
+    feedback: "The plan goes quiet, the database stays unencrypted, and the code now claims it's encrypted. Security's requirement isn't met."
+  - id: modify-console
+    label: "Turn on encryption for the instance in the RDS console"
+    kind: wrong
+    feedback: "There's no such setting for an existing instance: an unencrypted DB instance can't be encrypted in place."
+
+solution_paths:
+  - [revert-and-migrate]
+
+key_evidence: [prevent-destroy, encryption-change, force-new, unencrypted]
+
+evidence_labels:
+  prevent-destroy: "Plan fails: prevent_destroy blocks destroying aws_db_instance.orders"
+  encryption-change: "The PR switches storage_encrypted from false to true"
+  force-new: "storage_encrypted forces a new resource"
+  unencrypted: "The live instance is unencrypted"
+
+hints:
+  nudge: "Why would turning on a setting need anything to be destroyed?"
+  direction: "Check whether storage_encrypted can change on an existing instance, and what Terraform does when it can't."
+  answer: "storage_encrypted forces replacement, and prevent_destroy rightly refuses. Revert it and migrate through an encrypted snapshot copy and a planned cutover."
+
+analogy:
+  title: "You can't fit a lock to a vault after it's built"
+  text: |
+    The new rule says every vault must have a combination lock. This vault
+    was built without one, and the only way to add it is to build a new
+    vault. The rule against demolishing vaults stops you from knocking it
+    down with the gold inside. Build the new vault, move the gold, then
+    retire the old one.
+
+debrief:
+  root_cause: |
+    Some arguments can't change on an existing resource; for an RDS
+    instance, storage_encrypted is one, since an unencrypted instance can't
+    be encrypted in place. Terraform therefore planned to replace the
+    database: destroy it and create a new, empty, encrypted one.
+    prevent_destroy makes any plan that destroys the resource fail, so the
+    plan stopped. The guard did its job; the real route is migrating the data
+    through an encrypted snapshot copy.
+  ideal_path:
+    - "Read the error: prevent_destroy blocked a destroy."
+    - "Find why: storage_encrypted forces a new resource."
+    - "Confirm the live instance is unencrypted; there's no in-place switch."
+    - "Revert, and plan an encrypted-snapshot migration with a cutover."
+  real_world: |
+    Keep prevent_destroy on stateful resources, and read every "forces
+    replacement" in a plan as "this deletes it". Provider docs and the plan
+    output say which arguments do that; check before writing the PR.
+
+concepts:
+  - term: "prevent_destroy"
+    text: "A lifecycle setting that makes Terraform reject any plan that would destroy the resource."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+  - term: "Forces replacement"
+    text: "A change to an argument that can't be updated in place, so Terraform destroys and recreates the object."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+
+sources:
+  - title: "Terraform: The lifecycle meta-argument (prevent_destroy)"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-02
+  - title: "Amazon RDS: Encrypting Amazon RDS resources (limitations: can't encrypt an existing unencrypted instance; encrypted snapshot copy)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html"
+    retrieved: 2026-10-02
+  - title: "Terraform AWS provider source: aws_db_instance schema (storage_encrypted ForceNew)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/internal/service/rds/instance.go"
+    retrieved: 2026-10-02

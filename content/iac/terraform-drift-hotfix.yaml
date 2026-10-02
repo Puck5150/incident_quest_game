@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-drift-hotfix
+track: iac
+difficulty: 2
+title: "Tonight's routine apply wants to undo last night's emergency fix"
+par_minutes: 10
+
+ticket:
+  from: "Platform team"
+  priority: P2
+  body: |
+    The plan for tonight's routine change (a new tag) also wants to "update
+    in-place" the payments security group, removing a rule. Nobody changed
+    that in code. Should we just apply? Someone mentioned an incident last
+    night.
+
+environment: |
+  All networking for the payments service is managed by Terraform in the
+  infra repo. Last night during an outage, on-call opened TCP 8443 from the
+  partner's new address range (198.51.100.0/24) directly in the AWS console.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "terraform plan"
+      when_actions: [codify]
+      output: |
+        aws_security_group.payments: Refreshing state... [id=sg-0payments]
+
+        Terraform will perform the following actions:
+
+          # aws_instance.payments_worker will be updated in-place
+          ~ resource "aws_instance" "payments_worker" {
+              ~ tags = {
+                  + "cost-center" = "payments"
+                }
+            }
+
+        Plan: 0 to add, 1 to change, 0 to destroy.
+    - match: "terraform plan"
+      evidence: plan-removes-rule
+      output: |
+        aws_security_group.payments: Refreshing state... [id=sg-0payments]
+
+        Terraform will perform the following actions:
+
+          # aws_instance.payments_worker will be updated in-place
+          ~ resource "aws_instance" "payments_worker" {
+              ~ tags = {
+                  + "cost-center" = "payments"
+                }
+            }
+
+          # aws_security_group.payments will be updated in-place
+          ~ resource "aws_security_group" "payments" {
+              ~ ingress = [
+                  - {
+                      - cidr_blocks = ["198.51.100.0/24"]
+                      - from_port   = 8443
+                      - to_port     = 8443
+                      - protocol    = "tcp"
+                      - description = "partner hotfix"
+                    },
+                    # (1 unchanged element hidden)
+                ]
+            }
+
+        Plan: 0 to add, 2 to change, 0 to destroy.
+    - match: "terraform plan -refresh-only"
+      evidence: drift
+      output: |
+        Note: Objects have changed outside of Terraform
+
+        Terraform detected the following changes made outside of Terraform since the last "terraform apply":
+
+          # aws_security_group.payments has changed
+          ~ resource "aws_security_group" "payments" {
+              ~ ingress = [
+                  + {
+                      + cidr_blocks = ["198.51.100.0/24"]
+                      + description = "partner hotfix"
+                      + from_port   = 8443
+                      + protocol    = "tcp"
+                      + to_port     = 8443
+                    },
+                ]
+            }
+
+logs:
+  - name: "#incidents (last night)"
+    evidence: hotfix-note
+    lines: |
+      23:48 on-call: partner moved to 198.51.100.0/24, their callbacks are failing
+      23:52 on-call: opened 8443 from 198.51.100.0/24 on sg-0payments in the console, callbacks OK. Will codify tomorrow.
+
+hypotheses:
+  - id: drift
+    text: "Last night's console change isn't in the code, so Terraform sees it as drift and plans to remove it. Applying as-is would break the partner's callbacks again."
+    correct: true
+  - id: bug
+    text: "Terraform has a bug and is planning a change that isn't needed."
+    feedback: "Terraform is doing exactly its job: make the real resource match the code. The code doesn't have the rule; the real security group does."
+  - id: tag-side-effect
+    text: "Adding the tag forces the security group to be updated."
+    feedback: "The tag goes on the instance. The security group change is a separate entry, removing an ingress rule nobody added in code."
+  - id: state-corrupt
+    text: "The state file is corrupt."
+    feedback: "A refresh-only plan shows exactly what changed outside Terraform: one new ingress rule, matching last night's console change."
+
+actions:
+  - id: codify
+    label: "Add the 198.51.100.0/24 rule on 8443 to the security group in code (reviewed), so the plan no longer removes it"
+    kind: fix
+    feedback: "The code now matches what's really needed, the plan shows only the tag change, and the hotfix is reviewed and recorded."
+  - id: apply-anyway
+    label: "Apply the plan as it is"
+    kind: destructive
+    feedback: "Terraform removes the rule, and the partner's callbacks fail again, recreating last night's outage."
+  - id: target-instance
+    label: "Apply with -target=aws_instance.payments_worker to skip the security group"
+    kind: wrong
+    feedback: "Tonight's change goes out, and the drift is still waiting for the next untargeted apply to undo the fix. -target is for exceptions, not for avoiding drift."
+  - id: refresh-apply
+    label: "Run terraform apply -refresh-only to accept the drift into state"
+    kind: wrong
+    feedback: "State would record the rule, but the code still doesn't have it, so the very next plan wants to remove it again."
+
+solution_paths:
+  - [codify]
+
+key_evidence: [plan-removes-rule, drift, hotfix-note]
+
+evidence_labels:
+  plan-removes-rule: "The plan removes a 198.51.100.0/24 rule on 8443 from the payments security group"
+  drift: "A refresh-only plan shows that rule was added outside Terraform"
+  hotfix-note: "On-call added it in the console last night to fix partner callbacks"
+
+hints:
+  nudge: "Nobody removed that rule in code. Was it ever in code?"
+  direction: "Run a refresh-only plan to see what changed outside Terraform, then check last night's incident notes."
+  answer: "The rule was a console hotfix, so it's drift. Add it to the code and the plan stops removing it."
+
+analogy:
+  title: "The plan of the house vs the house"
+  text: |
+    During a storm, someone propped open a back door so deliveries could
+    get in. The building's official plan has that door shut, and tonight
+    the caretaker will make the building match the plan. Update the plan
+    to include the door, or the caretaker closes it again.
+
+debrief:
+  root_cause: |
+    Terraform makes real infrastructure match the code. Last night's rule was
+    added in the console, so it existed in AWS but not in the configuration:
+    drift. Every plan from then on would remove it, and tonight's routine
+    apply would have broken the partner's callbacks again. Codifying the
+    hotfix makes the code the truth again.
+  ideal_path:
+    - "Read the plan: it removes a rule nobody touched in code."
+    - "Run a refresh-only plan: the rule was added outside Terraform."
+    - "Match it to last night's console hotfix."
+    - "Add the rule to the code; plan again and see only the intended change."
+  real_world: |
+    Console hotfixes are sometimes necessary; the follow-up is to codify
+    them the next day. Scheduled refresh-only plans (drift detection) catch
+    the ones that get forgotten.
+
+concepts:
+  - term: "Drift"
+    text: "A difference between real infrastructure and what the Terraform configuration and state describe, usually from changes made outside Terraform."
+    url: "https://developer.hashicorp.com/terraform/tutorials/state/resource-drift"
+  - term: "Refresh-only mode"
+    text: "A plan that only reports how real infrastructure has changed since the last apply, without proposing changes to match the code."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+
+sources:
+  - title: "Terraform: Manage resource drift"
+    url: "https://developer.hashicorp.com/terraform/tutorials/state/resource-drift"
+    retrieved: 2026-10-02
+  - title: "Terraform: terraform plan (-refresh-only, -target)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+    retrieved: 2026-10-02

@@ -386,3 +386,15 @@ from your own experience and tick them off.
 - [ ] Representative output: gh CLI tables and --log lines (including the
       "Skipped:" step line), runner machine names, the actions/cache log
       wording, the AWS credentials action error text.
+
+## IaC to 8 (2026-10-02): terraform-drift-hotfix, terraform-count-index-shift, terraform-import-existing, terraform-state-in-git, terraform-ignore-changes-autoscaling, terraform-forces-replacement
+- [x] Checked on 2026-10-02: state stores sensitive values in plain text,
+      keep it out of git, use encrypted remote backends; the dependency lock
+      file and init -upgrade; ignore_changes for attributes another process
+      manages; RDS can only be encrypted at creation (encrypted snapshot copy
+      and restore otherwise); in the AWS provider source, storage_encrypted is
+      ForceNew and identifier is NOT (it renames in place), so the
+      forces-replacement incident uses encryption, not a rename.
+- [ ] Representative output: terraform plan/apply formatting, the S3
+      BucketAlreadyOwnedByYou error as the provider prints it, git/grep
+      output. The prevent_destroy error wording follows Terraform's message.

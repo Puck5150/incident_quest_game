@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-count-index-shift
+track: iac
+difficulty: 3
+title: "Removing one queue wants to destroy and recreate two others"
+par_minutes: 12
+
+ticket:
+  from: "Messaging team"
+  priority: P2
+  body: |
+    We're retiring the "returns" queue. The PR just deletes "returns" from a
+    list, but the plan replaces the "refunds" queue and destroys the
+    "shipping" queue, both full of live messages. Is the plan wrong?
+
+environment: |
+  The SQS queues are created from a list with count. Before the PR:
+  queue_names = ["orders", "returns", "refunds", "shipping"]. Changing a
+  queue's name forces Terraform to replace it.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "terraform state list | grep aws_sqs_queue"
+      when_actions: [for-each-moved]
+      output: |
+        aws_sqs_queue.queue["orders"]
+        aws_sqs_queue.queue["refunds"]
+        aws_sqs_queue.queue["returns"]
+        aws_sqs_queue.queue["shipping"]
+    - match: "terraform state list | grep aws_sqs_queue"
+      evidence: indexed-state
+      output: |
+        aws_sqs_queue.queue[0]
+        aws_sqs_queue.queue[1]
+        aws_sqs_queue.queue[2]
+        aws_sqs_queue.queue[3]
+    - match: "terraform plan"
+      when_actions: [for-each-moved]
+      output: |2
+          # aws_sqs_queue.queue[0] has moved to aws_sqs_queue.queue["orders"]
+          # aws_sqs_queue.queue[2] has moved to aws_sqs_queue.queue["refunds"]
+          # aws_sqs_queue.queue[3] has moved to aws_sqs_queue.queue["shipping"]
+          # aws_sqs_queue.queue[1] has moved to aws_sqs_queue.queue["returns"]
+
+          # aws_sqs_queue.queue["returns"] will be destroyed
+          - resource "aws_sqs_queue" "queue" {
+              - name = "returns"
+            }
+
+        Plan: 0 to add, 0 to change, 1 to destroy.
+    - match: "terraform plan"
+      evidence: shift-plan
+      output: |2
+          # aws_sqs_queue.queue[1] must be replaced
+        -/+ resource "aws_sqs_queue" "queue" {
+              ~ name = "returns" -> "refunds" # forces replacement
+            }
+
+          # aws_sqs_queue.queue[2] must be replaced
+        -/+ resource "aws_sqs_queue" "queue" {
+              ~ name = "refunds" -> "shipping" # forces replacement
+            }
+
+          # aws_sqs_queue.queue[3] will be destroyed
+          - resource "aws_sqs_queue" "queue" {
+              - name = "shipping"
+            }
+
+        Plan: 2 to add, 0 to change, 3 to destroy.
+
+files:
+  - path: "queues.tf (on the PR branch)"
+    evidence: count-list
+    content: |
+      variable "queue_names" {
+        default = ["orders", "refunds", "shipping"]   # "returns" removed
+      }
+
+      resource "aws_sqs_queue" "queue" {
+        count = length(var.queue_names)
+        name  = var.queue_names[count.index]
+      }
+
+hypotheses:
+  - id: index-shift
+    text: "With count, each queue is identified by its position. Removing \"returns\" shifts every later queue down one index, so Terraform thinks queue[1] and queue[2] were renamed (which forces replacement) and queue[3] was removed."
+    correct: true
+  - id: plan-bug
+    text: "The plan is wrong; Terraform will only remove \"returns\"."
+    feedback: "The plan is exactly what will happen: Terraform tracks these queues by index (queue[0] to queue[3]), and the indexes now point at different names."
+  - id: drift
+    text: "Someone changed the queues in the console."
+    feedback: "The plan's reasons are all in the code: each name change comes from the list, marked \"forces replacement\"."
+  - id: provider
+    text: "A provider upgrade changed how queues are named."
+    feedback: "Nothing about the provider changed. The names move because the list's positions moved."
+
+actions:
+  - id: for-each-moved
+    label: "Change the resource to for_each = toset(var.queue_names) (keyed by name), add moved blocks from each old index to its name (queue[0] to queue[\"orders\"] and so on, with \"returns\" included in the list for this step), then remove \"returns\" in the PR"
+    kind: fix
+    feedback: "Each queue is now tracked by its name, so the moves are recognised without touching the queues, and removing \"returns\" destroys only \"returns\"."
+  - id: apply-anyway
+    label: "Apply the plan; the queues come back with the same names"
+    kind: destructive
+    feedback: "Recreated queues are new queues: every message waiting in \"refunds\" and \"shipping\" is lost."
+  - id: keep-placeholder
+    label: "Leave \"returns\" in the list forever and just stop using it"
+    kind: wrong
+    feedback: "Nothing is destroyed, but the dead queue lives on, and the next removal hits the same trap."
+  - id: state-rm
+    label: "terraform state rm all the queues and import them again"
+    kind: wrong
+    feedback: "It can be made to work, but it's error-prone surgery on live state. moved blocks do the same safely, reviewed in the PR."
+
+solution_paths:
+  - [for-each-moved]
+
+key_evidence: [shift-plan, indexed-state, count-list]
+
+evidence_labels:
+  shift-plan: "The plan renames queue[1] and queue[2] (forcing replacement) and destroys queue[3]"
+  indexed-state: "State tracks the queues by index: queue[0] to queue[3]"
+  count-list: "The queues come from a list with count; \"returns\" was removed from the middle"
+
+hints:
+  nudge: "How does Terraform know which queue is which: by name, or by position?"
+  direction: "Look at the resource addresses in state, and at how the PR changed the list."
+  answer: "count tracks queues by position, so removing one from the middle shifts the rest. Switch to for_each keyed by name, with moved blocks from the old indexes."
+
+analogy:
+  title: "Lockers numbered by row"
+  text: |
+    Everyone's locker is assigned by their place in the queue. When the
+    second person leaves, everyone behind them shuffles forward, and the
+    caretaker empties and reassigns all their lockers. Give each locker its
+    owner's name instead.
+
+debrief:
+  root_cause: |
+    With count, Terraform identifies each instance by its index. Removing
+    "returns" (index 1) shifted "refunds" to index 1 and "shipping" to index
+    2. Terraform therefore saw queue[1] renamed from returns to refunds and
+    queue[2] from refunds to shipping (a name change forces replacement) and
+    queue[3] gone, so it planned to replace two live queues and destroy a
+    third. for_each keys each instance by name, so removing one only
+    affects that one.
+  ideal_path:
+    - "Read the plan: two replacements and a destroy, not one."
+    - "Check state: queues are addressed by index."
+    - "See the shift: removing from the middle renumbers everything after it."
+    - "Move to for_each keyed by name with moved blocks, then remove \"returns\"; plan shows one destroy."
+  real_world: |
+    Use count for interchangeable copies and for_each when each instance has
+    its own identity. Read every "must be replaced" line in a plan, and be
+    wary of any plan that destroys more than the change intended.
+
+concepts:
+  - term: "count"
+    text: "Creates several instances of a resource, identified by index: name[0], name[1]..."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/count"
+  - term: "for_each"
+    text: "Creates instances from a map or set, identified by key: name[\"orders\"]."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+  - term: "Forces replacement"
+    text: "Some arguments can't be changed in place; changing them makes Terraform destroy the object and create a new one."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+
+sources:
+  - title: "Terraform: The count meta-argument (when to use for_each instead)"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/count"
+    retrieved: 2026-10-02
+  - title: "Terraform: The for_each meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+    retrieved: 2026-10-02
+  - title: "Terraform: Refactoring (moved blocks, count to for_each)"
+    url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+    retrieved: 2026-10-02

@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-import-existing
+track: iac
+difficulty: 2
+title: "Terraform can't create the bucket because it already exists"
+par_minutes: 10
+
+ticket:
+  from: "Data team"
+  priority: P3
+  body: |
+    We're bringing our hand-made analytics bucket under Terraform. We wrote
+    the resource block exactly like the real bucket, but apply fails saying
+    the bucket already exists, which it does, because it's ours.
+
+environment: |
+  The bucket acme-analytics-raw was created by hand in the console two years
+  ago and holds 9 TB of data. The infra repo uses Terraform 1.9 with the
+  AWS provider. The new resource block was added in this PR; the bucket
+  isn't in Terraform state.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "terraform state list | grep analytics"
+      when_actions: [import-block]
+      output: |
+        aws_s3_bucket.analytics_raw
+    - match: "terraform state list | grep analytics"
+      evidence: not-in-state
+      output: ""
+    - match: "terraform plan"
+      when_actions: [import-block]
+      output: |2
+          # aws_s3_bucket.analytics_raw will be imported
+            resource "aws_s3_bucket" "analytics_raw" {
+                bucket = "acme-analytics-raw"
+                id     = "acme-analytics-raw"
+            }
+
+        Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.
+    - match: "terraform plan"
+      evidence: plan-create
+      output: |2
+          # aws_s3_bucket.analytics_raw will be created
+          + resource "aws_s3_bucket" "analytics_raw" {
+              + bucket = "acme-analytics-raw"
+            }
+
+        Plan: 1 to add, 0 to change, 0 to destroy.
+    - match: "aws s3api head-bucket --bucket acme-analytics-raw"
+      evidence: exists
+      output: |
+        {
+            "BucketRegion": "us-east-1"
+        }
+
+logs:
+  - name: "CI: terraform apply (PR #77)"
+    evidence: already-owned
+    lines: |
+      aws_s3_bucket.analytics_raw: Creating...
+      Error: creating S3 Bucket (acme-analytics-raw): operation error S3: CreateBucket, https response error StatusCode: 409, api error BucketAlreadyOwnedByYou: Your previous request to create the named bucket succeeded and you already own it.
+
+hypotheses:
+  - id: not-imported
+    text: "Terraform doesn't know the bucket exists: it isn't in state, so the plan tries to create it. Existing objects have to be imported, not declared."
+    correct: true
+  - id: name-taken
+    text: "Another AWS account owns the bucket name."
+    feedback: "BucketAlreadyOwnedByYou means your own account owns it. Another account's bucket gives BucketAlreadyExists."
+  - id: config-mismatch
+    text: "The resource block doesn't exactly match the real bucket."
+    feedback: "Even a perfect match would be planned as a create: Terraform only manages objects recorded in its state, and this one isn't."
+  - id: permissions
+    text: "CI's role isn't allowed to create buckets."
+    feedback: "The request reached S3, which answered that you already own the bucket. A permission problem would be AccessDenied."
+
+actions:
+  - id: import-block
+    label: "Add an import block (to = aws_s3_bucket.analytics_raw, id = \"acme-analytics-raw\") to the PR, check the plan says \"1 to import\" with no other changes, then apply"
+    kind: fix
+    feedback: "Terraform adopts the existing bucket into state without touching it, and from now on manages it like any other resource. The import is reviewed in the PR."
+  - id: rename
+    label: "Change the bucket name in code to acme-analytics-raw-2"
+    kind: wrong
+    feedback: "Terraform creates a second, empty bucket. The 9 TB stays in the unmanaged one, and nothing points the pipelines at the new one."
+  - id: delete-recreate
+    label: "Empty and delete the bucket so Terraform can create it"
+    kind: destructive
+    feedback: "That deletes 9 TB of analytics data to satisfy a tool that can simply adopt the bucket."
+  - id: ignore-error
+    label: "Mark the CI step as allowed to fail"
+    kind: wrong
+    feedback: "The bucket stays unmanaged, every apply fails at the same point, and real failures get hidden."
+
+solution_paths:
+  - [import-block]
+
+key_evidence: [already-owned, not-in-state, plan-create, exists]
+
+evidence_labels:
+  already-owned: "CreateBucket fails: BucketAlreadyOwnedByYou"
+  not-in-state: "The bucket isn't in Terraform state"
+  plan-create: "So the plan tries to create it"
+  exists: "The bucket really exists, in this account"
+
+hints:
+  nudge: "Terraform wrote down nothing about this bucket. How would it know it already exists?"
+  direction: "Check state for the bucket, then look at how Terraform adopts an existing object."
+  answer: "Existing objects must be imported. Add an import block for acme-analytics-raw and check the plan says \"1 to import\"."
+
+analogy:
+  title: "Registering a car you already own"
+  text: |
+    You've driven the car for years, but it was never registered to the
+    fleet. Writing its description on a form doesn't register it; the
+    office tries to order you a new one, and the dealer says you already
+    have it. Bring the car in and register it.
+
+debrief:
+  root_cause: |
+    Terraform only manages objects recorded in its state. The bucket was made
+    by hand, so writing a matching resource block made Terraform plan to
+    create a new bucket with that name, and S3 refused: BucketAlreadyOwnedByYou.
+    An import block tells Terraform to adopt the existing bucket into state at
+    that address, after which it manages it like anything it created.
+  ideal_path:
+    - "Read the apply error: you already own the bucket."
+    - "Check state: no entry for it."
+    - "See why: the plan treats it as new."
+    - "Add an import block, confirm the plan imports with no other changes, then apply."
+  real_world: |
+    Import blocks (Terraform 1.5+) put imports through code review and can
+    generate configuration for you with -generate-config-out. Always check
+    the post-import plan for unexpected changes before applying.
+
+concepts:
+  - term: "Terraform state"
+    text: "Terraform's record of which real objects it manages and how they map to the configuration."
+    url: "https://developer.hashicorp.com/terraform/language/state"
+  - term: "import block"
+    text: "Declares an existing object to bring under Terraform management at a given resource address."
+    url: "https://developer.hashicorp.com/terraform/language/import"
+
+sources:
+  - title: "Terraform: Import (import blocks)"
+    url: "https://developer.hashicorp.com/terraform/language/import"
+    retrieved: 2026-10-02
+  - title: "Terraform: State"
+    url: "https://developer.hashicorp.com/terraform/language/state"
+    retrieved: 2026-10-02
+  - title: "Amazon S3: Error responses (BucketAlreadyOwnedByYou)"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html"
+    retrieved: 2026-10-02

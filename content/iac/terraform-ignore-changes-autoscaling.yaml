@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-ignore-changes-autoscaling
+track: iac
+difficulty: 2
+title: "Every Terraform apply shrinks the busy service back to two tasks"
+par_minutes: 10
+
+ticket:
+  from: "Checkout team"
+  priority: P2
+  body: |
+    Twice this week checkout slowed down right after an unrelated infra
+    change went out. The ECS service had scaled itself to 12 tasks for the
+    traffic, and after each apply it was back to 2, then slowly scaled up
+    again.
+
+environment: |
+  The checkout ECS service is managed by Terraform with desired_count = 2.
+  Application Auto Scaling adjusts the service's desired count between 2
+  and 20 based on CPU. Infra changes are applied by CI several times a week.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "terraform plan"
+      when_actions: [ignore-desired]
+      output: |
+        aws_ecs_service.checkout: Refreshing state... [id=arn:aws:ecs:us-east-1:111122223333:service/prod/checkout]
+
+        No changes. Your infrastructure matches the configuration.
+    - match: "terraform plan"
+      evidence: plan-reset
+      output: |2
+          # aws_ecs_service.checkout will be updated in-place
+          ~ resource "aws_ecs_service" "checkout" {
+              ~ desired_count = 12 -> 2
+                name          = "checkout"
+            }
+
+        Plan: 0 to add, 1 to change, 0 to destroy.
+    - match: "aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids service/prod/checkout --query ScalableTargets[0].[MinCapacity,MaxCapacity]"
+      evidence: autoscaling
+      output: |
+        [
+            2,
+            20
+        ]
+    - match: "aws ecs describe-services --cluster prod --services checkout --query services[0].desiredCount"
+      output: |
+        12
+
+files:
+  - path: "ecs.tf (excerpt)"
+    evidence: desired-fixed
+    content: |
+      resource "aws_ecs_service" "checkout" {
+        name          = "checkout"
+        cluster       = aws_ecs_cluster.prod.id
+        desired_count = 2
+        # ...
+      }
+
+hypotheses:
+  - id: two-owners
+    text: "Terraform and Application Auto Scaling both set desired_count. Each apply puts Terraform's value (2) back, overriding the autoscaler's 12."
+    correct: true
+  - id: scaling-policy
+    text: "The scaling policy scales in too aggressively."
+    feedback: "The drop happens at the moment of each apply, and the plan shows Terraform setting desired_count from 12 to 2."
+  - id: deploy-restart
+    text: "The apply redeploys the service, which restarts it at minimum size."
+    feedback: "The plan changes only desired_count, an in-place update; nothing is redeployed."
+  - id: max-too-low
+    text: "The autoscaler's maximum is too low."
+    feedback: "Its maximum is 20 and it reached 12 on its own. The problem is that Terraform sets it back."
+
+actions:
+  - id: ignore-desired
+    label: "Add lifecycle { ignore_changes = [desired_count] } to aws_ecs_service.checkout"
+    kind: fix
+    feedback: "Terraform still sets the initial count when it creates the service, then leaves it to the autoscaler. Plans stop showing the reset."
+  - id: set-12
+    label: "Change desired_count to 12 in code"
+    kind: wrong
+    feedback: "Each apply would now set it to 12, whatever traffic needs at that moment: wrong in the quiet hours and still wrong in a bigger peak."
+  - id: remove-autoscaling
+    label: "Remove the autoscaling and keep a fixed desired_count of 12"
+    kind: destructive
+    feedback: "You pay for 12 tasks all night, and a peak bigger than 12 now has nowhere to go."
+  - id: apply-at-night
+    label: "Only apply infra changes at night"
+    kind: wrong
+    feedback: "It hides the problem in quiet hours; any daytime apply, including an urgent fix, still resets it."
+
+solution_paths:
+  - [ignore-desired]
+
+key_evidence: [plan-reset, autoscaling, desired-fixed]
+
+evidence_labels:
+  plan-reset: "The plan sets desired_count from 12 back to 2"
+  autoscaling: "Application Auto Scaling manages the same count (2 to 20)"
+  desired-fixed: "The code sets desired_count = 2"
+
+hints:
+  nudge: "Read the plan for a change nobody asked for."
+  direction: "Two things set the service's desired count. Which one wins at each apply?"
+  answer: "Terraform keeps resetting the autoscaler's value. Add lifecycle { ignore_changes = [desired_count] }."
+
+analogy:
+  title: "Two people setting the thermostat"
+  text: |
+    The building's automatic heating turns up the radiators when it's cold.
+    Every time the caretaker does their rounds, they set every radiator back
+    to the number on their clipboard. Tell the caretaker to leave the
+    radiators to the automatic system.
+
+debrief:
+  root_cause: |
+    Application Auto Scaling raises and lowers the service's desired count;
+    Terraform's configuration also sets desired_count = 2. Terraform treats
+    any difference from the configuration as something to correct, so every
+    apply set the count back to 2 in the middle of the autoscaler's work.
+    ignore_changes tells Terraform that another process manages that
+    attribute after creation.
+  ideal_path:
+    - "Read the plan: desired_count 12 -> 2."
+    - "Find the other owner: an autoscaling target on the same service."
+    - "Add ignore_changes for desired_count."
+    - "Plan again: no changes."
+  real_world: |
+    Whenever another system owns an attribute (autoscalers, deployment
+    tools, sidecar injectors), ignore it in Terraform so the two don't fight.
+    Use ignore_changes narrowly, for specific attributes, not the whole
+    resource.
+
+concepts:
+  - term: "ignore_changes"
+    text: "Tells Terraform not to update named attributes when they differ, so another process can manage them after creation."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+  - term: "Application Auto Scaling"
+    text: "AWS service that adjusts a resource's capacity, such as an ECS service's desired count, based on metrics."
+    url: "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html"
+
+sources:
+  - title: "Terraform: The lifecycle meta-argument (ignore_changes)"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-02
+  - title: "Amazon ECS: Automatically scale your service"
+    url: "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html"
+    retrieved: 2026-10-02
