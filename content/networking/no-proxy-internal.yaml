@@ -155,3 +155,5 @@ sources:
   - title: "curl: man page (--noproxy, proxy environment variables)"
     url: "https://curl.se/docs/manpage.html"
     retrieved: 2026-10-02
+command_notes:
+  "curl -sS --noproxy '*' https://stock.corp.example/v2/levels -o /dev/null -w '%{http_code}\\n'": "Going direct works, so the server is fine and the traffic shouldn't be going through the proxy."

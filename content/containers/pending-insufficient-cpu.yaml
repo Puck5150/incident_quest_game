@@ -179,3 +179,5 @@ sources:
   - title: "Kubernetes: Debug Pods (Pending pods)"
     url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl describe pod label-printer-6f7c8d9b5-b7rwn -n shop": "Each pod requests 2 CPUs; the FailedScheduling event says no node has that much left unrequested."

@@ -178,3 +178,7 @@ sources:
   - title: "Amazon CloudFront: Update existing files using versioned file names"
     url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/UpdatingExistingObjects.html"
     retrieved: 2026-10-01
+command_notes:
+  "curl -s -o /dev/null -w '%{http_code}\\n' https://shop.example.com/assets/app.81ab.js": "The bundle the cached page asks for is gone; S3 answers 403 rather than 404 for a missing object when the caller can't list the bucket."
+  "curl -sI https://shop.example.com/ | grep -iE 'x-cache|age|cache-control'": "X-Cache and Age show the page came from the edge cache, and how long it has been there."
+  "curl -s https://shop.example.com/ | grep script": "Shows which bundle the served page references; after the fix it names the new one."

@@ -252,3 +252,5 @@ sources:
   - title: "Route 53: Values that you specify when you create or update health checks (failure threshold)"
     url: "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/health-checks-creating-values.html"
     retrieved: 2026-10-01
+command_notes:
+  "dig api.shop.example.com": "The CNAME's target shows which region clients are sent to, and the TTL how long they keep that answer."

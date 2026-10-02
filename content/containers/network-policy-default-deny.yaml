@@ -155,3 +155,5 @@ sources:
   - title: "Kubernetes: Declare Network Policy"
     url: "https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl get networkpolicy catalog-allow-frontends -n shop -o yaml": "With default deny in place, only pods matching these from: selectors can reach catalog; compare them with the new client's labels."

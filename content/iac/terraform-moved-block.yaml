@@ -285,3 +285,5 @@ sources:
   - title: "Terraform CLI: terraform state mv"
     url: "https://developer.hashicorp.com/terraform/cli/commands/state/mv"
     retrieved: 2026-10-01
+command_notes:
+  "git diff main": "The resource moved into a module with no moved block, so Terraform sees a destroy at the old address and a create at the new one."

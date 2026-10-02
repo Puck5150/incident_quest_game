@@ -160,3 +160,5 @@ sources:
   - title: "MDN: X-Forwarded-Proto"
     url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-Proto"
     retrieved: 2026-10-02
+command_notes:
+  "curl -sI -H 'X-Forwarded-Proto: https' http://10.0.3.14:3000/": "Even when told the original request was HTTPS, the app redirects to HTTPS again: it ignores the proxy's header, so the loop never ends."

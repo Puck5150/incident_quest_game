@@ -158,3 +158,6 @@ sources:
   - title: "Kubernetes: Deployments (strategy: Recreate and RollingUpdate)"
     url: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl describe pod wiki-7c9f6d8b4-hx3wn -n tools": "The Multi-Attach error names the old pod still holding the volume on another node."
+  "kubectl get pvc wiki-data -n tools": "RWO means one node at a time, so a rolling update's new pod on a different node can't attach it."

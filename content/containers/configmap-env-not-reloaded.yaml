@@ -156,3 +156,6 @@ sources:
   - title: "Kubernetes: kubectl rollout restart"
     url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_restart/"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl get configmap payments-config -n shop -o jsonpath='{.data.PSP_URL}'": "The ConfigMap already holds the new URL; what matters is whether the running pods have it."
+  "kubectl exec deploy/payments -n shop -- printenv PSP_URL": "The value the running process actually has; environment variables are read once, when the container starts."

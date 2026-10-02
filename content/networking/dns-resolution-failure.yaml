@@ -199,3 +199,5 @@ sources:
   - title: "Ansible: How to build your inventory"
     url: "https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html"
     retrieved: 2026-09-30
+command_notes:
+  "dig +short @10.0.0.2 api.internal.example.com": "Asking that server directly works, so the record is fine; the problem is which server the host asks."

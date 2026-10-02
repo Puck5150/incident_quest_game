@@ -215,3 +215,5 @@ sources:
   - title: "nginx ngx_http_log_module (combined log format)"
     url: "https://nginx.org/en/docs/http/ngx_http_log_module.html"
     retrieved: 2026-09-30
+command_notes:
+  "journalctl -u checkout": "Errno 28 (No space left on device) means the filesystem is out of space or inodes; check both with df."

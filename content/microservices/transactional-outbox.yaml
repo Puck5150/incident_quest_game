@@ -146,3 +146,5 @@ sources:
   - title: "AWS Prescriptive Guidance: Transactional outbox pattern"
     url: "https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html"
     retrieved: 2026-10-02
+command_notes:
+  "psql -d orders -Atc \"SELECT count(*) FROM orders WHERE status = 'confirmed' AND created_at BETWEEN '2026-10-01 15:10' AND '2026-10-01 15:25'\"": "The orders were saved, so the gap is in publishing their events, not in taking orders."

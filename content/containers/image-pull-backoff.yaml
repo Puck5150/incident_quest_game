@@ -298,3 +298,5 @@ sources:
   - title: "kubectl rollout undo"
     url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/"
     retrieved: 2026-10-01
+command_notes:
+  "kubectl describe pod pricing-api-7c9d8f6b4-x2kqp -n shop": "The events say the registry has no such tag, so the fix is the image reference, not the cluster."

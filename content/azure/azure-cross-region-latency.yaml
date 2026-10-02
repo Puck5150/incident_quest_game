@@ -229,3 +229,5 @@ sources:
   - title: "psql: \\timing"
     url: "https://www.postgresql.org/docs/current/app-psql.html"
     retrieved: 2026-10-01
+command_notes:
+  "psql \"host=orders-pg.postgres.database.azure.com dbname=orders user=app\" -c \"select 1\"": "select 1 does no work, so its time is almost pure network round trip; every query the app makes pays it."

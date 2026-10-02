@@ -144,3 +144,5 @@ sources:
   - title: "OpenSSL: openssl-s_client"
     url: "https://docs.openssl.org/master/man1/openssl-s_client/"
     retrieved: 2026-10-02
+command_notes:
+  "ssh api-01 grep ssl_certificate /etc/nginx/sites-enabled/api": "nginx is pointed at the leaf certificate alone; ssl_certificate should be the full chain."

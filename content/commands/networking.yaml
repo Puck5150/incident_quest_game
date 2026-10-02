@@ -66,6 +66,7 @@
   parts:
     - { token: "-s", meaning: "Silent: no progress meter." }
     - { token: "-S", meaning: "(With -s) still show an error message if the request fails." }
+    - { token: "| jq '{price, price_money}'", meaning: "(If piped) parse the JSON body and keep only these fields." }
   why: "The body is what the app actually says, such as a health endpoint's JSON naming which dependency is down."
   alternatives:
     - { command: "curl -sv URL", note: "Also show the connection and headers." }
@@ -77,6 +78,8 @@
   summary: "Asks DNS for a name's records and shows the full answer, including the TTL."
   parts:
     - { token: "dig NAME", meaning: "Query the A record for NAME using the system's resolver." }
+    - { token: "@10.0.0.2", meaning: "(If given) ask this DNS server instead of the ones in /etc/resolv.conf." }
+    - { token: "+short", meaning: "(If given) print only the answer, such as the address." }
   why: "Shows what clients are actually being told right now, and the TTL says how long they'll keep it."
   alternatives:
     - { command: "dig +short NAME", note: "Just the addresses." }

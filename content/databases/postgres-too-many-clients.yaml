@@ -174,3 +174,5 @@ sources:
   - title: "PostgreSQL: The Cumulative Statistics System (pg_stat_activity)"
     url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl get configmap shop-api -o jsonpath='{.data.DB_POOL_SIZE}'": "Each pod opens up to this many connections, so pool size times replicas is what the app asks of max_connections."

@@ -179,3 +179,6 @@ sources:
   - title: "Kubernetes: Pod Lifecycle (container probes)"
     url: "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl describe pod search-api-5c7d9b8f4-9fj2x -n shop": "Exit code 143 is 128 + 15 (SIGTERM): Kubernetes stopped the container after failed liveness probes; it didn't crash."
+  "kubectl logs search-api-5c7d9b8f4-9fj2x -n shop --previous": "SIGTERM arrives while the index is still loading, so the probe gives up before startup can finish."

@@ -35,6 +35,7 @@
     - { token: "-n shop", meaning: "In this namespace." }
     - { token: "--previous", meaning: "(If given) the logs of the previous, crashed instance of the container, not the one that just restarted." }
     - { token: "--since=5m", meaning: "(If given) only the last five minutes." }
+    - { token: "| head -6", meaning: "(If piped) only the first 6 lines." }
   why: "In a crash loop the current container has barely started; --previous shows why the last one died."
   alternatives:
     - { command: "kubectl logs -l app=NAME -n NS --all-containers", note: "Every pod with this label." }

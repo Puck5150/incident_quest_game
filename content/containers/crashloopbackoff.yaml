@@ -250,3 +250,6 @@ sources:
   - title: "Kubernetes: Assign Memory Resources (OOMKilled, BackOff events)"
     url: "https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/"
     retrieved: 2026-09-30
+command_notes:
+  "kubectl describe pod orders-api-7f8c6d9b4-7lq2x -n shop": "Exit code 1 means the app quit on its own; its last words are in the previous container's logs."
+  "kubectl logs --previous orders-api-7f8c6d9b4-7lq2x -n shop": "The crashed container's last line names the missing DATABASE_URL."

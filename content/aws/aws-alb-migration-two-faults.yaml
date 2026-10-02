@@ -305,3 +305,5 @@ stages:
         - "Read the health check settings: path / (the default)."
         - "Confirm what the API serves: / is 404, /health is 200; the old target group used /health."
         - "Set api-v2's health check path to /health, then confirm targets go healthy."
+command_notes:
+  "curl -s -o /dev/null -w '%{http_code}\\n' http://10.0.11.21:8080/": "Asking the target directly gets 404 on /, so a health check on / fails no matter what the security group allows: that's the second fault."

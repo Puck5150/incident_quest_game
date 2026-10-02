@@ -145,3 +145,5 @@ sources:
   - title: "GitHub Actions: Workflow syntax (concurrency)"
     url: "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax"
     retrieved: 2026-10-02
+command_notes:
+  "kubectl get deploy checkout -n shop -o jsonpath='{.spec.template.spec.containers[0].image}'": "The image tag is the commit actually running; compare it with the newest run's SHA."

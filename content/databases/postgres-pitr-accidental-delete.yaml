@@ -153,3 +153,5 @@ sources:
   - title: "PostgreSQL: The Cumulative Statistics System (pg_stat_archiver)"
     url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
     retrieved: 2026-10-02
+command_notes:
+  "sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM orders WHERE created_at >= now()::date'": "Today's order count is the number to compare after the point-in-time restore."

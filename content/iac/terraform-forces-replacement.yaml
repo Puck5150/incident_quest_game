@@ -156,3 +156,5 @@ sources:
   - title: "Terraform AWS provider source: aws_db_instance schema (storage_encrypted ForceNew)"
     url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/internal/service/rds/instance.go"
     retrieved: 2026-10-02
+command_notes:
+  "git diff main -- db.tf": "The only change is storage_encrypted, which an existing RDS instance can't change in place, so Terraform plans a replacement."

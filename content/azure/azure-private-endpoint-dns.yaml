@@ -182,3 +182,5 @@ sources:
   - title: "Azure Private Link: Azure Private Endpoint DNS configuration (zone names, CNAME chain)"
     url: "https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-dns"
     retrieved: 2026-10-01
+command_notes:
+  "nslookup stshopdocs.blob.core.windows.net": "The privatelink CNAME and a private 10.x address mean this VNet resolves to the private endpoint; a public address would mean the zone isn't linked here."

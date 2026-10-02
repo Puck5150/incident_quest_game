@@ -298,3 +298,5 @@ sources:
   - title: "ufw(8) — Ubuntu manual page (deleting and allowing rules)"
     url: "https://manpages.ubuntu.com/manpages/noble/en/man8/ufw.8.html"
     retrieved: 2026-10-01
+command_notes:
+  "sudo tail -n 50 /var/log/letsencrypt/letsencrypt.log": "Renewal has been running but failing the http-01 challenge, which is why the certificate expired."
