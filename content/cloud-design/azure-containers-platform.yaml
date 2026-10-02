@@ -1,0 +1,168 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: azure-containers-platform
+track: cloud-design
+difficulty: 2
+title: "Run the booking API in containers on Azure"
+provider: azure
+par_minutes: 10
+
+brief: |
+  A travel company's booking API is packaged as a container image. Traffic
+  is near zero overnight and spikes to ten times normal when a sale email
+  goes out. The two-person platform team doesn't want to operate a
+  Kubernetes cluster. The API must survive a zone failure in its region.
+  Security's rules: no shared passwords for pulling images, and the API's
+  database connection string must come from Key Vault, never plain text in
+  app configuration.
+
+requirements:
+  - "Absorb 10x traffic when a sale email goes out"
+  - "Keep working if one availability zone fails"
+  - "No cluster for the team to operate"
+  - "No shared passwords or plain-text secrets"
+  - "Stay within 6 cost units per month"
+budget: 6
+
+tiers:
+  - id: platform
+    label: "Where the containers run"
+    options:
+      - id: run-aci
+        short: "Container Instances"
+        label: "Azure Container Instances: one container group"
+        cost: 2
+        facts:
+          - "Runs containers without managing servers; a container group runs on a single host."
+          - "For automatic scaling and full orchestration, Microsoft recommends a service such as AKS instead."
+        capabilities: { survives: [ops, audit], scales: 1 }
+      - id: run-aca
+        short: "Container Apps"
+        label: "Azure Container Apps in a zone-redundant environment, with an HTTP scale rule"
+        cost: 3
+        facts:
+          - "Serverless containers: no cluster to manage. Scale rules add replicas as HTTP traffic grows and can scale to zero when idle."
+          - "A zone-redundant environment spreads replicas across availability zones."
+        capabilities: { survives: [ops, az-outage, audit], scales: 10 }
+      - id: run-aks
+        short: "AKS"
+        label: "Azure Kubernetes Service, node pools across three zones, cluster autoscaler"
+        cost: 6
+        facts:
+          - "Managed Kubernetes: Azure runs the control plane; you run and upgrade the node pools."
+          - "A cluster always keeps at least one node in its system node pool, so it never scales to zero."
+        capabilities: { survives: [az-outage, audit], scales: 10 }
+  - id: image
+    label: "How the platform pulls the image from Azure Container Registry"
+    options:
+      - id: acr-admin
+        short: "ACR admin user"
+        label: "Enable the registry's admin user and give its password to the platform"
+        cost: 1
+        facts:
+          - "The admin account is a single account with full rights to the registry, and it's disabled by default."
+          - "Anyone using it shares the same username and password."
+        capabilities: { survives: [ops, az-outage], scales: 10 }
+      - id: acr-identity
+        short: "Managed identity"
+        label: "A managed identity with the AcrPull role on the registry"
+        cost: 1
+        facts:
+          - "The platform authenticates as its own identity, with no password to store or rotate."
+          - "AcrPull allows pulling images and nothing else."
+        capabilities: { survives: [ops, az-outage, audit], scales: 10 }
+  - id: secrets
+    label: "How the API gets the database connection string"
+    options:
+      - id: secret-plain
+        short: "Plain env var"
+        label: "Set it as a plain environment variable in the app's configuration"
+        cost: 0
+        facts: ["Anyone who can read the app's configuration can read the connection string."]
+        capabilities: { survives: [ops, az-outage], scales: 10 }
+      - id: secret-kv
+        short: "Key Vault ref"
+        label: "Store it in Key Vault and reference it from the app, read with a managed identity"
+        cost: 1
+        facts:
+          - "The app's configuration holds only a reference to the Key Vault secret."
+          - "The identity needs a role that can read secret values, such as Key Vault Secrets User."
+        capabilities: { survives: [ops, az-outage, audit], scales: 10 }
+
+stress_tests:
+  - id: sale
+    label: "The sale email goes out: 10x traffic in minutes"
+    requires: { tier: platform, min_scales: 10 }
+  - id: az-outage
+    label: "Zone 1 of the region becomes unavailable"
+    requires: { every_tier_survives: az-outage }
+  - id: ops
+    label: "Upgrade week: the team is on leave"
+    requires: { every_tier_survives: ops }
+  - id: audit
+    label: "Security audits credentials and app configuration"
+    requires: { every_tier_survives: audit }
+
+failure_feedback:
+  run-aci:
+    sale: "One container group doesn't add copies by itself. At 10x, requests queue and time out."
+    az-outage: "The container group ran on one host, in one zone. The API is down."
+  run-aks:
+    ops: "Node pools need upgrading and the cluster needs looking after, and nobody's here. That's the job the team said it didn't want."
+  acr-admin:
+    audit: "The admin user is a shared password with full rights to the registry. The audit flags it straight away."
+  secret-plain:
+    audit: "The connection string sits in the app's configuration in plain text."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { platform: run-aca, image: acr-identity, secrets: secret-kv }
+    why: "Container Apps scales on HTTP traffic (down to zero at night) across zones with no cluster to run. A managed identity pulls images with AcrPull and reads the connection string from Key Vault, so there are no passwords anywhere."
+
+hints:
+  nudge: "The team doesn't want a cluster, and traffic goes from nothing to 10x. Which option scales by itself without one?"
+  direction: "Container Apps scales on HTTP traffic and can be zone-redundant. Then replace every password: an identity for pulling images, Key Vault for the connection string."
+  answer: "Azure Container Apps in a zone-redundant environment, a managed identity with AcrPull on the registry, and the connection string referenced from Key Vault."
+
+analogy:
+  title: "Staff on call, not a staff room"
+  text: |
+    Some shops keep a full staff room open all night just in case. A better
+    one has people on call who come in when the doors get busy and go home
+    when it's quiet. Each has their own badge for the stockroom, not one
+    shared key, and the safe code stays with the manager.
+
+debrief:
+  summary: |
+    Azure has several ways to run a container. Container Instances runs one
+    container group on demand, but doesn't scale by itself. Container Apps
+    adds scale rules (including to zero), revisions and zone redundancy,
+    with no cluster to run. AKS is full Kubernetes: powerful, but node pools
+    are yours to upgrade and a system node pool always runs. Whatever runs
+    the container, a managed identity with AcrPull replaces the registry's
+    shared admin password, and Key Vault references keep secrets out of
+    configuration.
+  real_world: |
+    Teams often start on Container Apps and move to AKS when they need
+    Kubernetes APIs, custom operators or very fine control. In either case,
+    keep the ACR admin user disabled and use managed identities.
+
+sources:
+  - title: "Azure Container Instances: What is Azure Container Instances?"
+    url: "https://learn.microsoft.com/en-us/azure/container-instances/container-instances-overview"
+    retrieved: 2026-10-01
+  - title: "Azure Container Apps: Set scaling rules"
+    url: "https://learn.microsoft.com/en-us/azure/container-apps/scale-app"
+    retrieved: 2026-10-01
+  - title: "Azure Container Apps: Manage secrets (Key Vault references)"
+    url: "https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets"
+    retrieved: 2026-10-01
+  - title: "Reliability in Azure Container Apps (zone redundancy)"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-azure-container-apps"
+    retrieved: 2026-10-01
+  - title: "Azure Kubernetes Service: Manage system node pools"
+    url: "https://learn.microsoft.com/en-us/azure/aks/use-system-pools"
+    retrieved: 2026-10-01
+  - title: "Azure Container Registry: Authentication options (admin account, managed identities, AcrPull)"
+    url: "https://learn.microsoft.com/en-us/azure/container-registry/container-registry-authentication"
+    retrieved: 2026-10-01

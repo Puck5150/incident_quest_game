@@ -283,3 +283,22 @@ from your own experience and tick them off.
 - [ ] The Regional ALB option on Google Cloud: its "every request is forwarded"
       fact is how the option is used here (no caching configured), not a
       product limitation.
+
+## Exam-outline design challenges (2026-10-01): aws-clickstream-ingestion, aws-catalog-cache, aws-containers-platform, azure-containers-platform, azure-entra-groups-access
+- [ ] All costs, budgets and `scales` values are scenario numbers, not prices.
+- [ ] Kinesis: "on-demand mode scales with traffic" is simplified; the docs
+      describe accommodating up to double the previous peak, with throttling
+      possible beyond that.
+- [ ] ElastiCache: a single node "coming back empty" after failure is the
+      no-replica case; check the node-replacement wording against the docs.
+- [ ] Containers (AWS): treating EKS managed node groups as failing the
+      "no servers to patch" test is a judgment (AWS builds the AMIs, you start
+      updates). The Docker Hub rate-limit failure is plausible behind shared
+      NAT IPs, not a documented AWS behaviour.
+- [ ] Containers (Azure): the AKS "ops" failure is a judgment (node image
+      auto-upgrade channels exist); the point is that a cluster is still
+      something to operate.
+- [ ] Entra ID: Helpdesk Administrator also covers some limited admin roles;
+      the fact says "non-administrators" for simplicity. Security defaults
+      prompt for MFA "when needed", not at every sign-in; the `mfa` test
+      checks that a second factor can be required.

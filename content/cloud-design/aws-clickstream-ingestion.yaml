@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: aws-clickstream-ingestion
+track: cloud-design
+difficulty: 2
+title: "Collect every click from the shop without losing any"
+provider: aws
+par_minutes: 10
+
+brief: |
+  The shop wants to record every click and page view from its website and
+  app: about 2,000 small events a second on a normal day, and up to eight
+  times that during a sale. The analytics team needs all events stored in S3
+  for reporting. The fraud team will soon add its own app that reads the
+  same live events. If a reporting bug is found, the team wants to reprocess
+  the last day of events. Nobody on the team wants to run servers for this.
+
+requirements:
+  - "Handle 8x normal event volume during a sale"
+  - "Several apps can each read every event"
+  - "Reprocess the last 24 hours of events after a bug"
+  - "Keep delivering to S3 if a server fails"
+  - "Stay within 9 cost units per month"
+budget: 9
+
+tiers:
+  - id: ingest
+    label: "Where events are written first"
+    options:
+      - id: ingest-rds
+        short: "RDS table"
+        label: "Insert each event as a row in the shop's RDS database"
+        cost: 2
+        facts:
+          - "Every event becomes a write on the same database that serves orders."
+          - "Thousands of extra writes a second compete with the shop's own queries for the instance's capacity."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 1 }
+      - id: ingest-sqs
+        short: "SQS queue"
+        label: "An SQS standard queue"
+        cost: 2
+        facts:
+          - "Standard queues support a nearly unlimited number of API calls per second."
+          - "Consumers compete for messages: each message is processed by one consumer and then deleted."
+          - "Once a message is deleted it can't be read again."
+        capabilities: { survives: [server-failure], scales: 10 }
+      - id: ingest-kds-2
+        short: "Kinesis, 2 shards"
+        label: "A Kinesis data stream in provisioned mode with 2 shards"
+        cost: 2
+        facts:
+          - "Each shard accepts up to 1 MB or 1,000 records per second of writes."
+          - "Records stay in the stream for its retention period (24 hours by default), and any number of applications can read them, each at its own pace."
+          - "In provisioned mode you choose the number of shards and change it yourself."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 1 }
+      - id: ingest-kds-20
+        short: "Kinesis, 20 shards"
+        label: "A Kinesis data stream in provisioned mode with 20 shards"
+        cost: 8
+        facts:
+          - "Each shard accepts up to 1 MB or 1,000 records per second of writes."
+          - "Records stay in the stream for its retention period (24 hours by default), and any number of applications can read them, each at its own pace."
+          - "You pay for every shard, every hour, whether or not it's busy."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+      - id: ingest-kds-ondemand
+        short: "Kinesis on-demand"
+        label: "A Kinesis data stream in on-demand mode"
+        cost: 5
+        facts:
+          - "On-demand mode manages capacity for you and scales with traffic; you pay for the data written and read."
+          - "Records stay in the stream for its retention period (24 hours by default), and any number of applications can read them, each at its own pace."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+  - id: delivery
+    label: "Getting events into S3"
+    options:
+      - id: delivery-ec2
+        short: "EC2 writer"
+        label: "A small app on one EC2 instance that reads events and writes files to S3"
+        cost: 1
+        facts:
+          - "Runs on a single instance that you patch and monitor."
+          - "While the instance is down, nothing is written to S3."
+        capabilities: { survives: [fan-out, replay], scales: 10 }
+      - id: delivery-firehose
+        short: "Firehose"
+        label: "Amazon Data Firehose, reading from the source and delivering to S3"
+        cost: 3
+        facts:
+          - "A fully managed service that delivers streaming data to destinations such as S3, with no application to write or servers to manage."
+          - "It buffers incoming data and writes it to S3 in batches, by size or time."
+          - "A Kinesis data stream can be its source."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+
+stress_tests:
+  - id: sale
+    label: "A sale starts: events jump to 8x normal"
+    requires: { tier: ingest, min_scales: 8 }
+  - id: fan-out
+    label: "The fraud team's app starts reading every live event too"
+    requires: { every_tier_survives: fan-out }
+  - id: replay
+    label: "A reporting bug: reprocess the last 24 hours of events"
+    requires: { every_tier_survives: replay }
+  - id: server-failure
+    label: "The host running the S3 writer fails overnight"
+    requires: { every_tier_survives: server-failure }
+
+failure_feedback:
+  ingest-rds:
+    sale: "Sixteen thousand inserts a second on the order database: checkout slows down with it, and events back up."
+  ingest-sqs:
+    fan-out: "The fraud app and the S3 delivery compete for the same messages, so each sees only some of the events."
+    replay: "Delivered messages were deleted from the queue. There's nothing left to reprocess."
+  ingest-kds-2:
+    sale: "Two shards take about 2,000 records a second. At 8x, writes are throttled and events are lost or delayed."
+  delivery-ec2:
+    server-failure: "The only writer was down until morning, so S3 is missing hours of events."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { ingest: ingest-kds-ondemand, delivery: delivery-firehose }
+    why: "A Kinesis data stream keeps every event for 24 hours and lets the S3 delivery, the fraud app and any reprocessing job each read all of it. On-demand mode absorbs the sale without you resizing shards, and Firehose delivers to S3 with no servers to run."
+
+hints:
+  nudge: "Two of the requirements are about reading the same events more than once. Which options delete an event once it's been read?"
+  direction: "Compare a queue (each message goes to one consumer, then it's gone) with a stream (records stay for a retention period, and every app reads all of them). Then check how much each option can take at 8x."
+  answer: "A Kinesis data stream in on-demand mode, delivered to S3 with Amazon Data Firehose."
+
+analogy:
+  title: "A recording, not a phone call"
+  text: |
+    A phone call reaches one person, and once it's over it's gone. A
+    recording can be played by the whole team, each when they like, and
+    replayed tomorrow if someone misheard. And if more people start talking,
+    you want a recorder that doesn't run out of tape.
+
+debrief:
+  summary: |
+    Streaming ingestion is about more than accepting writes. A Kinesis data
+    stream keeps records for its retention period (24 hours by default,
+    extendable), so several applications can each read every record and you
+    can reprocess after a bug. A queue like SQS hands each message to one
+    consumer and deletes it, which is right for work items, wrong for a
+    shared event log. In provisioned mode each shard takes up to 1 MB or
+    1,000 records a second of writes, so you size and resize shards
+    yourself; on-demand mode manages that for you. Amazon Data Firehose
+    delivers the stream to S3 with no code or servers.
+  real_world: |
+    Clickstreams, application logs and IoT telemetry all follow this
+    pattern: a stream in the middle, Firehose to the data lake, and
+    separate consumers for real-time uses. If several consumers need high
+    read throughput, look at enhanced fan-out, which gives each registered
+    consumer its own read throughput per shard.
+
+sources:
+  - title: "Amazon Kinesis Data Streams: Quotas and limits (per-shard write and read throughput)"
+    url: "https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html"
+    retrieved: 2026-10-01
+  - title: "Amazon Kinesis Data Streams: Choose the data stream capacity mode (on-demand and provisioned)"
+    url: "https://docs.aws.amazon.com/streams/latest/dev/how-do-i-size-a-stream.html"
+    retrieved: 2026-10-01
+  - title: "Amazon Kinesis Data Streams: Change the data retention period (24 hours by default)"
+    url: "https://docs.aws.amazon.com/streams/latest/dev/kinesis-extended-retention.html"
+    retrieved: 2026-10-01
+  - title: "Amazon Kinesis Data Streams: Develop enhanced fan-out consumers"
+    url: "https://docs.aws.amazon.com/streams/latest/dev/enhanced-consumers.html"
+    retrieved: 2026-10-01
+  - title: "Amazon Data Firehose: What is Amazon Data Firehose?"
+    url: "https://docs.aws.amazon.com/firehose/latest/dev/what-is-this-service.html"
+    retrieved: 2026-10-01
+  - title: "Amazon SQS: Basic architecture (consumers receive, process and delete messages)"
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-basic-architecture.html"
+    retrieved: 2026-10-01

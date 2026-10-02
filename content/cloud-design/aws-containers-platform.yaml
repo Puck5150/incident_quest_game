@@ -1,0 +1,195 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: aws-containers-platform
+track: cloud-design
+difficulty: 2
+title: "Pick a home for the new container app"
+provider: aws
+par_minutes: 10
+
+brief: |
+  Three developers have packaged the shop's new order-tracking API as a
+  container image. None of them has run Kubernetes, and nobody wants to look
+  after servers: no patching, no capacity planning. It has to survive an
+  Availability Zone failure, scale from 2 to 10 copies within minutes for a
+  launch, and connect to its database with a password that security insists
+  must never sit in plain text in any configuration.
+
+requirements:
+  - "No servers for the team to patch"
+  - "Keep working if one Availability Zone fails"
+  - "Scale from 2 to 10 copies within minutes"
+  - "No database password in plain text in configuration"
+  - "Stay within 7 cost units per month"
+budget: 7
+
+tiers:
+  - id: platform
+    label: "Where the containers run"
+    options:
+      - id: run-ec2-docker
+        short: "1 EC2 + Docker"
+        label: "One EC2 instance running the containers with Docker"
+        cost: 1
+        facts:
+          - "You install, patch and monitor the instance and Docker yourself."
+          - "Everything runs in the instance's one Availability Zone."
+        capabilities: { survives: [pulls, audit], scales: 1 }
+      - id: run-ecs-ec2
+        short: "ECS on EC2"
+        label: "Amazon ECS service on an Auto Scaling group of EC2 instances in two AZs"
+        cost: 3
+        facts:
+          - "ECS schedules tasks across the cluster's container instances, spread over Availability Zones."
+          - "The container instances are EC2 instances in your account: you keep their operating system patched."
+        capabilities: { survives: [az-outage, pulls, audit], scales: 5 }
+      - id: run-ecs-fargate
+        short: "ECS on Fargate"
+        label: "Amazon ECS service on AWS Fargate, tasks in two AZs"
+        cost: 4
+        facts:
+          - "With Fargate you don't provision, configure or scale clusters of virtual machines to run containers."
+          - "ECS spreads the service's tasks across the subnets (and so the Availability Zones) you give it."
+        capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
+      - id: run-eks-nodes
+        short: "EKS + nodes"
+        label: "Amazon EKS cluster with a managed node group in two AZs"
+        cost: 6
+        facts:
+          - "Kubernetes, with the control plane run by AWS. Each EKS cluster has an hourly charge, on top of its nodes."
+          - "Managed node groups create and update the EC2 nodes for you, but you start node updates, and the team needs to know Kubernetes."
+        capabilities: { survives: [az-outage, pulls, audit], scales: 5 }
+      - id: run-eks-fargate
+        short: "EKS on Fargate"
+        label: "Amazon EKS cluster running pods on AWS Fargate"
+        cost: 7
+        facts:
+          - "Kubernetes, with the control plane run by AWS. Each EKS cluster has an hourly charge, on top of what the pods use."
+          - "With Fargate profiles, pods run without nodes for you to manage."
+        capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
+  - id: registry
+    label: "Where the image is pulled from"
+    options:
+      - id: reg-dockerhub
+        short: "Docker Hub (anon)"
+        label: "A public Docker Hub repository, pulled without logging in"
+        cost: 0
+        facts:
+          - "Docker Hub limits how many images unauthenticated users can pull in a time window, counted per IP address."
+          - "Anyone can pull the image, including your code inside it."
+        capabilities: { survives: [patching, az-outage, audit], scales: 5 }
+      - id: reg-ecr
+        short: "ECR private"
+        label: "A private Amazon ECR repository in the same region"
+        cost: 1
+        facts:
+          - "A managed, private container registry; access is controlled with IAM."
+          - "ECS and EKS pull from it within the region, authenticated with the task's or node's role."
+        capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
+  - id: secrets
+    label: "How the app gets the database password"
+    options:
+      - id: secret-env
+        short: "Plain env var"
+        label: "Set it as a plain environment variable in the task definition"
+        cost: 0
+        facts:
+          - "The value is stored in the task definition, visible to anyone who can describe it."
+        capabilities: { survives: [patching, az-outage, pulls], scales: 5 }
+      - id: secret-sm
+        short: "Secrets Manager"
+        label: "Store it in AWS Secrets Manager and reference it from the task definition"
+        cost: 1
+        facts:
+          - "The task definition holds only the secret's ARN; ECS injects the value into the container when it starts."
+          - "The task execution role needs permission to read that secret."
+        capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
+
+stress_tests:
+  - id: patching
+    label: "A critical Linux vulnerability is announced on a Friday afternoon"
+    requires: { every_tier_survives: patching }
+  - id: az-outage
+    label: "us-east-1a becomes unreachable"
+    requires: { every_tier_survives: az-outage }
+  - id: launch
+    label: "Launch day: scale from 2 to 10 copies in minutes"
+    requires: { tier: platform, min_scales: 5 }
+  - id: pulls
+    label: "Eight new copies all pull the image at once"
+    requires: { every_tier_survives: pulls }
+  - id: audit
+    label: "Security reviews every configuration for plain-text passwords"
+    requires: { every_tier_survives: audit }
+
+failure_feedback:
+  run-ec2-docker:
+    patching: "The instance is yours to patch, on a Friday afternoon."
+    az-outage: "The only instance was in that zone. The API is down."
+    launch: "One instance can only fit so many copies. Adding more means launching and setting up servers by hand."
+  run-ecs-ec2:
+    patching: "The cluster's EC2 instances run an operating system you have to update: exactly the job the team wanted to avoid."
+  run-eks-nodes:
+    patching: "Managed node groups help, but someone still has to start and watch node updates, and know Kubernetes well enough to do it."
+  reg-dockerhub:
+    pulls: "Anonymous pulls from shared NAT IP addresses hit Docker Hub's rate limit, and some new copies fail to start. The image was public, too."
+  secret-env:
+    audit: "The password is in the task definition in plain text, visible to anyone who can read it."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { platform: run-ecs-fargate, registry: reg-ecr, secrets: secret-sm }
+    why: "ECS on Fargate runs containers across zones with no servers or Kubernetes to learn, scales by changing the desired count, pulls from a private ECR repository in the region, and gets the password from Secrets Manager at start-up."
+
+hints:
+  nudge: "Read the brief for what the team doesn't want to do. Which options still leave a server, or Kubernetes, on their plate?"
+  direction: "Fargate removes the servers. Then check the other two tiers: where do eight copies pull the image from at once, and where does the password live?"
+  answer: "ECS on Fargate in two Availability Zones, a private ECR repository, and the password in Secrets Manager referenced from the task definition."
+
+analogy:
+  title: "Food trucks at a managed market"
+  text: |
+    You could buy your own truck and keep it serviced, or rent a pitch at
+    a market where the organiser looks after the vans, the power and the
+    pitches in both car parks. You bring the recipe. Keep the recipe in your
+    own locked kitchen rather than a shared public fridge, and keep the safe
+    combination with the manager, not taped to the menu.
+
+debrief:
+  summary: |
+    Containers still need somewhere to run. With ECS or EKS on EC2, that's
+    instances you patch; with AWS Fargate, AWS runs the underlying
+    infrastructure and you just define tasks. EKS gives you Kubernetes, which
+    is worth it when you need its ecosystem or already know it, but it adds a
+    per-cluster charge and a lot to learn. A private ECR repository keeps the
+    image private and avoids public registry pull limits during scale-out,
+    and Secrets Manager keeps the password out of the task definition: ECS
+    injects it at start-up, using the task execution role.
+  real_world: |
+    For small teams, ECS on Fargate is the usual starting point on AWS; EKS
+    makes sense when Kubernetes skills or portability matter. Either way,
+    keep images in ECR (with image scanning turned on) and secrets in
+    Secrets Manager or Parameter Store.
+
+sources:
+  - title: "Amazon ECS: AWS Fargate for Amazon ECS"
+    url: "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html"
+    retrieved: 2026-10-01
+  - title: "Amazon ECS: Pass Secrets Manager secrets through environment variables"
+    url: "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html"
+    retrieved: 2026-10-01
+  - title: "Amazon EKS: What is Amazon EKS?"
+    url: "https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html"
+    retrieved: 2026-10-01
+  - title: "Amazon EKS: Simplify node lifecycle with managed node groups"
+    url: "https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html"
+    retrieved: 2026-10-01
+  - title: "Amazon EKS: Pricing (per-cluster hourly charge)"
+    url: "https://aws.amazon.com/eks/pricing/"
+    retrieved: 2026-10-01
+  - title: "Amazon ECR: What is Amazon Elastic Container Registry?"
+    url: "https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html"
+    retrieved: 2026-10-01
+  - title: "Docker Hub: Usage and limits (pull rate limits)"
+    url: "https://docs.docker.com/docker-hub/usage/"
+    retrieved: 2026-10-01

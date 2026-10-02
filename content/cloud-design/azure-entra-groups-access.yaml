@@ -1,0 +1,185 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: azure-entra-groups-access
+track: cloud-design
+difficulty: 2
+title: "Give 400 people the right access, and take it away again"
+provider: azure
+par_minutes: 10
+
+brief: |
+  A 400-person company is moving its sales tools to Azure. Sales staff need
+  the Contributor role on the rg-sales resource group and access to the CRM
+  app; nobody else should have either. HR already sets each user's
+  department in Microsoft Entra ID. People join and change teams every
+  week, and access has been left behind when they move. Six IT staff
+  currently share admin duties, and most of their day is password resets.
+  Last year a phished password was used to sign in, so security wants
+  multifactor authentication for everyone.
+
+requirements:
+  - "New sales hires get access on day one, without an IT ticket"
+  - "People who leave Sales lose its access automatically"
+  - "A phished helpdesk password can't take over the tenant"
+  - "Everyone signs in with multifactor authentication"
+  - "Stay within 4 cost units per month"
+budget: 4
+
+tiers:
+  - id: membership
+    label: "How sales staff get the role and the app"
+    options:
+      - id: assign-users
+        short: "Each user"
+        label: "Assign the role and the app to each salesperson individually"
+        cost: 0
+        facts:
+          - "Every joiner needs new assignments, and every mover needs them found and removed."
+          - "With hundreds of individual assignments, it's hard to see who has access and why."
+        capabilities: { survives: [phish, mfa], scales: 1 }
+      - id: assign-group
+        short: "Assigned group"
+        label: "A security group with assigned membership; IT adds and removes people"
+        cost: 0
+        facts:
+          - "The role and the app are assigned once, to the group."
+          - "Members are added and removed by hand."
+        capabilities: { survives: [phish, mfa], scales: 1 }
+      - id: assign-dynamic
+        short: "Dynamic group"
+        label: "A security group with a dynamic membership rule: user.department -eq \"Sales\""
+        cost: 3
+        facts:
+          - "Microsoft Entra ID adds and removes members automatically as users' attributes change."
+          - "The role and the app are assigned once, to the group."
+          - "Dynamic membership groups need a Microsoft Entra ID P1 license for each user who's a member."
+        capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
+  - id: admins
+    label: "Admin roles for the six IT staff"
+    options:
+      - id: admins-global
+        short: "6 Global Admins"
+        label: "Global Administrator for all six"
+        cost: 0
+        facts:
+          - "Global Administrator can manage everything in Microsoft Entra ID and the services that use it."
+          - "Microsoft recommends having fewer than five Global Administrators."
+        capabilities: { survives: [joiner, mover, mfa], scales: 1 }
+      - id: admins-least
+        short: "Helpdesk roles"
+        label: "Helpdesk Administrator for four, Global Administrator for two senior staff"
+        cost: 0
+        facts:
+          - "Helpdesk Administrator can reset passwords for non-administrators, and not much else."
+          - "Microsoft recommends giving each admin the least privileged role that does the job."
+        capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
+  - id: signin
+    label: "Sign-in protection"
+    options:
+      - id: signin-password
+        short: "Passwords only"
+        label: "Keep password-only sign-in"
+        cost: 0
+        facts: ["A stolen password is enough to sign in."]
+        capabilities: { survives: [joiner, mover], scales: 1 }
+      - id: signin-defaults
+        short: "Security defaults"
+        label: "Turn on security defaults"
+        cost: 0
+        facts:
+          - "Requires all users to register for multifactor authentication, and prompts for it when needed; admins are always prompted."
+          - "Included at no extra cost, but not configurable."
+        capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
+      - id: signin-ca
+        short: "Conditional Access"
+        label: "A Conditional Access policy requiring multifactor authentication for all users"
+        cost: 1
+        facts:
+          - "Policies can target users, apps and conditions such as location or risk, with exceptions where you need them."
+          - "Requires Microsoft Entra ID P1 licenses."
+        capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
+
+stress_tests:
+  - id: joiner
+    label: "Monday: twenty new salespeople start"
+    requires: { every_tier_survives: joiner }
+  - id: mover
+    label: "A salesperson moves to Finance"
+    requires: { every_tier_survives: mover }
+  - id: phish
+    label: "A helpdesk admin's password is phished"
+    requires: { every_tier_survives: phish }
+  - id: mfa
+    label: "Security checks that every sign-in can require a second factor"
+    requires: { every_tier_survives: mfa }
+
+failure_feedback:
+  assign-users:
+    joiner: "Twenty people, two assignments each, all by ticket. Some wait days for access."
+    mover: "Nobody removed their individual assignments, so they still have Contributor on rg-sales from Finance."
+  assign-group:
+    joiner: "Better than individual assignments, but someone still has to add twenty people to the group by hand."
+    mover: "They're still in the Sales group until someone remembers to take them out."
+  admins-global:
+    phish: "The phished account is a Global Administrator. Whoever has the password can change anything in the tenant."
+  signin-password:
+    phish: "With only a password, the attacker signs straight in."
+    mfa: "Nobody is ever asked for a second factor."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { membership: assign-dynamic, admins: admins-least, signin: signin-defaults }
+    why: "A dynamic group driven by the department HR already maintains handles joiners and movers with no tickets. Helpdesk staff get only the role they use, so one phished password can't run the tenant, and security defaults turn on MFA for everyone at no extra cost."
+  - name: "Also passes"
+    picks: { membership: assign-dynamic, admins: admins-least, signin: signin-ca }
+    why: "Since you're licensing P1 for the dynamic group, Conditional Access is the more flexible way to require MFA, with exceptions and conditions as the company needs them. (You turn security defaults off to use it.)"
+
+hints:
+  nudge: "HR already keeps one thing up to date for every user. Can access follow it automatically?"
+  direction: "Assign access to a group, and let a membership rule fill the group. Then look at what one stolen helpdesk password could do, and what stops a password alone from working."
+  answer: "A dynamic security group on user.department -eq \"Sales\" holding the role and the app, Helpdesk Administrator for most IT staff (two Global Administrators), and security defaults or a Conditional Access MFA policy."
+
+analogy:
+  title: "Keycards that follow the org chart"
+  text: |
+    Instead of the front desk programming each person's keycard by hand,
+    the card opens whichever floor HR's list says you work on. Move teams
+    and the old floor stops opening the next morning. The person who resets
+    forgotten PINs doesn't get a master key, and everyone taps their card
+    and types a code.
+
+debrief:
+  summary: |
+    Assign access to groups, not individual users, so it's granted and
+    reviewed in one place. A dynamic membership group goes further: its
+    rule (here, department equals Sales) adds and removes members as HR
+    updates users, so joiners and movers are handled without tickets, at
+    the cost of an Entra ID P1 license for its members. Give admins the
+    least privileged role that does the job, keep Global Administrators
+    few, and require multifactor authentication: security defaults do it
+    for free, Conditional Access does it with more control.
+  real_world: |
+    Pair dynamic groups with access reviews for anything sensitive, keep
+    a couple of emergency access accounts excluded from Conditional Access,
+    and consider Privileged Identity Management (P2) so admin roles are
+    activated only when needed.
+
+sources:
+  - title: "Microsoft Entra ID: Manage rules for dynamic membership groups"
+    url: "https://learn.microsoft.com/en-us/entra/identity/users/groups-dynamic-membership"
+    retrieved: 2026-10-01
+  - title: "Azure RBAC: Best practices (assign roles to groups, not users)"
+    url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/best-practices"
+    retrieved: 2026-10-01
+  - title: "Microsoft Entra ID: Best practices for Microsoft Entra roles (least privilege, fewer than five Global Administrators)"
+    url: "https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/best-practices"
+    retrieved: 2026-10-01
+  - title: "Microsoft Entra ID: Built-in roles (Helpdesk Administrator)"
+    url: "https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/permissions-reference"
+    retrieved: 2026-10-01
+  - title: "Microsoft Entra ID: Security defaults"
+    url: "https://learn.microsoft.com/en-us/entra/fundamentals/security-defaults"
+    retrieved: 2026-10-01
+  - title: "Microsoft Entra Conditional Access: Require MFA for all users"
+    url: "https://learn.microsoft.com/en-us/entra/identity/conditional-access/policy-all-users-mfa-strength"
+    retrieved: 2026-10-01

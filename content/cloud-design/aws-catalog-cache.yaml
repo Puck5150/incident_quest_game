@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../../schemas/challenge.json
+type: challenge
+id: aws-catalog-cache
+track: cloud-design
+difficulty: 2
+title: "Keep product pages fast when the sale traffic arrives"
+provider: aws
+par_minutes: 10
+
+brief: |
+  The shop's product pages read from a MySQL database on Amazon RDS. Pages
+  are read about fifty times for every time a product changes, and the same
+  few hundred products get most of the views. Next month's sale will bring
+  ten times the usual traffic, and last year the database's CPU hit 100%
+  and pages timed out. The site must also stay up if an Availability Zone
+  fails, and losing a cache server shouldn't send the whole load back to
+  the database at once.
+
+requirements:
+  - "Serve 10x normal page views during the sale"
+  - "Keep working if one Availability Zone fails"
+  - "Losing one cache node doesn't empty the cache"
+  - "Stay within 10 cost units per month"
+budget: 10
+
+tiers:
+  - id: database
+    label: "Database (RDS for MySQL)"
+    options:
+      - id: db-single-az
+        short: "Single-AZ"
+        label: "A Single-AZ DB instance"
+        cost: 3
+        facts:
+          - "The DB instance runs in one Availability Zone."
+          - "If that zone has a problem, the database is unavailable until it's recovered."
+        capabilities: { survives: [node-failure], scales: 1 }
+      - id: db-multi-az
+        short: "Multi-AZ"
+        label: "A Multi-AZ DB instance deployment (primary plus standby)"
+        cost: 5
+        facts:
+          - "RDS keeps a synchronous standby in a different Availability Zone and fails over to it automatically."
+          - "The standby doesn't serve read traffic: it's there for availability."
+        capabilities: { survives: [node-failure, az-outage], scales: 1 }
+  - id: cache
+    label: "Cache in front of the database"
+    options:
+      - id: cache-none
+        short: "No cache"
+        label: "No cache: every page view queries the database"
+        cost: 0
+        facts: ["Every page view runs the product queries on the DB instance."]
+        capabilities: { survives: [node-failure, az-outage], scales: 1 }
+      - id: cache-dax
+        short: "DAX"
+        label: "A DynamoDB Accelerator (DAX) cluster"
+        cost: 3
+        facts:
+          - "DAX is an in-memory cache for Amazon DynamoDB tables."
+          - "Applications use it through a DAX client in place of the DynamoDB client."
+        capabilities: { survives: [node-failure, az-outage], scales: 1 }
+      - id: cache-single
+        short: "1 cache node"
+        label: "ElastiCache (Valkey or Redis OSS), one node, no replicas"
+        cost: 2
+        facts:
+          - "An in-memory key-value store that the app checks before querying the database (lazy loading)."
+          - "With no replicas, the node's data exists only on that node."
+        capabilities: { survives: [], scales: 10 }
+      - id: cache-replicated
+        short: "Cache + replica"
+        label: "ElastiCache (Valkey or Redis OSS), a primary and a replica in another AZ, Multi-AZ with automatic failover"
+        cost: 4
+        facts:
+          - "An in-memory key-value store that the app checks before querying the database (lazy loading)."
+          - "If the primary fails, ElastiCache promotes the replica and the endpoint points to it."
+          - "Multi-AZ with automatic failover needs at least one replica."
+        capabilities: { survives: [node-failure, az-outage], scales: 10 }
+      - id: cache-serverless
+        short: "Serverless cache"
+        label: "ElastiCache Serverless (Valkey or Redis OSS)"
+        cost: 5
+        facts:
+          - "An in-memory key-value store that the app checks before querying the database (lazy loading)."
+          - "Scales capacity automatically, and replicates data across multiple Availability Zones."
+          - "You pay for data stored and requests processed, rather than for nodes."
+        capabilities: { survives: [node-failure, az-outage], scales: 10 }
+
+stress_tests:
+  - id: sale
+    label: "The sale starts: 10x normal page views"
+    requires: { tier: cache, min_scales: 10 }
+  - id: az-outage
+    label: "us-east-1a becomes unreachable"
+    requires: { every_tier_survives: az-outage }
+  - id: node-failure
+    label: "A cache node fails mid-sale"
+    requires: { every_tier_survives: node-failure }
+
+failure_feedback:
+  cache-none:
+    sale: "Every view runs the same product queries on the database, ten times as often. CPU hits 100%, just like last year."
+  cache-dax:
+    sale: "DAX caches DynamoDB, and the catalog is in MySQL on RDS. Nothing is cached; the database takes the whole load."
+  cache-single:
+    node-failure: "The only cache node failed and came back empty. Every request misses at once, and the database gets the full sale load."
+    az-outage: "The only cache node was in that zone. The cache is gone, and so is the protection for the database."
+  db-single-az:
+    az-outage: "The database lived only in that zone. With it gone, every cache miss fails, and changes can't be saved."
+
+reference_designs:
+  - name: "Recommended"
+    picks: { database: db-multi-az, cache: cache-replicated }
+    why: "A cache absorbs the repeated reads, so the database only sees misses and changes. A replica in another zone with automatic failover means losing a node, or a zone, doesn't empty the cache, and a Multi-AZ database survives the zone failure behind it."
+  - name: "Also passes"
+    picks: { database: db-multi-az, cache: cache-serverless }
+    why: "ElastiCache Serverless scales and replicates across zones for you, at a slightly higher cost here. A good choice when traffic is hard to predict."
+
+hints:
+  nudge: "The same few hundred products get most of the views. Does the database need to answer the same question thousands of times?"
+  direction: "Put a cache in front of the database, then ask what happens to everything in it when its only node fails. And check which caches actually work with MySQL."
+  answer: "A Multi-AZ RDS deployment with ElastiCache (Valkey or Redis OSS) using a replica in another zone and automatic failover, or ElastiCache Serverless."
+
+analogy:
+  title: "The specials board"
+  text: |
+    If every customer asks the kitchen what today's soup is, the chef never
+    gets any cooking done. Write it on a board by the door. Better still,
+    put a board at both entrances, so if one gets knocked over the queue
+    doesn't all go back to the kitchen at once.
+
+debrief:
+  summary: |
+    Read-heavy pages with a small set of popular items are the textbook
+    case for a cache. The app checks ElastiCache first and only queries
+    RDS on a miss (lazy loading), so the database sees a fraction of the
+    traffic. But a cache that lives on one node is a single point of
+    failure: when it fails, every request misses at once and the database
+    takes the full load. A replica in another Availability Zone with
+    Multi-AZ automatic failover, or ElastiCache Serverless, keeps the cache
+    warm through a failure. DAX is a cache for DynamoDB, not for RDS, and
+    an RDS Multi-AZ standby adds availability, not read capacity.
+  real_world: |
+    Decide what to cache (popular, rarely changing reads), how long to keep
+    it (a TTL), and how to update it when data changes (lazy loading,
+    write-through, or both). Watch the cache hit rate: a sudden drop is
+    often the first sign the database is about to have a bad day.
+
+sources:
+  - title: "Amazon ElastiCache: Caching strategies (lazy loading, write-through, TTL)"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html"
+    retrieved: 2026-10-01
+  - title: "Amazon ElastiCache: Minimizing downtime with Multi-AZ (automatic failover, replicas)"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html"
+    retrieved: 2026-10-01
+  - title: "Amazon ElastiCache: What is Amazon ElastiCache? (serverless and node-based caches)"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html"
+    retrieved: 2026-10-01
+  - title: "Amazon DynamoDB: In-memory acceleration with DynamoDB Accelerator (DAX)"
+    url: "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.html"
+    retrieved: 2026-10-01
+  - title: "Amazon RDS: Multi-AZ DB instance deployments (standby doesn't serve reads)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
+    retrieved: 2026-10-01
