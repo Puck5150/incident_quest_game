@@ -16,6 +16,11 @@ export type QueueItem = {
 
 const CLOUD: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' }
 
+// A stable, ops-style reference for each mission (display only, so a rare
+// collision is harmless). Same id, same number, every visit.
+const missionId = (id: string, kind: QueueItem['kind']) =>
+  `${kind === 'challenge' ? 'BLD' : 'INC'}-${String([...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 10000, 7)).padStart(4, '0')}`
+
 // The incident queue: tracks that have content, in tracks.yaml order,
 // incidents easiest first. Locked tracks say what unlocks them.
 export default function HomeScreen({
@@ -58,7 +63,17 @@ export default function HomeScreen({
               tabIndex={-1}
               className="mb-3 flex scroll-mt-4 flex-wrap items-center gap-3 text-lg font-semibold focus:outline-none"
             >
-              {track.name}
+              <span
+                aria-hidden
+                className={`h-2 w-2 rounded-full ${!open ? 'bg-line' : items.every((s) => progress.completed[s.id]) ? 'bg-ok' : 'bg-warn'}`}
+              />
+              <span className="font-mono tracking-widest uppercase">
+                <span className="text-muted">Sector // </span>
+                {track.name}
+              </span>
+              <span className="font-mono text-sm font-normal text-muted tabular-nums">
+                {items.filter((s) => progress.completed[s.id]).length}/{items.length} clear
+              </span>
               {!open && (
                 <span className="flex items-center gap-1.5 text-sm font-normal text-muted">
                   <Icon name="lock" className="h-3.5 w-3.5" />
@@ -74,10 +89,13 @@ export default function HomeScreen({
                     <button
                       disabled={!open}
                       onClick={() => onPlay(s.id)}
-                      className="h-full w-full rounded-lg border border-line bg-panel p-4 text-left hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+                      className={`h-full w-full rounded-lg border border-l-4 border-line bg-panel p-4 text-left hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 ${done ? 'border-l-ok' : 'border-l-warn'}`}
                     >
                       <span className="flex items-center justify-between gap-2 text-xs text-muted">
-                        <span className={s.kind === 'challenge' ? 'text-accent' : 'font-mono'}>{s.tag}</span>
+                        <span className="flex gap-2 font-mono">
+                          <span>{missionId(s.id, s.kind)}</span>
+                          <span className={s.kind === 'challenge' ? 'text-accent' : ''}>{s.tag}</span>
+                        </span>
                         <span className="flex gap-1" role="img" aria-label={`Difficulty ${s.difficulty} of 5`}>
                           {[1, 2, 3, 4, 5].map((n) => (
                             <span key={n} className={`h-1.5 w-3 rounded-full ${n <= s.difficulty ? 'bg-accent' : 'bg-line'}`} />
@@ -112,7 +130,7 @@ export default function HomeScreen({
                             {done.clean && ' · clean'}
                           </>
                         ) : (
-                          'Open'
+                          <span className="font-mono tracking-wider text-warn uppercase">Open</span>
                         )}
                       </span>
                     </button>

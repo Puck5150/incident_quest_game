@@ -1,6 +1,6 @@
 # Plan: Ops Center theme
 
-Status: **approved 2026-10-01; T1 done.** Shell-only theming, sound opt-in. Requested: "really feel like a
+Status: **approved 2026-10-01; T1 and T2 done.** Shell-only theming, sound opt-in. Requested: "really feel like a
 game, not just a test prep tutorial". Theme picked: cyber ops command center.
 
 ## 1. The idea

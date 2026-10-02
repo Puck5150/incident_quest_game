@@ -20,7 +20,7 @@
   --line: oklch(0.88 0.01 250);
   --fg: oklch(0.22 0.02 250);
   --muted: oklch(0.45 0.02 250);
-  --accent: oklch(0.5 0.15 245);
+  --accent: oklch(0.5 0.12 220);
   --ok: oklch(0.5 0.13 150);
   --warn: oklch(0.5 0.12 70);
   --crit: oklch(0.52 0.19 25);
@@ -30,16 +30,17 @@
   --series-3: #1baf7a;
 }
 .dark {
+  /* Ops-room night shift: blue-black consoles, cyan signal, amber and red alarms. */
   color-scheme: dark;
-  --bg: oklch(0.16 0.015 250);
-  --panel: oklch(0.21 0.02 250);
-  --line: oklch(0.32 0.02 250);
-  --fg: oklch(0.93 0.01 250);
-  --muted: oklch(0.72 0.02 250);
-  --accent: oklch(0.75 0.13 230);
-  --ok: oklch(0.78 0.16 150);
-  --warn: oklch(0.82 0.14 80);
-  --crit: oklch(0.72 0.17 25);
+  --bg: oklch(0.14 0.02 240);
+  --panel: oklch(0.185 0.025 240);
+  --line: oklch(0.31 0.04 230);
+  --fg: oklch(0.93 0.01 220);
+  --muted: oklch(0.73 0.03 230);
+  --accent: oklch(0.82 0.13 200);
+  --ok: oklch(0.8 0.17 155);
+  --warn: oklch(0.83 0.15 75);
+  --crit: oklch(0.7 0.19 25);
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
@@ -67,6 +68,22 @@
 
 body {
   @apply bg-bg text-fg antialiased;
+  /* Faint plotting grid behind everything, like an ops-room wall. */
+  background-image:
+    linear-gradient(color-mix(in oklch, var(--line) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklch, var(--line) 30%, transparent) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Console labels: every panel's first heading reads like a station label,
+   with a signal light. One rule here instead of a class on 20 headings. */
+.bg-panel > h2:first-child {
+  @apply flex items-center gap-2 font-mono text-sm font-medium tracking-widest uppercase;
+}
+.bg-panel > h2:first-child::before {
+  content: '';
+  @apply h-1.5 w-1.5 shrink-0 rounded-full bg-accent;
+  box-shadow: 0 0 6px var(--accent);
 }
 
 /* Browser surfaces follow the palette too. */

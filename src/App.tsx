@@ -205,8 +205,8 @@ export default function App() {
       </a>
       <header className="border-b border-line bg-panel">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 lg:px-6">
-          <span className="font-semibold tracking-tight">
-            Incident <span className="text-accent">Quest</span>
+          <span className="font-mono font-semibold tracking-widest uppercase">
+            Incident<span className="text-accent">//</span>Quest
           </span>
           <Callsign value={callsign} onChange={(c) => setting({ callsign: c })} />
           <nav aria-label="Main" className="flex gap-1">
@@ -220,10 +220,23 @@ export default function App() {
             </div>
             <div className="flex gap-1.5">
               <dt className="text-muted">XP</dt>
-              <dd className="font-mono tabular-nums">
+              <dd className="flex items-center gap-2 font-mono tabular-nums">
                 {progress.xp}
                 {next && <span className="text-muted"> / {next.xp}</span>}
+                {next && (
+                  <meter
+                    aria-hidden // the numbers beside it say the same thing
+                    min={rank.xp}
+                    max={next.xp}
+                    value={progress.xp}
+                    className="h-1.5 w-20 [&::-moz-meter-bar]:bg-accent [&::-webkit-meter-bar]:rounded-full [&::-webkit-meter-bar]:border-0 [&::-webkit-meter-bar]:bg-line [&::-webkit-meter-optimum-value]:rounded-full [&::-webkit-meter-optimum-value]:bg-accent"
+                  />
+                )}
               </dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt className="text-muted">Missions cleared</dt>
+              <dd className="font-mono tabular-nums">{Object.keys(progress.completed).length}</dd>
             </div>
             <div className="flex gap-1.5">
               <dt className="text-muted">Clean streak</dt>
