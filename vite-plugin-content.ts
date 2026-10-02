@@ -15,6 +15,8 @@ import { TrackSchema, type Scenario, type Track } from './src/schema/scenario.ts
 import type { Challenge } from './src/schema/challenge.ts'
 import type { CanvasChallenge } from './src/schema/canvas.ts'
 import { checkRaw, itemMeta, parseItem, type MultiChallenge } from './src/content/item.ts'
+import { CommandLibrarySchema, type CommandEntry } from './src/schema/commands.ts'
+import { breakdownFor, uncovered } from './src/game/breakdown.ts'
 
 export { contentKind, type ContentKind, type MultiChallenge } from './src/content/item.ts'
 
@@ -24,6 +26,7 @@ export type Content = {
   challenges: Challenge[]
   canvases: CanvasChallenge[]
   multis: MultiChallenge[]
+  library: CommandEntry[] // content/commands/*.yaml: the command breakdown library
 }
 
 export function loadContent(dir: string): Content {
@@ -31,7 +34,18 @@ export function loadContent(dir: string): Content {
   const tracks = check(path.join(dir, 'tracks.yaml'), z.array(TrackSchema), errors) ?? []
   const trackIds = new Set(tracks.map((t) => t.id))
   const seen = new Set<string>()
-  const content: Content = { tracks, scenarios: [], challenges: [], canvases: [], multis: [] }
+  const content: Content = { tracks, scenarios: [], challenges: [], canvases: [], multis: [], library: [] }
+
+  // The command library: one file per tool family, entry ids unique across all.
+  const libDir = path.join(dir, COMMANDS_DIR)
+  if (fs.existsSync(libDir))
+    for (const f of fs.readdirSync(libDir).filter((f) => /\.ya?ml$/.test(f)).sort()) {
+      const entries = check(path.join(libDir, f), CommandLibrarySchema, errors) ?? []
+      for (const e of entries) {
+        if (content.library.some((x) => x.id === e.id)) errors.push(`${COMMANDS_DIR}/${f}: duplicate command entry id "${e.id}"`)
+        content.library.push(e)
+      }
+    }
 
   for (const file of scenarioFiles(dir)) {
     const rel = path.relative(dir, file)
@@ -72,12 +86,14 @@ export function loadContent(dir: string): Content {
 export const check = <T>(file: string, schema: z.ZodType<T>, errors: string[]): T | undefined =>
   checkRaw(fs.readFileSync(file, 'utf8'), schema, path.relative(process.cwd(), file), errors)
 
-// Every .yaml under dir except tracks.yaml and files starting with "_"
-// (like _template.yaml), which are not playable scenarios.
+// Every .yaml under dir except tracks.yaml, files starting with "_" (like
+// _template.yaml) and the command library, which are not playable scenarios.
+const COMMANDS_DIR = 'commands'
+
 function scenarioFiles(dir: string): string[] {
   return fs
     .readdirSync(dir, { recursive: true, encoding: 'utf8' })
-    .filter((f) => /\.ya?ml$/.test(f) && f !== 'tracks.yaml' && !path.basename(f).startsWith('_'))
+    .filter((f) => /\.ya?ml$/.test(f) && f !== 'tracks.yaml' && !path.basename(f).startsWith('_') && !f.startsWith(COMMANDS_DIR + path.sep))
     .sort()
     .map((f) => path.join(dir, f))
 }
@@ -105,7 +121,7 @@ function indexOf(c: Content) {
 function itemOf(c: Content, id: string) {
   const find = <T extends { id: string }>(xs: T[]) => xs.find((x) => x.id === id)
   const s = find(c.scenarios)
-  if (s) return { kind: 'incident', scenario: s }
+  if (s) return { kind: 'incident', scenario: s, breakdown: breakdownFor(s, c.library) }
   const ch = find(c.challenges)
   if (ch) return { kind: 'challenge', challenge: ch }
   const cv = find(c.canvases)
@@ -130,6 +146,9 @@ export function contentPlugin(dir: string): Plugin {
     load(id) {
       if (id === RESOLVED_ID) {
         const c = content()
+        // Until every track's commands are in the library (PLAN_COMMAND_BREAKDOWN.md B3), report gaps.
+        const gaps = c.scenarios.reduce((n, sc) => n + uncovered(sc, c.library).length, 0)
+        if (gaps) this.warn(`command breakdown: ${gaps} key or verification commands have no library entry yet`)
         const all = [...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis]
         const loaders = all.map((x) => `${JSON.stringify(x.id)}: () => import(${JSON.stringify(ITEM_PREFIX + x.id)})`)
         return [

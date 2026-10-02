@@ -9,6 +9,7 @@ import { play } from '../game/sound.ts'
 import IncidentScreen from './IncidentScreen.tsx'
 import DebriefScreen from './DebriefScreen.tsx'
 import Card from '../components/Card.tsx'
+import type { Breakdown } from '../schema/commands.ts'
 import { mmss } from '../game/format.ts'
 import { stageAt } from '../schema/stages.ts'
 import WorldMap, { type Sector } from '../components/WorldMap.tsx'
@@ -49,6 +50,7 @@ export default function ShiftScreen({
     undefined,
   )
   const [scenarios, setScenarios] = useState<Record<string, Scenario>>({})
+  const [breakdowns, setBreakdowns] = useState<Record<string, Breakdown | undefined>>({})
   const [finished, setFinished] = useState<Record<string, Finished>>({})
   const [last, setLast] = useState<string>() // the result card after a resolve
   const [viewing, setViewing] = useState<string>() // a full after-action report from the shift report
@@ -58,9 +60,11 @@ export default function ShiftScreen({
   function begin(length: number) {
     const s = newShift(candidates, length, relaxed)
     // Every page's scenario loads up front, so switching is instant.
-    Promise.all(s.pages.map((p) => loadItem(p.id))).then((loaded) =>
-      setScenarios(Object.fromEntries(loaded.flatMap((x) => (x.kind === 'incident' ? [[x.scenario.id, x.scenario]] : [])))),
-    )
+    Promise.all(s.pages.map((p) => loadItem(p.id))).then((loaded) => {
+      const incidents = loaded.flatMap((x) => (x.kind === 'incident' ? [x] : []))
+      setScenarios(Object.fromEntries(incidents.map((x) => [x.scenario.id, x.scenario])))
+      setBreakdowns(Object.fromEntries(incidents.map((x) => [x.scenario.id, x.breakdown])))
+    })
     dispatch({ type: 'BEGIN', shift: s })
   }
 
@@ -105,6 +109,7 @@ export default function ShiftScreen({
     return (
       <DebriefScreen
         scenario={scenarios[viewing]}
+        breakdown={breakdowns[viewing]}
         log={f.log}
         score={f.score}
         gained={f.outcome.gained}

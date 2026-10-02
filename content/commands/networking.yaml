@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: networking and HTTP. First matching entry wins.
+
+- id: curl-head
+  match: "^curl (-s)?I "
+  summary: "Requests a URL and prints only the response's status line and headers."
+  parts:
+    - { token: "curl", meaning: "Transfer a URL." }
+    - { token: "-s", meaning: "Silent: no progress meter." }
+    - { token: "-I", meaning: "Send a HEAD request and show only the headers." }
+  why: "Status code, server and cache headers answer most \"what does the server say?\" questions without the body."
+  alternatives:
+    - { command: "curl -sv URL -o /dev/null", note: "Also shows the connection, TLS handshake and request headers." }
+    - { command: "wget -S --spider URL", note: "Headers with wget." }
+  docs: { title: "curl man page", url: "https://curl.se/docs/manpage.html" }

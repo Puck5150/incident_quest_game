@@ -1,6 +1,8 @@
 import { artifacts } from '../schema/constants.ts'
 import type { Scenario } from '../schema/scenario.ts'
-import { evidenceSeen, type GameEvent } from '../game/engine.ts'
+import { commandsHit, evidenceSeen, type GameEvent } from '../game/engine.ts'
+import CommandBreakdown from '../components/CommandBreakdown.tsx'
+import type { Breakdown } from '../schema/commands.ts'
 import { atStage, stageCount } from '../schema/stages.ts'
 import Prose from '../components/Prose.tsx'
 import Icon from '../components/Icon.tsx'
@@ -23,6 +25,7 @@ export default function DebriefScreen({
   onTree,
   onReplay,
   homeLabel = 'Back to ops board',
+  breakdown,
 }: {
   scenario: Scenario
   log: GameEvent[]
@@ -36,6 +39,7 @@ export default function DebriefScreen({
   onTree: () => void
   onReplay?: () => void // omitted inside a shift: replays happen from the ops board
   homeLabel?: string
+  breakdown?: Breakdown // the build's command breakdown for this incident (absent in preview)
 }) {
   const seen = evidenceSeen(scenario, log)
   const start = log[0]?.at ?? 0
@@ -186,6 +190,8 @@ export default function DebriefScreen({
         </div>
         ))}
       </Card>
+
+      {breakdown && <CommandBreakdown breakdown={breakdown} notes={scenario.command_notes} ran={commandsHit(scenario, log)} />}
 
       <Card title={`Analogy: ${analogy.title}`}>
         <Prose text={analogy.text} />

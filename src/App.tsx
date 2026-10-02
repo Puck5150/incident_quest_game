@@ -389,6 +389,7 @@ export default function App() {
           {screen.name === 'debrief' && (
             <DebriefScreen
               scenario={scenario!}
+              breakdown={item?.kind === 'incident' ? item.breakdown : undefined}
               log={screen.log}
               score={screen.score}
               gained={screen.gained}

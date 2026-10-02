@@ -126,7 +126,7 @@ export function runCommand(
   scenario: Scenario,
   input: string,
   taken: Set<string>,
-): { output: string; evidence?: string; scripted?: boolean } {
+): { output: string; evidence?: string; scripted?: boolean; command?: string } {
   const cmd = normalize(input)
   const t = scenario.terminal
   if (!t) return { output: '' }
@@ -143,7 +143,8 @@ export function runCommand(
       (c.match !== undefined ? normalize(c.match) === cmd : new RegExp(c.match_regex!).test(cmd)) &&
       (c.when_actions ?? []).every((a) => taken.has(a)),
   )
-  if (hit) return { output: hit.output.replace(/\n$/, ''), evidence: hit.evidence, scripted: true }
+  // `command`: the scripted command as written (its match, or a pattern's example).
+  if (hit) return { output: hit.output.replace(/\n$/, ''), evidence: hit.evidence, scripted: true, command: hit.match ?? hit.example }
 
   // Default is honest rather than realistic: a real command we didn't script
   // shouldn't pretend to be "command not found".
@@ -238,6 +239,19 @@ export function transcript(scenario: Scenario, log: GameEvent[]): { input: strin
     lines = input === 'clear' ? [] : [...lines, { input, output: terminalOutput(scenario, input, log.slice(0, i)) }]
   })
   return lines
+}
+
+// The scripted commands the player ran, as written in the scenario (so a typed
+// variant of a pattern command maps to its example). For the command breakdown.
+export function commandsHit(scenario: Scenario, log: GameEvent[]): Set<string> {
+  const hit = new Set<string>()
+  log.forEach((e, i) => {
+    if (e.type !== 'RUN_COMMAND') return
+    const before = log.slice(0, i)
+    const cmd = runCommand(atStage(scenario, stageAt(before)), e.input, actionsTaken(before)).command
+    if (cmd) hit.add(cmd)
+  })
+  return hit
 }
 
 // Fixed when every action of ANY one solution path has been taken, in any order.

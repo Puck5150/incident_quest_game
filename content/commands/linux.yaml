@@ -1,0 +1,368 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: Linux. First matching entry wins, so specific forms come
+# before general ones. Matched against commands with spaces collapsed.
+
+- id: df-inodes
+  match: "^(sudo )?df -i"
+  summary: "Shows how many inodes each filesystem has and how many are used, instead of bytes."
+  parts:
+    - { token: "df", meaning: "Report filesystem usage." }
+    - { token: "-i", meaning: "Count inodes (one per file or directory) instead of blocks." }
+    - { token: "/var", meaning: "Only the filesystem that holds this path." }
+  why: "\"No space left on device\" can mean no free inodes as well as no free bytes. df -i answers the second question directly."
+  alternatives:
+    - { command: "stat -f /var", note: "Shows free blocks and free inodes for one filesystem together." }
+    - { command: "df -h /var", note: "The bytes view; compare the two when they disagree." }
+  docs: { title: "df(1)", url: "https://man7.org/linux/man-pages/man1/df.1.html" }
+
+- id: df-human
+  match: "^(sudo )?df -h"
+  summary: "Shows each filesystem's size, used and free space in human-readable units."
+  parts:
+    - { token: "df", meaning: "Report filesystem disk space usage." }
+    - { token: "-h", meaning: "Human-readable sizes (G, M) instead of 1K blocks." }
+    - { token: "[path]", meaning: "Optional: only the filesystem containing that path." }
+  why: "The fastest answer to \"is a filesystem full?\", for every mount at once."
+  alternatives:
+    - { command: "df -hT", note: "Adds each filesystem's type (ext4, xfs, nfs)." }
+    - { command: "findmnt -D", note: "A tree of mounts with usage, from util-linux." }
+  docs: { title: "df(1)", url: "https://man7.org/linux/man-pages/man1/df.1.html" }
+
+- id: du-summary
+  match: "^(sudo )?du -sh"
+  summary: "Totals the disk space used under each given path."
+  parts:
+    - { token: "du", meaning: "Estimate file space usage." }
+    - { token: "-s", meaning: "Summarise: one total per argument instead of every subdirectory." }
+    - { token: "-h", meaning: "Human-readable sizes." }
+    - { token: "/var/log/*", meaning: "The shell expands * so each entry gets its own total." }
+  why: "Once df says a filesystem is full, du finds which directory is using it."
+  alternatives:
+    - { command: "du -xh --max-depth=1 / | sort -h", note: "One level at a time, sorted, staying on one filesystem (-x)." }
+    - { command: "ncdu /var", note: "An interactive browser of disk usage, if installed." }
+  docs: { title: "du(1)", url: "https://man7.org/linux/man-pages/man1/du.1.html" }
+
+- id: find-count-files
+  match: "^(sudo )?find \\S+ -type f( -print)? \\| wc -l$"
+  summary: "Counts the regular files under a directory."
+  parts:
+    - { token: "find /var/cache/thumbs", meaning: "Walk everything under this directory." }
+    - { token: "-type f", meaning: "Only regular files (not directories or links)." }
+    - { token: "| wc -l", meaning: "Count the lines find prints: one per file." }
+  why: "When inodes run out, the question is which directory holds millions of files; this counts them directly."
+  alternatives:
+    - { command: "du --inodes -s /var/cache/thumbs", note: "GNU du can total inodes instead of bytes." }
+    - { command: "find /var -xdev -type f | cut -d/ -f2-3 | sort | uniq -c | sort -n", note: "Counts files per top-level directory to find the hot spot." }
+  docs: { title: "find(1)", url: "https://man7.org/linux/man-pages/man1/find.1.html" }
+
+- id: namei-long
+  match: "^namei -l"
+  summary: "Follows a path one component at a time and shows each directory's mode and owner."
+  parts:
+    - { token: "namei", meaning: "Follow a pathname until a terminal point is found." }
+    - { token: "-l", meaning: "Long listing: permissions, owner and group for each component." }
+  why: "Opening a file needs search (x) permission on every directory above it. namei shows the whole path in one go, so the blocking directory stands out."
+  alternatives:
+    - { command: "ls -ld / /srv /srv/www /srv/www/promo", note: "The same information, one ls per directory." }
+    - { command: "sudo -u www-data cat /srv/www/promo/index.html", note: "Test access as the web server's user directly." }
+  docs: { title: "namei(1)", url: "https://man7.org/linux/man-pages/man1/namei.1.html" }
+
+- id: ls-selinux
+  match: "^ls -Z"
+  summary: "Lists files with their SELinux security context (label)."
+  parts:
+    - { token: "ls", meaning: "List directory contents." }
+    - { token: "-Z", meaning: "Print each file's security context: user:role:type:level." }
+  why: "On SELinux systems normal permissions are only half the story; the type in the label (like user_home_t) decides what a confined service may read."
+  alternatives:
+    - { command: "stat -c %C /var/www/html/index.html", note: "Prints just the context." }
+    - { command: "matchpathcon /var/www/html/index.html", note: "Shows the label the policy expects for that path, to compare." }
+  docs: { title: "ls(1)", url: "https://man7.org/linux/man-pages/man1/ls.1.html" }
+
+- id: ls-dirs
+  match: "^ls -ld"
+  summary: "Shows the permissions and owner of directories themselves, not their contents."
+  parts:
+    - { token: "ls", meaning: "List directory contents." }
+    - { token: "-l", meaning: "Long format: mode, links, owner, group, size, date." }
+    - { token: "-d", meaning: "List the directories themselves instead of what's inside." }
+  why: "Permission checks often fail on a directory (a home directory, .ssh), and -d shows exactly those entries."
+  alternatives:
+    - { command: "namei -l /home/deploy/.ssh/authorized_keys", note: "Every component of the path at once." }
+    - { command: "stat -c '%A %U %n' /home/deploy", note: "Just the mode and owner." }
+  docs: { title: "ls(1)", url: "https://man7.org/linux/man-pages/man1/ls.1.html" }
+
+- id: ls-long
+  match: "^ls -lh?( |$)"
+  summary: "Lists a directory's files with permissions, owner, size and modification time."
+  parts:
+    - { token: "-l", meaning: "Long format." }
+    - { token: "-h", meaning: "(If given) human-readable sizes." }
+  why: "The quickest look at what's in a directory and who owns it, how big it is, and when it changed."
+  alternatives:
+    - { command: "ls -lhS /var/log/app", note: "Sorted by size, largest first." }
+    - { command: "stat FILE", note: "Every timestamp and the inode number for one file." }
+  docs: { title: "ls(1)", url: "https://man7.org/linux/man-pages/man1/ls.1.html" }
+
+- id: ps-dstate
+  match: "^ps -eo state"
+  summary: "Lists processes in uninterruptible sleep (state D) and the kernel function each is waiting in."
+  parts:
+    - { token: "ps -e", meaning: "Every process." }
+    - { token: "-o state,pid,wchan:20,cmd", meaning: "Custom columns: state letter, PID, wait channel (20 characters wide) and command line." }
+    - { token: "awk '$1==\"D\"'", meaning: "Keep only lines whose first column (the state) is D." }
+    - { token: "head -4", meaning: "Show the first few." }
+  why: "High load with idle CPUs means processes are waiting. State D plus the wait channel (here rpc_wait..., NFS) shows what they're waiting for."
+  alternatives:
+    - { command: "top", note: "Shows each process's state in the S column (D is uninterruptible sleep), without the wait channel." }
+    - { command: "cat /proc/PID/stack", note: "As root, the kernel stack of one stuck process." }
+  docs: { title: "ps(1) (process state codes, wchan)", url: "https://man7.org/linux/man-pages/man1/ps.1.html" }
+
+- id: ps-command-user
+  match: "^ps -o user,cmd -C"
+  summary: "Shows which user each process of a given program runs as."
+  parts:
+    - { token: "-o user,cmd", meaning: "Only the user and command line columns." }
+    - { token: "-C nginx", meaning: "Select processes by command name." }
+  why: "Permission problems depend on which user the service runs as (here www-data for nginx's workers, not root)."
+  alternatives:
+    - { command: "ps aux | grep [n]ginx", note: "Every column; the [n] trick hides grep itself." }
+    - { command: "systemctl show -p User nginx", note: "The user systemd starts the service as." }
+  docs: { title: "ps(1)", url: "https://man7.org/linux/man-pages/man1/ps.1.html" }
+
+- id: top-batch
+  match: "^top -bn1"
+  summary: "Prints one snapshot of top's summary and process list, without the interactive screen."
+  parts:
+    - { token: "-b", meaning: "Batch mode: plain text output suitable for piping." }
+    - { token: "-n1", meaning: "Exit after one iteration." }
+    - { token: "| head -3", meaning: "Keep the summary lines: uptime and load, tasks, CPU breakdown." }
+  why: "The %Cpu(s) line splits CPU time into user, system, idle and I/O wait, which tells \"busy\" from \"waiting\" at a glance."
+  alternatives:
+    - { command: "vmstat 1 5", note: "CPU, memory and I/O every second, including blocked processes (b column)." }
+    - { command: "mpstat -P ALL 1", note: "Per-CPU usage, from sysstat." }
+  docs: { title: "top(1)", url: "https://man7.org/linux/man-pages/man1/top.1.html" }
+
+- id: uptime
+  match: "^uptime$"
+  summary: "Shows how long the system has been up and the 1, 5 and 15-minute load averages."
+  parts:
+    - { token: "uptime", meaning: "No options needed." }
+  why: "A trend in one line: is load rising (1-minute above 15-minute) or falling?"
+  alternatives:
+    - { command: "cat /proc/loadavg", note: "The raw figures, plus running and total task counts." }
+    - { command: "w", note: "uptime's line plus who is logged in." }
+  docs: { title: "proc_loadavg(5) (what load counts)", url: "https://man7.org/linux/man-pages/man5/proc_loadavg.5.html" }
+
+- id: free-human
+  match: "^free -h"
+  summary: "Shows total, used and available memory and swap in human-readable units."
+  parts:
+    - { token: "free", meaning: "Display amount of free and used memory." }
+    - { token: "-h", meaning: "Human-readable units." }
+  why: "Separates \"the whole machine is out of memory\" from \"one service hit its own limit\": look at the available column."
+  alternatives:
+    - { command: "cat /proc/meminfo", note: "Every memory counter the kernel keeps." }
+    - { command: "vmstat -s", note: "Memory and swap statistics as a list." }
+  docs: { title: "free(1)", url: "https://man7.org/linux/man-pages/man1/free.1.html" }
+
+- id: findmnt-target
+  match: "^findmnt "
+  summary: "Shows what's mounted at a path, from where, and with which options."
+  parts:
+    - { token: "findmnt", meaning: "Find a filesystem (util-linux)." }
+    - { token: "/mnt/uploads", meaning: "The mount point to look up." }
+  why: "Mount options such as hard or soft for NFS change how failures behave; findmnt shows them in one line."
+  alternatives:
+    - { command: "mount | grep /mnt/uploads", note: "The older way, same information." }
+    - { command: "nfsstat -m", note: "NFS mounts with their negotiated options." }
+  docs: { title: "findmnt(8)", url: "https://man7.org/linux/man-pages/man8/findmnt.8.html" }
+
+- id: journalctl-unit
+  match: "^(sudo )?journalctl (-u|-xeu) "
+  summary: "Shows a systemd service's log from the journal."
+  parts:
+    - { token: "journalctl", meaning: "Query the systemd journal." }
+    - { token: "-u NAME", meaning: "Only messages from this unit (service)." }
+    - { token: "-n 50", meaning: "(If given) only the last 50 lines." }
+    - { token: "-x -e", meaning: "(In -xeu) add explanatory help text and jump to the end." }
+  why: "A service's own errors are the first clue, and the journal has them along with systemd's own messages about starts, stops and kills."
+  alternatives:
+    - { command: "journalctl -u NAME --since '-1h' -p warning", note: "Only warnings and worse from the last hour." }
+    - { command: "systemctl status NAME", note: "The last few log lines plus the unit's state." }
+  docs: { title: "journalctl(1)", url: "https://www.freedesktop.org/software/systemd/man/latest/journalctl.html" }
+
+- id: kernel-log
+  match: "^(sudo )?(dmesg|journalctl -k)"
+  summary: "Shows the kernel's message buffer: hardware, filesystem, network and out-of-memory events."
+  parts:
+    - { token: "dmesg", meaning: "Print the kernel ring buffer." }
+    - { token: "-T", meaning: "Human-readable timestamps instead of seconds since boot." }
+    - { token: "| tail", meaning: "Only the most recent messages." }
+  why: "Some failures are only reported by the kernel: OOM kills, NFS servers not responding, disk errors."
+  alternatives:
+    - { command: "journalctl -k -b", note: "Kernel messages for this boot, from the journal." }
+    - { command: "dmesg -T --level=err,warn", note: "Only errors and warnings." }
+  docs: { title: "dmesg(1)", url: "https://man7.org/linux/man-pages/man1/dmesg.1.html" }
+
+- id: systemctl-status
+  match: "^(ssh \\S+ )?(sudo )?systemctl status "
+  summary: "Shows a unit's state, its main process, recent result and its last log lines."
+  parts:
+    - { token: "systemctl", meaning: "Control the systemd system and service manager." }
+    - { token: "status NAME", meaning: "Runtime status of that unit." }
+  why: "One command shows whether it's running, why it last stopped (for example Result: oom-kill), and memory use against its limit."
+  alternatives:
+    - { command: "systemctl show NAME -p ActiveState,Result", note: "Only specific properties, script-friendly." }
+    - { command: "journalctl -u NAME -n 50", note: "More of the unit's log." }
+  docs: { title: "systemctl(1)", url: "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html" }
+
+- id: systemctl-is
+  match: "^(ssh \\S+ )?(sudo )?systemctl is-(active|enabled) "
+  summary: "Answers in one word whether a unit is running now (is-active) or set to start at boot (is-enabled)."
+  parts:
+    - { token: "is-active", meaning: "active, inactive or failed: is it running right now?" }
+    - { token: "is-enabled", meaning: "enabled or disabled: will it start at boot?" }
+    - { token: "ssh files-01", meaning: "(If given) run it on another host." }
+  why: "Started and enabled are different things; a service started by hand but not enabled disappears after the next reboot."
+  alternatives:
+    - { command: "systemctl status NAME", note: "Both answers plus logs, in more words." }
+    - { command: "systemctl list-unit-files --state=disabled", note: "Every disabled unit on the host." }
+  docs: { title: "systemctl(1) (is-active, is-enabled)", url: "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html" }
+
+- id: systemctl-cat
+  match: "^(sudo )?systemctl cat "
+  summary: "Prints a unit's file and every drop-in that changes it, with their paths."
+  parts:
+    - { token: "cat NAME", meaning: "Show the unit file and drop-ins, in the order systemd applies them." }
+  why: "Settings like MemoryMax often come from a drop-in, not the main file; this shows where each one is set."
+  alternatives:
+    - { command: "systemctl show -p FragmentPath,DropInPaths NAME", note: "Just the file locations." }
+    - { command: "systemd-delta", note: "Every unit file overridden or extended on the system." }
+  docs: { title: "systemctl(1) (cat)", url: "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html" }
+
+- id: systemctl-show-prop
+  match: "^(sudo )?systemctl show (-p |--property=)"
+  summary: "Prints one property of a unit as systemd currently sees it."
+  parts:
+    - { token: "show", meaning: "Show properties of a unit." }
+    - { token: "-p MemoryMax", meaning: "Only this property: the effective memory limit in bytes." }
+  why: "Shows the value actually in effect after every file and drop-in is combined."
+  alternatives:
+    - { command: "systemctl cat NAME", note: "Where the value comes from." }
+    - { command: "cat /sys/fs/cgroup/system.slice/NAME.service/memory.max", note: "The cgroup's limit, straight from the kernel." }
+  docs: { title: "systemd.resource-control(5) (MemoryMax)", url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html" }
+
+- id: ausearch-avc
+  match: "^(sudo )?ausearch -m AVC"
+  summary: "Searches the audit log for SELinux denials."
+  parts:
+    - { token: "ausearch", meaning: "Query the audit daemon's logs." }
+    - { token: "-m AVC,USER_AVC", meaning: "Only these message types: SELinux access-vector denials." }
+    - { token: "-ts recent", meaning: "Only events from the last 10 minutes." }
+  why: "Each denial names the process type (scontext), the file's type (tcontext) and what was refused, which is the whole diagnosis."
+  alternatives:
+    - { command: "sudo journalctl -t setroubleshoot", note: "Plain-English explanations, if setroubleshoot is installed." }
+    - { command: "sudo ausearch -m AVC -ts recent | audit2why", note: "Explains why each denial happened." }
+  docs: { title: "RHEL 9: Troubleshooting problems related to SELinux", url: "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/using_selinux/troubleshooting-problems-related-to-selinux_using-selinux" }
+
+- id: getenforce
+  match: "^getenforce$"
+  summary: "Prints SELinux's current mode: Enforcing, Permissive or Disabled."
+  parts:
+    - { token: "getenforce", meaning: "No options." }
+  why: "Confirms SELinux is actually enforcing before you look for denials."
+  alternatives:
+    - { command: "sestatus", note: "Mode plus the loaded policy and other details." }
+  docs: { title: "RHEL 9: Using SELinux (SELinux states and modes)", url: "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/using_selinux/troubleshooting-problems-related-to-selinux_using-selinux" }
+
+- id: sshd-test-config
+  match: "^(sudo )?sshd -T"
+  summary: "Prints sshd's effective configuration, every setting with its value, after defaults and includes."
+  parts:
+    - { token: "sshd -T", meaning: "Extended test mode: check the configuration and print it." }
+    - { token: "| grep -i strictmodes", meaning: "Keep only the line for StrictModes, ignoring case." }
+  why: "Shows what sshd will actually do, including defaults you never wrote down."
+  alternatives:
+    - { command: "grep -i strictmodes /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*", note: "Only shows settings someone wrote, not defaults." }
+  docs: { title: "sshd(8) (-T)", url: "https://man.openbsd.org/sshd.8" }
+
+- id: grep-count
+  match: "^(sudo )?grep -c "
+  summary: "Counts lines in a file that match a pattern."
+  parts:
+    - { token: "grep", meaning: "Print lines that match a pattern." }
+    - { token: "-c", meaning: "Print only the number of matching lines." }
+  why: "A quick yes/no-and-how-many: is the key in the file, how many errors are in the log."
+  alternatives:
+    - { command: "grep -n PATTERN FILE", note: "Show the matching lines with their line numbers." }
+  docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
+
+- id: tail-file
+  match: "^(sudo )?tail( -n ?\\d+)? \\S+$"
+  summary: "Shows the last lines of a file."
+  parts:
+    - { token: "tail", meaning: "Output the last part of a file." }
+    - { token: "-n 2", meaning: "(If given) how many lines; 10 by default." }
+  why: "The newest entries in a log are usually the ones that matter now."
+  alternatives:
+    - { command: "tail -f FILE", note: "Keep printing new lines as they're written." }
+    - { command: "less +G FILE", note: "Open at the end and scroll back." }
+  docs: { title: "tail(1)", url: "https://man7.org/linux/man-pages/man1/tail.1.html" }
+
+- id: crontab-list
+  match: "^crontab -l$"
+  summary: "Prints the current user's crontab."
+  parts:
+    - { token: "crontab", meaning: "Maintain a user's crontab." }
+    - { token: "-l", meaning: "List it." }
+  why: "Shows exactly what cron runs for this user, including any environment lines like PATH=."
+  alternatives:
+    - { command: "sudo crontab -l -u ops", note: "Another user's crontab." }
+    - { command: "ls /etc/cron.d", note: "System-wide jobs live here too." }
+  docs: { title: "crontab(1)", url: "https://man7.org/linux/man-pages/man1/crontab.1.html" }
+
+- id: command-v
+  match: "^command -v "
+  summary: "Prints the path the shell would run for a command name, or nothing if it isn't found."
+  parts:
+    - { token: "command -v NAME", meaning: "Shell builtin: describe how NAME would be resolved." }
+  why: "Shows where a tool is installed (here /usr/local/bin), which you then compare with another environment's PATH."
+  alternatives:
+    - { command: "type -a aws", note: "Every match on the PATH, plus aliases and functions." }
+    - { command: "which aws", note: "Common, but not a shell builtin; behaviour varies." }
+  docs: { title: "GNU Bash manual: command builtin", url: "https://www.gnu.org/software/bash/manual/bash.html#index-command" }
+
+- id: echo-path
+  match: "^echo \\$PATH$"
+  summary: "Prints the directories the current shell searches for commands."
+  parts:
+    - { token: "$PATH", meaning: "The PATH environment variable, colon-separated." }
+  why: "Your interactive PATH is the baseline to compare with what a cron job or service gets."
+  alternatives:
+    - { command: "env", note: "The whole environment." }
+    - { command: "printenv PATH", note: "Same, without the shell expanding it." }
+  docs: { title: "environ(7) (PATH)", url: "https://man7.org/linux/man-pages/man7/environ.7.html" }
+
+- id: sed-print-lines
+  match: "^sed -n \\d+,\\d+p "
+  summary: "Prints a range of lines from a file."
+  parts:
+    - { token: "-n", meaning: "Don't print every line automatically." }
+    - { token: "10,14p", meaning: "Print lines 10 to 14." }
+  why: "Jumps straight to the lines an error message names (\"line 11\")."
+  alternatives:
+    - { command: "awk 'NR>=10 && NR<=14' FILE", note: "Same with awk." }
+    - { command: "less +10 FILE", note: "Open at line 10 to read around it." }
+  docs: { title: "sed(1)", url: "https://man7.org/linux/man-pages/man1/sed.1.html" }
+
+- id: cat-file
+  match: "^(sudo )?cat "
+  summary: "Prints a file's contents."
+  parts:
+    - { token: "cat FILE", meaning: "Concatenate and print files." }
+  why: "Configuration files are short; reading the whole thing is the quickest way to spot a wrong value."
+  alternatives:
+    - { command: "less FILE", note: "Page through longer files." }
+    - { command: "grep -v '^#' FILE | grep -v '^$'", note: "Only the active lines, without comments and blanks." }
+  docs: { title: "cat(1)", url: "https://man7.org/linux/man-pages/man1/cat.1.html" }

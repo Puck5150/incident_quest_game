@@ -23,6 +23,7 @@ const walk = (x: unknown, item: string) => {
 }
 const c = loadContent(path.resolve(import.meta.dirname, '../content'))
 for (const x of [...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis]) walk(x, x.id)
+for (const e of c.library) walk(e, `commands:${e.id}`) // the command breakdown library's docs links
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

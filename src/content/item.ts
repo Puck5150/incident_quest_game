@@ -7,6 +7,7 @@
 import { parse } from 'yaml'
 import { z } from 'zod'
 import { ScenarioSchema, type Scenario } from '../schema/scenario.ts'
+import type { Breakdown } from '../schema/commands.ts'
 import { ChallengeSchema, type Challenge } from '../schema/challenge.ts'
 import { CanvasChallengeSchema, type CanvasChallenge } from '../schema/canvas.ts'
 import { MultiCanvasSchema, MultiSlotSchema, resolveProvider, resolveSlot, unresolvedTokens, type Provider } from '../schema/multi.ts'
@@ -29,7 +30,7 @@ export type MultiChallenge =
 
 // One playable item's full content, tagged with how it plays.
 export type Item =
-  | { kind: 'incident'; scenario: Scenario }
+  | { kind: 'incident'; scenario: Scenario; breakdown?: Breakdown } // breakdown: added by the build (not in preview)
   | { kind: 'challenge'; challenge: Challenge }
   | { kind: 'canvas'; canvas: CanvasChallenge }
   | { kind: 'multi'; multi: MultiChallenge }

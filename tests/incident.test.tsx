@@ -62,6 +62,12 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   expect(await screen.findByText('115', { selector: '.sr-only' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Root cause' })).toBeTruthy()
   expect(screen.getByText('The root filesystem is at 100%')).toBeTruthy() // evidence label, not the tag id
+  // The command breakdown: commands that found evidence or verify the fix, plus what you ran.
+  const breakdown = within(screen.getByRole('heading', { name: 'Command breakdown' }).closest('section')!)
+  const dfEntry = breakdown.getByText('$ df -h').closest('details')!
+  expect(dfEntry.textContent).toMatch(/you ran it/)
+  expect(dfEntry.textContent).toMatch(/Human-readable sizes/) // the -h flag, explained
+  expect(breakdown.getByText('$ journalctl -u checkout')).toBeTruthy() // found key evidence, though not typed here
   expect(location.hash).toBe('#/done/full-disk') // a reload opens the queue, not a fresh run
   expect(screen.getByText(/Clearance raised: Operator/)).toBeTruthy()
   expect(screen.queryByText(/Sector cleared/)).toBeNull() // other Linux incidents are still open

@@ -20,6 +20,7 @@ const files = fs
 it.each(files)('%s names the schema for its kind on line 1', (f) => {
   const file = path.join(CONTENT, f)
   const raw = fs.readFileSync(file, 'utf8')
-  const want = path.relative(path.dirname(file), path.join(OUT_DIR, `${contentKind(raw)}.json`))
+  const kind = f.startsWith('commands' + path.sep) ? 'commands' : contentKind(raw)
+  const want = path.relative(path.dirname(file), path.join(OUT_DIR, `${kind}.json`))
   expect(raw.split('\n')[0]).toBe(`# yaml-language-server: $schema=${want}`)
 })

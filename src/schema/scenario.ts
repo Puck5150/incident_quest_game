@@ -246,6 +246,9 @@ export const ScenarioSchema = z
       .optional(),
     sources: SourcesSchema,
     stages: z.array(StageSchema).min(1).max(2).optional(), // up to 3 stages in all
+    // Optional "why this command, here" for the after-action command breakdown,
+    // keyed by a terminal command as written (its match, or its example).
+    command_notes: z.record(z.string(), z.string().min(1)).optional(),
   })
   // Cross-references inside one file. These catch typos that would otherwise
   // produce an incident nobody can finish.
@@ -293,6 +296,10 @@ export const ScenarioSchema = z
           issue('match_regex commands need an `example` (on this entry or another with the same pattern) so players can find them', [...path, i, 'example'])
       }),
     )
+    const canonical = new Set(allCommands.flatMap((c) => (c.match ?? c.example ? [c.match ?? c.example!] : [])))
+    Object.keys(s.command_notes ?? {}).forEach((k) => {
+      if (!canonical.has(k)) issue(`"${k}" isn't a terminal command in this incident (use its match or example exactly)`, ['command_notes', k])
+    })
     stages.forEach((x, k) => {
       if (x.terminal && !s.terminal) issue('stage commands need a terminal at the top level', ['stages', k, 'terminal'])
       const nodes = new Set(s.diagram?.nodes.map((n) => n.id) ?? [])

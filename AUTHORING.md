@@ -193,6 +193,33 @@ stages:
 - **Scoring:** the methodical and verified bonuses are shared across stages;
   each stage has its own three hint tiers.
 
+## Command breakdown library
+
+After an incident, the after-action report explains the commands that found key
+evidence or verify the fix, plus anything the player ran. The explanations come
+from a shared library in `content/commands/` (one file per tool family), not from
+each incident:
+
+```yaml
+- id: df-inodes
+  match: "^(sudo )?df -i"          # regex over the command, spaces collapsed
+  summary: "What it does, one or two sentences."
+  parts:                           # every flag, argument, filter or regex
+    - { token: "-i", meaning: "Count inodes instead of blocks." }
+  why: "Why it's the right tool for this kind of question."
+  alternatives:
+    - { command: "stat -f /var", note: "How it differs." }
+  docs: { title: "df(1)", url: "https://man7.org/linux/man-pages/man1/df.1.html" }
+```
+
+- **First match wins**, so put specific forms (`df -i`) before general ones (`df -h`).
+- Explain short-flag clusters letter by letter (`-sh` as `-s` and `-h`); the tests
+  check every flag in a matched command is explained.
+- An incident can add `command_notes` (keyed by a terminal command exactly as
+  written) for "why this command, here".
+- The build warns about key-evidence or verification commands with no entry
+  (PLAN_COMMAND_BREAKDOWN.md); covered tracks are enforced by the tests.
+
 ## Things the validator enforces for you
 
 - Every `key_evidence` tag has a label in `evidence_labels`, and every label

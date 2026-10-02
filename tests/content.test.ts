@@ -13,6 +13,7 @@ import { CanvasChallengeSchema } from '../src/schema/canvas.ts'
 import { evaluateCanvas } from '../src/game/canvas.ts'
 import { MultiCanvasSchema, resolveProvider, unresolvedTokens } from '../src/schema/multi.ts'
 import { newSession, step, type GameEvent } from '../src/game/engine.ts'
+import { breakdownFor, uncovered } from '../src/game/breakdown.ts'
 
 const CONTENT = path.resolve(import.meta.dirname, '../content')
 
@@ -135,5 +136,31 @@ describe('validator rejects', () => {
 
   it('missing sources', () => {
     expect(loadMutated((y) => y.slice(0, y.indexOf('sources:')))).toThrow(/sources/)
+  })
+})
+
+// The after-action command breakdown (PLAN_COMMAND_BREAKDOWN.md). Tracks are
+// added here as their commands get library entries; B3 makes this every track.
+describe('command breakdown', () => {
+  const c = loadContent(CONTENT)
+  const COVERED = ['linux']
+  it.each(c.scenarios.filter((s) => COVERED.includes(s.track)).map((s) => [s.id, s] as const))(
+    '%s: every key-evidence and verification command has a library entry',
+    (_id, s) => expect(uncovered(s, c.library)).toEqual([]),
+  )
+
+  it('library entries list a part for every flag in the commands they explain', () => {
+    const missing: string[] = []
+    for (const s of c.scenarios.filter((x) => COVERED.includes(x.track)))
+      for (const { command, entry } of breakdownFor(s, c.library).commands) {
+        const tokens = c.library.find((e) => e.id === entry)!.parts.map((p) => p.token).join(' ')
+        for (const flag of command.split(/\s+/).filter((t) => /^-{1,2}[A-Za-z]/.test(t))) {
+          // A short-flag cluster like -sh or -bn1 is explained letter by letter (-s, -h; -b, -n1).
+          const wanted = /^-[A-Za-z]{2,}\d*$/.test(flag) ? [...flag.slice(1).replace(/\d+$/, '')].map((l) => `-${l}`) : [flag.replace(/=.*/, '')]
+          const ok = tokens.includes(flag) || wanted.every((w) => tokens.includes(w))
+          if (!ok) missing.push(`${entry}: ${flag} (in ${command})`)
+        }
+      }
+    expect(missing).toEqual([])
   })
 })
