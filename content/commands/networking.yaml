@@ -23,7 +23,9 @@
   parts:
     - { token: "-s", meaning: "Silent: no progress meter." }
     - { token: "-o /dev/null", meaning: "Throw the body away." }
-    - { token: "-w '%{http_code}\\n'", meaning: "After the transfer, write out the response's status code and a newline." }
+    - { token: "-w '%{http_code}\\n'", meaning: "After the transfer, write out the response's status code and a newline (%{time_total} adds the seconds taken)." }
+    - { token: "-H 'Host: NAME'", meaning: "(If given) send this header, here a different Host, to test how the server answers for another name." }
+    - { token: "-X POST", meaning: "(If given) use this request method instead of GET." }
   why: "One number answers \"what does this URL return?\", which is what a health check or a cache test compares against."
   alternatives:
     - { command: "curl -sI URL", note: "The status line plus headers." }
@@ -74,3 +76,49 @@
     - { command: "dig @8.8.8.8 NAME", note: "Ask a specific resolver." }
     - { command: "nslookup NAME", note: "Older and available on Windows too." }
   docs: { title: "BIND 9: dig", url: "https://bind9.readthedocs.io/en/latest/manpages.html#dig-dns-lookup-utility" }
+
+- id: nc-port-check
+  match: "^nc -zv "
+  summary: "Tests whether a TCP connection to a host and port succeeds, without sending data."
+  parts:
+    - { token: "nc", meaning: "netcat: raw TCP and UDP connections." }
+    - { token: "-z", meaning: "Zero-I/O: just connect, then close." }
+    - { token: "-v", meaning: "Verbose: say whether it succeeded or why not." }
+  why: "Separates the network from the application: if the TCP connection fails, no credential or setting in the app matters yet."
+  alternatives:
+    - { command: "Test-NetConnection HOST -Port N", note: "The PowerShell equivalent." }
+    - { command: "curl -v telnet://HOST:N", note: "Where nc isn't installed." }
+  docs: { title: "nc(1) (OpenBSD netcat)", url: "https://man.openbsd.org/nc.1" }
+
+- id: test-netconnection
+  match: "^Test-NetConnection "
+  summary: "PowerShell: tests DNS resolution and a TCP connection to a host and port."
+  parts:
+    - { token: "-ComputerName NAME", meaning: "The host to test." }
+    - { token: "-Port 445", meaning: "The TCP port (445 is SMB, used by Azure Files)." }
+  why: "TcpTestSucceeded False on 445 is the classic reason an Azure file share won't mount: many networks block outbound SMB."
+  alternatives:
+    - { command: "nc -zv HOST 445", note: "The same test on Linux or macOS." }
+  docs: { title: "Test-NetConnection", url: "https://learn.microsoft.com/en-us/powershell/module/nettcpip/test-netconnection" }
+
+- id: net-use
+  match: "^net use "
+  summary: "Windows: maps a drive letter to an SMB share."
+  parts:
+    - { token: "Z:", meaning: "The drive letter to use." }
+    - { token: "\\\\server\\share", meaning: "The share's UNC path." }
+  why: "Trying the mount shows the actual error (such as system error 53, network path not found) that users see."
+  alternatives:
+    - { command: "New-PSDrive -Name Z -PSProvider FileSystem -Root \\\\server\\share -Persist", note: "The PowerShell way." }
+  docs: { title: "Mount an Azure file share on Windows", url: "https://learn.microsoft.com/en-us/azure/storage/files/storage-how-to-use-files-windows" }
+
+- id: nslookup
+  match: "^nslookup "
+  summary: "Asks DNS what a name resolves to, following any CNAMEs."
+  parts:
+    - { token: "nslookup NAME", meaning: "Resolve NAME with the system's resolver." }
+  why: "Shows whether a name resolves to a private endpoint's address (through its privatelink CNAME) or to the public one."
+  alternatives:
+    - { command: "dig NAME", note: "More detail, including TTLs." }
+    - { command: "Resolve-DnsName NAME", note: "PowerShell." }
+  docs: { title: "nslookup", url: "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/nslookup" }

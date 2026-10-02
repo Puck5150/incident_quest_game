@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: database clients. First matching entry wins.
+
+- id: psql-command
+  match: "^psql .*-c "
+  summary: "Connects to PostgreSQL and runs one SQL command."
+  parts:
+    - { token: "\"host=... dbname=... user=...\"", meaning: "A connection string: server, database and user." }
+    - { token: "-c \"select 1\"", meaning: "Run this command and exit; select 1 just proves the connection and login work." }
+  why: "The error, if any, says which step failed: name resolution, connection, TLS, or authentication."
+  alternatives:
+    - { command: "pg_isready -h HOST", note: "Only whether the server accepts connections." }
+    - { command: "nc -zv HOST 5432", note: "Only the TCP connection." }
+  docs: { title: "PostgreSQL: psql", url: "https://www.postgresql.org/docs/current/app-psql.html" }
+
+- id: sqlcmd-query
+  match: "^sqlcmd "
+  summary: "Connects to SQL Server or Azure SQL and runs a query."
+  parts:
+    - { token: "-S server", meaning: "The server." }
+    - { token: "-d inventory", meaning: "The database." }
+    - { token: "-G", meaning: "Sign in with Microsoft Entra ID instead of a SQL login." }
+    - { token: "-Q \"...\"", meaning: "Run this query and exit." }
+    - { token: "sys.database_principals ... type IN ('E','X')", meaning: "Database users created from Entra identities: E is an external user (or app), X an external group." }
+  why: "A managed identity can only sign in to a database where a user was created for it; this lists which exist."
+  alternatives:
+    - { command: "Azure portal > SQL database > Query editor", note: "Run the same query in the browser." }
+  docs: { title: "sqlcmd utility", url: "https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility" }

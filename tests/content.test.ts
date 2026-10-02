@@ -143,7 +143,7 @@ describe('validator rejects', () => {
 // added here as their commands get library entries; B3 makes this every track.
 describe('command breakdown', () => {
   const c = loadContent(CONTENT)
-  const COVERED = ['linux', 'aws']
+  const COVERED = ['linux', 'aws', 'azure']
   it.each(c.scenarios.filter((s) => COVERED.includes(s.track)).map((s) => [s.id, s] as const))(
     '%s: every key-evidence and verification command has a library entry',
     (_id, s) => expect(uncovered(s, c.library)).toEqual([]),
@@ -156,7 +156,7 @@ describe('command breakdown', () => {
         const tokens = c.library.find((e) => e.id === entry)!.parts.map((p) => p.token).join(' ')
         for (const flag of command.split(/\s+/).filter((t) => /^-{1,2}[A-Za-z]/.test(t))) {
           // A short-flag cluster like -sh or -bn1 is explained letter by letter (-s, -h; -b, -n1).
-          const wanted = /^-[A-Za-z]{2,}\d*$/.test(flag) ? [...flag.slice(1).replace(/\d+$/, '')].map((l) => `-${l}`) : [flag.replace(/=.*/, '')]
+          const wanted = /^-[A-Za-z]{2,}\d*$/.test(flag) ? [...flag.slice(1).replace(/\d+$/, '')].map((l) => `-${l}`) : [flag.replace(/[=)"'].*/, '')]
           const ok = tokens.includes(flag) || wanted.every((w) => tokens.includes(w))
           if (!ok) missing.push(`${entry}: ${flag} (in ${command})`)
         }

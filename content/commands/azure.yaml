@@ -1,0 +1,348 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: Azure CLI. First matching entry wins.
+# Common options: -g is --resource-group, -n is --name, -o/--out is --output
+# (table, tsv, json). --query is a JMESPath expression the CLI applies to the
+# JSON response: [] walks a list, [0] takes the first item, {a:b} builds an object.
+
+- id: az-afd-origin-show
+  match: "^az afd origin show"
+  summary: "Shows one origin behind an Azure Front Door profile."
+  parts:
+    - { token: "-g rg-edge", meaning: "--resource-group: the resource group." }
+    - { token: "--profile-name fd-shop", meaning: "The Front Door profile." }
+    - { token: "--origin-group-name og-web", meaning: "The origin group the origin belongs to." }
+    - { token: "--origin-name shop-web", meaning: "The origin." }
+    - { token: "--query \"{hostName:..., originHostHeader:...}\"", meaning: "Keep the address Front Door connects to and the Host header it sends." }
+  why: "If the origin host header isn't a name the backend serves, the backend answers with its default site or an error, even though the address is right."
+  alternatives:
+    - { command: "curl -s -o /dev/null -w '%{http_code}\\n' -H 'Host: NAME' https://ORIGIN/", note: "Ask the origin directly with that Host header." }
+    - { command: "Azure portal > Front Door > Origin groups", note: "The same settings." }
+  docs: { title: "Azure CLI: az afd origin", url: "https://learn.microsoft.com/en-us/cli/azure/afd/origin?view=azure-cli-latest" }
+
+- id: az-backup-recoverypoints
+  match: "^az backup recoverypoint list"
+  summary: "Lists the recovery points (backups) of an item protected by a Recovery Services vault."
+  parts:
+    - { token: "-g rg-finance", meaning: "--resource-group: the vault's resource group." }
+    - { token: "-v rsv-prod", meaning: "--vault-name: the Recovery Services vault." }
+    - { token: "-c fs-finance-01", meaning: "--container-name: the protected container (for a VM, the VM)." }
+    - { token: "-i fs-finance-01", meaning: "--item-name: the protected item." }
+    - { token: "--backup-management-type AzureIaasVM", meaning: "The kind of backup: Azure VM backup." }
+    - { token: "--query \"[0:3].{name:..., time:...}\"", meaning: "The three newest points, each with its name and time." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Before restoring, you need a point from before the damage; this lists what exists and when it was taken."
+  alternatives:
+    - { command: "Azure portal > Recovery Services vault > Backup items", note: "The same points, with restore buttons." }
+  docs: { title: "Azure CLI: az backup recoverypoint", url: "https://learn.microsoft.com/en-us/cli/azure/backup/recoverypoint?view=azure-cli-latest" }
+
+- id: az-cosmos-container-throughput
+  match: "^az cosmosdb sql container throughput show"
+  summary: "Shows a Cosmos DB container's provisioned throughput (RU/s)."
+  parts:
+    - { token: "-a cosmos-iot", meaning: "--account-name: the Cosmos DB account." }
+    - { token: "-g rg-iot", meaning: "--resource-group." }
+    - { token: "-d iot", meaning: "--database-name." }
+    - { token: "-n telemetry", meaning: "--name: the container." }
+    - { token: "--query resource.throughput", meaning: "Just the RU/s number." }
+  why: "Throughput is split across physical partitions, so a hot partition key can throttle (429) while total RU/s looks ample."
+  alternatives:
+    - { command: "Azure Monitor: Normalized RU Consumption by PartitionKeyRangeId", note: "Shows whether one partition is at 100%." }
+  docs: { title: "Azure CLI: az cosmosdb sql container throughput", url: "https://learn.microsoft.com/en-us/cli/azure/cosmosdb/sql/container/throughput?view=azure-cli-latest" }
+
+- id: az-cosmos-container-show
+  match: "^az cosmosdb sql container show"
+  summary: "Shows a Cosmos DB container's settings."
+  parts:
+    - { token: "-a cosmos-iot", meaning: "--account-name: the Cosmos DB account." }
+    - { token: "-g rg-iot", meaning: "--resource-group." }
+    - { token: "-d iot", meaning: "--database-name." }
+    - { token: "-n telemetry", meaning: "--name: the container." }
+    - { token: "--query resource.partitionKey", meaning: "Just the partition key definition." }
+  why: "The partition key decides how writes spread; a low-cardinality or time-based key sends them to one partition."
+  alternatives:
+    - { command: "Azure portal > Data Explorer > container > Settings", note: "The same." }
+  docs: { title: "Azure CLI: az cosmosdb sql container", url: "https://learn.microsoft.com/en-us/cli/azure/cosmosdb/sql/container?view=azure-cli-latest" }
+
+- id: az-keyvault-show
+  match: "^az keyvault show"
+  summary: "Shows a key vault's settings."
+  parts:
+    - { token: "-n kv-shared", meaning: "--name: the vault." }
+    - { token: "--query properties.enableRbacAuthorization", meaning: "true: access is decided by Azure RBAC roles; false: by the vault's access policies." }
+    - { token: "--query properties.accessPolicies[].objectId", meaning: "(Other form) the object id of every identity with an access policy." }
+    - { token: "-o tsv", meaning: "--output tsv: plain values, one per line." }
+  why: "A vault uses one permission model or the other; a role assignment does nothing on a vault using access policies, and the reverse."
+  alternatives:
+    - { command: "az role assignment list --scope VAULT_ID --out table", note: "Role assignments, for RBAC vaults." }
+  docs: { title: "Azure CLI: az keyvault show", url: "https://learn.microsoft.com/en-us/cli/azure/keyvault?view=azure-cli-latest#az-keyvault-show" }
+
+- id: az-alert-processing-rule
+  match: "^az monitor alert-processing-rule (list|show)"
+  summary: "Lists or shows alert processing rules, which can suppress notifications or add action groups."
+  parts:
+    - { token: "list", meaning: "Every rule in the subscription." }
+    - { token: "show -g rg-ops -n NAME", meaning: "One rule: its scope, filters, schedule and action." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "An alert can fire and still notify nobody because a processing rule removed its action groups; the alert itself looks fine."
+  alternatives:
+    - { command: "Azure portal > Monitor > Alerts > Alert processing rules", note: "The same rules and their schedules." }
+  docs: { title: "Azure CLI: az monitor alert-processing-rule", url: "https://learn.microsoft.com/en-us/cli/azure/monitor/alert-processing-rule?view=azure-cli-latest" }
+
+- id: az-appgw-probe
+  match: "^az network application-gateway probe show"
+  summary: "Shows an Application Gateway custom health probe."
+  parts:
+    - { token: "-g rg-portal", meaning: "--resource-group." }
+    - { token: "--gateway-name agw-portal", meaning: "The application gateway." }
+    - { token: "-n probe-portal", meaning: "--name: the probe." }
+  why: "The probe's path, host and accepted status codes decide whether backends count as healthy."
+  alternatives:
+    - { command: "curl -s -o /dev/null -w '%{http_code}\\n' http://BACKEND/PATH", note: "What the backend returns for that path." }
+  docs: { title: "Azure CLI: az network application-gateway probe", url: "https://learn.microsoft.com/en-us/cli/azure/network/application-gateway/probe?view=azure-cli-latest" }
+
+- id: az-appgw-backend-health
+  match: "^az network application-gateway show-backend-health"
+  summary: "Shows each Application Gateway backend's health, with the reason when unhealthy."
+  parts:
+    - { token: "-g rg-portal", meaning: "--resource-group." }
+    - { token: "-n agw-portal", meaning: "--name: the application gateway." }
+  why: "The health message says whether the probe got the wrong status code, timed out, or couldn't connect."
+  alternatives:
+    - { command: "Azure portal > Application gateway > Backend health", note: "The same, with troubleshooting hints." }
+  docs: { title: "Azure CLI: show-backend-health", url: "https://learn.microsoft.com/en-us/cli/azure/network/application-gateway?view=azure-cli-latest#az-network-application-gateway-show-backend-health" }
+
+- id: az-nic-effective-routes
+  match: "^az network nic show-effective-route-table"
+  summary: "Shows the routes actually applied to a network interface: system routes, peering, and user-defined routes combined."
+  parts:
+    - { token: "-g rg-app", meaning: "--resource-group." }
+    - { token: "-n vm-app-01-nic", meaning: "--name: the NIC." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Effective routes are the end result; they show which route wins for a destination, even when it comes from a route table you didn't expect."
+  alternatives:
+    - { command: "az network watcher show-next-hop ...", note: "The next hop for one source and destination." }
+  docs: { title: "Azure CLI: show-effective-route-table", url: "https://learn.microsoft.com/en-us/cli/azure/network/nic?view=azure-cli-latest#az-network-nic-show-effective-route-table" }
+
+- id: az-nsg-rules
+  match: "^az network nsg rule list"
+  summary: "Lists a network security group's custom rules."
+  parts:
+    - { token: "-g rg-batch", meaning: "--resource-group." }
+    - { token: "--nsg-name nsg-batch", meaning: "The NSG." }
+    - { token: "--out table", meaning: "Print as a table, with priority, direction, access and ports." }
+  why: "Rules are evaluated by priority, lowest number first; the first match decides, so a Deny with a lower number beats a later Allow."
+  alternatives:
+    - { command: "az network nsg rule list -g RG --nsg-name NSG --include-default --out table", note: "Also the default rules." }
+    - { command: "az network watcher test-ip-flow ...", note: "Which rule decides a specific flow." }
+  docs: { title: "Azure CLI: az network nsg rule", url: "https://learn.microsoft.com/en-us/cli/azure/network/nsg/rule?view=azure-cli-latest" }
+
+- id: az-private-dns-links
+  match: "^az network private-dns link vnet list"
+  summary: "Lists the virtual networks linked to a private DNS zone."
+  parts:
+    - { token: "-g rg-net", meaning: "--resource-group." }
+    - { token: "-z privatelink.blob.core.windows.net", meaning: "--zone-name: the private DNS zone." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Only linked VNets resolve the zone's records; an unlinked VNet gets the public address instead of the private endpoint's."
+  alternatives:
+    - { command: "nslookup NAME (from a VM in the VNet)", note: "What that VNet actually resolves." }
+  docs: { title: "Azure CLI: az network private-dns link vnet", url: "https://learn.microsoft.com/en-us/cli/azure/network/private-dns/link/vnet?view=azure-cli-latest" }
+
+- id: az-vnet-peering-list
+  match: "^az network vnet peering list"
+  summary: "Lists a virtual network's peerings and their state."
+  parts:
+    - { token: "-g rg-app", meaning: "--resource-group." }
+    - { token: "--vnet-name vnet-app", meaning: "The VNet." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "A peering needs both sides; PeeringState Initiated or Disconnected means traffic won't flow."
+  alternatives:
+    - { command: "az network nic show-effective-route-table ...", note: "Whether a VNetPeering route exists for the remote range." }
+  docs: { title: "Azure CLI: az network vnet peering", url: "https://learn.microsoft.com/en-us/cli/azure/network/vnet/peering?view=azure-cli-latest" }
+
+- id: az-watcher-ip-flow
+  match: "^az network watcher test-ip-flow"
+  summary: "Asks Network Watcher whether NSG rules allow a specific packet to or from a VM, and which rule decides."
+  parts:
+    - { token: "--direction inbound", meaning: "Test traffic arriving at the VM." }
+    - { token: "--protocol TCP", meaning: "The protocol." }
+    - { token: "--local 10.1.0.4:22", meaning: "The VM's address and port." }
+    - { token: "--remote 203.0.113.25:50000", meaning: "The other end's address and port." }
+    - { token: "--vm vm-batch-01", meaning: "The VM." }
+    - { token: "--resource-group rg-batch", meaning: "Its resource group." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Evaluates every NSG on the path (subnet and NIC) and names the rule, so you don't have to work out priorities yourself."
+  alternatives:
+    - { command: "az network nsg rule list ...", note: "Read the rules yourself." }
+    - { command: "Azure portal > Network Watcher > IP flow verify", note: "The same test." }
+  docs: { title: "Azure CLI: az network watcher test-ip-flow", url: "https://learn.microsoft.com/en-us/cli/azure/network/watcher?view=azure-cli-latest#az-network-watcher-test-ip-flow" }
+
+- id: az-policy-assignment-show
+  match: "^az policy assignment show"
+  summary: "Shows an Azure Policy assignment, including its parameters."
+  parts:
+    - { token: "--name allowed-locations", meaning: "The assignment." }
+    - { token: "--scope /providers/Microsoft.Management/managementGroups/mg-acme", meaning: "Where it's assigned: here a management group, so it applies to every subscription below it." }
+    - { token: "--query \"{name:displayName, params:parameters}\"", meaning: "Keep its display name and parameter values (such as the allowed regions)." }
+  why: "A deployment denied by policy is decided by the assignment's parameters, not the definition alone."
+  alternatives:
+    - { command: "az policy assignment list --disable-scope-strict-match", note: "Every assignment that applies here, including inherited ones." }
+  docs: { title: "Azure CLI: az policy assignment", url: "https://learn.microsoft.com/en-us/cli/azure/policy/assignment?view=azure-cli-latest" }
+
+- id: az-role-assignment-list
+  match: "^az role assignment list"
+  summary: "Lists Azure RBAC role assignments."
+  parts:
+    - { token: "--assignee ID", meaning: "Only assignments for this user, group or managed identity." }
+    - { token: "--all", meaning: "At every scope in the subscription, not just the subscription itself." }
+    - { token: "--scope /subscriptions/.../vaults/kv-payments", meaning: "(Other form) only assignments at this resource." }
+    - { token: "--role \"Key Vault Secrets User\"", meaning: "Only this role." }
+    - { token: "--query [].principalId", meaning: "Just who holds it." }
+    - { token: "-o tsv", meaning: "Plain values, one per line." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Answers both \"what can this identity do?\" and \"who can do this here?\", which is how you match an identity to the role it's missing."
+  alternatives:
+    - { command: "Azure portal > resource > Access control (IAM) > Check access", note: "Effective access for one identity." }
+  docs: { title: "Azure CLI: az role assignment list", url: "https://learn.microsoft.com/en-us/cli/azure/role/assignment?view=azure-cli-latest#az-role-assignment-list" }
+
+- id: az-role-definition-list
+  match: "^az role definition list"
+  summary: "Shows role definitions: the actions and data actions a role grants."
+  parts:
+    - { token: "--name \"Key Vault Reader\"", meaning: "Only this role." }
+    - { token: "--query [0].permissions[0].dataActions", meaning: "Its data actions, the permissions on data (such as reading secret values) rather than on the resource." }
+  why: "Control-plane actions and data actions are separate; a role can read a vault's settings without being able to read a single secret."
+  alternatives:
+    - { command: "Azure built-in roles reference", note: "Every built-in role's permissions." }
+  docs: { title: "Azure CLI: az role definition list", url: "https://learn.microsoft.com/en-us/cli/azure/role/definition?view=azure-cli-latest#az-role-definition-list" }
+
+- id: az-servicebus-queue-show
+  match: "^az servicebus queue show"
+  summary: "Shows a Service Bus queue's settings and message counts."
+  parts:
+    - { token: "-g rg-shop", meaning: "--resource-group." }
+    - { token: "--namespace-name sb-shop", meaning: "The Service Bus namespace." }
+    - { token: "-n orders-to-warehouse", meaning: "--name: the queue." }
+    - { token: "--query countDetails", meaning: "Active, dead-lettered, scheduled and transfer message counts." }
+  why: "A growing dead-letter count means messages are being rejected or expiring, not just processed slowly."
+  alternatives:
+    - { command: "Service Bus Explorer (portal)", note: "Peek the dead-lettered messages and their reasons." }
+  docs: { title: "Azure CLI: az servicebus queue", url: "https://learn.microsoft.com/en-us/cli/azure/servicebus/queue?view=azure-cli-latest" }
+
+- id: az-sql-firewall-rules
+  match: "^az sql server firewall-rule list"
+  summary: "Lists an Azure SQL logical server's IP firewall rules."
+  parts:
+    - { token: "-g rg-inventory", meaning: "--resource-group." }
+    - { token: "-s sql-acme-inventory", meaning: "--server: the logical server." }
+    - { token: "-o table", meaning: "Print as a table." }
+  why: "Connections from addresses outside every rule are refused before login; compare the rules with the caller's outbound IPs."
+  alternatives:
+    - { command: "az sql server show -g RG -n SERVER --query publicNetworkAccess", note: "Whether public access is on at all." }
+  docs: { title: "Azure CLI: az sql server firewall-rule", url: "https://learn.microsoft.com/en-us/cli/azure/sql/server/firewall-rule?view=azure-cli-latest" }
+
+- id: az-storage-container-permission
+  match: "^az storage container show-permission"
+  summary: "Shows a blob container's public access level."
+  parts:
+    - { token: "--name invoices", meaning: "The container." }
+    - { token: "--account-name shopdocsprod", meaning: "The storage account." }
+  why: "blob or container means anonymous reads are allowed; off means every request needs authorization."
+  alternatives:
+    - { command: "az storage account show -n ACCOUNT --query allowBlobPublicAccess", note: "Whether the account allows public containers at all." }
+  docs: { title: "Azure CLI: az storage container", url: "https://learn.microsoft.com/en-us/cli/azure/storage/container?view=azure-cli-latest" }
+
+- id: az-vm-list
+  match: "^az vm list"
+  summary: "Lists virtual machines."
+  parts:
+    - { token: "-d", meaning: "--show-details: include power state and IPs (slower)." }
+    - { token: "-g rg-test", meaning: "--resource-group: only this group." }
+    - { token: "--query \"[].{name:name, power:powerState}\"", meaning: "Each VM's name and power state." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Shows which VMs are running, stopped (still billed for compute) or deallocated."
+  alternatives:
+    - { command: "az vm get-instance-view -g RG -n VM --query instanceView.statuses", note: "One VM's statuses." }
+  docs: { title: "Azure CLI: az vm list", url: "https://learn.microsoft.com/en-us/cli/azure/vm?view=azure-cli-latest#az-vm-list" }
+
+- id: az-vm-run-command
+  match: "^az vm run-command invoke"
+  summary: "Runs a script inside a VM through the VM agent, without signing in."
+  parts:
+    - { token: "-g rg-finance", meaning: "--resource-group." }
+    - { token: "-n fs-finance-01", meaning: "--name: the VM." }
+    - { token: "--command-id RunPowerShellScript", meaning: "Run PowerShell (RunShellScript on Linux)." }
+    - { token: "--scripts \"...\"", meaning: "The script; here, count the files under a folder." }
+    - { token: "Get-ChildItem PATH -Recurse -File", meaning: "Inside the script: list everything under PATH, in subfolders too (-Recurse), files only (-File), and count them." }
+    - { token: "--query value[0].message", meaning: "Just the script's output." }
+    - { token: "-o tsv", meaning: "As plain text." }
+  why: "Checks the state inside the VM directly, which is how you confirm a restore actually brought files back."
+  alternatives:
+    - { command: "Azure portal > VM > Run command", note: "The same." }
+    - { command: "Azure Bastion", note: "A full interactive session." }
+  docs: { title: "Azure CLI: az vm run-command invoke", url: "https://learn.microsoft.com/en-us/cli/azure/vm/run-command?view=azure-cli-latest#az-vm-run-command-invoke" }
+
+- id: az-webapp-connection-strings
+  match: "^az webapp config connection-string list"
+  summary: "Lists an App Service app's connection strings."
+  parts:
+    - { token: "-n shop-api", meaning: "--name: the app." }
+    - { token: "-g rg-shop", meaning: "--resource-group." }
+    - { token: "--slot staging", meaning: "(If given) the staging slot instead of production." }
+    - { token: "--query \"[].{name:..., slotSetting:..., server:...}\"", meaning: "Each one's name, whether it stays with the slot on swap, and its value." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "Settings without slotSetting move with the app in a swap; that's how production can end up on the staging database."
+  alternatives:
+    - { command: "az webapp config appsettings list -n APP -g RG", note: "App settings, with the same slotSetting flag." }
+  docs: { title: "Azure CLI: az webapp config connection-string", url: "https://learn.microsoft.com/en-us/cli/azure/webapp/config/connection-string?view=azure-cli-latest" }
+
+- id: az-webapp-hostnames
+  match: "^az webapp config hostname list"
+  summary: "Lists the host names bound to an App Service app."
+  parts:
+    - { token: "--webapp-name shop-web", meaning: "The app." }
+    - { token: "-g rg-web", meaning: "--resource-group." }
+    - { token: "--out table", meaning: "Print as a table." }
+  why: "App Service only serves the app for host names bound to it; any other Host header gets an error page."
+  alternatives:
+    - { command: "Azure portal > App Service > Custom domains", note: "The same, with certificate bindings." }
+  docs: { title: "Azure CLI: az webapp config hostname", url: "https://learn.microsoft.com/en-us/cli/azure/webapp/config/hostname?view=azure-cli-latest" }
+
+- id: az-webapp-identity
+  match: "^az webapp identity show"
+  summary: "Shows an App Service app's managed identity."
+  parts:
+    - { token: "-g RG", meaning: "--resource-group." }
+    - { token: "-n APP", meaning: "--name: the app." }
+    - { token: "--slot staging", meaning: "(If given) the staging slot, which has its own identity." }
+    - { token: "--query [type,principalId]", meaning: "Whether it's system- or user-assigned, and its principal (object) id." }
+    - { token: "-o tsv", meaning: "(If given) plain text." }
+  why: "The principal id is what role assignments and access policies must name; compare it with theirs."
+  alternatives:
+    - { command: "az role assignment list --assignee PRINCIPAL_ID --all --out table", note: "What that identity is allowed." }
+  docs: { title: "Azure CLI: az webapp identity", url: "https://learn.microsoft.com/en-us/cli/azure/webapp/identity?view=azure-cli-latest" }
+
+- id: az-webapp-log-tail
+  match: "^az webapp log tail"
+  summary: "Streams an App Service app's logs live."
+  parts:
+    - { token: "-g RG", meaning: "--resource-group." }
+    - { token: "-n APP", meaning: "--name: the app." }
+  why: "The app's own error (such as a 403 from Key Vault or a login failure) usually names what's wrong."
+  alternatives:
+    - { command: "Azure portal > App Service > Log stream", note: "The same stream." }
+    - { command: "az webapp log download -g RG -n APP", note: "Download logs as a zip." }
+  docs: { title: "Azure CLI: az webapp log tail", url: "https://learn.microsoft.com/en-us/cli/azure/webapp/log?view=azure-cli-latest#az-webapp-log-tail" }
+
+- id: az-webapp-show
+  match: "^az webapp show"
+  summary: "Shows an App Service app's properties."
+  parts:
+    - { token: "-g RG", meaning: "--resource-group." }
+    - { token: "-n APP", meaning: "--name: the app." }
+    - { token: "--query possibleOutboundIpAddresses", meaning: "Every address the app might connect out from (or --query location for its region)." }
+    - { token: "-o tsv", meaning: "(If given) plain text." }
+  why: "Firewalls must allow all possible outbound addresses, not just the current ones; location shows where the app runs relative to its database."
+  alternatives:
+    - { command: "Azure portal > App Service > Properties", note: "Outbound IPs and location." }
+  docs: { title: "Azure CLI: az webapp show", url: "https://learn.microsoft.com/en-us/cli/azure/webapp?view=azure-cli-latest#az-webapp-show" }
