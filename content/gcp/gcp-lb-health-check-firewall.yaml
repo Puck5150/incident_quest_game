@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-lb-health-check-firewall
+track: gcp
+difficulty: 2
+title: "The new load balancer says every backend is unhealthy"
+par_minutes: 10
+
+ticket:
+  from: "Web team"
+  priority: P2
+  body: |
+    We put the partner portal behind a new global external Application Load
+    Balancer today. Every request gets "no healthy upstream". The VMs are
+    fine: from the office VPN, curl to each VM on 8080 returns 200 for
+    /healthz.
+
+environment: |
+  The portal runs on the managed instance group portal-mig in us-central1,
+  serving on port 8080. Until today partners reached it over the office VPN
+  only, and the VPC firewall allows tcp:8080 from the VPN range
+  10.200.0.0/16. The new backend service uses an HTTP health check on port
+  8080, path /healthz.
+
+terminal:
+  prompt: "you@cloudshell:~ (portal-prod)$"
+  commands:
+    - match: "gcloud compute backend-services get-health portal-backend --global --format=\"value(status.healthStatus[].healthState)\""
+      when_actions: [allow-probes]
+      output: |
+        HEALTHY;HEALTHY;HEALTHY
+    - match: "gcloud compute backend-services get-health portal-backend --global --format=\"value(status.healthStatus[].healthState)\""
+      evidence: unhealthy
+      output: |
+        UNHEALTHY;UNHEALTHY;UNHEALTHY
+    - match: "gcloud compute firewall-rules list --filter=\"network=portal-vpc AND direction=INGRESS\" --format=\"table(name,sourceRanges.list(),allowed[].map().firewall_rule().list())\""
+      when_actions: [allow-probes]
+      output: |
+        NAME                   SRC_RANGES                      RULES
+        allow-vpn-8080         10.200.0.0/16                   tcp:8080
+        allow-health-checks    35.191.0.0/16,130.211.0.0/22    tcp:8080
+    - match: "gcloud compute firewall-rules list --filter=\"network=portal-vpc AND direction=INGRESS\" --format=\"table(name,sourceRanges.list(),allowed[].map().firewall_rule().list())\""
+      evidence: vpn-only
+      output: |
+        NAME                   SRC_RANGES      RULES
+        allow-vpn-8080         10.200.0.0/16   tcp:8080
+    - match: "gcloud compute health-checks describe portal-hc --format=\"value(httpHealthCheck.port,httpHealthCheck.requestPath)\""
+      evidence: hc-8080
+      output: |
+        8080	/healthz
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://portal.example.com/healthz"
+      when_actions: [allow-probes]
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://portal.example.com/healthz"
+      output: |
+        503
+
+hypotheses:
+  - id: probes-blocked
+    text: "Google's health check probes come from Google's own IP ranges, and the firewall only allows 8080 from the VPN range, so the implied deny drops the probes and every backend is marked unhealthy."
+    correct: true
+  - id: app-down
+    text: "The portal isn't running on the VMs."
+    feedback: "From the VPN, /healthz on each VM returns 200. The app answers anyone the firewall lets in."
+  - id: wrong-port
+    text: "The health check uses the wrong port or path."
+    feedback: "It checks port 8080, path /healthz, exactly what answers 200 from the VPN."
+  - id: dns
+    text: "portal.example.com points at the wrong address."
+    feedback: "The 503 comes from the new load balancer itself: it's reached, it just has no healthy backend to send to."
+
+actions:
+  - id: allow-probes
+    label: "Add an ingress firewall rule allowing tcp:8080 from Google's documented health check ranges (35.191.0.0/16 and 130.211.0.0/22) to the portal VMs"
+    kind: fix
+    feedback: "The probes reach /healthz, the backends turn HEALTHY, and the load balancer starts sending requests. Traffic from the load balancer to backends uses the same ranges."
+  - id: allow-all
+    label: "Allow tcp:8080 from 0.0.0.0/0"
+    kind: destructive
+    feedback: "Health checks pass, and anyone on the internet can now reach the VMs directly on 8080, around the load balancer and any security policy on it."
+  - id: tcp-hc
+    label: "Switch the health check to a TCP check"
+    kind: wrong
+    feedback: "A TCP probe comes from the same ranges and is dropped by the same firewall."
+  - id: recreate-lb
+    label: "Delete and recreate the load balancer"
+    kind: wrong
+    feedback: "The new one probes from the same ranges into the same firewall."
+
+solution_paths:
+  - [allow-probes]
+
+key_evidence: [unhealthy, vpn-only, hc-8080]
+
+evidence_labels:
+  unhealthy: "All three backends are UNHEALTHY"
+  vpn-only: "Ingress to 8080 is only allowed from the VPN range"
+  hc-8080: "The health check probes port 8080, path /healthz"
+
+hints:
+  nudge: "The VMs answer you over the VPN. Where do the load balancer's health checks come from?"
+  direction: "Compare the firewall's allowed sources on 8080 with where Google's health check probes originate."
+  answer: "The firewall only allows the VPN range, so probes from Google's ranges are dropped. Allow tcp:8080 from 35.191.0.0/16 and 130.211.0.0/22."
+
+analogy:
+  title: "The inspector isn't on the visitor list"
+  text: |
+    The building only admits staff with the office pass. A new inspector,
+    who must check each room before tenants are allowed in, arrives from
+    head office without one and is turned away, so no room is ever passed
+    as safe. Add the inspector's office to the visitor list.
+
+debrief:
+  root_cause: |
+    Google Cloud health checks probe backends from Google's own IP ranges,
+    and VPC firewalls must allow those ranges explicitly. The portal's
+    firewall allowed port 8080 only from the VPN, so the implied deny-ingress
+    rule dropped every probe. The backends were marked UNHEALTHY, and with no
+    healthy backend the load balancer answered 503.
+  ideal_path:
+    - "Check backend health: all UNHEALTHY."
+    - "Confirm the health check matches what the app serves: 8080 /healthz."
+    - "Read the firewall: 8080 only from the VPN range."
+    - "Allow tcp:8080 from Google's health check ranges, then check health and the public URL."
+  real_world: |
+    "Every backend unhealthy, the app is fine" on Google Cloud almost always
+    means the health check ranges aren't allowed. Google recommends allowing
+    all documented probe ranges, limited to the health check's port.
+
+concepts:
+  - term: "Health check probe ranges"
+    text: "The Google IP ranges health check probes come from; firewall rules must allow them to reach the backends."
+    url: "https://docs.cloud.google.com/load-balancing/docs/health-check-concepts"
+  - term: "Implied deny ingress"
+    text: "Every VPC network blocks incoming traffic that no firewall rule allows."
+    url: "https://docs.cloud.google.com/firewall/docs/firewalls"
+
+sources:
+  - title: "Cloud Load Balancing: Health checks overview (probe IP ranges and firewall rules)"
+    url: "https://docs.cloud.google.com/load-balancing/docs/health-check-concepts"
+    retrieved: 2026-10-02
+  - title: "Cloud NGFW: VPC firewall rules (implied rules)"
+    url: "https://docs.cloud.google.com/firewall/docs/firewalls"
+    retrieved: 2026-10-02

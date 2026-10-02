@@ -127,15 +127,15 @@ debrief:
 concepts:
   - term: "Backwards-compatible change"
     text: "A change existing clients keep working with, such as adding an optional field. Removing or renaming a field isn't one."
-    url: "https://cloud.google.com/apis/design/compatibility"
+    url: "https://docs.cloud.google.com/apis/design/compatibility"
   - term: "Expand and contract"
     text: "Add the new form alongside the old, migrate clients, then remove the old form once nothing uses it."
-    url: "https://cloud.google.com/apis/design/compatibility"
+    url: "https://docs.cloud.google.com/apis/design/compatibility"
 
 sources:
   - title: "Google Cloud API design guide: Backwards compatibility (removing or renaming a field is incompatible)"
-    url: "https://cloud.google.com/apis/design/compatibility"
+    url: "https://docs.cloud.google.com/apis/design/compatibility"
     retrieved: 2026-10-02
   - title: "Google Cloud API design guide: Versioning"
-    url: "https://cloud.google.com/apis/design/versioning"
+    url: "https://docs.cloud.google.com/apis/design/versioning"
     retrieved: 2026-10-02

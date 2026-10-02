@@ -405,8 +405,16 @@ from your own experience and tick them off.
       outbox table, idempotent consumers); RFC 6585 429 may carry Retry-After.
       The planned deep-health-check incident was dropped: its source (AWS
       Builders' Library) moved to a page that couldn't be read to verify.
-- [ ] Representative output: service log lines, the Squid-free supplier email,
+- [ ] Representative output: service log lines, the supplier email,
       replay script output, trace span timings, timedatectl layout.
 - [ ] From standards/experience, not re-fetched this session: RFC 9110
       idempotent methods and Retry-After, Google's API compatibility guide,
       W3C traceparent format, RFC 7519 nbf leeway wording.
+
+## Google Cloud to 8 (2026-10-02): gcp-lb-health-check-firewall
+- [x] Checked on 2026-10-02: health check probes for global external
+      Application Load Balancers come from 35.191.0.0/16 (IPv4); ingress allow
+      rules are required or the implied deny drops probes; Google recommends
+      allowing all documented probe ranges (130.211.0.0/22 is included in the
+      rule as Google's other documented health-check range).
+- [ ] Representative output: gcloud get-health and firewall-rules table layouts.
