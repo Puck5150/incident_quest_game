@@ -9,7 +9,8 @@ You're a responder on the night shift at a global ops center: incidents arrive
 as missions on the ops board, sectors light up on the wall map, and you clear
 them under your own callsign. There are 53 incidents across Linux, networking,
 containers, infrastructure as code, CI/CD, microservices, and AWS, Azure and
-Google Cloud, from platform basics to multi-step failures. A free **Field
+Google Cloud, from platform basics to multi-stage failures where the first
+fix reveals the next problem. A free **Field
 manual** on every screen explains the concepts in play and how to approach the
 problem without giving the answer; hints are there too, at an XP cost.
 
@@ -46,6 +47,7 @@ npm run check-links   # every source URL still resolves (CI runs it weekly)
   try a file without any setup on the [preview page](https://puck5150.github.io/incident_quest_game/#/preview)
 - [PLAN_DESIGN_CHALLENGES.md](PLAN_DESIGN_CHALLENGES.md): how design challenges work
 - [PLAN_ONCALL_SHIFT.md](PLAN_ONCALL_SHIFT.md): on-call shifts (arrivals, targets, triage, scoring)
+- [PLAN_MULTI_STAGE.md](PLAN_MULTI_STAGE.md): multi-stage incidents
 - [PLAN_THEME.md](PLAN_THEME.md) and [PLAN_GUIDANCE.md](PLAN_GUIDANCE.md): the ops-center theme and the Field manual
 - [CONTENT_TODO.md](CONTENT_TODO.md): output formats still to verify against real systems
 - [PARKING_LOT.md](PARKING_LOT.md): ideas for later

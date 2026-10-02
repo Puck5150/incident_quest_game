@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import App from '../src/App.tsx'
 import fullDisk from '../content/linux/full-disk.yaml?raw'
+import twoStage from './fixtures/two-stage.yaml?raw'
 
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -96,6 +97,29 @@ describe('preview page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to the preview page' }))
     expect(await screen.findByRole('heading', { name: 'Preview a content file' })).toBeTruthy()
     expect((screen.getByLabelText('or paste it here') as HTMLTextAreaElement).value).toMatch(/My draft incident/) // kept
+  })
+
+  it('plays a multi-stage file through both stages', async () => {
+    await paste(twoStage)
+    fireEvent.click(await screen.findByRole('button', { name: 'Accept mission' }))
+    expect(screen.getByText('Stage 1 of 2')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('The security group blocks 8080.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow 8080 from the load balancer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
+    expect(screen.getByText('Stage 2 of 2')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('The health check path is wrong.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set the path to /health' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
+    expect(await screen.findByRole('heading', { name: 'Root cause' })).toBeTruthy()
+  })
+
+  it('reports errors inside a stage with its path', async () => {
+    await paste(twoStage.replace('solution_paths: [[fix-path]]', 'solution_paths: [[open-port]]'))
+    const text = (await screen.findByRole('alert')).textContent
+    expect(text).toMatch(/"open-port" is not an action with kind: fix in this stage/)
+    expect(text).toMatch(/at stages\[0\]\.solution_paths/)
   })
 
   it('shows the same errors the build would', async () => {

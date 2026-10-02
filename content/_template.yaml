@@ -140,7 +140,7 @@ debrief:
   real_world: |
     Optional: how this shows up in production.
 
-concepts:                     # optional, for basics incidents: 1-4 terms explained in the debrief
+concepts:                     # optional: 1-4 terms, shown free in the Field manual during play and in the debrief
   - term: "Example term"
     text: "One or two plain-English sentences a newcomer can follow."
     url: "https://example.com/official-doc"
@@ -149,3 +149,20 @@ sources:                      # required: official docs only (see AUTHORING.md)
   - title: "Page title"
     url: "https://example.com/official-doc"
     retrieved: 2026-01-01     # YYYY-MM-DD
+
+# Optional: more stages, for incidents where a fix reveals a second problem.
+# The top level of this file is stage 1. See AUTHORING.md, "Multi-stage incidents".
+# stages:
+#   - id: second-problem
+#     update: |
+#       Reopened: what the player sees next.
+#     hypotheses: [...]
+#     actions: [...]
+#     solution_paths: [[...]]
+#     key_evidence: [...]
+#     evidence_labels: { ... }
+#     hints: { nudge: "...", direction: "...", answer: "..." }
+#     debrief:
+#       root_cause: |
+#         ...
+#       ideal_path: ["..."]

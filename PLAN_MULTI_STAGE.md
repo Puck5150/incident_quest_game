@@ -1,6 +1,6 @@
 # Plan: Multi-stage incidents
 
-Status: **approved 2026-10-02 with the defaults in section 10; M1–M3 done.** The
+Status: **approved 2026-10-02 with the defaults in section 10; M1–M4 done.** The
 stage is derived from the log (one per accepted close-out), so `Session` didn't
 change; `when_actions` may name any action in the incident. JSON Schema already
 regenerated. From PARKING_LOT.md:

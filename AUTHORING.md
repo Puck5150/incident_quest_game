@@ -58,11 +58,14 @@ commit the result (a test fails if you forget).
 3. **Hypothesis:** the player picks from `hypotheses`. The wrong ones show their
    `feedback`. Fix actions stay locked until the player picks the correct one.
 4. **Acting:** the player chooses from `actions`. Once every action in any one
-   `solution_paths` entry has been taken (in any order), a **Close incident**
+   `solution_paths` entry has been taken (in any order), a **Close out**
    button appears. The gap between fixing and closing is where the player verifies.
 5. **Hints** are available the whole time: nudge, then direction (which also shows
    the `analogy`), then answer.
 6. **Debrief:** shows `debrief`, `analogy`, and `sources`.
+
+A multi-stage incident repeats steps 2 to 4 for each stage: closing out a
+stage reopens the incident into the next one (see below).
 
 ## Writing good incidents
 
@@ -137,13 +140,64 @@ Optional, and each item can carry `evidence:` like logs and files:
 - **`diagram`**: node `status` is what *monitoring currently shows*, not the root
   cause. A slow-but-successful service is honestly "ok". That can be the lesson.
 
+## Multi-stage incidents
+
+A fix can reveal the next problem: open the security group and the health
+check now fails for another reason. Add a `stages:` list (one or two entries,
+so three stages at most). The top level of the file is stage 1, unchanged.
+
+```yaml
+stages:
+  - id: health-path                # kebab-case, unique in the file
+    update: |                      # shown when the incident reopens into this stage
+      11:05 Reopened: targets now fail health checks with 404.
+    diagram_status: { api: degraded }   # optional: node id -> new status
+    terminal:                      # optional: commands that appear from now on
+      commands: [...]
+    logs: [...]                    # optional, like files, traces and metrics
+    hypotheses: [...]              # this stage's causes, exactly one correct
+    actions: [...]                 # this stage's actions
+    solution_paths: [[fix-path]]
+    key_evidence: [...]
+    evidence_labels: { ... }
+    hints: { nudge, direction, answer }
+    debrief:
+      root_cause: |
+        ...
+      ideal_path: [...]
+```
+
+(Not to be confused with a `pipeline`'s `stages`, which are CI steps.)
+
+- **The next stage starts on close-out.** When the player closes a fixed
+  stage, the incident reopens with the stage's `update`; closing the last
+  stage resolves it.
+- **Make verification show the next symptom.** Give a stage 1 command a
+  `when_actions` entry for the stage 1 fix whose output shows the stage 2
+  problem. A player who checks their fix before closing sees it coming; the
+  key evidence for stage 2 can live there.
+- **Artifacts accumulate:** everything from earlier stages stays available.
+  A stage's own commands win over earlier ones with the same `match`.
+- **One stage's options shouldn't fix another.** If a wrong option in stage 1
+  would really fix stage 2 too, the scripted output can't follow it. Pick a
+  different wrong option.
+- Shared at the top level: title, difficulty (multi-stage incidents are 3 to
+  5), par (for the whole incident), analogy, concepts, `real_world` and
+  sources.
+- **Scoring:** the methodical and verified bonuses are shared across stages;
+  each stage has its own three hint tiers.
+
 ## Things the validator enforces for you
 
 - Every `key_evidence` tag has a label in `evidence_labels`, and every label
   belongs to a `key_evidence` tag.
 - Every `key_evidence` tag must be findable **before** any fix (not only on a
-  `when_actions` entry). Otherwise the methodical bonus can't be earned.
-- Every solution path is played through the real engine in the test suite.
+  `when_actions` entry). Otherwise the methodical bonus can't be earned. In a
+  multi-stage incident: after the earlier stages' fixes, before this stage's.
+- Every stage has exactly one correct hypothesis, and its solution paths use
+  only its own fix actions. Ids are unique across all stages.
+- Every solution path, of every stage, is played through the real engine in the
+  test suite.
 - Hypotheses and actions are **shuffled** in the game, so list them in whatever
   order is easiest to write.
 
