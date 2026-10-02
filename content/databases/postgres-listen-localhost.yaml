@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: postgres-listen-localhost
 track: databases
-difficulty: 1
+difficulty: 2
 title: "The app can't connect to the new database server"
 par_minutes: 8
 

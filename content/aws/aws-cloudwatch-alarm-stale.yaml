@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: aws-cloudwatch-alarm-stale
 track: aws
-difficulty: 1
+difficulty: 2
 title: "Checkout was slow for 40 minutes and nobody got paged"
 par_minutes: 9
 

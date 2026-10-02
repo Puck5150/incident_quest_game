@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: oidc-environment-subject
 track: cicd
-difficulty: 3
+difficulty: 4
 title: "Adding an approval step broke the deploy's access to AWS"
 par_minutes: 12
 

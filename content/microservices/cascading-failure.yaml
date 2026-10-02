@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: cascading-failure
 track: microservices
-difficulty: 3
+difficulty: 4
 title: "Whole shop timing out, even the cart"
 par_minutes: 15
 

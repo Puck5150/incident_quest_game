@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: aws-access-keys-to-role
 track: aws
-difficulty: 1
+difficulty: 2
 title: "Last night's database backup didn't happen"
 par_minutes: 10
 

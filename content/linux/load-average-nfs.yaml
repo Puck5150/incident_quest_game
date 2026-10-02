@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: load-average-nfs
 track: linux
-difficulty: 3
+difficulty: 4
 title: "Load average 48 on an idle server"
 par_minutes: 12
 

@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: azure-alert-suppressed
 track: azure
-difficulty: 1
+difficulty: 2
 title: "The alert fired, but nobody was told"
 par_minutes: 8
 
