@@ -150,6 +150,7 @@
     - { token: "-n shop", meaning: "In this namespace." }
     - { token: "--", meaning: "Everything after this is the command to run." }
     - { token: "printenv PSP_URL", meaning: "Print one environment variable as the process sees it." }
+    - { token: "./manage.py uncaptured --count", meaning: "(Other form) run the app's own management command inside its container; here, count orders authorized but not captured." }
   why: "Environment variables from a ConfigMap are read at container start; this shows the value the running process actually has."
   alternatives:
     - { command: "kubectl exec -it POD -n NS -- sh", note: "An interactive shell." }

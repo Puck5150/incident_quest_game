@@ -1,0 +1,388 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: evicted-checkout-major
+track: containers
+difficulty: 5
+title: "Checkout keeps dying during the sale, and paid orders aren't shipping"
+par_minutes: 30
+
+ticket:
+  from: "Head of e-commerce"
+  priority: P1
+  body: |
+    Our autumn sale started at 09:00. Since about 09:20 checkout fails in
+    waves: a few minutes fine, then errors. The warehouse also says
+    hundreds of paid orders from the last two days haven't been released
+    for shipping. The platform channel says there's been an ImagePullBackOff
+    in shop for weeks; could that be it?
+
+environment: |
+  Namespace shop on a 4-node cluster (8 GiB per node). checkout runs as a
+  Deployment with a HorizontalPodAutoscaler (target 70% CPU). On Monday the
+  data team deployed report-builder into shop for month-end reports. Orders
+  are released for shipping only after capture-reconcile, a CronJob that
+  runs at 02:00, captures authorized payments. Nobody on the team has set
+  resource requests or limits on these workloads.
+
+diagram:
+  nodes:
+    - { id: lb, label: "ingress", col: 0, row: 0, status: ok }
+    - { id: checkout, label: "checkout (HPA)", col: 1, row: 0, status: down }
+    - { id: report, label: "report-builder", col: 1, row: 1, status: ok }
+    - { id: capture, label: "capture-reconcile (CronJob 02:00)", col: 2, row: 1, status: down }
+    - { id: psp, label: "payment provider", col: 2, row: 0, status: ok }
+  edges:
+    - { from: lb, to: checkout }
+    - { from: checkout, to: psp }
+    - { from: capture, to: psp }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl get pods -n shop -l app=checkout"
+      when_actions: [set-resources]
+      output: |
+        NAME                        READY   STATUS    RESTARTS   AGE
+        checkout-6b8d7c9f4-2hx7q    1/1     Running   0          6m
+        checkout-6b8d7c9f4-9wd4m    1/1     Running   0          6m
+        checkout-6b8d7c9f4-c6n2v    1/1     Running   0          5m
+        checkout-6b8d7c9f4-tq8rz    1/1     Running   0          5m
+    - match: "kubectl get pods -n shop -l app=checkout"
+      evidence: evicted-list
+      output: |
+        NAME                        READY   STATUS              RESTARTS   AGE
+        checkout-7d9f8b6c5-k2x8p    0/1     Evicted             0          41m
+        checkout-7d9f8b6c5-m7q4d    0/1     Evicted             0          38m
+        checkout-7d9f8b6c5-p3v9w    0/1     Evicted             0          22m
+        checkout-7d9f8b6c5-r8z2t    1/1     Running             0          21m
+        checkout-7d9f8b6c5-x5h6n    0/1     ContainerCreating   0          4s
+    - match: "kubectl describe pod checkout-7d9f8b6c5-k2x8p -n shop"
+      evidence: besteffort-evicted
+      output: |
+        Name:             checkout-7d9f8b6c5-k2x8p
+        Namespace:        shop
+        Node:             node-c/10.0.3.13
+        Status:           Failed
+        Reason:           Evicted
+        Message:          The node had condition: [MemoryPressure].
+        ...
+        QoS Class:        BestEffort
+    - match: "kubectl top pods -n shop"
+      when_actions: [set-resources]
+      output: |
+        NAME                             CPU(cores)   MEMORY(bytes)
+        checkout-6b8d7c9f4-2hx7q         410m         402Mi
+        checkout-6b8d7c9f4-9wd4m         395m         398Mi
+        report-builder-5c7f9d8b6-w2kx9   900m         1980Mi
+    - match: "kubectl top pods -n shop"
+      evidence: hog
+      output: |
+        NAME                             CPU(cores)   MEMORY(bytes)
+        checkout-7d9f8b6c5-r8z2t         880m         391Mi
+        report-builder-5c7f9d8b6-w2kx9   1720m        6214Mi
+    - match: "kubectl get deploy report-builder -n shop -o jsonpath='{.spec.template.spec.containers[0].resources}'"
+      when_actions: [set-resources]
+      output: |
+        {"limits":{"memory":"2Gi"},"requests":{"cpu":"500m","memory":"2Gi"}}
+    - match: "kubectl get deploy report-builder -n shop -o jsonpath='{.spec.template.spec.containers[0].resources}'"
+      evidence: no-limits
+      output: |
+        {}
+    - match: "kubectl get deploy checkout -n shop -o jsonpath='{.spec.template.spec.containers[0].resources}'"
+      when_actions: [set-resources]
+      output: |
+        {"limits":{"memory":"512Mi"},"requests":{"cpu":"250m","memory":"512Mi"}}
+    - match: "kubectl get deploy checkout -n shop -o jsonpath='{.spec.template.spec.containers[0].resources}'"
+      output: |
+        {}
+    - match: "kubectl get pods -n shop -l app=legacy-export"
+      evidence: legacy-imagepull
+      output: |
+        NAME                           READY   STATUS             RESTARTS   AGE
+        legacy-export-29318400-7kq2m   0/1     ImagePullBackOff   0          23d
+
+hypotheses:
+  - id: besteffort
+    text: "report-builder has no memory limit and grows to over 6 GiB, putting nodes under memory pressure, and the kubelet evicts checkout first because with no requests it's BestEffort."
+    correct: true
+  - id: imagepull
+    text: "The ImagePullBackOff pod in shop is breaking checkout."
+    feedback: "That's legacy-export, a CronJob whose image was removed three weeks ago. It's never started, so it uses no memory, and checkout pods say Evicted because of MemoryPressure."
+  - id: oom
+    text: "checkout is exceeding its memory limit and being OOMKilled."
+    feedback: "checkout has no limit, and it's at about 390 MiB. OOMKilled would show as a restart with exit code 137; these pods are Failed with reason Evicted, a node-level decision."
+  - id: priority
+    text: "checkout needs a higher PriorityClass."
+    feedback: "The kubelet first looks at whether a pod uses more than it requested. With no requests at all, checkout always does, whatever its priority."
+
+actions:
+  - id: set-resources
+    label: "Give report-builder requests and a 2 GiB memory limit, and give checkout requests (cpu 250m, memory 512Mi) with a 512 MiB memory limit"
+    kind: fix
+    feedback: "report-builder can't take a node's memory any more, and checkout is Burstable, running within its requests, so it's no longer first in line for eviction."
+  - id: add-nodes
+    label: "Add two more nodes to the cluster"
+    kind: wrong
+    feedback: "report-builder has no limit; it will grow into the new nodes' memory too, and checkout stays BestEffort."
+  - id: priority-class
+    label: "Give checkout a high PriorityClass"
+    kind: wrong
+    feedback: "Eviction ranks pods using more than their requests first, and only then by priority. With no requests, checkout is still in the first group."
+  - id: delete-report
+    label: "kubectl delete deploy report-builder -n shop"
+    kind: destructive
+    feedback: "Month-end reports are due; the data team needs it. It needs a limit, not deleting."
+
+solution_paths:
+  - [set-resources]
+
+key_evidence: [evicted-list, besteffort-evicted, hog, no-limits]
+
+evidence_labels:
+  evicted-list: "checkout pods keep being Evicted and recreated"
+  besteffort-evicted: "Evicted for MemoryPressure; checkout's QoS class is BestEffort"
+  hog: "report-builder uses over 6 GiB on an 8 GiB node"
+  no-limits: "report-builder has no requests or limits"
+
+red_herrings:
+  - evidence: legacy-imagepull
+    label: "The ImagePullBackOff in shop"
+    why: "legacy-export has failed to pull its image for 23 days. It never starts, so it uses no node memory, and it has nothing to do with checkout being evicted for MemoryPressure."
+
+hints:
+  nudge: "The pods aren't crashing: they're Evicted. Why would a node throw pods off?"
+  direction: "Read an evicted pod's reason and QoS class, and see what's using the node's memory."
+  answer: "report-builder has no limit and uses 6+ GiB; checkout is BestEffort, so it goes first. Set limits on report-builder and requests on checkout."
+
+analogy:
+  title: "A guest with no booking"
+  text: |
+    A hotel full of guests without reservations takes in a party that keeps
+    asking for more rooms. When it runs out, the guests without a booking
+    are the first asked to leave. Give everyone a booking and cap the party,
+    and the hotel's manager starts doing their job, until they hit the
+    room limit someone set years ago. And the night porter, also without a
+    booking, never got to post the letters.
+
+debrief:
+  root_cause: |
+    report-builder ran with no memory limit and grew past 6 GiB on 8 GiB
+    nodes, so nodes crossed the kubelet's memory eviction threshold. The
+    kubelet evicts pods that use more than they request first; checkout
+    requested nothing, so it was BestEffort and always first. Its
+    Deployment recreated it, it was evicted again, and checkout failed
+    in waves.
+  ideal_path:
+    - "List checkout's pods: Evicted, repeatedly."
+    - "Describe one: MemoryPressure, QoS BestEffort."
+    - "Find the memory: report-builder at 6 GiB, no limits."
+    - "Limit report-builder and give checkout requests; watch the pods stay up."
+
+concepts:
+  - term: "Node-pressure eviction"
+    text: "When a node runs low on memory the kubelet evicts pods, starting with those using more than they requested; it doesn't respect PodDisruptionBudgets."
+    url: "https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/"
+  - term: "QoS classes"
+    text: "BestEffort (no requests or limits), Burstable, Guaranteed: set by a pod's requests and limits, and they decide who goes first under pressure."
+    url: "https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/"
+  - term: "HPA and resource requests"
+    text: "CPU utilization is measured against the request; without one, the HPA can't compute it and takes no action. maxReplicas caps how far it scales."
+    url: "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/"
+  - term: "Running a CronJob now"
+    text: "kubectl create job NAME --from=cronjob/CRONJOB starts a one-off Job from a CronJob's template."
+    url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_create/kubectl_create_job/"
+
+sources:
+  - title: "Kubernetes: Node-pressure eviction"
+    url: "https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Pod Quality of Service classes"
+    url: "https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Horizontal Pod Autoscaling (requests, conditions)"
+    url: "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/"
+    retrieved: 2026-10-02
+  - title: "kubectl create job"
+    url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_create/kubectl_create_job/"
+    retrieved: 2026-10-02
+
+stages:
+  - id: hpa-limit
+    update: |
+      09:52: no more evictions. But checkout is slow and timing out under
+      the sale's traffic, stuck at 4 pods.
+    diagram_status: { checkout: degraded }
+    terminal:
+      commands:
+        - match: "kubectl get hpa checkout -n shop"
+          when_actions: [set-resources, raise-max]
+          output: |
+            NAME       REFERENCE             TARGETS        MINPODS   MAXPODS   REPLICAS   AGE
+            checkout   Deployment/checkout   cpu: 63%/70%   2         12        9          2y
+        - match: "kubectl get hpa checkout -n shop"
+          when_actions: [set-resources]
+          evidence: hpa-maxed
+          output: |
+            NAME       REFERENCE             TARGETS         MINPODS   MAXPODS   REPLICAS   AGE
+            checkout   Deployment/checkout   cpu: 182%/70%   2         4         4          2y
+        - match: "kubectl get hpa checkout -n shop"
+          output: |
+            NAME       REFERENCE             TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+            checkout   Deployment/checkout   cpu: <unknown>/70%   2         4         2          2y
+        - match: "kubectl describe hpa checkout -n shop"
+          when_actions: [set-resources, raise-max]
+          output: |
+            Conditions:
+              Type            Status  Reason            Message
+              ----            ------  ------            -------
+              AbleToScale     True    ReadyForNewScale  recommended size matches current size
+              ScalingActive   True    ValidMetricFound  the HPA was able to successfully calculate a replica count from cpu resource utilization (percentage of request)
+              ScalingLimited  False   DesiredWithinRange  the desired count is within the acceptable range
+        - match: "kubectl describe hpa checkout -n shop"
+          when_actions: [set-resources]
+          evidence: too-many-replicas
+          output: |
+            Conditions:
+              Type            Status  Reason            Message
+              ----            ------  ------            -------
+              AbleToScale     True    ReadyForNewScale  recommended size matches current size
+              ScalingActive   True    ValidMetricFound  the HPA was able to successfully calculate a replica count from cpu resource utilization (percentage of request)
+              ScalingLimited  True    TooManyReplicas   the desired replica count is more than the maximum replica count
+        - match: "kubectl describe hpa checkout -n shop"
+          evidence: hpa-never-worked
+          output: |
+            Conditions:
+              Type            Status  Reason                   Message
+              ----            ------  ------                   -------
+              AbleToScale     True    SucceededGetScale        the HPA controller was able to get the target's current scale
+              ScalingActive   False   FailedGetResourceMetric  the HPA was unable to compute the replica count: failed to get cpu utilization: missing request for cpu in container checkout of Pod checkout-7d9f8b6c5-r8z2t
+    hypotheses:
+      - id: max-replicas
+        text: "Now that checkout has a CPU request, the HPA works for the first time, wants more than 4 pods, and is capped by maxReplicas: 4, set two years ago and never reached."
+        correct: true
+      - id: metrics
+        text: "The HPA can't read CPU metrics."
+        feedback: "That was true before the fix (no CPU request, so no utilization). Now ScalingActive is True with a valid metric: it's ScalingLimited by TooManyReplicas."
+      - id: cluster-full
+        text: "There's no room in the cluster for more pods."
+        feedback: "The HPA hasn't asked for any: it's at its maximum of 4. With report-builder capped, the nodes have room."
+    actions:
+      - id: raise-max
+        label: "kubectl patch hpa checkout -n shop -p '{\"spec\":{\"maxReplicas\":12}}'"
+        kind: fix
+        match_regex: "^kubectl patch hpa checkout -n shop -p '\\{\"spec\":\\{\"maxReplicas\":(8|9|1[0-9]|20)\\}\\}'$"
+        feedback: "The HPA scales checkout to 9 pods and utilization settles under 70%."
+      - id: manual-scale
+        label: "kubectl scale deploy checkout -n shop --replicas=10"
+        kind: wrong
+        match_regex: "^kubectl scale deploy(ment)?/? ?checkout -n shop --replicas=\\d+$"
+        feedback: "The HPA owns the replica count and puts it back within 2-4 at its next check."
+      - id: delete-hpa
+        label: "Delete the HPA and set replicas by hand for the sale"
+        kind: destructive
+        feedback: "Then nothing scales checkout up when traffic peaks or down after the sale. Raise its maximum."
+    solution_paths:
+      - [raise-max]
+    key_evidence: [hpa-maxed, too-many-replicas, hpa-never-worked]
+    evidence_labels:
+      hpa-maxed: "checkout is at 182% of its CPU target, at the maximum of 4 pods"
+      too-many-replicas: "ScalingLimited: TooManyReplicas"
+      hpa-never-worked: "Before the fix the HPA couldn't compute CPU at all: missing request"
+    hints:
+      nudge: "The HPA has a CPU number now. What's stopping it adding pods?"
+      direction: "Describe the HPA and read its conditions."
+      answer: "ScalingLimited, TooManyReplicas: maxReplicas is 4. Raise it, for example to 12."
+    debrief:
+      root_cause: |
+        CPU utilization is measured against the pod's CPU request; with none,
+        the HPA couldn't compute it and had never scaled checkout: it just
+        sat at its minimum. Adding requests switched it on, and it
+        immediately wanted more than 4 pods, the maxReplicas set when the
+        HPA was created two years ago and never reached.
+      ideal_path:
+        - "Read the HPA: 182% of target, at its maximum of 4."
+        - "Describe it: ScalingLimited, TooManyReplicas."
+        - "Notice it had never worked before: missing request for cpu."
+        - "Raise maxReplicas and watch it scale."
+
+  - id: uncaptured
+    update: |
+      10:10: checkout is healthy at 9 pods. The warehouse is still waiting on
+      2,140 paid orders from Tuesday and Wednesday nights.
+    diagram_status: { checkout: ok }
+    terminal:
+      commands:
+        - match: "kubectl get jobs -n shop -l app=capture-reconcile"
+          when_actions: [run-capture]
+          output: |
+            NAME                          STATUS     COMPLETIONS   DURATION   AGE
+            capture-reconcile-manual      Complete   1/1           3m12s      4m
+            capture-reconcile-29319720    Failed     0/1           11m        32h
+            capture-reconcile-29321160    Failed     0/1           9m         8h
+        - match: "kubectl get jobs -n shop -l app=capture-reconcile"
+          evidence: jobs-failed
+          output: |
+            NAME                          STATUS   COMPLETIONS   DURATION   AGE
+            capture-reconcile-29319720    Failed   0/1           11m        32h
+            capture-reconcile-29321160    Failed   0/1           9m         8h
+        - match: "kubectl get pods -n shop -l app=capture-reconcile"
+          evidence: capture-evicted
+          output: |
+            NAME                                READY   STATUS    RESTARTS   AGE
+            capture-reconcile-29319720-x8k2m    0/1     Evicted   0          32h
+            capture-reconcile-29321160-q4n7d    0/1     Evicted   0          8h
+        - match: "kubectl exec deploy/checkout -n shop -- ./manage.py uncaptured --count"
+          when_actions: [run-capture]
+          output: |
+            0 orders authorized and not captured
+        - match: "kubectl exec deploy/checkout -n shop -- ./manage.py uncaptured --count"
+          evidence: uncaptured-2140
+          output: |
+            2140 orders authorized and not captured (oldest 2026-09-30 01:58 UTC)
+    hypotheses:
+      - id: run-now
+        text: "capture-reconcile was evicted both nights (also BestEffort), so 2,140 authorizations were never captured; run it now from the CronJob, with requests added to its template."
+        correct: true
+      - id: wait
+        text: "Tonight's 02:00 run will catch up."
+        feedback: "Probably, but those orders don't ship until captured: two more days of delay on 2,140 paid orders, and card authorizations don't last forever. Run it now."
+      - id: charge-again
+        text: "Charge those customers again."
+        feedback: "The payments are authorized, just not captured. A new charge would bill them twice."
+    actions:
+      - id: run-capture
+        label: "Add requests to capture-reconcile's template, then kubectl create job capture-reconcile-manual --from=cronjob/capture-reconcile -n shop"
+        kind: fix
+        match_regex: "^kubectl create job capture-reconcile-manual --from=cronjob/capture-reconcile -n shop$"
+        feedback: "A one-off Job from the CronJob's own template captures the 2,140 payments; the warehouse can release the orders. Tonight's run is protected by its new requests."
+      - id: new-charges
+        label: "Re-run checkout's charge step for the 2,140 orders"
+        kind: destructive
+        feedback: "Creates new charges on top of the existing authorizations: customers billed twice."
+      - id: wait-tonight
+        label: "Leave it for tonight's scheduled run"
+        kind: wrong
+        feedback: "Another 16 hours before 2,140 paid orders can ship, during a sale."
+    solution_paths:
+      - [run-capture]
+    key_evidence: [jobs-failed, capture-evicted, uncaptured-2140]
+    evidence_labels:
+      jobs-failed: "Both nights' capture-reconcile Jobs failed"
+      capture-evicted: "Their pods were Evicted"
+      uncaptured-2140: "2,140 orders are authorized but not captured"
+    hints:
+      nudge: "What releases paid orders for shipping, and did it run?"
+      direction: "Look at capture-reconcile's recent Jobs and their pods."
+      answer: "Both runs were evicted. Add requests to its template and run kubectl create job ... --from=cronjob/capture-reconcile."
+    debrief:
+      root_cause: |
+        capture-reconcile also ran with no requests, so its pods were
+        BestEffort and were evicted under the same memory pressure on
+        Tuesday and Wednesday nights. Two days of authorized payments were
+        never captured and those orders weren't released. kubectl create
+        job --from=cronjob runs the CronJob's template now, instead of
+        waiting for 02:00.
+      ideal_path:
+        - "Count orders authorized but not captured: 2,140."
+        - "Check capture-reconcile's Jobs: both failed; their pods were Evicted."
+        - "Add requests to its template so it survives pressure."
+        - "Run it now with kubectl create job --from=cronjob, then re-count."
