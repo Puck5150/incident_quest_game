@@ -143,7 +143,7 @@ describe('validator rejects', () => {
 // added here as their commands get library entries; B3 makes this every track.
 describe('command breakdown', () => {
   const c = loadContent(CONTENT)
-  const COVERED = ['linux']
+  const COVERED = ['linux', 'aws']
   it.each(c.scenarios.filter((s) => COVERED.includes(s.track)).map((s) => [s.id, s] as const))(
     '%s: every key-evidence and verification command has a library entry',
     (_id, s) => expect(uncovered(s, c.library)).toEqual([]),

@@ -8,8 +8,69 @@
     - { token: "curl", meaning: "Transfer a URL." }
     - { token: "-s", meaning: "Silent: no progress meter." }
     - { token: "-I", meaning: "Send a HEAD request and show only the headers." }
+    - { token: "| grep -iE 'a|b'", meaning: "(If piped) keep only header lines matching any of the alternatives." }
+    - { token: "-i", meaning: "grep: ignore case (header names are case-insensitive)." }
+    - { token: "-E", meaning: "grep: extended regex, so | means \"or\"." }
   why: "Status code, server and cache headers answer most \"what does the server say?\" questions without the body."
   alternatives:
     - { command: "curl -sv URL -o /dev/null", note: "Also shows the connection, TLS handshake and request headers." }
     - { command: "wget -S --spider URL", note: "Headers with wget." }
   docs: { title: "curl man page", url: "https://curl.se/docs/manpage.html" }
+
+- id: curl-status-code
+  match: "^curl .*-w "
+  summary: "Requests a URL and prints only the HTTP status code."
+  parts:
+    - { token: "-s", meaning: "Silent: no progress meter." }
+    - { token: "-o /dev/null", meaning: "Throw the body away." }
+    - { token: "-w '%{http_code}\\n'", meaning: "After the transfer, write out the response's status code and a newline." }
+  why: "One number answers \"what does this URL return?\", which is what a health check or a cache test compares against."
+  alternatives:
+    - { command: "curl -sI URL", note: "The status line plus headers." }
+    - { command: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' URL", note: "Add the total time too." }
+  docs: { title: "curl man page: --write-out", url: "https://curl.se/docs/manpage.html" }
+
+- id: curl-timeout
+  match: "^curl .*-m "
+  summary: "Requests a URL but gives up after a fixed number of seconds."
+  parts:
+    - { token: "-m 10", meaning: "--max-time: abort the whole transfer after 10 seconds." }
+  why: "A request that hangs until the time limit (rather than failing fast) points at packets being dropped: a missing route or a firewall, not a refused connection."
+  alternatives:
+    - { command: "curl --connect-timeout 5 URL", note: "Limit only the connection phase." }
+    - { command: "nc -vz -w 5 HOST 443", note: "Test just the TCP connection." }
+  docs: { title: "curl man page: --max-time", url: "https://curl.se/docs/manpage.html" }
+
+- id: curl-grep
+  match: "^curl .*\\| grep "
+  summary: "Fetches a page and keeps only the lines that mention a word."
+  parts:
+    - { token: "-s", meaning: "Silent: no progress meter in the output." }
+    - { token: "| grep script", meaning: "Keep only lines containing \"script\", such as the <script> tags naming the JavaScript files the page loads." }
+  why: "Shows which file names the served page actually references, without reading the whole HTML."
+  alternatives:
+    - { command: "curl -s URL | grep -o 'src=\"[^\"]*\"'", note: "-o prints only the matching part: each src attribute." }
+  docs: { title: "curl man page", url: "https://curl.se/docs/manpage.html" }
+
+- id: curl-get
+  match: "^curl (-s )?[^-]"
+  summary: "Requests a URL and prints the response body."
+  parts:
+    - { token: "-s", meaning: "Silent: no progress meter." }
+  why: "The body is what the app actually says, such as a health endpoint's JSON naming which dependency is down."
+  alternatives:
+    - { command: "curl -sv URL", note: "Also show the connection and headers." }
+    - { command: "curl -s URL | jq .", note: "Pretty-print JSON." }
+  docs: { title: "curl man page", url: "https://curl.se/docs/manpage.html" }
+
+- id: dig
+  match: "^dig "
+  summary: "Asks DNS for a name's records and shows the full answer, including the TTL."
+  parts:
+    - { token: "dig NAME", meaning: "Query the A record for NAME using the system's resolver." }
+  why: "Shows what clients are actually being told right now, and the TTL says how long they'll keep it."
+  alternatives:
+    - { command: "dig +short NAME", note: "Just the addresses." }
+    - { command: "dig @8.8.8.8 NAME", note: "Ask a specific resolver." }
+    - { command: "nslookup NAME", note: "Older and available on Windows too." }
+  docs: { title: "BIND 9: dig", url: "https://bind9.readthedocs.io/en/latest/manpages.html#dig-dns-lookup-utility" }

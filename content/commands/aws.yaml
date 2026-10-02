@@ -1,0 +1,458 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: AWS CLI. First matching entry wins.
+# --query is a JMESPath expression the CLI applies to the JSON response on your
+# machine: [] walks a list, [0] takes the first item, {a:b} builds an object.
+
+- id: aws-app-autoscaling-targets
+  match: "^aws application-autoscaling describe-scalable-targets"
+  summary: "Lists the resources Application Auto Scaling manages for a service, and which dimension of each it scales."
+  parts:
+    - { token: "--service-namespace dynamodb", meaning: "Only targets for this service (dynamodb, ecs, lambda...)." }
+    - { token: "--query ScalableTargets[].[ResourceId,ScalableDimension]", meaning: "For each target, keep its resource (a table or index) and what's scaled (read or write capacity)." }
+  why: "Shows what auto scaling actually covers, which is how you notice an index that isn't registered while its table is."
+  alternatives:
+    - { command: "aws application-autoscaling describe-scaling-policies --service-namespace dynamodb", note: "The policies attached to those targets." }
+    - { command: "DynamoDB console, table > Additional settings", note: "The same per table and index." }
+  docs: { title: "AWS CLI: describe-scalable-targets", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/application-autoscaling/describe-scalable-targets.html" }
+
+- id: aws-asg-describe
+  match: "^aws autoscaling describe-auto-scaling-groups"
+  summary: "Shows an Auto Scaling group's settings."
+  parts:
+    - { token: "--auto-scaling-group-names web-asg", meaning: "Only this group." }
+    - { token: "--query AutoScalingGroups[0].[HealthCheckType,HealthCheckGracePeriod]", meaning: "From the first (only) group, keep the health check type (EC2 or ELB) and its grace period." }
+  why: "Whether a group replaces instances that fail the load balancer's checks depends on HealthCheckType: one field, here."
+  alternatives:
+    - { command: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names web-asg", note: "Every setting, unfiltered." }
+    - { command: "EC2 console > Auto Scaling groups > Details", note: "Health check type and grace period on the details tab." }
+  docs: { title: "AWS CLI: describe-auto-scaling-groups", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/autoscaling/describe-auto-scaling-groups.html" }
+
+- id: aws-asg-instances
+  match: "^aws autoscaling describe-auto-scaling-instances"
+  summary: "Lists the instances in Auto Scaling groups with their lifecycle state and health as Auto Scaling sees it."
+  parts:
+    - { token: "--query AutoScalingInstances[].[InstanceId,LifecycleState,HealthStatus]", meaning: "For each instance: id, lifecycle state (InService...) and Auto Scaling's health verdict." }
+  why: "Comparing Auto Scaling's HEALTHY with the load balancer's unhealthy shows the two disagree."
+  alternatives:
+    - { command: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names web-asg --query AutoScalingGroups[0].Instances", note: "The same, for one group." }
+  docs: { title: "AWS CLI: describe-auto-scaling-instances", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/autoscaling/describe-auto-scaling-instances.html" }
+
+- id: aws-asg-activities
+  match: "^aws autoscaling describe-scaling-activities"
+  summary: "Lists a group's recent scaling activities: launches and terminations, with the reason for each."
+  parts:
+    - { token: "--auto-scaling-group-name asg-api", meaning: "Only this group." }
+    - { token: "--max-items 2", meaning: "Only the two most recent activities." }
+    - { token: "--query Activities[].[StartTime,Description,Cause]", meaning: "For each activity: when, what, and why." }
+  why: "The Cause says whether an instance was replaced for a health check failure or by a scaling policy."
+  alternatives:
+    - { command: "EC2 console > Auto Scaling groups > Activity", note: "The same history." }
+  docs: { title: "AWS CLI: describe-scaling-activities", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/autoscaling/describe-scaling-activities.html" }
+
+- id: aws-cloudfront-dist-config
+  match: "^aws cloudfront get-distribution-config"
+  summary: "Shows a CloudFront distribution's configuration."
+  parts:
+    - { token: "--id E2SHOP", meaning: "The distribution's id." }
+    - { token: "--query DistributionConfig.DefaultCacheBehavior.[DefaultTTL,MinTTL,MaxTTL]", meaning: "From the default cache behaviour, keep the default, minimum and maximum TTL in seconds." }
+  why: "When the origin sends no Cache-Control, the default TTL decides how long edges keep a file."
+  alternatives:
+    - { command: "curl -sI URL | grep -i -E 'age|x-cache'", note: "What a cached response actually reports." }
+    - { command: "CloudFront console > Behaviors", note: "The cache policy or legacy TTL settings per behaviour." }
+  docs: { title: "AWS CLI: cloudfront get-distribution-config", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/cloudfront/get-distribution-config.html" }
+
+- id: aws-cloudwatch-alarms
+  match: "^aws cloudwatch describe-alarms"
+  summary: "Shows alarms with their state, metric, dimensions, threshold and actions."
+  parts:
+    - { token: "--alarm-names checkout-cpu-high", meaning: "Only this alarm." }
+  why: "An alarm's state and dimensions show what it's really watching, such as an instance that no longer exists."
+  alternatives:
+    - { command: "aws cloudwatch describe-alarm-history --alarm-name checkout-cpu-high", note: "When and why its state changed." }
+    - { command: "aws cloudwatch describe-alarms --state-value INSUFFICIENT_DATA", note: "Every alarm that can't see its data." }
+  docs: { title: "AWS CLI: describe-alarms", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/cloudwatch/describe-alarms.html" }
+
+- id: aws-dynamodb-describe-table
+  match: "^aws dynamodb describe-table"
+  summary: "Shows a DynamoDB table's settings, including the capacity of the table and each index."
+  parts:
+    - { token: "--table-name orders", meaning: "The table." }
+    - { token: "--query \"Table.{table:..., gsi:...}\"", meaning: "Build a small object: the table's write capacity and the first global secondary index's write capacity, side by side." }
+  why: "Each GSI has its own capacity; putting both numbers side by side shows an under-provisioned index at once."
+  alternatives:
+    - { command: "aws cloudwatch get-metric-statistics --namespace AWS/DynamoDB --metric-name WriteThrottleEvents ...", note: "Throttling per table or index over time." }
+  docs: { title: "AWS CLI: dynamodb describe-table", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/dynamodb/describe-table.html" }
+
+- id: aws-ec2-profile-associations
+  match: "^aws ec2 describe-iam-instance-profile-associations"
+  summary: "Shows which IAM instance profile (role) is attached to an instance."
+  parts:
+    - { token: "--filters Name=instance-id,Values=i-0backup01", meaning: "Only associations for this instance." }
+  why: "Answers \"does this instance have a role it could use instead of keys?\" directly."
+  alternatives:
+    - { command: "aws ec2 describe-instances --instance-ids i-0backup01 --query Reservations[0].Instances[0].IamInstanceProfile", note: "The same from the instance's description." }
+    - { command: "curl -s http://169.254.169.254/latest/meta-data/iam/info (on the instance, with an IMDSv2 token)", note: "What the instance itself sees." }
+  docs: { title: "AWS CLI: describe-iam-instance-profile-associations", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-iam-instance-profile-associations.html" }
+
+- id: aws-ec2-describe-instances
+  match: "^aws ec2 describe-instances"
+  summary: "Shows instances and their details."
+  parts:
+    - { token: "--instance-ids i-0checkoutold", meaning: "Only this instance." }
+    - { token: "--query Reservations[0].Instances[0].State", meaning: "The first instance's state (running, stopped, terminated)." }
+  why: "Confirms whether something still exists and is running before you trust anything that points at it."
+  alternatives:
+    - { command: "aws ec2 describe-instance-status --instance-ids ID", note: "Status checks for running instances." }
+  docs: { title: "AWS CLI: ec2 describe-instances", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-instances.html" }
+
+- id: aws-ec2-nat-gateways
+  match: "^aws ec2 describe-nat-gateways"
+  summary: "Lists NAT gateways."
+  parts:
+    - { token: "--query NatGateways[].[NatGatewayId,State,SubnetId]", meaning: "For each: id, state (available...) and the subnet it lives in." }
+  why: "Shows whether a NAT gateway exists, works, and in which zone's subnet."
+  alternatives:
+    - { command: "aws ec2 describe-route-tables ...", note: "Which subnets actually route to it." }
+  docs: { title: "AWS CLI: describe-nat-gateways", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-nat-gateways.html" }
+
+- id: aws-ec2-route-tables
+  match: "^aws ec2 describe-route-tables"
+  summary: "Shows route tables: their routes and which subnets they're associated with."
+  parts:
+    - { token: "--filters Name=association.subnet-id,Values=SUBNET", meaning: "Only the table explicitly associated with this subnet (nothing, if it uses the main table)." }
+    - { token: "--filters Name=association.main,Values=true", meaning: "Only the VPC's main route table." }
+    - { token: "--route-table-ids rtb-0private", meaning: "Only this table." }
+    - { token: "--query RouteTables[0].Routes", meaning: "Just the routes of the first match." }
+  why: "What a subnet can reach is decided by its route table; an empty result for the subnet filter means it falls back to the main table."
+  alternatives:
+    - { command: "VPC console > Subnets > Route table tab", note: "Shows the effective table, including the main one." }
+    - { command: "VPC Reachability Analyzer", note: "Traces a path between two endpoints and names what blocks it." }
+  docs: { title: "AWS CLI: describe-route-tables", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-route-tables.html" }
+
+- id: aws-ec2-security-groups
+  match: "^aws ec2 describe-security-groups"
+  summary: "Shows security groups and their rules."
+  parts:
+    - { token: "--group-ids sg-...", meaning: "Only this group." }
+    - { token: "--query SecurityGroups[0].IpPermissions", meaning: "The group's inbound rules." }
+    - { token: "--query SecurityGroups[0].IpPermissionsEgress", meaning: "(In the egress form) the outbound rules." }
+  why: "Security groups only allow; if no rule allows a source on a port, traffic is dropped silently, which looks like a timeout. The rules show it immediately."
+  alternatives:
+    - { command: "aws ec2 describe-security-group-rules --filters Name=group-id,Values=sg-...", note: "One rule per entry, with rule ids." }
+    - { command: "VPC Reachability Analyzer", note: "Confirms the path end to end." }
+  docs: { title: "AWS CLI: describe-security-groups", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-security-groups.html" }
+
+- id: aws-ec2-subnets
+  match: "^aws ec2 describe-subnets"
+  summary: "Lists subnets."
+  parts:
+    - { token: "--query Subnets[].[SubnetId,AvailabilityZone,Tags[0].Value]", meaning: "For each: id, zone, and its first tag's value (usually the Name)." }
+  why: "Maps subnet ids to zones and names, so you know which one you're looking at."
+  alternatives:
+    - { command: "aws ec2 describe-subnets --filters Name=vpc-id,Values=VPC", note: "Only one VPC's subnets." }
+  docs: { title: "AWS CLI: describe-subnets", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-subnets.html" }
+
+- id: aws-ec2-vpc-endpoints
+  match: "^aws ec2 describe-vpc-endpoints"
+  summary: "Lists VPC endpoints (gateway and interface)."
+  parts:
+    - { token: "--filters Name=vpc-id,Values=vpc-0shop", meaning: "Only endpoints in this VPC." }
+  why: "Shows whether S3 or DynamoDB traffic can bypass the NAT gateway through a gateway endpoint."
+  alternatives:
+    - { command: "aws ec2 describe-route-tables --route-table-ids RTB", note: "A gateway endpoint appears as a prefix-list route in the tables it's attached to." }
+  docs: { title: "AWS CLI: describe-vpc-endpoints", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-vpc-endpoints.html" }
+
+- id: aws-ecs-describe-services
+  match: "^aws ecs describe-services"
+  summary: "Shows ECS services and their deployments."
+  parts:
+    - { token: "--cluster prod", meaning: "The cluster." }
+    - { token: "--services orders-api", meaning: "The service." }
+    - { token: "--query services[0].deployments", meaning: "Its deployments: the primary and any still rolling out, with running and failed task counts." }
+  why: "Shows whether a new deployment is stuck, and how many of its tasks failed."
+  alternatives:
+    - { command: "aws ecs describe-services --cluster prod --services orders-api --query services[0].events[:5]", note: "The service's latest events." }
+    - { command: "aws ecs list-tasks --cluster prod --service-name orders-api --desired-status STOPPED", note: "Stopped tasks, then describe-tasks for their stop reason." }
+  docs: { title: "AWS CLI: ecs describe-services", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ecs/describe-services.html" }
+
+- id: aws-elbv2-load-balancers
+  match: "^aws elbv2 describe-load-balancers"
+  summary: "Shows load balancers."
+  parts:
+    - { token: "--names alb-shop-2", meaning: "Only this load balancer." }
+    - { token: "--query LoadBalancers[0].SecurityGroups", meaning: "Its security groups." }
+  why: "The load balancer's security group is what target security groups have to allow."
+  alternatives:
+    - { command: "EC2 console > Load balancers > Security tab", note: "The same." }
+  docs: { title: "AWS CLI: describe-load-balancers", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/elbv2/describe-load-balancers.html" }
+
+- id: aws-elbv2-target-groups
+  match: "^aws elbv2 describe-target-groups"
+  summary: "Shows target groups and their health check settings."
+  parts:
+    - { token: "--target-group-arns ARN", meaning: "Only this target group." }
+    - { token: "--query TargetGroups[0].[Port,HealthCheckPath,Matcher.HttpCode]", meaning: "Its port, health check path and success codes." }
+  why: "A new target group starts from the defaults (path /, code 200); comparing them with what the app serves explains failing checks."
+  alternatives:
+    - { command: "curl -s -o /dev/null -w '%{http_code}\\n' http://TARGET:PORT/PATH", note: "What the target returns for that path." }
+  docs: { title: "AWS CLI: describe-target-groups", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/elbv2/describe-target-groups.html" }
+
+- id: aws-elbv2-target-health
+  match: "^aws elbv2 describe-target-health"
+  summary: "Shows each target's health in a target group, with a reason code when it's unhealthy."
+  parts:
+    - { token: "--target-group-arn ARN", meaning: "The target group." }
+    - { token: "--query TargetHealthDescriptions[]...", meaning: "(If given) keep just each target's health state, reason and description." }
+  why: "The reason code tells you where to look: Target.Timeout means no response (network, security group); Target.ResponseCodeMismatch means the wrong answer (path, app)."
+  alternatives:
+    - { command: "EC2 console > Target groups > Targets", note: "The same, with hover text for each reason." }
+    - { command: "ALB health check logs", note: "Every check, if you've turned them on." }
+  docs: { title: "AWS CLI: describe-target-health", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/elbv2/describe-target-health.html" }
+
+- id: aws-iam-get-role
+  match: "^aws iam get-role "
+  summary: "Shows an IAM role: its trust policy, permissions boundary and other properties."
+  parts:
+    - { token: "--role-name orders-api-task-role", meaning: "The role." }
+    - { token: "--query Role.PermissionsBoundary", meaning: "Only its permissions boundary, if any." }
+  why: "A boundary caps what any of the role's policies can grant; you won't see it by reading the attached policies."
+  alternatives:
+    - { command: "aws iam get-role --role-name NAME --query Role.AssumeRolePolicyDocument", note: "Who may assume the role." }
+  docs: { title: "AWS CLI: iam get-role", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/get-role.html" }
+
+- id: aws-iam-get-role-policy
+  match: "^aws iam get-role-policy"
+  summary: "Prints an inline policy attached to a role."
+  parts:
+    - { token: "--role-name ...", meaning: "The role." }
+    - { token: "--policy-name ...", meaning: "The inline policy's name." }
+    - { token: "--query PolicyDocument.Statement", meaning: "(If given) only the statements." }
+  why: "Shows exactly which actions on which resources the role is allowed, to compare with the action and resource in an error."
+  alternatives:
+    - { command: "aws iam list-role-policies --role-name NAME", note: "The names of all inline policies." }
+    - { command: "aws iam simulate-principal-policy ...", note: "Ask IAM whether a specific action would be allowed." }
+  docs: { title: "AWS CLI: iam get-role-policy", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/get-role-policy.html" }
+
+- id: aws-iam-list-access-keys
+  match: "^aws iam list-access-keys"
+  summary: "Lists a user's access keys and whether each is active."
+  parts:
+    - { token: "--user-name backup-bot", meaning: "The IAM user." }
+  why: "Shows whether a key is active or was deactivated, and how old each key is."
+  alternatives:
+    - { command: "aws iam get-access-key-last-used --access-key-id KEY", note: "When and where a key was last used." }
+  docs: { title: "AWS CLI: list-access-keys", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/list-access-keys.html" }
+
+- id: aws-iam-attached-role-policies
+  match: "^aws iam list-attached-role-policies"
+  summary: "Lists the managed policies attached to a role."
+  parts:
+    - { token: "--role-name orders-api-task-role", meaning: "The role." }
+  why: "Managed policies are attached separately from inline ones; together they're the role's identity-based permissions."
+  alternatives:
+    - { command: "aws iam list-role-policies --role-name NAME", note: "Inline policies." }
+  docs: { title: "AWS CLI: list-attached-role-policies", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/list-attached-role-policies.html" }
+
+- id: aws-iam-simulate
+  match: "^aws iam simulate-principal-policy"
+  summary: "Asks IAM whether a role or user would be allowed an action, and which policy decides."
+  parts:
+    - { token: "--policy-source-arn ARN", meaning: "The role or user to test." }
+    - { token: "--action-names secretsmanager:GetSecretValue", meaning: "The action(s) to evaluate." }
+  why: "Evaluates every policy type together (identity, boundary, and others you include) and reports the decision, including whether the boundary allows it."
+  alternatives:
+    - { command: "IAM console > Policy simulator", note: "The same evaluation, interactively." }
+  docs: { title: "AWS CLI: simulate-principal-policy", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/simulate-principal-policy.html" }
+
+- id: aws-kms-key-policy
+  match: "^aws kms get-key-policy"
+  summary: "Prints a KMS key's key policy."
+  parts:
+    - { token: "--key-id ID", meaning: "The key (key id or ARN; aliases aren't accepted here)." }
+    - { token: "--policy-name default", meaning: "Key policies are always named default." }
+    - { token: "--query Policy", meaning: "Just the policy document." }
+    - { token: "--output text", meaning: "Print it as plain text rather than a JSON string." }
+  why: "The key policy decides whether IAM policies in the account can grant use of the key at all."
+  alternatives:
+    - { command: "aws kms list-grants --key-id ID", note: "Grants, the other way access to a key is given." }
+  docs: { title: "AWS CLI: kms get-key-policy", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/kms/get-key-policy.html" }
+
+- id: aws-lambda-account-settings
+  match: "^aws lambda get-account-settings"
+  summary: "Shows the account's Lambda limits and usage in this Region, including concurrency."
+  parts:
+    - { token: "get-account-settings", meaning: "No options: account-level ConcurrentExecutions limit and unreserved concurrency." }
+  why: "When functions are throttled, this shows the shared pool they're competing for."
+  alternatives:
+    - { command: "CloudWatch metric ConcurrentExecutions (account and per function)", note: "Who is using the concurrency over time." }
+  docs: { title: "AWS CLI: lambda get-account-settings", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/get-account-settings.html" }
+
+- id: aws-lambda-function-concurrency
+  match: "^aws lambda get-function-concurrency"
+  summary: "Shows a function's reserved concurrency, if it has any."
+  parts:
+    - { token: "--function-name NAME", meaning: "The function." }
+  why: "Reserved concurrency both guarantees and caps a function; an empty answer means it competes for the shared pool."
+  alternatives:
+    - { command: "aws lambda get-function --function-name NAME --query Concurrency", note: "The same, inside the full description." }
+  docs: { title: "AWS CLI: get-function-concurrency", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/get-function-concurrency.html" }
+
+- id: aws-lambda-function-config
+  match: "^aws lambda get-function-configuration"
+  summary: "Shows a function's settings: runtime, memory, timeout, VPC configuration and more."
+  parts:
+    - { token: "--function-name NAME", meaning: "The function." }
+    - { token: "--query ...", meaning: "Keep only the fields you need, such as Timeout or VpcConfig (subnets and security groups)." }
+  why: "Timeouts, subnets and security groups are settings, not code; this shows the ones actually deployed."
+  alternatives:
+    - { command: "Lambda console > Configuration", note: "The same settings by tab." }
+  docs: { title: "AWS CLI: get-function-configuration", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/get-function-configuration.html" }
+
+- id: aws-logs-tail
+  match: "^aws logs tail "
+  summary: "Prints recent events from a CloudWatch Logs log group."
+  parts:
+    - { token: "/aws/lambda/...", meaning: "The log group (Lambda functions log to /aws/lambda/NAME)." }
+    - { token: "--since 1d", meaning: "Only events from the last day (also 30m, 10m...)." }
+  why: "The function's own log has the error, the duration and messages like \"Task timed out\"."
+  alternatives:
+    - { command: "aws logs tail GROUP --follow", note: "Keep streaming new events." }
+    - { command: "CloudWatch Logs Insights", note: "Query and aggregate across many events." }
+  docs: { title: "AWS CLI: logs tail", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html" }
+
+- id: aws-rds-describe-instances
+  match: "^aws rds describe-db-instances"
+  summary: "Shows RDS DB instances: engine, status, zone, Multi-AZ, replication and more."
+  parts:
+    - { token: "--db-instance-identifier NAME", meaning: "Only this instance." }
+    - { token: "--query ...", meaning: "(If given) keep only fields such as AvailabilityZone, MultiAZ or StorageEncrypted." }
+  why: "Where the database runs, whether it has a standby, and whether it's encrypted are all settings here."
+  alternatives:
+    - { command: "aws rds describe-events --source-identifier NAME --source-type db-instance", note: "Recent events such as failovers." }
+  docs: { title: "AWS CLI: describe-db-instances", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/rds/describe-db-instances.html" }
+
+- id: aws-route53-health-status
+  match: "^aws route53 get-health-check-status"
+  summary: "Shows what each Route 53 health checker region currently reports for a health check."
+  parts:
+    - { token: "--health-check-id ID", meaning: "The health check." }
+  why: "If every checker region fails while the endpoint works from your office, the checkers can't reach it (network), not the app."
+  alternatives:
+    - { command: "CloudWatch metric HealthCheckStatus", note: "Healthy (1) or unhealthy (0) over time." }
+  docs: { title: "AWS CLI: get-health-check-status", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/route53/get-health-check-status.html" }
+
+- id: aws-route53-records
+  match: "^aws route53 list-resource-record-sets"
+  summary: "Lists the records in a hosted zone, including routing policies and TTLs."
+  parts:
+    - { token: "--hosted-zone-id ID", meaning: "The hosted zone." }
+  why: "Shows the failover setup (primary, secondary, health checks) and the TTL clients will cache answers for."
+  alternatives:
+    - { command: "dig NAME", note: "What resolvers actually answer right now." }
+  docs: { title: "AWS CLI: list-resource-record-sets", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/route53/list-resource-record-sets.html" }
+
+- id: aws-s3-cp
+  match: "^aws s3 cp "
+  summary: "Copies a file to or from S3."
+  parts:
+    - { token: "s3://bucket/key", meaning: "The object." }
+    - { token: ".", meaning: "Download to the current directory." }
+  why: "A real download is the simplest end-to-end test of read access."
+  alternatives:
+    - { command: "aws s3api get-object --bucket B --key K FILE", note: "Lower-level, shows the response metadata." }
+  docs: { title: "AWS CLI: s3 cp", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3/cp.html" }
+
+- id: aws-s3-ls
+  match: "^aws s3 ls "
+  summary: "Lists objects under a bucket or prefix."
+  parts:
+    - { token: "s3://bucket/prefix/", meaning: "What to list." }
+  why: "Shows what's actually in the bucket (or that listing is allowed while reading isn't)."
+  alternatives:
+    - { command: "aws s3api list-objects-v2 --bucket B --prefix P", note: "Full metadata, paginated." }
+  docs: { title: "AWS CLI: s3 ls", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3/ls.html" }
+
+- id: aws-s3api-lifecycle
+  match: "^aws s3api get-bucket-lifecycle-configuration"
+  summary: "Prints a bucket's lifecycle rules."
+  parts:
+    - { token: "--bucket acme-invoices", meaning: "The bucket." }
+  why: "Lifecycle rules move or delete objects automatically; this shows what happens to objects as they age."
+  alternatives:
+    - { command: "S3 console > Management > Lifecycle rules", note: "The same rules." }
+  docs: { title: "AWS CLI: get-bucket-lifecycle-configuration", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-lifecycle-configuration.html" }
+
+- id: aws-s3api-location
+  match: "^aws s3api get-bucket-location"
+  summary: "Shows which Region a bucket is in."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "A gateway endpoint only covers buckets in its own Region; this confirms where the traffic goes."
+  alternatives:
+    - { command: "aws s3api head-bucket --bucket NAME", note: "Also reports the bucket's Region." }
+  docs: { title: "AWS CLI: get-bucket-location", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-location.html" }
+
+- id: aws-s3api-bucket-policy
+  match: "^aws s3api get-bucket-policy"
+  summary: "Prints a bucket's resource policy."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "A bucket policy can allow or deny on its own; check it alongside the caller's IAM policy."
+  alternatives:
+    - { command: "aws s3api get-bucket-policy-status --bucket NAME", note: "Whether the policy makes the bucket public." }
+  docs: { title: "AWS CLI: get-bucket-policy", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-policy.html" }
+
+- id: aws-s3api-get-object
+  match: "^aws s3api get-object"
+  summary: "Downloads an object and prints the response's metadata."
+  parts:
+    - { token: "--bucket B --key K", meaning: "The object." }
+    - { token: "FILE", meaning: "The local file to write it to." }
+    - { token: "--profile report-viewer", meaning: "(If given) run as a different named profile, to test someone else's access." }
+  why: "Tests the exact permission a reader needs, and the error names the action and resource that were refused."
+  alternatives:
+    - { command: "aws s3 cp s3://B/K .", note: "Simpler, less detail." }
+  docs: { title: "AWS CLI: get-object", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-object.html" }
+
+- id: aws-s3api-head-object
+  match: "^aws s3api head-object"
+  summary: "Shows an object's metadata without downloading it."
+  parts:
+    - { token: "--bucket B --key K", meaning: "The object." }
+    - { token: "--query StorageClass", meaning: "Its storage class (missing means STANDARD)." }
+    - { token: "--query ServerSideEncryption / SSEKMSKeyId", meaning: "How it's encrypted, and with which KMS key." }
+  why: "Storage class and encryption decide whether and how an object can be read; head-object shows both."
+  alternatives:
+    - { command: "aws s3api get-object-attributes --bucket B --key K --object-attributes StorageClass ObjectSize", note: "Selected attributes." }
+  docs: { title: "AWS CLI: head-object", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/head-object.html" }
+
+- id: aws-sns-subscriptions
+  match: "^aws sns list-subscriptions-by-topic"
+  summary: "Lists who is subscribed to an SNS topic."
+  parts:
+    - { token: "--topic-arn ARN", meaning: "The topic." }
+  why: "Confirms an alarm's notifications have somewhere to go (and that subscriptions are confirmed)."
+  alternatives:
+    - { command: "aws sns publish --topic-arn ARN --message test", note: "Send a test message end to end." }
+  docs: { title: "AWS CLI: list-subscriptions-by-topic", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sns/list-subscriptions-by-topic.html" }
+
+- id: aws-sqs-queue-attributes
+  match: "^aws sqs get-queue-attributes"
+  summary: "Shows a queue's settings and counters."
+  parts:
+    - { token: "--queue-url URL", meaning: "The queue." }
+    - { token: "--attribute-names VisibilityTimeout", meaning: "Only this attribute (or All)." }
+  why: "The visibility timeout must be longer than processing takes, or messages reappear for another consumer."
+  alternatives:
+    - { command: "aws sqs get-queue-attributes --queue-url URL --attribute-names All", note: "Every setting and the message counts." }
+  docs: { title: "AWS CLI: get-queue-attributes", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-attributes.html" }
+
+- id: aws-sts-caller-identity
+  match: "^aws sts get-caller-identity$"
+  summary: "Shows which account and identity (user or role) your credentials belong to."
+  parts:
+    - { token: "get-caller-identity", meaning: "No options; works even with no permissions granted." }
+  why: "Before debugging access, confirm who you actually are; many \"denied\" problems are the wrong identity."
+  alternatives:
+    - { command: "aws configure list", note: "Which credential source and profile the CLI is using." }
+  docs: { title: "AWS CLI: sts get-caller-identity", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/get-caller-identity.html" }
