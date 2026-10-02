@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: network-policy-default-deny
+track: containers
+difficulty: 3
+title: "The new recommendations service can't reach the catalog, and nothing else changed"
+par_minutes: 12
+
+ticket:
+  from: "Recommendations team"
+  priority: P2
+  body: |
+    We deployed recs-api to the shop namespace this morning. Every call it
+    makes to http://catalog:8080 times out. The storefront calls the same
+    catalog service all day without trouble. DNS resolves fine.
+
+environment: |
+  The shop namespace has a default-deny NetworkPolicy for ingress, added by
+  the platform team last quarter, plus allow policies per service. The
+  cluster's network plugin enforces NetworkPolicy. recs-api's pods are
+  labelled app: recs-api.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl exec deploy/recs-api -n shop -- curl -s -m 5 -o /dev/null -w '%{http_code}\\n' http://catalog:8080/healthz"
+      when_actions: [allow-recs]
+      output: |
+        200
+    - match: "kubectl exec deploy/recs-api -n shop -- curl -s -m 5 -o /dev/null -w '%{http_code}\\n' http://catalog:8080/healthz"
+      evidence: recs-timeout
+      output: |
+        000
+        command terminated with exit code 28
+    - match: "kubectl exec deploy/storefront -n shop -- curl -s -m 5 -o /dev/null -w '%{http_code}\\n' http://catalog:8080/healthz"
+      evidence: storefront-ok
+      output: |
+        200
+    - match: "kubectl get networkpolicy -n shop"
+      when_actions: [allow-recs]
+      output: |
+        NAME                     POD-SELECTOR   AGE
+        default-deny-ingress     <none>         112d
+        catalog-allow-frontends  app=catalog    112d
+        catalog-allow-recs       app=catalog    10s
+    - match: "kubectl get networkpolicy -n shop"
+      evidence: policies
+      output: |
+        NAME                     POD-SELECTOR   AGE
+        default-deny-ingress     <none>         112d
+        catalog-allow-frontends  app=catalog    112d
+    - match: "kubectl get networkpolicy catalog-allow-frontends -n shop -o yaml"
+      evidence: allow-list
+      output: |
+        spec:
+          podSelector:
+            matchLabels:
+              app: catalog
+          policyTypes: [Ingress]
+          ingress:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app: storefront
+                - podSelector:
+                    matchLabels:
+                      app: checkout
+              ports:
+                - port: 8080
+
+hypotheses:
+  - id: not-allowed
+    text: "The namespace denies all ingress by default, and catalog's allow policy only admits storefront and checkout, so recs-api's connections are dropped."
+    correct: true
+  - id: dns
+    text: "recs-api can't resolve catalog."
+    feedback: "The ticket says DNS resolves, and the call times out connecting (exit code 28), not failing to resolve."
+  - id: catalog-down
+    text: "The catalog service is down."
+    feedback: "storefront gets 200 from the same URL at the same time."
+  - id: egress
+    text: "recs-api isn't allowed to send traffic out."
+    feedback: "No policy here restricts egress (default-deny-ingress only isolates ingress). The drop happens at catalog's side: its allow list doesn't include recs-api."
+
+actions:
+  - id: allow-recs
+    label: "Add a NetworkPolicy catalog-allow-recs that admits pods labelled app: recs-api to catalog on port 8080"
+    kind: fix
+    feedback: "Policies add up: catalog now accepts recs-api as well as storefront and checkout, and still nothing else."
+  - id: delete-default-deny
+    label: "Delete default-deny-ingress"
+    kind: destructive
+    feedback: "Every pod in shop becomes reachable from every pod in the cluster, undoing the platform team's isolation to fix one caller."
+  - id: label-as-storefront
+    label: "Add the label app: storefront to recs-api's pods"
+    kind: wrong
+    feedback: "It gets through by impersonating another service, which also puts recs-api behind storefront's Service selector and muddles every policy and dashboard keyed on that label."
+  - id: restart-catalog
+    label: "Restart the catalog pods"
+    kind: wrong
+    feedback: "The policies are unchanged, so recs-api is still not on catalog's allow list."
+
+solution_paths:
+  - [allow-recs]
+
+key_evidence: [recs-timeout, storefront-ok, policies, allow-list]
+
+evidence_labels:
+  recs-timeout: "recs-api's calls to catalog time out"
+  storefront-ok: "storefront reaches catalog fine"
+  policies: "The namespace has a default deny for ingress, plus one allow policy for catalog"
+  allow-list: "catalog's allow policy admits only storefront and checkout"
+
+hints:
+  nudge: "Same service, same URL: one caller works and one doesn't. What tells catalog who may connect?"
+  direction: "List the namespace's NetworkPolicies, then read who catalog's allow policy admits."
+  answer: "default-deny-ingress isolates catalog, and its allow policy lists only storefront and checkout. Add a policy admitting app: recs-api on port 8080."
+
+analogy:
+  title: "The guest list at the door"
+  text: |
+    The building's rule is that nobody gets into a room unless that room's
+    guest list names them. The new colleague isn't on the catalog room's
+    list yet, so the door stays shut while old colleagues walk in. Add
+    them to the list; don't take the door off.
+
+debrief:
+  root_cause: |
+    default-deny-ingress selects every pod in shop, so each pod accepts only
+    the connections some policy explicitly allows. catalog-allow-frontends
+    admits pods labelled storefront and checkout on port 8080. recs-api is
+    new and wasn't on any allow list, so its connections to catalog were
+    dropped and timed out, while storefront's worked.
+  ideal_path:
+    - "Compare callers: recs-api times out, storefront succeeds."
+    - "List the NetworkPolicies: a namespace-wide default deny for ingress."
+    - "Read catalog's allow policy: only storefront and checkout."
+    - "Add an allow policy for recs-api, and confirm the call returns 200."
+  real_world: |
+    Default-deny namespaces mean every new caller needs a policy, so ship the
+    NetworkPolicy with the service that needs it. Timeouts (not refusals) are
+    the usual symptom of a dropped connection.
+
+concepts:
+  - term: "NetworkPolicy"
+    text: "Rules for which pods may talk to which, enforced by the cluster's network plugin."
+    url: "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+  - term: "Default deny"
+    text: "A policy with an empty pod selector isolates every pod in the namespace, so only explicitly allowed traffic gets through."
+    url: "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+
+sources:
+  - title: "Kubernetes: Network Policies (isolation, default deny, additive policies)"
+    url: "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Declare Network Policy"
+    url: "https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/"
+    retrieved: 2026-10-02

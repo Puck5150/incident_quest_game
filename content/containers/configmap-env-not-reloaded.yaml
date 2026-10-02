@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: configmap-env-not-reloaded
+track: containers
+difficulty: 2
+title: "We changed the payment provider URL an hour ago, and pods still use the old one"
+par_minutes: 10
+
+ticket:
+  from: "Payments team"
+  priority: P1
+  body: |
+    Our payment provider retired its v1 endpoint at 14:00, as announced. At
+    13:30 we updated PSP_URL in the payments ConfigMap to the v2 endpoint
+    and applied it. kubectl shows the new value, but checkout still fails
+    with errors from the old URL.
+
+environment: |
+  payments runs as a Deployment in namespace shop. Its container reads
+  PSP_URL from the payments-config ConfigMap through env valueFrom
+  configMapKeyRef. The pods were last restarted yesterday.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl get configmap payments-config -n shop -o jsonpath='{.data.PSP_URL}'"
+      evidence: cm-new
+      output: |
+        https://api.psp.example.com/v2/charges
+    - match: "kubectl exec deploy/payments -n shop -- printenv PSP_URL"
+      when_actions: [rollout-restart]
+      output: |
+        https://api.psp.example.com/v2/charges
+    - match: "kubectl exec deploy/payments -n shop -- printenv PSP_URL"
+      evidence: env-old
+      output: |
+        https://api.psp.example.com/v1/charges
+    - match: "kubectl get pods -n shop -l app=payments"
+      when_actions: [rollout-restart]
+      output: |
+        NAME                        READY   STATUS    RESTARTS   AGE
+        payments-5f8c9d7b6-9wq2m    1/1     Running   0          1m
+        payments-5f8c9d7b6-jx4tz    1/1     Running   0          1m
+    - match: "kubectl get pods -n shop -l app=payments"
+      evidence: pods-old
+      output: |
+        NAME                        READY   STATUS    RESTARTS   AGE
+        payments-6c7b8f9d4-k2rpz    1/1     Running   0          21h
+        payments-6c7b8f9d4-t8nmx    1/1     Running   0          21h
+    - match: "kubectl logs deploy/payments -n shop --since=5m"
+      when_actions: [rollout-restart]
+      output: |
+        14:41:12 INFO charge ch_8Kq2 created via https://api.psp.example.com/v2/charges
+    - match: "kubectl logs deploy/payments -n shop --since=5m"
+      evidence: v1-errors
+      output: |
+        14:31:12 ERROR charge failed: POST https://api.psp.example.com/v1/charges -> 410 Gone (v1 retired)
+
+files:
+  - path: "k8s/payments.yaml (env)"
+    content: |
+      env:
+        - name: PSP_URL
+          valueFrom:
+            configMapKeyRef:
+              name: payments-config
+              key: PSP_URL
+
+hypotheses:
+  - id: env-at-start
+    text: "Environment variables are set when a container starts. The pods started yesterday, so they still have the old PSP_URL; ConfigMap changes don't reach env vars until the pods restart."
+    correct: true
+  - id: apply-failed
+    text: "The ConfigMap change wasn't applied."
+    feedback: "kubectl shows the ConfigMap with the v2 URL. It's the running containers that still have v1."
+  - id: wrong-key
+    text: "The Deployment reads a different key."
+    feedback: "It reads PSP_URL from payments-config, the key that was changed. Inside the container, the value is simply the old one."
+  - id: provider-down
+    text: "The provider's v2 endpoint is down."
+    feedback: "The errors are calls to v1, which returns 410 Gone. Nothing has called v2 yet."
+
+actions:
+  - id: rollout-restart
+    label: "kubectl rollout restart deployment/payments -n shop"
+    kind: fix
+    match_regex: "^kubectl rollout restart deployment/payments -n shop$"
+    feedback: "New pods start with the current ConfigMap, so PSP_URL is the v2 endpoint, and the restart rolls pod by pod without downtime."
+  - id: reapply
+    label: "kubectl apply the ConfigMap again"
+    kind: wrong
+    feedback: "It's already applied; running containers' environment variables don't change either way."
+  - id: exec-export
+    label: "kubectl exec into each pod and export PSP_URL with the new value"
+    kind: wrong
+    feedback: "That sets a variable in your exec shell, not in the running app's process, and new pods would never have it anyway."
+  - id: delete-all
+    label: "kubectl delete pods -n shop -l app=payments"
+    kind: destructive
+    feedback: "The new pods do get the new value, but both pods go at once and checkout is fully down until replacements are ready. A rollout restart replaces them one at a time."
+
+solution_paths:
+  - [rollout-restart]
+
+key_evidence: [v1-errors, cm-new, env-old, pods-old]
+
+evidence_labels:
+  v1-errors: "Checkout still calls the retired v1 URL"
+  cm-new: "The ConfigMap holds the v2 URL"
+  env-old: "The running container's PSP_URL is still v1"
+  pods-old: "The pods started 21 hours ago, before the change"
+
+hints:
+  nudge: "The ConfigMap is right. Is the value inside the running container the same?"
+  direction: "Compare the ConfigMap with the container's environment, and check when the pods started."
+  answer: "Env vars from a ConfigMap are only read at container start. Run kubectl rollout restart deployment/payments to start pods with the new value."
+
+analogy:
+  title: "Yesterday's instructions in the driver's pocket"
+  text: |
+    The office updated the delivery address on the noticeboard. The drivers
+    who set out yesterday morning still have yesterday's note in their
+    pockets. Bring them back in, a few at a time, so they pick up the new
+    note.
+
+debrief:
+  root_cause: |
+    Environment variables are fixed when a container starts. payments reads
+    PSP_URL from the ConfigMap as an environment variable, and ConfigMaps
+    consumed as environment variables aren't updated in running containers;
+    they need a pod restart. The pods had started the day before, so
+    after 14:00 they kept calling the retired v1 endpoint. A rollout restart
+    starts new pods, which read the current value.
+  ideal_path:
+    - "Read the errors: calls still go to v1."
+    - "Check the ConfigMap: v2. Check inside a pod: v1."
+    - "Notice the pods are 21 hours old."
+    - "Roll the deployment so new pods read the ConfigMap, then confirm the env and the logs."
+  real_world: |
+    Either restart workloads as part of a config change, or make config
+    changes trigger rollouts (for example, a hash of the ConfigMap in the
+    pod template's annotations). Mounted ConfigMap files do update in place,
+    but the app has to re-read them.
+
+concepts:
+  - term: "ConfigMap"
+    text: "Non-secret configuration stored in Kubernetes, which pods can use as environment variables, command arguments or mounted files."
+    url: "https://kubernetes.io/docs/concepts/configuration/configmap/"
+  - term: "kubectl rollout restart"
+    text: "Replaces a Deployment's pods gradually with new ones, using its normal rolling update."
+    url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_restart/"
+
+sources:
+  - title: "Kubernetes: ConfigMaps (env vars from ConfigMaps aren't updated automatically)"
+    url: "https://kubernetes.io/docs/concepts/configuration/configmap/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: kubectl rollout restart"
+    url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_restart/"
+    retrieved: 2026-10-02

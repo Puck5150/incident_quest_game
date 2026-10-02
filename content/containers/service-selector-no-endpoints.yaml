@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: service-selector-no-endpoints
+track: containers
+difficulty: 2
+title: "Every pod is Running, and the service still answers 503"
+par_minutes: 10
+
+ticket:
+  from: "Mobile team"
+  priority: P1
+  body: |
+    Since this morning's "label cleanup" release, the mobile app gets 503
+    from api.example.com/catalog for every request. All catalog pods are
+    Running and Ready, and their logs show no requests at all.
+
+environment: |
+  The ingress sends /catalog to the Service catalog in namespace shop, which
+  selects pods by label. This morning's release renamed the Deployment's pod
+  label from app: catalog to app.kubernetes.io/name: catalog, as part of a
+  cleanup across all manifests. The Service lives in a different file.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl get pods -n shop --show-labels | grep catalog"
+      evidence: new-labels
+      output: |
+        catalog-7b9d4f6c8-5hxkq   1/1   Running   0   2h   app.kubernetes.io/name=catalog,pod-template-hash=7b9d4f6c8
+        catalog-7b9d4f6c8-mz2rt   1/1   Running   0   2h   app.kubernetes.io/name=catalog,pod-template-hash=7b9d4f6c8
+    - match: "kubectl get endpointslices -n shop -l kubernetes.io/service-name=catalog"
+      when_actions: [fix-selector]
+      output: |
+        NAME            ADDRESSTYPE   PORTS   ENDPOINTS              AGE
+        catalog-x7k2p   IPv4          8080    10.4.1.22,10.4.2.31    214d
+    - match: "kubectl get endpointslices -n shop -l kubernetes.io/service-name=catalog"
+      evidence: no-endpoints
+      output: |
+        NAME            ADDRESSTYPE   PORTS     ENDPOINTS   AGE
+        catalog-x7k2p   IPv4          <unset>   <unset>     214d
+    - match: "kubectl get service catalog -n shop -o jsonpath='{.spec.selector}'"
+      when_actions: [fix-selector]
+      output: |
+        {"app.kubernetes.io/name":"catalog"}
+    - match: "kubectl get service catalog -n shop -o jsonpath='{.spec.selector}'"
+      evidence: old-selector
+      output: |
+        {"app":"catalog"}
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://api.example.com/catalog/items?limit=1"
+      when_actions: [fix-selector]
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' https://api.example.com/catalog/items?limit=1"
+      output: |
+        503
+
+hypotheses:
+  - id: selector
+    text: "The Service still selects app: catalog, but the pods are now labelled app.kubernetes.io/name: catalog, so the Service has no endpoints."
+    correct: true
+  - id: pods-unready
+    text: "The pods are failing their readiness probe."
+    feedback: "They're 1/1 Ready. Unready pods would still be listed on the EndpointSlice, as not ready; here there are none at all."
+  - id: ingress
+    text: "The ingress points at the wrong Service."
+    feedback: "The ingress reaches the catalog Service; it's the Service that has nowhere to send the traffic: no endpoints."
+  - id: network-policy
+    text: "A network policy blocks traffic to the pods."
+    feedback: "A blocked connection would time out. A 503 with nothing in the pods' logs means there was no pod to send it to."
+
+actions:
+  - id: fix-selector
+    label: "Change the Service's selector to app.kubernetes.io/name: catalog (in the manifest) and apply"
+    kind: fix
+    feedback: "The Service selects the catalog pods again; its EndpointSlice lists both pod addresses, and requests reach them."
+  - id: restart-pods
+    label: "kubectl rollout restart deployment/catalog -n shop"
+    kind: wrong
+    feedback: "The new pods carry the same new label, which the Service still doesn't select."
+  - id: label-pods
+    label: "kubectl label pods -n shop -l app.kubernetes.io/name=catalog app=catalog"
+    kind: wrong
+    feedback: "It works until the next rollout: new pods come from the Deployment's template, without the extra label, and the Service empties again."
+  - id: delete-service
+    label: "Delete and recreate the catalog Service"
+    kind: destructive
+    feedback: "Recreated from the same file, it has the same selector, and other services resolving catalog fail while it's gone."
+
+solution_paths:
+  - [fix-selector]
+
+key_evidence: [no-endpoints, old-selector, new-labels]
+
+evidence_labels:
+  no-endpoints: "The catalog Service has no endpoints"
+  old-selector: "The Service selects app: catalog"
+  new-labels: "The pods are labelled app.kubernetes.io/name: catalog"
+
+hints:
+  nudge: "The pods are fine and get no traffic. How does a Service decide which pods to send to?"
+  direction: "Look at the Service's endpoints, then compare its selector with the pods' labels."
+  answer: "The release renamed the pod label but not the Service's selector. Update the selector to app.kubernetes.io/name: catalog."
+
+analogy:
+  title: "Calling a number that was renamed"
+  text: |
+    The help desk forwards calls to "the catalog team". Overnight the team's
+    sign was changed to "Catalog (product data)". The switchboard still
+    looks for the old sign, finds nobody, and tells callers the line is
+    busy. Update the switchboard to the new name.
+
+debrief:
+  root_cause: |
+    A Service sends traffic to the pods its selector matches; the matching
+    pods' addresses appear in its EndpointSlices. The release renamed the
+    pods' label to app.kubernetes.io/name: catalog, but the Service, in a
+    different file, still selected app: catalog. It matched no pods, had no
+    endpoints, and the ingress answered 503 with no backend to send to.
+  ideal_path:
+    - "Reproduce: 503, and the pods log nothing."
+    - "Check the Service's endpoints: none."
+    - "Compare the Service's selector with the pods' labels: old name vs new."
+    - "Update the selector in the manifest, apply, and confirm endpoints and a 200."
+  real_world: |
+    Label renames need the selectors (Services, NetworkPolicies,
+    PodDisruptionBudgets) changed in the same release. A check in CI that
+    every Service selects at least one pod template catches this before
+    production.
+
+concepts:
+  - term: "Service selector"
+    text: "The labels a Service uses to find its pods. Pods whose labels match receive the Service's traffic."
+    url: "https://kubernetes.io/docs/concepts/services-networking/service/"
+  - term: "EndpointSlice"
+    text: "The list of addresses currently behind a Service, kept up to date from the selector."
+    url: "https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/"
+  - term: "Labels"
+    text: "Key/value pairs on objects, used by selectors to group and find them."
+    url: "https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/"
+
+sources:
+  - title: "Kubernetes: Service (selectors and endpoints)"
+    url: "https://kubernetes.io/docs/concepts/services-networking/service/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: EndpointSlices"
+    url: "https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Debug Services (does the Service have any endpoints?)"
+    url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/"
+    retrieved: 2026-10-02

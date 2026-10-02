@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: rwo-volume-multi-attach
+track: containers
+difficulty: 3
+title: "Every deploy of the wiki hangs halfway"
+par_minutes: 12
+
+ticket:
+  from: "Internal tools team"
+  priority: P3
+  body: |
+    Our internal wiki runs as one pod with its data on a persistent volume.
+    Since we moved it to the new cluster, every deploy gets stuck: the new
+    pod sits in ContainerCreating forever, and we end up deleting things by
+    hand until it works.
+
+environment: |
+  wiki is a Deployment with 1 replica and the default update strategy
+  (RollingUpdate, maxSurge 25%, maxUnavailable 25%). Its PersistentVolumeClaim
+  wiki-data uses the cluster's block storage class with access mode
+  ReadWriteOnce. The new cluster has three nodes, and pods are spread across
+  them.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl get pods -n tools -l app=wiki -o wide"
+      when_actions: [recreate]
+      output: |
+        NAME                    READY   STATUS    RESTARTS   AGE   NODE
+        wiki-8d6c5b7f9-2tqkx    1/1     Running   0          1m    node-b
+    - match: "kubectl get pods -n tools -l app=wiki -o wide"
+      evidence: two-nodes
+      output: |
+        NAME                    READY   STATUS              RESTARTS   AGE   NODE
+        wiki-5b4c8d9f7-qz6m2    1/1     Running             0          8d    node-a
+        wiki-7c9f6d8b4-hx3wn    0/1     ContainerCreating   0          14m   node-c
+    - match: "kubectl describe pod wiki-7c9f6d8b4-hx3wn -n tools"
+      evidence: multi-attach
+      output: |
+        Events:
+          Type     Reason              Age   From                     Message
+          ----     ------              ----  ----                     -------
+          Normal   Scheduled           14m   default-scheduler        Successfully assigned tools/wiki-7c9f6d8b4-hx3wn to node-c
+          Warning  FailedAttachVolume  14m   attachdetach-controller  Multi-Attach error for volume "pvc-3f1c8a2e-77b4-4d0e-9a6f-1e2b3c4d5e6f" Volume is already used by pod(s) wiki-5b4c8d9f7-qz6m2
+          Warning  FailedMount         2m    kubelet                  Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data]: timed out waiting for the condition
+    - match: "kubectl get pvc wiki-data -n tools"
+      evidence: rwo
+      output: |
+        NAME        STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS
+        wiki-data   Bound    pvc-3f1c8a2e-77b4-4d0e-9a6f-1e2b3c4d5e6f   20Gi       RWO            block-standard
+    - match: "kubectl get deployment wiki -n tools -o jsonpath='{.spec.strategy}'"
+      when_actions: [recreate]
+      output: |
+        {"type":"Recreate"}
+    - match: "kubectl get deployment wiki -n tools -o jsonpath='{.spec.strategy}'"
+      evidence: rolling
+      output: |
+        {"rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"},"type":"RollingUpdate"}
+    - match: "kubectl rollout status deployment/wiki -n tools"
+      when_actions: [recreate]
+      output: |
+        deployment "wiki" successfully rolled out
+    - match: "kubectl rollout status deployment/wiki -n tools"
+      output: |
+        Waiting for deployment "wiki" rollout to finish: 1 old replicas are pending termination...
+
+hypotheses:
+  - id: rwo-rolling
+    text: "A rolling update starts the new pod before stopping the old one. The volume is ReadWriteOnce, attached to the old pod's node, so when the new pod lands on another node it can't attach the volume."
+    correct: true
+  - id: storage-down
+    text: "The storage system is down."
+    feedback: "The old pod is Running with the volume mounted. The error is specific: the volume is already used by another pod."
+  - id: image
+    text: "The new image is broken."
+    feedback: "The container never started: it's waiting to mount its volume. An image problem would show ErrImagePull."
+  - id: pvc-full
+    text: "The volume is full."
+    feedback: "A full volume doesn't stop it attaching. This one can't attach because another pod, on another node, has it."
+
+actions:
+  - id: recreate
+    label: "Set the wiki Deployment's strategy to Recreate (stop the old pod, then start the new one) and deploy again"
+    kind: fix
+    feedback: "The old pod is stopped and the volume detached before the new pod starts, so the new pod can attach it on any node. A single-replica app with a single-node volume can't run two copies anyway."
+  - id: rwx
+    label: "Change the claim's access mode to ReadWriteMany"
+    kind: wrong
+    feedback: "A bound claim's access mode can't simply be changed, and this block storage class doesn't support ReadWriteMany. It would mean migrating to a different kind of storage."
+  - id: force-delete
+    label: "Force-delete the old pod (kubectl delete pod --force --grace-period=0) on every deploy"
+    kind: destructive
+    feedback: "The wiki's database is killed mid-write while the volume may still be attached, which risks corrupting it, and it has to be repeated on every deploy."
+  - id: pin-node
+    label: "Pin the wiki to node-a with a nodeSelector"
+    kind: wrong
+    feedback: "Rollouts on the same node would work, until node-a is drained or fails and the wiki can't run anywhere else."
+
+solution_paths:
+  - [recreate]
+
+key_evidence: [two-nodes, multi-attach, rwo, rolling]
+
+evidence_labels:
+  two-nodes: "The old pod runs on node-a; the new one waits on node-c"
+  multi-attach: "Multi-Attach error: the volume is already used by the old pod"
+  rwo: "The claim is ReadWriteOnce: one node at a time"
+  rolling: "The Deployment uses RollingUpdate, which starts the new pod first"
+
+hints:
+  nudge: "During a deploy there are briefly two wiki pods. How many nodes can use the volume at once?"
+  direction: "Read the new pod's events, then compare the claim's access mode with the Deployment's update strategy."
+  answer: "RollingUpdate starts the new pod before the old one stops, and a ReadWriteOnce volume can't attach to a second node. Use the Recreate strategy."
+
+analogy:
+  title: "One key, two rooms"
+  text: |
+    The archive has one key. During a move, the new clerk waits at the new
+    office for the key while the old clerk keeps it at the old office until
+    the new clerk is ready. Neither moves. Have the old clerk hand the key
+    back first, then the new clerk starts.
+
+debrief:
+  root_cause: |
+    A ReadWriteOnce volume can be attached to a single node at a time. The
+    default RollingUpdate strategy starts the new pod before stopping the
+    old one; on the new cluster's three nodes, the new pod was often
+    scheduled to a different node, where the volume, still attached to
+    node-a, couldn't be attached: a Multi-Attach error. The old pod wouldn't
+    stop until the new one was ready, so the rollout waited forever.
+  ideal_path:
+    - "List the pods with nodes: old on node-a, new stuck on node-c."
+    - "Describe the new pod: Multi-Attach error, volume used by the old pod."
+    - "Check the claim: ReadWriteOnce. Check the strategy: RollingUpdate."
+    - "Switch to Recreate, deploy, and confirm the rollout completes."
+  real_world: |
+    It works on a one-node cluster or by luck, which is why it shows up after
+    a migration. Single-replica stateful apps on block storage should use
+    Recreate (or be a StatefulSet); apps that need several replicas sharing
+    files need ReadWriteMany storage.
+
+concepts:
+  - term: "Access modes"
+    text: "How a volume can be mounted: ReadWriteOnce by a single node, ReadWriteOncePod by a single pod, ReadWriteMany by many nodes."
+    url: "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"
+  - term: "Deployment strategy"
+    text: "RollingUpdate replaces pods gradually, starting new ones before old ones stop; Recreate stops all old pods before starting new ones."
+    url: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+  - term: "PersistentVolumeClaim"
+    text: "A pod's request for storage, bound to a PersistentVolume with a size and access mode."
+    url: "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"
+
+sources:
+  - title: "Kubernetes: Persistent Volumes (access modes)"
+    url: "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Deployments (strategy: Recreate and RollingUpdate)"
+    url: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"
+    retrieved: 2026-10-02

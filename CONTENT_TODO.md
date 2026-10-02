@@ -361,3 +361,15 @@ from your own experience and tick them off.
 - [ ] Judgment/behaviour from experience, not quoted docs: "mv keeps a file's
       SELinux label" (vs. cp); new queries queueing behind a waiting ACCESS
       EXCLUSIVE request; lowering client MTU shrinking the advertised TCP MSS.
+
+## Containers to 8 (2026-10-02): liveness-probe-slow-start, pending-insufficient-cpu, service-selector-no-endpoints, configmap-env-not-reloaded, rwo-volume-multi-attach, network-policy-default-deny
+- [x] Checked against Kubernetes docs on 2026-10-02: startup probes disable
+      the other probes until they succeed; failed liveness probes restart the
+      container; ConfigMaps consumed as env vars "are not updated
+      automatically and require a pod restart" (docs source); access modes
+      (RWO = one node); default-deny ingress with an empty podSelector,
+      additive allow policies, plugin must enforce NetworkPolicy; the
+      scheduler filters nodes by resource requests.
+- [ ] Representative output: kubectl describe/get layouts, event messages
+      (FailedScheduling, Multi-Attach, Unhealthy/Killing), EndpointSlice
+      "<unset>" rendering, exit code 143 after SIGTERM.

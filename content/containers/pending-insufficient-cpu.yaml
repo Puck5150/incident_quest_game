@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: pending-insufficient-cpu
+track: containers
+difficulty: 2
+title: "Scaled the workers up for the sale, and the new pods never start"
+par_minutes: 10
+
+ticket:
+  from: "Fulfilment team"
+  priority: P2
+  body: |
+    We scaled label-printer from 2 to 6 replicas ahead of the sale. Four new
+    pods have been "Pending" for 20 minutes. The cluster's CPU graph says
+    the nodes are only 30% busy, so there's plenty of room.
+
+environment: |
+  The cluster has three worker nodes with 4 vCPUs each. label-printer's
+  manifest requests 2 CPUs per pod (copied from a template for a heavier
+  service); it actually uses about 0.2 CPU. Other workloads already request
+  most of the remaining capacity.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl get pods -n shop -l app=label-printer"
+      when_actions: [right-size]
+      output: |
+        NAME                             READY   STATUS    RESTARTS   AGE
+        label-printer-84b6d9f7c-4tqzr    1/1     Running   0          2m
+        label-printer-84b6d9f7c-7mxn2    1/1     Running   0          2m
+        label-printer-84b6d9f7c-c2v9l    1/1     Running   0          2m
+        label-printer-84b6d9f7c-hk5ws    1/1     Running   0          2m
+        label-printer-84b6d9f7c-pq8jd    1/1     Running   0          2m
+        label-printer-84b6d9f7c-wr3fz    1/1     Running   0          2m
+    - match: "kubectl get pods -n shop -l app=label-printer"
+      evidence: pending
+      output: |
+        NAME                             READY   STATUS    RESTARTS   AGE
+        label-printer-6f7c8d9b5-8xk2p    1/1     Running   0          6d
+        label-printer-6f7c8d9b5-q4mzt    1/1     Running   0          6d
+        label-printer-6f7c8d9b5-b7rwn    0/1     Pending   0          20m
+        label-printer-6f7c8d9b5-f9dkc    0/1     Pending   0          20m
+        label-printer-6f7c8d9b5-l2hvs    0/1     Pending   0          20m
+        label-printer-6f7c8d9b5-t6jzq    0/1     Pending   0          20m
+    - match: "kubectl describe pod label-printer-6f7c8d9b5-b7rwn -n shop"
+      evidence: insufficient-cpu
+      output: |
+        Name:             label-printer-6f7c8d9b5-b7rwn
+        Namespace:        shop
+        Status:           Pending
+        Containers:
+          label-printer:
+            Requests:
+              cpu:     2
+              memory:  256Mi
+        Events:
+          Type     Reason            Age                From               Message
+          ----     ------            ----               ----               -------
+          Warning  FailedScheduling  58s (x21 over 20m)  default-scheduler  0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.
+    - match: "kubectl describe nodes | grep -A6 'Allocated resources'"
+      evidence: requests-full
+      output: |
+        Allocated resources:
+          Resource           Requests      Limits
+          --------           --------      ------
+          cpu                3220m (82%)   4 (102%)
+          memory             9840Mi (68%)  12Gi (84%)
+        Allocated resources:
+          Resource           Requests      Limits
+          --------           --------      ------
+          cpu                3410m (87%)   4 (102%)
+          memory             8960Mi (62%)  11Gi (77%)
+        Allocated resources:
+          Resource           Requests      Limits
+          --------           --------      ------
+          cpu                3100m (79%)   4 (102%)
+          memory             10Gi (71%)    12Gi (84%)
+    - match: "kubectl top pods -n shop -l app=label-printer"
+      evidence: real-usage
+      output: |
+        NAME                             CPU(cores)   MEMORY(bytes)
+        label-printer-6f7c8d9b5-8xk2p    190m         141Mi
+        label-printer-6f7c8d9b5-q4mzt    212m         138Mi
+    - match: "kubectl top nodes"
+      output: |
+        NAME       CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+        node-a     1210m        31%    7802Mi          54%
+        node-b     1130m        29%    7104Mi          49%
+        node-c     1240m        32%    7950Mi          55%
+
+hypotheses:
+  - id: requests
+    text: "The scheduler places pods by their CPU requests, not actual usage. Each new pod requests 2 CPUs, and no node has 2 unrequested CPUs left."
+    correct: true
+  - id: nodes-busy
+    text: "The nodes are too busy."
+    feedback: "Actual usage is about 30%. The scheduler doesn't look at usage: it adds up requests, and those are at 79 to 87% of each node."
+  - id: image
+    text: "The new pods can't pull their image."
+    feedback: "A pod with an image problem is scheduled first and then shows ErrImagePull. These were never scheduled: FailedScheduling, Insufficient cpu."
+  - id: quota
+    text: "A namespace resource quota blocks the new pods."
+    feedback: "A quota rejects the pod at creation with an \"exceeded quota\" error. These pods exist and wait for a node."
+
+actions:
+  - id: right-size
+    label: "Set label-printer's CPU request to 250m (its real use is about 0.2 CPU) and roll out"
+    kind: fix
+    feedback: "Six pods now request 1.5 CPUs in total, which fit on the existing nodes with room to spare."
+  - id: add-nodes
+    label: "Add six more nodes to the cluster"
+    kind: wrong
+    feedback: "The pods would schedule, onto nodes reserved for CPU nobody uses. The requests are what's wrong: they're ten times the real need."
+  - id: no-requests
+    label: "Remove the CPU request entirely"
+    kind: wrong
+    feedback: "The pods would schedule, but with no request the scheduler doesn't account for them at all, and under contention they get the least CPU. Request what they really use."
+  - id: delete-others
+    label: "Scale down other deployments to make room"
+    kind: destructive
+    feedback: "That takes capacity away from services that need it during the sale, to make room for requests that are padding."
+
+solution_paths:
+  - [right-size]
+
+key_evidence: [pending, insufficient-cpu, requests-full, real-usage]
+
+evidence_labels:
+  pending: "Four new pods have been Pending for 20 minutes"
+  insufficient-cpu: "FailedScheduling: 0/3 nodes have enough unrequested CPU for 2 CPUs"
+  requests-full: "The nodes' CPU is 79 to 87% requested"
+  real-usage: "Each pod really uses about 0.2 CPU"
+
+hints:
+  nudge: "The nodes are 30% busy, but are they 30% booked?"
+  direction: "Read why the scheduler can't place the pod, then compare what each pod requests with what it uses."
+  answer: "Each pod requests 2 CPUs but uses 0.2; the nodes' CPU is mostly requested already. Lower the request to about 250m."
+
+analogy:
+  title: "Booking the whole table for one coffee"
+  text: |
+    The café is a third full, but every table is reserved. One regular books
+    a table for eight every morning and drinks a single coffee. New
+    customers are turned away at the door. Book the table you need.
+
+debrief:
+  root_cause: |
+    The scheduler only places a pod on a node with enough unrequested
+    capacity for the pod's requests; it doesn't consider live usage.
+    label-printer requests 2 CPUs per pod (copied from a template) but uses
+    about 0.2. The nodes' CPU was already 79 to 87% requested by other
+    workloads, so no node had 2 CPUs free to book, and the new pods stayed
+    Pending with "Insufficient cpu".
+  ideal_path:
+    - "List the pods: four Pending."
+    - "Describe one: FailedScheduling, 3 Insufficient cpu."
+    - "Compare requests with reality: nodes 80%+ requested, 30% used; the pods use 0.2 of the 2 CPUs they request."
+    - "Right-size the request, roll out, and confirm all six run."
+  real_world: |
+    Requests are reservations. Set them from measured usage (kubectl top,
+    or a vertical autoscaler's recommendations), review them when templates
+    are copied, and watch requested-vs-allocatable, not just usage.
+
+concepts:
+  - term: "Resource requests"
+    text: "The CPU and memory a container is guaranteed; the scheduler uses requests to decide which node a pod fits on."
+    url: "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+  - term: "Pending pod"
+    text: "A pod that the scheduler hasn't placed on a node yet; its events say why."
+    url: "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+
+sources:
+  - title: "Kubernetes: Resource Management for Pods and Containers (requests and scheduling)"
+    url: "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Kubernetes Scheduler (filtering by resource requests)"
+    url: "https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Debug Pods (Pending pods)"
+    url: "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+    retrieved: 2026-10-02

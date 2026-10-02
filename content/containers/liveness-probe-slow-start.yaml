@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: liveness-probe-slow-start
+track: containers
+difficulty: 2
+title: "The new search service restarts forever and never serves a request"
+par_minutes: 10
+
+ticket:
+  from: "Search team"
+  priority: P2
+  body: |
+    search-api v2 loads its whole product index into memory at startup,
+    which takes about 90 seconds. Since we deployed it to production, the
+    pods restart every minute or so and never become ready. It runs fine
+    with docker run on a laptop, and nothing in the logs looks like a crash.
+
+environment: |
+  search-api runs as a Deployment in namespace shop, three replicas. The
+  manifest has a liveness probe on GET /healthz:8080 and a readiness probe on
+  GET /ready:8080. /healthz only answers once the index has loaded.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl get pods -n shop -l app=search-api"
+      when_actions: [startup-probe]
+      output: |
+        NAME                          READY   STATUS    RESTARTS   AGE
+        search-api-6d9f8c7b5-2kqzt    1/1     Running   0          3m12s
+        search-api-6d9f8c7b5-8wxlm    1/1     Running   0          3m40s
+        search-api-6d9f8c7b5-tp4dn    1/1     Running   0          4m05s
+    - match: "kubectl get pods -n shop -l app=search-api"
+      evidence: restarts
+      output: |
+        NAME                          READY   STATUS    RESTARTS      AGE
+        search-api-5c7d9b8f4-9fj2x    0/1     Running   14 (52s ago)  15m
+        search-api-5c7d9b8f4-kd8pw    0/1     Running   14 (49s ago)  15m
+        search-api-5c7d9b8f4-zx7mq    0/1     Running   13 (58s ago)  15m
+    - match: "kubectl describe pod search-api-5c7d9b8f4-9fj2x -n shop"
+      evidence: liveness-kills
+      output: |
+        Name:             search-api-5c7d9b8f4-9fj2x
+        Namespace:        shop
+        Containers:
+          search-api:
+            State:          Running
+            Last State:     Terminated
+              Reason:       Error
+              Exit Code:    143
+            Restart Count:  14
+            Liveness:       http-get http://:8080/healthz delay=10s timeout=1s period=10s #success=1 #failure=3
+            Readiness:      http-get http://:8080/ready delay=5s timeout=1s period=5s #success=1 #failure=3
+        Events:
+          Type     Reason     Age                  From     Message
+          ----     ------     ----                 ----     -------
+          Warning  Unhealthy  60s (x42 over 15m)   kubelet  Liveness probe failed: Get "http://10.4.2.17:8080/healthz": dial tcp 10.4.2.17:8080: connect: connection refused
+          Normal   Killing    40s (x14 over 15m)   kubelet  Container search-api failed liveness probe, will be restarted
+    - match: "kubectl logs search-api-5c7d9b8f4-9fj2x -n shop --previous"
+      evidence: still-loading
+      output: |
+        2026-10-02T09:14:01Z INFO  starting search-api v2.0.0
+        2026-10-02T09:14:01Z INFO  loading product index (2.1M documents)...
+        2026-10-02T09:14:31Z INFO  index load 31% done
+        2026-10-02T09:14:41Z INFO  received SIGTERM, shutting down
+    - match: "kubectl rollout status deployment/search-api -n shop"
+      when_actions: [startup-probe]
+      output: |
+        deployment "search-api" successfully rolled out
+    - match: "kubectl rollout status deployment/search-api -n shop"
+      output: |
+        Waiting for deployment "search-api" rollout to finish: 0 of 3 updated replicas are available...
+
+files:
+  - path: "k8s/search-api.yaml (probes)"
+    evidence: probe-config
+    content: |
+      livenessProbe:
+        httpGet: { path: /healthz, port: 8080 }
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        failureThreshold: 3
+      readinessProbe:
+        httpGet: { path: /ready, port: 8080 }
+        periodSeconds: 5
+
+hypotheses:
+  - id: liveness-too-early
+    text: "The liveness probe starts checking after 10 seconds and gives up after 3 failures, so the kubelet stops the container long before its 90-second startup finishes."
+    correct: true
+  - id: crash
+    text: "The app crashes during startup."
+    feedback: "The logs end with \"received SIGTERM, shutting down\" at 31% of the index load: it was stopped from outside. The events say the kubelet killed it after failed liveness probes."
+  - id: oom
+    text: "The container runs out of memory loading the index."
+    feedback: "An out-of-memory kill shows Reason: OOMKilled. This one says Error, and the events name the liveness probe."
+  - id: readiness
+    text: "The readiness probe is restarting the pods."
+    feedback: "A failing readiness probe only takes a pod out of the Service; it never restarts it. Restarts come from the liveness probe."
+
+actions:
+  - id: startup-probe
+    label: "Add a startupProbe on /healthz (periodSeconds: 10, failureThreshold: 18, so up to 3 minutes) and roll out"
+    kind: fix
+    feedback: "The startup probe holds off the liveness and readiness probes until the index has loaded, then hands over, so the liveness probe still catches a hung process later."
+  - id: delete-liveness
+    label: "Remove the liveness probe"
+    kind: wrong
+    feedback: "The pods would start, but a search-api that hangs later would never be restarted. Delay the liveness probe until startup is done instead."
+  - id: delay-600
+    label: "Set the liveness probe's initialDelaySeconds to 600"
+    kind: wrong
+    feedback: "It works, but every pod waits 10 minutes before a hang can be detected, even after startups that took 30 seconds. A startup probe waits only as long as each start actually takes."
+  - id: delete-pods
+    label: "Delete the pods so they start fresh"
+    kind: destructive
+    feedback: "The new pods meet the same probe, and the old ones were at least partly through loading. Search is fully down for longer."
+
+solution_paths:
+  - [startup-probe]
+
+key_evidence: [restarts, liveness-kills, still-loading, probe-config]
+
+evidence_labels:
+  restarts: "Every pod has restarted 13 or 14 times in 15 minutes"
+  liveness-kills: "The kubelet kills the container after failed liveness probes"
+  still-loading: "Each run is stopped by SIGTERM while still loading the index"
+  probe-config: "The liveness probe starts at 10 s and fails after 3 misses"
+
+hints:
+  nudge: "The app isn't crashing; something is stopping it. Who, and why?"
+  direction: "Read the pod's events and the previous container's last log lines, then compare the probe timing with the 90-second startup."
+  answer: "The liveness probe kills the container before it finishes loading. Add a startupProbe that allows a few minutes, so liveness only starts afterwards."
+
+analogy:
+  title: "Checking on the cook too soon"
+  text: |
+    The new cook needs an hour to prepare the kitchen before serving. A
+    supervisor checks every ten minutes from the start and, finding no food
+    after half an hour, sends the cook home and hires another, forever. Tell
+    the supervisor to start checking only once the kitchen is open.
+
+debrief:
+  root_cause: |
+    The liveness probe starts 10 seconds after the container starts and
+    restarts it after three failures in a row, about 40 seconds in. search-api
+    takes about 90 seconds to load its index before /healthz answers, so the
+    kubelet stopped every container mid-startup (SIGTERM, exit code 143),
+    and none ever became ready. A startup probe disables the other
+    probes until startup succeeds, so slow starters get the time they need.
+  ideal_path:
+    - "List the pods: all restarting, none ready."
+    - "Describe one: the kubelet kills it after liveness probe failures."
+    - "Read the previous container's logs: stopped by SIGTERM while loading."
+    - "Compare probe timing (about 40 s) with startup (about 90 s); add a startupProbe and roll out."
+    - "Confirm: pods ready, restarts stay at 0, rollout complete."
+  real_world: |
+    Probes are tuned for the steady state and break slow starters. Use a
+    startupProbe for anything that loads data at boot, and keep liveness
+    probes cheap and specific to "this process is stuck".
+
+concepts:
+  - term: "Liveness probe"
+    text: "A check the kubelet runs to decide whether to restart a container."
+    url: "https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/"
+  - term: "Readiness probe"
+    text: "A check that decides whether a pod receives traffic from Services. Failing it removes the pod from endpoints without restarting it."
+    url: "https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/"
+  - term: "Startup probe"
+    text: "A check for slow-starting containers: other probes are disabled until it succeeds."
+    url: "https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/"
+
+sources:
+  - title: "Kubernetes: Liveness, Readiness, and Startup Probes"
+    url: "https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Configure Liveness, Readiness and Startup Probes"
+    url: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+    retrieved: 2026-10-02
+  - title: "Kubernetes: Pod Lifecycle (container probes)"
+    url: "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    retrieved: 2026-10-02
