@@ -313,5 +313,6 @@ from your own experience and tick them off.
       judgment (Google manages nodes; the team still runs Kubernetes objects).
 - [ ] IAM: the "cleanup script in the wrong project" test is a stand-in for
       blast radius; the Editor failure is plausible, not a documented case.
-- [ ] Many cloud.google.com source URLs now redirect to docs.cloud.google.com;
-      the link checker follows redirects, but the stored URLs could be updated.
+- [x] Google Cloud docs URLs moved to docs.cloud.google.com (2026-10-01), using
+      each URL's actual redirect target. Pricing pages stay on cloud.google.com:
+      they don't redirect.

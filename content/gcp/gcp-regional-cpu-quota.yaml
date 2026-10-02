@@ -207,17 +207,17 @@ debrief:
 
 sources:
   - title: "Compute Engine: Understanding autoscaler decisions (recommended size, status messages)"
-    url: "https://cloud.google.com/compute/docs/autoscaler/understanding-autoscaler-decisions"
+    url: "https://docs.cloud.google.com/compute/docs/autoscaler/understanding-autoscaler-decisions"
     retrieved: 2026-10-01
   - title: "Compute Engine: Getting info about MIGs (list-errors, QUOTA_EXCEEDED)"
-    url: "https://cloud.google.com/compute/docs/instance-groups/getting-info-about-migs"
+    url: "https://docs.cloud.google.com/compute/docs/instance-groups/getting-info-about-migs"
     retrieved: 2026-10-01
   - title: "Compute Engine: Allocation quotas (regional quota, gcloud compute regions describe)"
-    url: "https://cloud.google.com/compute/quotas-limits"
+    url: "https://docs.cloud.google.com/compute/quotas-limits"
     retrieved: 2026-10-01
   - title: "gcloud compute instance-groups managed resize"
-    url: "https://cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/resize"
+    url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/resize"
     retrieved: 2026-10-01
   - title: "gcloud compute instance-groups managed set-autoscaling"
-    url: "https://cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/set-autoscaling"
+    url: "https://docs.cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/set-autoscaling"
     retrieved: 2026-10-01

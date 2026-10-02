@@ -162,18 +162,18 @@ debrief:
 concepts:
   - term: "Alerting policy"
     text: "Describes when Cloud Monitoring should create an alert (its conditions) and who to notify (notification channels)."
-    url: "https://cloud.google.com/monitoring/alerts"
+    url: "https://docs.cloud.google.com/monitoring/alerts"
   - term: "Metric-threshold condition"
     text: "Compares a metric with a threshold, for example \"5xx ratio greater than 5%\"."
-    url: "https://cloud.google.com/monitoring/alerts/concepts-indepth"
+    url: "https://docs.cloud.google.com/monitoring/alerts/concepts-indepth"
   - term: "Retest window (duration)"
     text: "How long the condition must stay true before it's met. It restarts whenever a measurement doesn't satisfy the condition, and it delays alerts by at least its length."
-    url: "https://cloud.google.com/monitoring/alerts/concepts-indepth"
+    url: "https://docs.cloud.google.com/monitoring/alerts/concepts-indepth"
 
 sources:
   - title: "Cloud Monitoring: Alerting behavior (retest window, duration field, resets)"
-    url: "https://cloud.google.com/monitoring/alerts/concepts-indepth"
+    url: "https://docs.cloud.google.com/monitoring/alerts/concepts-indepth"
     retrieved: 2026-10-01
   - title: "Cloud Monitoring: Alerting overview (policies, notification channels)"
-    url: "https://cloud.google.com/monitoring/alerts"
+    url: "https://docs.cloud.google.com/monitoring/alerts"
     retrieved: 2026-10-01

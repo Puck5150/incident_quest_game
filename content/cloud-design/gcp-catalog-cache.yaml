@@ -123,11 +123,11 @@ debrief:
 
 sources:
   - title: "Memorystore for Redis: Redis tier capabilities (Basic and Standard)"
-    url: "https://cloud.google.com/memorystore/docs/redis/redis-tiers"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers"
     retrieved: 2026-10-01
   - title: "Memorystore for Redis: Memorystore for Redis overview"
-    url: "https://cloud.google.com/memorystore/docs/redis/memorystore-for-redis-overview"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/memorystore-for-redis-overview"
     retrieved: 2026-10-01
   - title: "Cloud SQL for MySQL: About high availability (standby can't serve reads)"
-    url: "https://cloud.google.com/sql/docs/mysql/high-availability"
+    url: "https://docs.cloud.google.com/sql/docs/mysql/high-availability"
     retrieved: 2026-10-01

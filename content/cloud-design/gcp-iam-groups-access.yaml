@@ -165,16 +165,16 @@ debrief:
 
 sources:
   - title: "IAM: Roles and permissions (basic, predefined and custom roles)"
-    url: "https://cloud.google.com/iam/docs/roles-overview"
+    url: "https://docs.cloud.google.com/iam/docs/roles-overview"
     retrieved: 2026-10-01
   - title: "IAM: Use IAM securely (grant roles to groups)"
-    url: "https://cloud.google.com/iam/docs/using-iam-securely"
+    url: "https://docs.cloud.google.com/iam/docs/using-iam-securely"
     retrieved: 2026-10-01
   - title: "BigQuery: Access control with IAM (Data Viewer, Job User, bigquery.jobs.create)"
-    url: "https://cloud.google.com/bigquery/docs/access-control"
+    url: "https://docs.cloud.google.com/bigquery/docs/access-control"
     retrieved: 2026-10-01
   - title: "Cloud Identity: Creating dynamic groups"
-    url: "https://cloud.google.com/identity/docs/how-to/create-dynamic-groups"
+    url: "https://docs.cloud.google.com/identity/docs/how-to/create-dynamic-groups"
     retrieved: 2026-10-01
   - title: "Google Workspace Admin Help: Deploy 2-Step Verification (enforce)"
     url: "https://support.google.com/a/answer/9176657"

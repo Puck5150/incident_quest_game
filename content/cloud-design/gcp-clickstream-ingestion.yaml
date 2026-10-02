@@ -150,20 +150,20 @@ debrief:
 
 sources:
   - title: "Pub/Sub: What is Pub/Sub?"
-    url: "https://cloud.google.com/pubsub/docs/overview"
+    url: "https://docs.cloud.google.com/pubsub/docs/overview"
     retrieved: 2026-10-01
   - title: "Pub/Sub: Replay and purge messages (seek, topic retention, retained acknowledged messages)"
-    url: "https://cloud.google.com/pubsub/docs/replay-overview"
+    url: "https://docs.cloud.google.com/pubsub/docs/replay-overview"
     retrieved: 2026-10-01
   - title: "Pub/Sub: BigQuery subscriptions"
-    url: "https://cloud.google.com/pubsub/docs/bigquery"
+    url: "https://docs.cloud.google.com/pubsub/docs/bigquery"
     retrieved: 2026-10-01
   - title: "Cloud Tasks: Choose Cloud Tasks or Pub/Sub (explicit vs implicit invocation)"
-    url: "https://cloud.google.com/tasks/docs/comp-pub-sub"
+    url: "https://docs.cloud.google.com/tasks/docs/comp-pub-sub"
     retrieved: 2026-10-01
   - title: "Cloud Tasks: Quotas and limits (maximum dispatch rate per queue)"
-    url: "https://cloud.google.com/tasks/docs/quotas"
+    url: "https://docs.cloud.google.com/tasks/docs/quotas"
     retrieved: 2026-10-01
   - title: "Dataflow: Dataflow overview"
-    url: "https://cloud.google.com/dataflow/docs/overview"
+    url: "https://docs.cloud.google.com/dataflow/docs/overview"
     retrieved: 2026-10-01

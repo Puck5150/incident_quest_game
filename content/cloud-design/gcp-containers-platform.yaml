@@ -162,22 +162,22 @@ debrief:
 
 sources:
   - title: "Cloud Run: What is Cloud Run"
-    url: "https://cloud.google.com/run/docs/overview/what-is-cloud-run"
+    url: "https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run"
     retrieved: 2026-10-01
   - title: "Cloud Run: Cloud Run locations (regional, redundant across zones)"
-    url: "https://cloud.google.com/run/docs/locations"
+    url: "https://docs.cloud.google.com/run/docs/locations"
     retrieved: 2026-10-01
   - title: "Cloud Run: Configure secrets for services"
-    url: "https://cloud.google.com/run/docs/configuring/services/secrets"
+    url: "https://docs.cloud.google.com/run/docs/configuring/services/secrets"
     retrieved: 2026-10-01
   - title: "Google Kubernetes Engine: Autopilot overview"
-    url: "https://cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview"
+    url: "https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview"
     retrieved: 2026-10-01
   - title: "Google Kubernetes Engine: Pricing (cluster management fee)"
     url: "https://cloud.google.com/kubernetes-engine/pricing"
     retrieved: 2026-10-01
   - title: "Artifact Registry: Artifact Registry overview"
-    url: "https://cloud.google.com/artifact-registry/docs/overview"
+    url: "https://docs.cloud.google.com/artifact-registry/docs/overview"
     retrieved: 2026-10-01
   - title: "Docker Hub: Usage and limits (pull rate limits)"
     url: "https://docs.docker.com/docker-hub/usage/"

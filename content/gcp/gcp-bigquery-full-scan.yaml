@@ -149,23 +149,23 @@ concepts:
     url: "https://cloud.google.com/bigquery/pricing"
   - term: "Partitioned table"
     text: "A table split into segments, for example one per day. A query that filters on the partitioning column only reads the matching partitions (partition pruning)."
-    url: "https://cloud.google.com/bigquery/docs/querying-partitioned-tables"
+    url: "https://docs.cloud.google.com/bigquery/docs/querying-partitioned-tables"
   - term: "Require partition filter"
     text: "A table option that makes BigQuery reject queries that don't filter on the partitioning column."
-    url: "https://cloud.google.com/bigquery/docs/managing-partitioned-tables"
+    url: "https://docs.cloud.google.com/bigquery/docs/managing-partitioned-tables"
   - term: "Dry run"
     text: "Validates a query and reports how many bytes it would process, without running it or billing for it."
-    url: "https://cloud.google.com/bigquery/docs/best-practices-costs"
+    url: "https://docs.cloud.google.com/bigquery/docs/best-practices-costs"
 
 sources:
   - title: "BigQuery: Optimize query computation and costs (LIMIT doesn't reduce data read, maximum bytes billed, dry runs)"
-    url: "https://cloud.google.com/bigquery/docs/best-practices-costs"
+    url: "https://docs.cloud.google.com/bigquery/docs/best-practices-costs"
     retrieved: 2026-10-01
   - title: "BigQuery: Query partitioned tables (partition pruning)"
-    url: "https://cloud.google.com/bigquery/docs/querying-partitioned-tables"
+    url: "https://docs.cloud.google.com/bigquery/docs/querying-partitioned-tables"
     retrieved: 2026-10-01
   - title: "BigQuery: Manage partitioned tables (update the partition filter requirement)"
-    url: "https://cloud.google.com/bigquery/docs/managing-partitioned-tables"
+    url: "https://docs.cloud.google.com/bigquery/docs/managing-partitioned-tables"
     retrieved: 2026-10-01
   - title: "BigQuery pricing (on-demand: bytes processed)"
     url: "https://cloud.google.com/bigquery/pricing"

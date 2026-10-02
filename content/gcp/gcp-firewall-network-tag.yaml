@@ -139,18 +139,18 @@ debrief:
 concepts:
   - term: "VPC firewall rules"
     text: "Rules that allow or deny traffic to and from VMs in a VPC network. Each rule has a direction, a priority (0 to 65535, lower wins), a target and the traffic it matches."
-    url: "https://cloud.google.com/firewall/docs/firewalls"
+    url: "https://docs.cloud.google.com/firewall/docs/firewalls"
   - term: "Implied rules"
     text: "Every VPC network has an implied rule that denies all incoming traffic and one that allows all outgoing traffic, unless other rules say otherwise."
-    url: "https://cloud.google.com/firewall/docs/firewalls"
+    url: "https://docs.cloud.google.com/firewall/docs/firewalls"
   - term: "Network tags"
     text: "Labels on a VM that firewall rules (and routes) use to pick which VMs they apply to. A rule with a target tag only applies to VMs that have that tag."
-    url: "https://cloud.google.com/vpc/docs/add-remove-network-tags"
+    url: "https://docs.cloud.google.com/vpc/docs/add-remove-network-tags"
 
 sources:
   - title: "Cloud NGFW: VPC firewall rules (implied rules, priority, target network tags)"
-    url: "https://cloud.google.com/firewall/docs/firewalls"
+    url: "https://docs.cloud.google.com/firewall/docs/firewalls"
     retrieved: 2026-10-01
   - title: "Google Cloud VPC: Add network tags (add-tags while running)"
-    url: "https://cloud.google.com/vpc/docs/add-remove-network-tags"
+    url: "https://docs.cloud.google.com/vpc/docs/add-remove-network-tags"
     retrieved: 2026-10-01
