@@ -13,13 +13,152 @@
     - { command: "kubectl logs -l app=NAME --since=5m", note: "All pods with this label, not just one." }
   docs: { title: "kubectl logs", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/" }
 
+- id: kubectl-logs
+  match: "^kubectl logs "
+  summary: "Prints a container's logs."
+  parts:
+    - { token: "POD or deploy/NAME", meaning: "A pod, or a deployment (kubectl picks one of its pods)." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "--previous", meaning: "(If given) the logs of the previous, crashed instance of the container, not the one that just restarted." }
+    - { token: "--since=5m", meaning: "(If given) only the last five minutes." }
+  why: "In a crash loop the current container has barely started; --previous shows why the last one died."
+  alternatives:
+    - { command: "kubectl logs -l app=NAME -n NS --all-containers", note: "Every pod with this label." }
+    - { command: "kubectl describe pod POD", note: "Exit code and reason, when the logs are empty." }
+  docs: { title: "kubectl logs", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/" }
+
 - id: kubectl-get-jsonpath
   match: "^kubectl get .*-o jsonpath="
   summary: "Prints one field of a Kubernetes object."
   parts:
-    - { token: "get configmap NAME", meaning: "The object." }
-    - { token: "-o jsonpath='{.data.KEY}'", meaning: "Output only this path: the KEY entry in the ConfigMap's data." }
+    - { token: "get KIND NAME", meaning: "The object, such as a configmap, deployment or service." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "-o jsonpath='{.data.KEY}'", meaning: "Output only this path, such as a ConfigMap's .data.KEY, a deployment's .spec.strategy, or a service's .spec.selector." }
   why: "Gives a single value to check, without reading the whole manifest."
   alternatives:
     - { command: "kubectl get configmap NAME -o yaml", note: "The whole object." }
   docs: { title: "kubectl JSONPath support", url: "https://kubernetes.io/docs/reference/kubectl/jsonpath/" }
+
+- id: kubectl-get-yaml
+  match: "^kubectl get .*-o yaml"
+  summary: "Prints a Kubernetes object's full definition as YAML."
+  parts:
+    - { token: "get networkpolicy NAME", meaning: "The object." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "-o yaml", meaning: "Output the whole object (spec and status) as YAML." }
+  why: "For a NetworkPolicy, the podSelector and each ingress from: selector decide exactly which pods may connect; compare them with the real pod labels."
+  alternatives:
+    - { command: "kubectl describe networkpolicy NAME -n NS", note: "A readable summary of the same rules." }
+  docs: { title: "kubectl get", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_get/" }
+
+- id: kubectl-get-endpointslices
+  match: "^kubectl get endpointslices"
+  summary: "Lists the EndpointSlices behind a Service: the pod addresses it actually sends traffic to."
+  parts:
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "-l kubernetes.io/service-name=catalog", meaning: "Only slices that belong to the catalog Service." }
+  why: "No endpoints means the Service's selector matches no ready pod, so connections fail even though the pods run."
+  alternatives:
+    - { command: "kubectl get endpoints catalog -n shop", note: "The older Endpoints view." }
+    - { command: "kubectl describe service catalog -n shop", note: "Selector and endpoints together." }
+  docs: { title: "EndpointSlices", url: "https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/" }
+
+- id: kubectl-get-pods-labels
+  match: "^kubectl get pods .*--show-labels"
+  summary: "Lists pods with all their labels."
+  parts:
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "--show-labels", meaning: "Add a column with every label on each pod." }
+    - { token: "| grep catalog", meaning: "(If piped) keep only lines mentioning catalog." }
+  why: "Selectors (Services, NetworkPolicies) match labels exactly; seeing the real labels next to the selector shows a mismatch."
+  alternatives:
+    - { command: "kubectl get pods -n NS -l app=catalog", note: "Test a selector directly: no output means it matches nothing." }
+  docs: { title: "kubectl get", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_get/" }
+
+- id: kubectl-get
+  match: "^kubectl get "
+  summary: "Lists Kubernetes objects of one kind with their status."
+  parts:
+    - { token: "get pods / pvc / networkpolicy", meaning: "The kind of object to list (or one by name)." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "-l app=NAME", meaning: "(If given) only objects with this label." }
+    - { token: "-o wide", meaning: "(If given) extra columns, such as each pod's node and IP." }
+  why: "The STATUS, READY and RESTARTS columns (or a PVC's Pending/Bound) say at a glance which object to dig into."
+  alternatives:
+    - { command: "kubectl get pods -n NS -w", note: "Watch for changes." }
+    - { command: "kubectl describe KIND NAME -n NS", note: "Detail and events for one object." }
+  docs: { title: "kubectl get", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_get/" }
+
+- id: kubectl-describe-nodes-alloc
+  match: "^kubectl describe nodes? .*\\| grep -A"
+  summary: "Shows how much CPU and memory is already requested on each node."
+  parts:
+    - { token: "describe nodes", meaning: "Full description of every node." }
+    - { token: "| grep -A6 'Allocated resources'", meaning: "Keep the \"Allocated resources\" heading and the 6 lines After it: requests and limits as a share of what the node can allocate." }
+  why: "The scheduler places pods by requests, not actual use; nodes near 100% requested can't fit a new pod even if they look idle."
+  alternatives:
+    - { command: "kubectl top nodes", note: "Actual use, not requests (needs metrics-server)." }
+  docs: { title: "kubectl describe", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/" }
+
+- id: kubectl-describe
+  match: "^kubectl describe "
+  summary: "Shows a readable description of an object, including its recent events."
+  parts:
+    - { token: "describe pod NAME", meaning: "The object." }
+    - { token: "-n shop", meaning: "In this namespace." }
+  why: "Events and container state explain most pod problems: FailedScheduling, image pull errors, probe failures, OOMKilled, and the last exit code."
+  alternatives:
+    - { command: "kubectl get events -n NS --sort-by=.lastTimestamp", note: "All recent events in the namespace." }
+  docs: { title: "kubectl describe", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/" }
+
+- id: kubectl-exec-curl
+  match: "^kubectl exec .* -- curl "
+  summary: "Makes an HTTP request from inside a pod, to test the network path that pod actually has."
+  parts:
+    - { token: "exec deploy/NAME", meaning: "Run in a pod of this deployment." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "--", meaning: "Everything after this is the command to run in the container." }
+    - { token: "-s", meaning: "curl: silent." }
+    - { token: "-m 5", meaning: "curl: give up after 5 seconds." }
+    - { token: "-o /dev/null", meaning: "curl: discard the body." }
+    - { token: "-w '%{http_code}\\n'", meaning: "curl: print only the status code (000 means no response at all)." }
+  why: "NetworkPolicies and DNS apply per pod; a request from your laptop doesn't test them, one from the client pod does."
+  alternatives:
+    - { command: "kubectl run tmp --rm -it --image=curlimages/curl -- sh", note: "A throwaway pod, when the app image has no curl (its labels won't match the client's)." }
+  docs: { title: "kubectl exec", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/" }
+
+- id: kubectl-exec
+  match: "^kubectl exec "
+  summary: "Runs a command inside a running container."
+  parts:
+    - { token: "exec deploy/NAME", meaning: "Run in a pod of this deployment." }
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "--", meaning: "Everything after this is the command to run." }
+    - { token: "printenv PSP_URL", meaning: "Print one environment variable as the process sees it." }
+  why: "Environment variables from a ConfigMap are read at container start; this shows the value the running process actually has."
+  alternatives:
+    - { command: "kubectl exec -it POD -n NS -- sh", note: "An interactive shell." }
+  docs: { title: "kubectl exec", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/" }
+
+- id: kubectl-rollout-status
+  match: "^kubectl rollout status "
+  summary: "Waits for a deployment's rollout to finish and reports progress."
+  parts:
+    - { token: "deployment/NAME", meaning: "The deployment." }
+    - { token: "-n shop", meaning: "In this namespace." }
+  why: "Returns success only when every new replica is updated and available, which is the verification that a fix actually rolled out."
+  alternatives:
+    - { command: "kubectl get deploy NAME -n NS", note: "READY and UP-TO-DATE counts right now." }
+    - { command: "kubectl rollout history deployment/NAME -n NS", note: "Earlier revisions, for a rollback." }
+  docs: { title: "kubectl rollout status", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/" }
+
+- id: kubectl-top-pods
+  match: "^kubectl top pods? "
+  summary: "Shows pods' current CPU and memory use (from metrics-server)."
+  parts:
+    - { token: "-n shop", meaning: "In this namespace." }
+    - { token: "-l app=NAME", meaning: "Only pods with this label." }
+  why: "Memory use climbing toward the container's limit explains OOMKilled restarts."
+  alternatives:
+    - { command: "kubectl describe pod POD", note: "The limit, and Last State: OOMKilled." }
+  docs: { title: "kubectl top pod", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_top/kubectl_top_pod/" }
