@@ -31,6 +31,7 @@
     - { token: "-S", meaning: "(With -s) still show an error message if the request fails." }
     - { token: "--max-time 20", meaning: "(If given) give up after 20 seconds." }
     - { token: "--noproxy '*'", meaning: "(If given) bypass any proxy set in the environment and connect directly." }
+    - { token: "-L", meaning: "(If given) follow redirects, so the code is the final response's (GitHub release downloads redirect to storage)." }
     - { token: "%{size_download}", meaning: "(In -w) the number of body bytes received; a short count means the response was cut off." }
   why: "One number answers \"what does this URL return?\", which is what a health check or a cache test compares against."
   alternatives:

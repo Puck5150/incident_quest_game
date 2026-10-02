@@ -1,0 +1,374 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: release-pipeline-major
+track: cicd
+difficulty: 5
+title: "v2.4.0 was announced this morning, and nobody can install it"
+par_minutes: 30
+
+ticket:
+  from: "Developer relations"
+  priority: P1
+  body: |
+    We announced acmectl v2.4.0 at 09:00 (blog, newsletter, conference
+    keynote at 14:00). The GitHub release page exists, but the install
+    script fails and the binaries aren't there. Also, every workflow run is
+    covered in yellow warnings since this week; is something broken in
+    Actions?
+
+environment: |
+  acme/acmectl on GitHub. release.yml (run by hand) bumps the version,
+  commits, and pushes a tag vX.Y.Z using actions/checkout's default
+  credentials. publish.yml runs on: push: tags: ['v*'] (and on
+  workflow_dispatch with a tag input): it builds acmectl on a matrix of
+  ubuntu, macOS and Windows, then a publish job creates the GitHub release
+  and attaches the binaries and SHA256SUMS. The install script downloads
+  from releases/latest/download/. Until this release only Linux was built.
+
+diagram:
+  nodes:
+    - { id: release, label: "release.yml (tag v2.4.0)", col: 0, row: 0, status: ok }
+    - { id: publish, label: "publish.yml (on tag push)", col: 1, row: 0, status: down }
+    - { id: matrix, label: "build matrix x3", col: 2, row: 0, status: ok }
+    - { id: gh, label: "GitHub release v2.4.0", col: 3, row: 0, status: degraded }
+  edges:
+    - { from: release, to: publish }
+    - { from: publish, to: matrix }
+    - { from: matrix, to: gh }
+
+terminal:
+  prompt: "you@laptop:~/acmectl$"
+  commands:
+    - match: "gh run list --workflow publish.yml --limit 3"
+      when_actions: [dispatch-and-app-token]
+      output: |
+        STATUS  TITLE                 WORKFLOW     BRANCH  EVENT              ID    ELAPSED  AGE
+        ✓       publish v2.4.0        publish.yml  main    workflow_dispatch  8812  6m12s    3m
+        ✓       v2.3.0                publish.yml  v2.3.0  push               8519  2m40s    16d
+        ✓       v2.2.1                publish.yml  v2.2.1  push               8204  2m31s    29d
+    - match: "gh run list --workflow publish.yml --limit 3"
+      evidence: no-publish-run
+      output: |
+        STATUS  TITLE   WORKFLOW     BRANCH  EVENT  ID    ELAPSED  AGE
+        ✓       v2.3.0  publish.yml  v2.3.0  push   8519  2m40s    16d
+        ✓       v2.2.1  publish.yml  v2.2.1  push   8204  2m31s    29d
+        ✓       v2.2.0  publish.yml  v2.2.0  push   8077  2m29s    36d
+    - match: "gh run list --workflow release.yml --limit 2"
+      output: |
+        STATUS  TITLE            WORKFLOW     BRANCH  EVENT              ID    ELAPSED  AGE
+        ✓       Release v2.4.0   release.yml  main    workflow_dispatch  8790  48s      2h
+        ✓       Release v2.3.0   release.yml  main    workflow_dispatch  8517  51s      16d
+    - match: "git ls-remote --tags origin 'v2.4*'"
+      evidence: tag-exists
+      output: |
+        9c41e7a2b8f0d3c6e5a1b4f7d2c8e9a0b3f6d1c4	refs/tags/v2.4.0
+    - match: "git log --oneline -3 -- .github/workflows"
+      output: |
+        b7d1e04 ci: build macOS and Windows binaries too (matrix)
+        a2c93f8 ci: release.yml pushes the tag itself instead of a maintainer
+        5e8f1aa ci: upgrade to upload-artifact@v4
+
+files:
+  - path: ".github/workflows/release.yml (excerpt)"
+    evidence: tag-by-token
+    language: yaml
+    content: |
+      permissions:
+        contents: write
+      jobs:
+        release:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4          # default credentials: GITHUB_TOKEN
+            - run: ./scripts/bump-version.sh "${{ inputs.version }}"
+            - run: |
+                git commit -am "release v${{ inputs.version }}"
+                git tag "v${{ inputs.version }}"
+                git push origin main "v${{ inputs.version }}"
+  - path: "Annotations on recent runs"
+    evidence: node-warnings
+    content: |
+      Warning: Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: ... (every run since 09-29, all workflows, all green)
+
+hypotheses:
+  - id: github-token
+    text: "Since this release, release.yml pushes the tag itself with the GITHUB_TOKEN, and events made with the GITHUB_TOKEN don't start new workflow runs, so the tag push never triggered publish.yml."
+    correct: true
+  - id: node-warning
+    text: "The Node.js deprecation warnings mean actions are failing."
+    feedback: "They're warnings on every run since 09-29, and those runs are green, including release.yml today. publish.yml didn't fail: it never started."
+  - id: tag-filter
+    text: "publish.yml's tag filter doesn't match v2.4.0."
+    feedback: "v* has matched every release so far, and the tag is on the remote. What changed is who pushed it: a maintainer used to, now the workflow does."
+  - id: actions-outage
+    text: "GitHub Actions had an outage this morning."
+    feedback: "release.yml ran fine 2 hours ago. The publish run is missing, not failed or queued."
+
+actions:
+  - id: dispatch-and-app-token
+    label: "Start publish.yml for v2.4.0 with gh workflow run publish.yml -f tag=v2.4.0, and change release.yml to push tags with a GitHub App installation token"
+    kind: fix
+    match_regex: "^gh workflow run publish\\.yml -f tag=v2\\.4\\.0$"
+    feedback: "workflow_dispatch always creates a run, so v2.4.0 publishes now; with an App token, the next release's tag push will trigger publish.yml on its own."
+  - id: retag-laptop
+    label: "Delete the tag and push it again from your laptop"
+    kind: wrong
+    feedback: "It would trigger publish this once (your push isn't the GITHUB_TOKEN), but release.yml still pushes with the token, so v2.5.0 breaks the same way. And deleting a published tag is something to avoid."
+  - id: actions-write
+    label: "Add actions: write to release.yml's permissions"
+    kind: wrong
+    feedback: "Permissions change what the token may do, not the rule that its events don't start workflow runs."
+
+solution_paths:
+  - [dispatch-and-app-token]
+
+key_evidence: [no-publish-run, tag-exists, tag-by-token]
+
+evidence_labels:
+  no-publish-run: "publish.yml has no run for v2.4.0"
+  tag-exists: "The v2.4.0 tag is on the remote"
+  tag-by-token: "release.yml now pushes the tag with the default GITHUB_TOKEN"
+
+red_herrings:
+  - evidence: node-warnings
+    label: "Yellow warnings on every run"
+    why: "A Node.js runtime deprecation notice for actions, on every workflow since 09-29, including green ones. publish.yml didn't fail with a warning; it never ran."
+
+hints:
+  nudge: "Did publish.yml fail, or never start?"
+  direction: "It never started for v2.4.0. Who pushed that tag, and what does GitHub do with events made by the GITHUB_TOKEN?"
+  answer: "Tags pushed with the GITHUB_TOKEN don't trigger workflows. Dispatch publish.yml for v2.4.0 now and push tags with a GitHub App token from now on."
+
+analogy:
+  title: "The robot rang its own doorbell"
+  text: |
+    The release robot now rings the doorbell itself, and the house is set
+    to ignore the robot's own rings, so the packer never comes. Call the
+    packer directly and the boxes get packed, but each packer puts their
+    box on the same shelf spot, pushing the last one off, so only one box
+    ships. Then someone has to finish the half-filled delivery that's
+    already on customers' doorsteps.
+
+debrief:
+  root_cause: |
+    Until v2.3.0 a maintainer pushed release tags. Commit a2c93f8 had
+    release.yml push the tag itself with actions/checkout's default
+    credentials, the GITHUB_TOKEN, and events made with the GITHUB_TOKEN
+    don't create new workflow runs (to stop workflows triggering each
+    other in loops). So the v2.4.0 tag push never started publish.yml.
+  ideal_path:
+    - "Look for publish.yml's run for v2.4.0: there isn't one."
+    - "Confirm the tag exists on the remote."
+    - "See who pushed it: release.yml, with the GITHUB_TOKEN, since this release."
+    - "Dispatch publish.yml for the tag; move release.yml to a GitHub App token."
+  real_world: |
+    workflow_dispatch and repository_dispatch are the exceptions: they
+    always create runs. Many release setups call the publish workflow
+    directly (workflow_call) from the release workflow instead of relying
+    on a tag-push event.
+
+concepts:
+  - term: "GITHUB_TOKEN and triggering workflows"
+    text: "Events caused by the GITHUB_TOKEN don't create new workflow runs, except workflow_dispatch and repository_dispatch; use a GitHub App token or PAT when they must."
+    url: "https://docs.github.com/en/actions/concepts/security/github_token"
+  - term: "Artifacts in v4"
+    text: "upload-artifact@v4 artifacts are immutable: uploading the same name twice fails, and overwrite: true deletes the previous artifact. Matrix jobs need unique names."
+    url: "https://github.com/actions/upload-artifact"
+  - term: "Downloading many artifacts"
+    text: "download-artifact's pattern selects artifacts by glob, and merge-multiple: true puts their files in one directory."
+    url: "https://github.com/actions/download-artifact"
+  - term: "Release assets"
+    text: "gh release upload attaches files to an existing release; --clobber replaces assets of the same name."
+    url: "https://cli.github.com/manual/gh_release_upload"
+
+sources:
+  - title: "GitHub Docs: GITHUB_TOKEN (events don't trigger new workflow runs)"
+    url: "https://docs.github.com/en/actions/concepts/security/github_token"
+    retrieved: 2026-10-02
+  - title: "actions/upload-artifact: v4 immutability, overwrite, matrix naming"
+    url: "https://github.com/actions/upload-artifact"
+    retrieved: 2026-10-02
+  - title: "actions/download-artifact: pattern and merge-multiple"
+    url: "https://github.com/actions/download-artifact"
+    retrieved: 2026-10-02
+  - title: "GitHub CLI: gh release upload (--clobber)"
+    url: "https://cli.github.com/manual/gh_release_upload"
+    retrieved: 2026-10-02
+
+stages:
+  - id: one-binary
+    update: |
+      11:20: publish.yml ran for v2.4.0 and went green in 6 minutes. Linux
+      installs work. macOS and Windows installs still 404.
+    diagram_status: { publish: ok, gh: degraded }
+    terminal:
+      commands:
+        - match: "gh release view v2.4.0 --json assets --jq '.assets[].name'"
+          when_actions: [upload-missing]
+          output: |
+            SHA256SUMS
+            acmectl-darwin-arm64.tar.gz
+            acmectl-linux-amd64.tar.gz
+            acmectl-windows-amd64.zip
+        - match: "gh release view v2.4.0 --json assets --jq '.assets[].name'"
+          evidence: linux-only
+          output: |
+            SHA256SUMS
+            acmectl-linux-amd64.tar.gz
+        - match: "gh run view --log | grep -i 'artifact'"
+          when_actions: [unique-names]
+          output: |
+            build (macos-14)        Upload dist      Uploaded artifact 'dist-macos-14' (acmectl-darwin-arm64.tar.gz)
+            build (windows-2022)    Upload dist      Uploaded artifact 'dist-windows-2022' (acmectl-windows-amd64.zip)
+            build (ubuntu-24.04)    Upload dist      Uploaded artifact 'dist-ubuntu-24.04' (acmectl-linux-amd64.tar.gz)
+            publish (dry run)       Download dist    pattern dist-*, merge-multiple: 3 artifacts, 3 files in dist/
+        - match: "gh run view --log | grep -i 'artifact'"
+          evidence: overwrite-log
+          output: |
+            build (macos-14)        Upload dist      Uploaded artifact 'dist' (acmectl-darwin-arm64.tar.gz) at 11:15:58
+            build (windows-2022)    Upload dist      overwrite: true, deleted existing artifact 'dist'; uploaded 'dist' (acmectl-windows-amd64.zip) at 11:16:40
+            build (ubuntu-24.04)    Upload dist      overwrite: true, deleted existing artifact 'dist'; uploaded 'dist' (acmectl-linux-amd64.tar.gz) at 11:17:02
+            publish                 Download dist    Downloaded artifact 'dist': 1 file
+    files:
+      - path: ".github/workflows/publish.yml (excerpt)"
+        evidence: same-name
+        language: yaml
+        content: |
+          build:
+            strategy:
+              matrix:
+                os: [ubuntu-24.04, macos-14, windows-2022]
+            runs-on: ${{ matrix.os }}
+            steps:
+              - run: make dist
+              - uses: actions/upload-artifact@v4
+                with:
+                  name: dist
+                  path: dist/
+                  overwrite: true   # added in b7d1e04: "fix 409 Conflict on matrix upload"
+          publish:
+            needs: build
+            steps:
+              - uses: actions/download-artifact@v4
+                with: { name: dist, path: dist/ }
+              - run: gh release create "$TAG" dist/* --generate-notes
+    hypotheses:
+      - id: overwrite
+        text: "All three matrix jobs upload an artifact called dist with overwrite: true, so each deletes the previous one and only the last to finish (Linux) reaches the publish job."
+        correct: true
+      - id: macos-build
+        text: "The macOS and Windows builds failed."
+        feedback: "All three build jobs succeeded and uploaded. Their artifacts were deleted by the next job's upload."
+      - id: release-limit
+        text: "GitHub limits how many assets a release can have."
+        feedback: "Two assets is nowhere near any limit. Only one binary ever reached the publish job: \"Downloaded artifact 'dist': 1 file\"."
+    actions:
+      - id: unique-names
+        label: "Name each matrix upload dist-${{ matrix.os }} without overwrite, and download with pattern: dist-* and merge-multiple: true"
+        kind: fix
+        feedback: "Each job's binary is its own immutable artifact, and the publish job collects all three into dist/."
+      - id: max-parallel
+        label: "Set max-parallel: 1 on the matrix so uploads don't collide"
+        kind: wrong
+        feedback: "They'd run one after another, and overwrite: true would still delete each previous dist: you'd still publish only the last one."
+      - id: drop-overwrite
+        label: "Remove overwrite: true and keep the name dist"
+        kind: wrong
+        feedback: "Then the second job's upload fails with a 409 Conflict: v4 artifacts are immutable. That's what overwrite was added to silence. The names need to differ."
+    solution_paths:
+      - [unique-names]
+    key_evidence: [linux-only, overwrite-log, same-name]
+    evidence_labels:
+      linux-only: "The release has only the Linux binary"
+      overwrite-log: "Each matrix job deleted the previous dist; publish downloaded 1 file"
+      same-name: "All three jobs upload to the name dist with overwrite: true"
+    hints:
+      nudge: "Three builds succeeded. How many files reached the publish job?"
+      direction: "Read the upload steps in the run log and the artifact names in publish.yml."
+      answer: "They all upload dist with overwrite: true. Use unique names per OS and download with pattern + merge-multiple."
+    debrief:
+      root_cause: |
+        Commit b7d1e04 turned the single Linux build into a three-OS matrix.
+        upload-artifact@v4 artifacts are immutable, so the second upload to
+        dist failed with a 409 Conflict; the fix chosen was overwrite: true,
+        which deletes the existing artifact and uploads a new one. Each job
+        replaced the last, and the publish job downloaded only the final
+        one: Linux.
+      ideal_path:
+        - "List the release's assets: Linux only."
+        - "Read the run log: each upload deleted the previous dist; publish got 1 file."
+        - "Read publish.yml: same name, overwrite: true."
+        - "Name per OS, download with pattern + merge-multiple."
+
+  - id: patch-release
+    update: |
+      11:40: the workflow is fixed for the next release. But v2.4.0 is the
+      Latest release, the install script points every macOS and Windows
+      user at it, and the keynote is at 14:00.
+    diagram_status: { matrix: ok }
+    terminal:
+      commands:
+        - match: "curl -s -o /dev/null -w '%{http_code}\\n' -L https://github.com/acme/acmectl/releases/latest/download/acmectl-darwin-arm64.tar.gz"
+          when_actions: [upload-missing]
+          output: |
+            200
+        - match: "curl -s -o /dev/null -w '%{http_code}\\n' -L https://github.com/acme/acmectl/releases/latest/download/acmectl-darwin-arm64.tar.gz"
+          evidence: latest-404
+          output: |
+            404
+        - match: "gh release download v2.4.0 -p SHA256SUMS -O -"
+          when_actions: [upload-missing]
+          output: |
+            1b9e...c04a  acmectl-darwin-arm64.tar.gz
+            7f3a...9e21  acmectl-linux-amd64.tar.gz
+            d4c8...51b7  acmectl-windows-amd64.zip
+        - match: "gh release download v2.4.0 -p SHA256SUMS -O -"
+          evidence: sums-one
+          output: |
+            7f3a...9e21  acmectl-linux-amd64.tar.gz
+    hypotheses:
+      - id: upload
+        text: "Build the three binaries from the v2.4.0 tag with the fixed workflow and attach the missing ones, plus a complete SHA256SUMS, to the existing release."
+        correct: true
+      - id: retag
+        text: "Delete the v2.4.0 release and tag and publish it again."
+        feedback: "Linux users have already installed v2.4.0 and checked it against SHA256SUMS; tags and releases are meant to stay put once published. Add the missing assets to the release that exists."
+      - id: previous-latest
+        text: "Mark v2.3.0 as Latest until next week."
+        feedback: "macOS and Windows users would get the old version on announcement day, and v2.4.0 stays broken."
+    actions:
+      - id: upload-missing
+        label: "Build v2.4.0 with the fixed workflow, then gh release upload v2.4.0 acmectl-darwin-arm64.tar.gz acmectl-windows-amd64.zip SHA256SUMS --clobber"
+        kind: fix
+        match_regex: "^gh release upload v2\\.4\\.0 .*SHA256SUMS.* --clobber$|^gh release upload v2\\.4\\.0 --clobber .*SHA256SUMS.*$"
+        feedback: "The release has all three binaries and a SHA256SUMS that lists them; --clobber replaced only SHA256SUMS. The Linux binary and the tag are untouched."
+      - id: delete-release
+        label: "gh release delete v2.4.0 --cleanup-tag, then re-run release.yml"
+        kind: destructive
+        feedback: "Deletes a tag people have already installed from and verified, and makes a new one. Patch the release instead."
+      - id: no-sums
+        label: "Upload just the two missing binaries"
+        kind: wrong
+        feedback: "The install script verifies against SHA256SUMS, which still lists only Linux: macOS and Windows installs would fail the checksum check."
+    solution_paths:
+      - [upload-missing]
+    key_evidence: [latest-404, sums-one]
+    evidence_labels:
+      latest-404: "releases/latest/download for macOS returns 404"
+      sums-one: "v2.4.0's SHA256SUMS lists only the Linux binary"
+    hints:
+      nudge: "The workflow is fixed for v2.5.0. What do macOS users get today?"
+      direction: "Check what latest/download returns, and what SHA256SUMS lists."
+      answer: "Upload the missing binaries and a full SHA256SUMS to v2.4.0 with gh release upload --clobber; don't move the tag."
+    debrief:
+      root_cause: |
+        v2.4.0 went out as the Latest release with one binary and a
+        SHA256SUMS listing one file, so releases/latest/download 404s for
+        macOS and Windows. Rebuilding from the same tag and attaching the
+        missing assets (replacing SHA256SUMS with --clobber) completes the
+        release without moving a tag that people have already installed
+        from.
+      ideal_path:
+        - "Check latest/download for macOS: 404."
+        - "Read SHA256SUMS: only Linux."
+        - "Build all three from the tag with the fixed workflow."
+        - "gh release upload the missing files and SHA256SUMS --clobber; check again."

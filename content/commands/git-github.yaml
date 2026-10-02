@@ -143,3 +143,39 @@
   alternatives:
     - { command: "git log --all -- '*.tfstate'", note: "Whether one was ever committed, even if deleted since." }
   docs: { title: "git ls-files", url: "https://git-scm.com/docs/git-ls-files" }
+
+- id: git-ls-remote-tags
+  match: "^git ls-remote --tags "
+  summary: "Lists the tags on a remote repository, without fetching them."
+  parts:
+    - { token: "--tags", meaning: "Only refs under refs/tags." }
+    - { token: "origin", meaning: "The remote to ask." }
+    - { token: "'v2.4*'", meaning: "(If given) only refs matching this pattern; quoted so the shell doesn't expand it." }
+  why: "Confirms what the server has, regardless of your local tags."
+  alternatives:
+    - { command: "gh api repos/OWNER/REPO/git/refs/tags/v2.4.0", note: "The same through the API, with the tag's object." }
+  docs: { title: "git ls-remote", url: "https://git-scm.com/docs/git-ls-remote" }
+
+- id: gh-release-view
+  match: "^gh release view "
+  summary: "Shows a GitHub release: its notes, state and assets."
+  parts:
+    - { token: "v2.4.0", meaning: "The release's tag." }
+    - { token: "--json assets", meaning: "Output its assets as JSON." }
+    - { token: "--jq '.assets[].name'", meaning: "Print each asset's file name." }
+  why: "Shows exactly which files a release offers for download."
+  alternatives:
+    - { command: "gh release view v2.4.0 --web", note: "Open the release page." }
+  docs: { title: "gh release view", url: "https://cli.github.com/manual/gh_release_view" }
+
+- id: gh-release-download
+  match: "^gh release download "
+  summary: "Downloads assets from a GitHub release."
+  parts:
+    - { token: "v2.4.0", meaning: "The release's tag." }
+    - { token: "-p SHA256SUMS", meaning: "--pattern: only assets matching this glob." }
+    - { token: "-O -", meaning: "--output: write to standard output instead of a file." }
+  why: "Reads a release file directly, such as the checksum list installers verify against."
+  alternatives:
+    - { command: "curl -sL https://github.com/OWNER/REPO/releases/download/TAG/FILE", note: "Without gh." }
+  docs: { title: "gh release download", url: "https://cli.github.com/manual/gh_release_download" }
