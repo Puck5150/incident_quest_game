@@ -316,3 +316,24 @@ from your own experience and tick them off.
 - [x] Google Cloud docs URLs moved to docs.cloud.google.com (2026-10-01), using
       each URL's actual redirect target. Pricing pages stay on cloud.google.com:
       they don't redirect.
+
+## Multi-stage incidents (2026-10-02): aws-alb-migration-two-faults, aws-lambda-export-two-faults, azure-app-sql-two-faults, azure-slot-swap-key-vault-two-faults
+- [x] Checked against docs on 2026-10-02: ALB health check defaults (path /,
+      success code 200), reason codes and descriptions (Target.Timeout "Request
+      timed out", Target.ResponseCodeMismatch "Health checks failed with these
+      codes: [404]") and fail-open; Lambda default timeout 3 s and the
+      "Task timed out after 3.00 seconds" message; RDS/Lambda security group
+      pattern; Azure SQL 40615 (firewall) and 18456 (login); "Allow Azure
+      services" includes other customers; App Service outbound IPs picked at
+      random from the set; managed identities aren't swapped; unresolved Key
+      Vault references are passed as the literal string.
+- [ ] Representative output, not captured from real systems: the ALB access log
+      lines (fields truncated), the Auto Scaling activity Cause text, the
+      Lambda log lines and REPORT line layout, node-postgres's "Connection
+      terminated due to connection timeout", the PostgreSQL slow-statement log
+      line, the full text of SQL errors 40615 and 18456 as SqlClient prints
+      them, the sqlcmd table layout, and the Key Vault Application Settings
+      Diagnostics output (the detector exists; its exact wording is mine).
+- [ ] Judgment: in the ALB incident, users see errors "while instances are
+      swapped" during Auto Scaling churn; the exact symptom depends on
+      deregistration delay and connection draining.

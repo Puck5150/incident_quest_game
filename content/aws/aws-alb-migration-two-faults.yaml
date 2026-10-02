@@ -1,0 +1,307 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-alb-migration-two-faults
+track: aws
+difficulty: 3
+title: "The API moved to the new load balancer, and it's gone twice"
+par_minutes: 16
+
+ticket:
+  from: "On-call bot"
+  priority: P1
+  body: |
+    10:40 ALARM api.example.com: 100% of requests return 504 Gateway Timeout.
+    Started at 10:31, right after the platform team switched the API from the
+    old load balancer (alb-shop) to the new one (alb-shop-2).
+
+environment: |
+  The API runs on three EC2 instances in the Auto Scaling group asg-api,
+  listening on port 8080, with security group sg-0api. The platform team
+  created alb-shop-2 (security group sg-0alb2) and a new target group, api-v2,
+  for the Auto Scaling group, then pointed api.example.com at alb-shop-2. The
+  old load balancer, alb-shop, used security group sg-0alb. asg-api uses ELB
+  health checks.
+
+diagram:
+  nodes:
+    - { id: users, label: "users", col: 0, row: 0, status: ok }
+    - { id: alb2, label: "alb-shop-2 (new)", col: 1, row: 0, status: degraded }
+    - { id: api, label: "asg-api x3 (port 8080)", col: 2, row: 0, status: down }
+  edges:
+    - { from: users, to: alb2 }
+    - { from: alb2, to: api }
+
+terminal:
+  prompt: "you@bastion:~$"
+  commands:
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --query TargetHealthDescriptions[].TargetHealth"
+      when_actions: [allow-new-alb, fix-hc-path]
+      output: |
+        [
+            { "State": "healthy" },
+            { "State": "healthy" },
+            { "State": "healthy" }
+        ]
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --query TargetHealthDescriptions[].TargetHealth"
+      when_actions: [allow-new-alb]
+      evidence: hc-404
+      output: |
+        [
+            { "State": "unhealthy", "Reason": "Target.ResponseCodeMismatch", "Description": "Health checks failed with these codes: [404]" },
+            { "State": "unhealthy", "Reason": "Target.ResponseCodeMismatch", "Description": "Health checks failed with these codes: [404]" },
+            { "State": "unhealthy", "Reason": "Target.ResponseCodeMismatch", "Description": "Health checks failed with these codes: [404]" }
+        ]
+    - match: "aws elbv2 describe-target-health --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --query TargetHealthDescriptions[].TargetHealth"
+      evidence: target-timeout
+      output: |
+        [
+            { "State": "unhealthy", "Reason": "Target.Timeout", "Description": "Request timed out" },
+            { "State": "unhealthy", "Reason": "Target.Timeout", "Description": "Request timed out" },
+            { "State": "unhealthy", "Reason": "Target.Timeout", "Description": "Request timed out" }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0api --query SecurityGroups[0].IpPermissions"
+      when_actions: [allow-new-alb]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080,
+              "UserIdGroupPairs": [ { "GroupId": "sg-0alb", "Description": "from alb-shop" },
+                                    { "GroupId": "sg-0alb2", "Description": "from alb-shop-2" } ] },
+            { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "UserIdGroupPairs": [ { "GroupId": "sg-0bastion" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0api --query SecurityGroups[0].IpPermissions"
+      evidence: old-alb-rule
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080,
+              "UserIdGroupPairs": [ { "GroupId": "sg-0alb", "Description": "from alb-shop" } ] },
+            { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "UserIdGroupPairs": [ { "GroupId": "sg-0bastion" } ] }
+        ]
+    - match: "aws elbv2 describe-load-balancers --names alb-shop-2 --query LoadBalancers[0].SecurityGroups"
+      evidence: new-alb-sg
+      output: |
+        [
+            "sg-0alb2"
+        ]
+    - match: "aws elbv2 describe-target-groups --target-group-arns arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --query TargetGroups[0].[Port,HealthCheckPath,Matcher.HttpCode]"
+      when_actions: [fix-hc-path]
+      output: |
+        [
+            8080,
+            "/health",
+            "200"
+        ]
+    - match: "aws elbv2 describe-target-groups --target-group-arns arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --query TargetGroups[0].[Port,HealthCheckPath,Matcher.HttpCode]"
+      evidence: hc-path-root
+      output: |
+        [
+            8080,
+            "/",
+            "200"
+        ]
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' http://10.0.11.21:8080/health"
+      output: |
+        200
+    - match: "curl -s -o /dev/null -w '%{http_code}\\n' http://10.0.11.21:8080/"
+      evidence: root-404
+      output: |
+        404
+
+logs:
+  - name: "alb-shop-2 access log (excerpt, 10:38)"
+    evidence: alb-504
+    lines: |
+      https 2026-10-02T10:38:02.114Z app/alb-shop-2/50dc6c495c0c9188 198.51.100.24:51522 10.0.11.21:8080 -1 -1 -1 504 - 210 345 "GET https://api.example.com:443/v1/orders HTTP/1.1"
+      https 2026-10-02T10:38:02.871Z app/alb-shop-2/50dc6c495c0c9188 203.0.113.77:40318 10.0.12.48:8080 -1 -1 -1 504 - 198 345 "GET https://api.example.com:443/v1/cart HTTP/1.1"
+
+hypotheses:
+  - id: sg-old-alb
+    text: "The instances' security group only lets the old load balancer's security group in on 8080, so the new one can't reach the targets."
+    correct: true
+  - id: dns-old
+    text: "api.example.com still points at the old load balancer."
+    feedback: "The 504s are in alb-shop-2's own access log, so requests are reaching the new load balancer. It's the next hop, to the targets, that fails."
+  - id: hc-path
+    text: "The new target group's health check path is wrong."
+    feedback: "A wrong path still gets an HTTP answer back, which shows as a response-code mismatch. These targets don't answer at all: \"Request timed out\"."
+  - id: app-down
+    text: "The API crashed on all three instances."
+    feedback: "From the bastion, the API answers /health with 200 on 8080. It's running; the load balancer just can't get to it."
+
+actions:
+  - id: allow-new-alb
+    label: "aws ec2 authorize-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --source-group sg-0alb2"
+    kind: fix
+    match_regex: "^aws ec2 authorize-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --source-group sg-0alb2$"
+    feedback: "The new load balancer's security group can now reach port 8080. Requests start reaching the instances."
+  - id: allow-anywhere
+    label: "aws ec2 authorize-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --cidr 0.0.0.0/0"
+    kind: wrong
+    match_regex: "^aws ec2 authorize-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --cidr 0\\.0\\.0\\.0/0$"
+    feedback: "Traffic would flow, but so would anything else that can route to these instances, around the load balancer. Reference sg-0alb2 instead: only the load balancer needs in."
+  - id: switch-back
+    label: "Point api.example.com back at the old load balancer"
+    kind: wrong
+    feedback: "The old load balancer's target group was emptied in the migration, so it has nothing to send traffic to. And the migration still has to happen."
+  - id: terminate-all
+    label: "Terminate all three instances so the Auto Scaling group launches fresh ones"
+    kind: destructive
+    feedback: "The new instances get the same security group and the same problem, and for a few minutes there's nothing running at all."
+
+solution_paths:
+  - [allow-new-alb]
+
+key_evidence: [alb-504, target-timeout, old-alb-rule, new-alb-sg]
+
+evidence_labels:
+  alb-504: "The new load balancer itself returns 504 for every request"
+  target-timeout: "Its health checks to the targets time out"
+  old-alb-rule: "Port 8080 is only open to the old load balancer's group, sg-0alb"
+  new-alb-sg: "The new load balancer uses sg-0alb2"
+
+hints:
+  nudge: "The new load balancer gets the requests. Can it reach the instances behind it?"
+  direction: "Compare the security group the new load balancer uses with the one the instances allow in on 8080."
+  answer: "sg-0api allows 8080 only from sg-0alb (the old load balancer). Add a rule allowing 8080 from sg-0alb2."
+
+analogy:
+  title: "The guest list still names the old courier"
+  text: |
+    The office switched couriers overnight. Parcels arrive at the gate, but
+    the guard's list only names the old courier's company, so the new van is
+    turned away every time. Add the new courier to the list. Then check the
+    van can actually find the right door once it's inside.
+
+debrief:
+  root_cause: |
+    sg-0api allowed port 8080 only from sg-0alb, the old load balancer's
+    security group. The new load balancer uses sg-0alb2, so its health checks
+    and requests to the targets timed out (Target.Timeout), and every request
+    got a 504 from alb-shop-2. Referencing a security group is the right way
+    to allow a load balancer in, but the rule names one group, so a new load
+    balancer with a new group needs its own rule.
+  ideal_path:
+    - "Find where it fails: the 504s come from the new load balancer itself."
+    - "Check the targets: unhealthy, \"Request timed out\"."
+    - "Compare security groups: 8080 allows only sg-0alb, the new load balancer uses sg-0alb2."
+    - "Allow 8080 from sg-0alb2, then check target health again before closing."
+  real_world: |
+    Load balancer migrations are a classic source of two-part outages: the
+    network path is the first thing to break, and health check settings are
+    the second, because a new target group starts from the defaults. Copy the
+    old target group's settings deliberately, and check target health before
+    moving DNS.
+
+concepts:
+  - term: "Security group referencing"
+    text: "A rule can allow traffic from another security group instead of an IP range: anything using that group may connect. The rule names one group."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  - term: "Target group health checks"
+    text: "The load balancer calls each target on a path and port, and expects a success code (200 by default, path / by default). Targets that fail get a reason code."
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+  - term: "Fail-open"
+    text: "If every target in a target group is unhealthy, an Application Load Balancer routes requests to all of them anyway, rather than to none."
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+  - term: "ELB health checks for Auto Scaling"
+    text: "When an Auto Scaling group uses ELB health checks, it replaces instances the load balancer reports as unhealthy."
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-health-checks.html"
+
+sources:
+  - title: "Elastic Load Balancing: Health checks for Application Load Balancer target groups (defaults, reason codes, fail-open)"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+    retrieved: 2026-10-02
+  - title: "Elastic Load Balancing: Troubleshoot your Application Load Balancers (HTTP 504)"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-troubleshooting.html"
+    retrieved: 2026-10-02
+  - title: "Amazon VPC: Security group rules (referencing security groups)"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+    retrieved: 2026-10-02
+  - title: "Amazon EC2 Auto Scaling: Health checks for instances in an Auto Scaling group"
+    url: "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-health-checks.html"
+    retrieved: 2026-10-02
+
+stages:
+  - id: health-check-path
+    update: |
+      11:05 Reopened by the on-call bot: api.example.com mostly answers again,
+      but all 3 targets in api-v2 are unhealthy, and asg-api has terminated
+      and replaced 5 instances in 20 minutes. Some requests fail while
+      instances are being swapped.
+    diagram_status: { alb2: ok, api: degraded }
+    terminal:
+      commands:
+        - match: "aws autoscaling describe-scaling-activities --auto-scaling-group-name asg-api --max-items 2 --query Activities[].[StartTime,Description,Cause]"
+          when_actions: [fix-hc-path]
+          output: |
+            [
+                [ "2026-10-02T11:04:51Z", "Terminating EC2 instance: i-0a51c2e9", "At 2026-10-02T11:04:51Z an instance was taken out of service in response to an ELB system health check failure." ]
+            ]
+        - match: "aws autoscaling describe-scaling-activities --auto-scaling-group-name asg-api --max-items 2 --query Activities[].[StartTime,Description,Cause]"
+          evidence: asg-churn
+          output: |
+            [
+                [ "2026-10-02T11:04:51Z", "Terminating EC2 instance: i-0a51c2e9", "At 2026-10-02T11:04:51Z an instance was taken out of service in response to an ELB system health check failure." ],
+                [ "2026-10-02T11:01:12Z", "Launching a new EC2 instance: i-0c7d33f0", "At 2026-10-02T11:01:12Z an instance was started in response to a difference between desired and actual capacity, increasing the capacity from 2 to 3." ]
+            ]
+    files:
+      - path: "old target group api (alb-shop): health check settings"
+        content: |
+          Protocol:            HTTP
+          Port:                traffic port (8080)
+          Path:                /health
+          Success codes:       200
+    hypotheses:
+      - id: hc-root
+        text: "The new target group checks the default path, /, which the API answers with 404, so every target fails and the Auto Scaling group keeps replacing them."
+        correct: true
+      - id: sg-still
+        text: "The security group is still blocking the load balancer."
+        feedback: "The health checks now get an answer, a 404. That means the connection works; it's what's being asked for that's wrong."
+      - id: bad-instances
+        text: "The new instances are broken."
+        feedback: "Each instance answers /health with 200. The load balancer isn't asking for /health."
+      - id: scaling-policy
+        text: "A scaling policy is adding and removing instances."
+        feedback: "The activity history says why instances are terminated: an ELB system health check failure, not a scaling policy."
+    actions:
+      - id: fix-hc-path
+        label: "aws elbv2 modify-target-group --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --health-check-path /health"
+        kind: fix
+        match_regex: "^aws elbv2 modify-target-group --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --health-check-path /health$"
+        feedback: "Health checks now ask for /health, which returns 200. Targets go healthy after the healthy threshold, and the Auto Scaling group stops replacing them."
+      - id: widen-matcher
+        label: "Change the target group's success codes to 200-499"
+        kind: wrong
+        feedback: "The 404s would count as healthy, and so would any instance that's broken in a way that returns 4xx. The check would stop telling you anything."
+      - id: asg-ec2-checks
+        label: "Switch asg-api to EC2 health checks only"
+        kind: wrong
+        feedback: "The churn stops, but the targets stay unhealthy in the load balancer, and an instance whose app hangs would never be replaced. Fix the check, not the reaction to it."
+      - id: recreate-tg
+        label: "Delete api-v2 and create a new target group with the defaults"
+        kind: destructive
+        feedback: "The load balancer's listener loses its target, so every request fails until the new group is attached, and the defaults bring back path /."
+    solution_paths:
+      - [fix-hc-path]
+    key_evidence: [hc-404, hc-path-root, root-404, asg-churn]
+    evidence_labels:
+      hc-404: "Health checks now fail with code 404"
+      hc-path-root: "api-v2 checks path / (the default), with success code 200"
+      root-404: "The API answers / with 404"
+      asg-churn: "asg-api is terminating instances for failing ELB health checks"
+    hints:
+      nudge: "The load balancer gets an answer now. Which page is it asking for?"
+      direction: "Compare the new target group's health check path with what the API serves, and with the old target group's settings."
+      answer: "api-v2 was created with the default health check path, /, which returns 404. Set the health check path to /health."
+    debrief:
+      root_cause: |
+        api-v2 was created with the default health check path, /, and the API
+        answers / with 404, so every target failed with
+        Target.ResponseCodeMismatch. With all targets unhealthy, the load
+        balancer failed open and still sent traffic to them, which is why the
+        site mostly worked. But asg-api uses ELB health checks, so it kept
+        terminating and replacing "unhealthy" instances, and requests failed
+        mid-swap.
+      ideal_path:
+        - "Check the targets again: the reason is now a 404, not a timeout."
+        - "Read the health check settings: path / (the default)."
+        - "Confirm what the API serves: / is 404, /health is 200; the old target group used /health."
+        - "Set api-v2's health check path to /health, then confirm targets go healthy."

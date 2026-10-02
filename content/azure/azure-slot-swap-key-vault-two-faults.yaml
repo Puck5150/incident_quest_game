@@ -1,0 +1,275 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-slot-swap-key-vault-two-faults
+track: azure
+difficulty: 3
+title: "It worked in staging: after the swap, payments fail, then webhooks"
+par_minutes: 15
+
+ticket:
+  from: "Payments team"
+  priority: P1
+  body: |
+    We swapped the new release from staging into production at 14:00 and
+    checkout immediately started failing with "payment declined:
+    authentication failed". Staging worked perfectly all morning with the
+    same code and settings.
+
+environment: |
+  app-payments is a Linux App Service app with a staging slot; each slot has
+  its own system-assigned managed identity. The release added two app
+  settings as Key Vault references: PAYMENT_API_KEY from kv-payments (Azure
+  RBAC permission model) and WEBHOOK_SECRET from kv-shared, an older vault
+  other apps use too. Before testing, the team gave the staging slot's
+  identity access to both vaults.
+
+diagram:
+  nodes:
+    - { id: users, label: "shoppers", col: 0, row: 0, status: degraded }
+    - { id: app, label: "app-payments (production slot)", col: 1, row: 0, status: degraded }
+    - { id: kv, label: "Key Vaults kv-payments, kv-shared", col: 2, row: 0, status: ok }
+    - { id: psp, label: "payment provider", col: 2, row: 1, status: ok }
+  edges:
+    - { from: users, to: app }
+    - { from: app, to: kv }
+    - { from: app, to: psp }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az webapp log tail -g rg-payments -n app-payments"
+      when_actions: [grant-prod-rbac, add-policy]
+      output: |
+        14:52:10  INFO  POST /checkout 200 charge ch_7Qx2 captured
+        14:52:31  INFO  POST /webhooks/payments 200 event refund.created verified
+    - match: "az webapp log tail -g rg-payments -n app-payments"
+      when_actions: [grant-prod-rbac]
+      evidence: webhook-fail
+      output: |
+        14:31:02  INFO  POST /checkout 200 charge ch_7Pm9 captured
+        14:31:40  WARN  POST /webhooks/payments 400 signature verification failed (event dispute.created)
+        14:32:05  WARN  POST /webhooks/payments 400 signature verification failed (event refund.created)
+    - match: "az webapp log tail -g rg-payments -n app-payments"
+      evidence: provider-401
+      output: |
+        14:03:11  ERROR POST /checkout 502 payment provider returned 401 invalid_api_key
+        14:03:12  ERROR POST /checkout 502 payment provider returned 401 invalid_api_key
+    - match: "az webapp identity show -g rg-payments -n app-payments --query principalId -o tsv"
+      evidence: prod-identity
+      output: |
+        3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093
+    - match: "az webapp identity show -g rg-payments -n app-payments --slot staging --query principalId -o tsv"
+      output: |
+        9a7d4e16-2b8c-4c51-8f7a-6e0b3d92c4a8
+    - match: "az role assignment list --scope /subscriptions/0b6c1f2e-7a34-4d9e-b8c1-5f2a9e3d7c60/resourceGroups/rg-payments/providers/Microsoft.KeyVault/vaults/kv-payments --role \"Key Vault Secrets User\" --query [].principalId -o tsv"
+      when_actions: [grant-prod-rbac]
+      output: |
+        9a7d4e16-2b8c-4c51-8f7a-6e0b3d92c4a8
+        3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093
+    - match: "az role assignment list --scope /subscriptions/0b6c1f2e-7a34-4d9e-b8c1-5f2a9e3d7c60/resourceGroups/rg-payments/providers/Microsoft.KeyVault/vaults/kv-payments --role \"Key Vault Secrets User\" --query [].principalId -o tsv"
+      evidence: rbac-staging-only
+      output: |
+        9a7d4e16-2b8c-4c51-8f7a-6e0b3d92c4a8
+
+files:
+  - path: "Diagnose and solve problems: Key Vault Application Settings Diagnostics (14:10)"
+    evidence: kv-ref-failed
+    content: |
+      Setting            Vault         Status
+      PAYMENT_API_KEY    kv-payments   Not resolved: the app's identity was denied access to the secret
+      WEBHOOK_SECRET     kv-shared     Not resolved: the app's identity was denied access to the secret
+
+      Unresolved references are passed to the app as the literal
+      @Microsoft.KeyVault(...) string.
+
+hypotheses:
+  - id: identity-not-swapped
+    text: "Managed identities stay with their slot. Production's own identity was never given access to kv-payments, so the reference doesn't resolve and the app sends the literal reference string as its API key."
+    correct: true
+  - id: slot-setting
+    text: "PAYMENT_API_KEY should have been marked as a deployment slot setting."
+    feedback: "The setting moved with the release, as intended: it's the same reference in both slots. What differs is who resolves it: each slot uses its own identity."
+  - id: provider-down
+    text: "The payment provider is having an outage."
+    feedback: "The provider answers, with 401 invalid_api_key: it rejects the key it was sent. And Key Vault diagnostics say the key never resolved."
+  - id: vault-firewall
+    text: "kv-payments' firewall blocks production."
+    feedback: "The diagnostics say access to the secret was denied for the identity, and only the staging identity holds a role on the vault."
+
+actions:
+  - id: grant-prod-rbac
+    label: "az role assignment create --assignee 3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093 --role \"Key Vault Secrets User\" --scope (kv-payments)"
+    kind: fix
+    feedback: "Production's identity can now read secrets in kv-payments. After the app picks up the change, PAYMENT_API_KEY resolves to the real key."
+  - id: plain-secret
+    label: "Paste the API key into PAYMENT_API_KEY as a plain value instead of a reference"
+    kind: wrong
+    feedback: "Checkout would work, with the secret now sitting in app configuration where anyone who can read it sees the key. That's what the Key Vault reference was for."
+  - id: mark-sticky
+    label: "Mark PAYMENT_API_KEY as a deployment slot setting and restart"
+    kind: wrong
+    feedback: "It stays the same reference, resolved by the same production identity, which still has no access."
+  - id: kv-admin-sub
+    label: "Give production's identity Key Vault Administrator on the whole subscription"
+    kind: destructive
+    feedback: "The app could now read, change and delete every secret, key and certificate in every vault in the subscription. It needs to read secrets in one vault."
+
+solution_paths:
+  - [grant-prod-rbac]
+
+key_evidence: [provider-401, kv-ref-failed, prod-identity, rbac-staging-only]
+
+evidence_labels:
+  provider-401: "The payment provider rejects the API key it's sent (401)"
+  kv-ref-failed: "Key Vault diagnostics: PAYMENT_API_KEY isn't resolved, access denied"
+  prod-identity: "Production's identity is 3c1e7b52..., not staging's 9a7d4e16..."
+  rbac-staging-only: "Only the staging identity has Key Vault Secrets User on kv-payments"
+
+hints:
+  nudge: "Same code and settings worked in staging. Which part of a slot doesn't move in a swap?"
+  direction: "Compare the identities of the two slots with who has access to kv-payments."
+  answer: "Managed identities aren't swapped. Give production's identity (3c1e7b52...) Key Vault Secrets User on kv-payments."
+
+analogy:
+  title: "The new manager's badge"
+  text: |
+    The new procedure was rehearsed by the deputy, whose badge opens the
+    safe. On launch day the manager runs it with their own badge, which was
+    never added, so the safe stays shut. And there's a second safe in the
+    old building that doesn't use badges at all: it has a paper list at the
+    door.
+
+debrief:
+  root_cause: |
+    A swap moves the app and its swappable settings, but managed identities
+    stay with their slot. Key Vault references resolve with the app's
+    system-assigned identity, so after the swap production resolved
+    PAYMENT_API_KEY with its own identity, which had no role on kv-payments.
+    An unresolved reference is passed to the app as the literal
+    @Microsoft.KeyVault(...) string, which the payment provider rejected as
+    an invalid key.
+  ideal_path:
+    - "Read the logs: the provider rejects the API key with 401."
+    - "Check the Key Vault reference diagnostics: not resolved, access denied."
+    - "Compare identities: production's differs from staging's, and only staging has the role on kv-payments."
+    - "Grant production's identity Key Vault Secrets User on kv-payments; check the logs again."
+  real_world: |
+    Grant every slot's identity the access it will need before swapping (or
+    use one user-assigned identity for both, set as the Key Vault reference
+    identity), and check Key Vault reference status in staging and in
+    production after a swap.
+
+concepts:
+  - term: "Key Vault references"
+    text: "An app setting whose value is @Microsoft.KeyVault(...): App Service fetches the secret with the app's identity and gives the app the secret's value."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references"
+  - term: "What a slot swap moves"
+    text: "App settings and code move with a swap unless marked as slot settings; managed identities, custom domains and scale settings stay with their slot."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots"
+  - term: "Key Vault permission models"
+    text: "A vault uses either Azure RBAC (roles such as Key Vault Secrets User) or access policies for data access. Each vault uses one of the two."
+    url: "https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-access-policy"
+
+sources:
+  - title: "App Service: Use Key Vault references as app settings (identity, unresolved references, troubleshooting)"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references"
+    retrieved: 2026-10-02
+  - title: "App Service: Set up staging environments (which settings are swapped; managed identities aren't)"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots"
+    retrieved: 2026-10-02
+  - title: "Key Vault: Azure RBAC vs. access policies"
+    url: "https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-access-policy"
+    retrieved: 2026-10-02
+  - title: "Key Vault: Assign a Key Vault access policy"
+    url: "https://learn.microsoft.com/en-us/azure/key-vault/general/assign-access-policy"
+    retrieved: 2026-10-02
+
+stages:
+  - id: access-policy
+    update: |
+      14:35 Checkout works again. But every webhook from the payment provider
+      (refunds, disputes) now fails signature verification, and support can't
+      process refunds.
+    diagram_status: { users: ok }
+    terminal:
+      commands:
+        - match: "az keyvault show -n kv-shared --query properties.enableRbacAuthorization"
+          evidence: shared-policies
+          output: |
+            false
+        - match: "az keyvault show -n kv-payments --query properties.enableRbacAuthorization"
+          output: |
+            true
+        - match: "az keyvault show -n kv-shared --query properties.accessPolicies[].objectId -o tsv"
+          when_actions: [add-policy]
+          output: |
+            5e2a8c71-0d43-4b9f-a6e1-8c3f7b20d915
+            9a7d4e16-2b8c-4c51-8f7a-6e0b3d92c4a8
+            3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093
+        - match: "az keyvault show -n kv-shared --query properties.accessPolicies[].objectId -o tsv"
+          evidence: policy-staging-only
+          output: |
+            5e2a8c71-0d43-4b9f-a6e1-8c3f7b20d915
+            9a7d4e16-2b8c-4c51-8f7a-6e0b3d92c4a8
+    files:
+      - path: "Diagnose and solve problems: Key Vault Application Settings Diagnostics (14:40)"
+        evidence: webhook-ref-failed
+        content: |
+          Setting            Vault         Status
+          PAYMENT_API_KEY    kv-payments   Resolved
+          WEBHOOK_SECRET     kv-shared     Not resolved: the app's identity was denied access to the secret
+    hypotheses:
+      - id: access-policy-model
+        text: "kv-shared uses access policies, not Azure RBAC, and production's identity has no access policy there, so WEBHOOK_SECRET still doesn't resolve."
+        correct: true
+      - id: rbac-delay
+        text: "The role assignment is still propagating."
+        feedback: "PAYMENT_API_KEY resolved after the role assignment. WEBHOOK_SECRET is in a different vault, and that vault doesn't use roles at all."
+      - id: provider-secret
+        text: "The payment provider changed the webhook signing secret."
+        feedback: "Staging verified webhooks with the same secret this morning. In production the reference to it doesn't resolve."
+      - id: webhook-slot
+        text: "The provider still sends webhooks to the staging slot."
+        feedback: "The webhooks are reaching production, and failing there: the log shows them on app-payments, rejected at signature verification."
+    actions:
+      - id: add-policy
+        label: "az keyvault set-policy -n kv-shared --object-id 3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093 --secret-permissions get"
+        kind: fix
+        match_regex: "^az keyvault set-policy (-n|--name) kv-shared --object-id 3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093 --secret-permissions get$"
+        feedback: "Production's identity can now get secrets in kv-shared. WEBHOOK_SECRET resolves and signatures verify."
+      - id: rbac-on-shared
+        label: "Give production's identity Key Vault Secrets User on kv-shared"
+        kind: wrong
+        feedback: "kv-shared uses access policies (enableRbacAuthorization is false), so role assignments don't grant data access to it. Nothing changes."
+      - id: all-permissions
+        label: "az keyvault set-policy -n kv-shared --object-id 3c1e7b52-6d0a-4f8e-a9b3-25e4c7d1f093 --secret-permissions all"
+        kind: wrong
+        feedback: "It would work, and also let the app set and delete every secret in a vault other apps depend on. It needs get."
+      - id: switch-to-rbac
+        label: "Switch kv-shared to the Azure RBAC permission model"
+        kind: destructive
+        feedback: "Every other app that reads kv-shared through an access policy loses access at once, because access policies stop applying. That move needs planning, not an incident."
+    solution_paths:
+      - [add-policy]
+    key_evidence: [webhook-fail, webhook-ref-failed, shared-policies, policy-staging-only]
+    evidence_labels:
+      webhook-fail: "Checkout works, but webhooks fail signature verification"
+      webhook-ref-failed: "WEBHOOK_SECRET in kv-shared still isn't resolved"
+      shared-policies: "kv-shared uses access policies, not Azure RBAC"
+      policy-staging-only: "kv-shared's access policies include staging's identity, not production's"
+    hints:
+      nudge: "One reference resolved after the role assignment, the other didn't. What's different about the second vault?"
+      direction: "Check which permission model kv-shared uses, then who it grants access to."
+      answer: "kv-shared uses access policies. Add one for production's identity with get on secrets (az keyvault set-policy ... --secret-permissions get)."
+    debrief:
+      root_cause: |
+        WEBHOOK_SECRET lives in kv-shared, an older vault that uses access
+        policies rather than Azure RBAC. The role assignment fixed
+        kv-payments but means nothing to kv-shared, whose access policies
+        listed the staging identity and not production's. So the reference
+        stayed unresolved, the app checked webhook signatures against the
+        literal reference string, and every webhook failed.
+      ideal_path:
+        - "Read the logs again: checkout works, webhooks fail signature checks."
+        - "Check the reference diagnostics: WEBHOOK_SECRET (kv-shared) still unresolved."
+        - "Check kv-shared's permission model: access policies, not RBAC."
+        - "Add an access policy with get on secrets for production's identity; check the logs."

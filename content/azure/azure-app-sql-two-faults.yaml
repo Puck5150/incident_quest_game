@@ -1,0 +1,260 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-app-sql-two-faults
+track: azure
+difficulty: 3
+title: "The inventory app can't use its new database: first the network, then the sign-in"
+par_minutes: 15
+
+ticket:
+  from: "Warehouse operations"
+  priority: P1
+  body: |
+    Since this morning's release the inventory app shows "Something went
+    wrong" on every page. The release moved it to a new Azure SQL database
+    and switched it from a password to its managed identity, which security
+    asked for. The warehouse is picking orders from paper lists.
+
+environment: |
+  app-inventory is an App Service web app (resource group rg-inventory) with
+  a system-assigned managed identity. It connects to the database inventory
+  on the new logical server sql-acme-inventory, created by the platform
+  team's template with Microsoft Entra-only authentication; platform-admins
+  (an Entra group) is the server's Entra admin. The connection string uses
+  Authentication=Active Directory Default.
+
+diagram:
+  nodes:
+    - { id: users, label: "warehouse staff", col: 0, row: 0, status: degraded }
+    - { id: app, label: "App Service app-inventory", col: 1, row: 0, status: degraded }
+    - { id: sql, label: "Azure SQL sql-acme-inventory / inventory", col: 2, row: 0, status: ok }
+  edges:
+    - { from: users, to: app }
+    - { from: app, to: sql }
+
+terminal:
+  prompt: "you@cloudshell:~$"
+  commands:
+    - match: "az webapp log tail -g rg-inventory -n app-inventory"
+      when_actions: [allow-outbound-ips, create-db-user]
+      output: |
+        2026-10-02T09:52:10  INFO  GET /orders/picking 200 (41 ms)
+        2026-10-02T09:52:12  INFO  GET /stock/A-114 200 (18 ms)
+    - match: "az webapp log tail -g rg-inventory -n app-inventory"
+      when_actions: [allow-outbound-ips]
+      evidence: login-failed
+      output: |
+        2026-10-02T09:41:03  ERROR Microsoft.Data.SqlClient.SqlException (0x80131904): Login failed for user '<token-identified principal>'.
+           Error Number:18456,State:1,Class:14
+    - match: "az webapp log tail -g rg-inventory -n app-inventory"
+      evidence: firewall-40615
+      output: |
+        2026-10-02T09:12:44  ERROR Microsoft.Data.SqlClient.SqlException (0x80131904): Cannot open server 'sql-acme-inventory' requested by the login. Client with IP address '20.51.9.112' is not allowed to access the server.
+           Error Number:40615,State:1,Class:14
+    - match: "az sql server firewall-rule list -g rg-inventory -s sql-acme-inventory -o table"
+      when_actions: [allow-outbound-ips]
+      output: |
+        EndIpAddress    Name          StartIpAddress
+        --------------  ------------  ----------------
+        203.0.113.10    office-vpn    203.0.113.10
+        20.51.8.30      app-out-1     20.51.8.30
+        20.51.9.112     app-out-2     20.51.9.112
+        20.51.10.7      app-out-3     20.51.10.7
+        20.51.11.64     app-out-4     20.51.11.64
+    - match: "az sql server firewall-rule list -g rg-inventory -s sql-acme-inventory -o table"
+      evidence: office-only
+      output: |
+        EndIpAddress    Name          StartIpAddress
+        --------------  ------------  ----------------
+        203.0.113.10    office-vpn    203.0.113.10
+    - match: "az webapp show -g rg-inventory -n app-inventory --query possibleOutboundIpAddresses -o tsv"
+      evidence: app-ips
+      output: |
+        20.51.8.30,20.51.9.112,20.51.10.7,20.51.11.64
+
+hypotheses:
+  - id: firewall
+    text: "The new server's firewall only allows the office, not the app's outbound IP addresses, so connections are refused before sign-in."
+    correct: true
+  - id: identity-off
+    text: "The app's managed identity isn't turned on."
+    feedback: "An identity problem would fail at sign-in. Error 40615 comes earlier: the server refuses the connection because of the client's IP address."
+  - id: dns
+    text: "The app can't resolve the new server's name."
+    feedback: "The server answered: it named the client's IP address and said it isn't allowed. Name resolution worked."
+  - id: db-down
+    text: "The new database is offline."
+    feedback: "The server is up and enforcing its firewall. The error is about the client's address, not the database's state."
+
+actions:
+  - id: allow-outbound-ips
+    label: "Add a server firewall rule for each of the app's possible outbound IP addresses (az sql server firewall-rule create, once per address)"
+    kind: fix
+    feedback: "The app picks one of its outbound addresses at random for each connection, so all four are now allowed, and nothing else new is."
+  - id: allow-azure
+    label: "Turn on \"Allow Azure services and resources to access this server\""
+    kind: wrong
+    feedback: "The app would get through, but so would any Azure resource with outbound access, including other customers' subscriptions. Allow the app's own addresses (or move it to a private endpoint)."
+  - id: one-ip
+    label: "Add a firewall rule for 20.51.9.112, the address in the error"
+    kind: wrong
+    feedback: "That's only one of the app's four outbound addresses, and the app picks one at random per connection, so about three in four connections still fail."
+  - id: allow-all
+    label: "Add a firewall rule from 0.0.0.0 to 255.255.255.255"
+    kind: destructive
+    feedback: "That opens the database's public endpoint to the whole internet, protected only by sign-in. The firewall exists so that isn't the only line of defence."
+
+solution_paths:
+  - [allow-outbound-ips]
+
+key_evidence: [firewall-40615, office-only, app-ips]
+
+evidence_labels:
+  firewall-40615: "Error 40615: client IP 20.51.9.112 isn't allowed to access the server"
+  office-only: "The server's firewall allows only the office VPN address"
+  app-ips: "The app can use any of four outbound IP addresses"
+
+hints:
+  nudge: "The error names an IP address. Whose is it, and what does the server allow?"
+  direction: "Compare the server's firewall rules with the app's possible outbound IP addresses."
+  answer: "The new server allows only the office IP. Add firewall rules for all of the app's possible outbound IP addresses."
+
+analogy:
+  title: "A new building, a new reception"
+  text: |
+    The team moved to a new building, and its reception only lets in people
+    on the visitor list, which so far has just the managers. Add the team to
+    the list. Once they're in, the next question is whether their new key
+    cards open the office door.
+
+debrief:
+  root_cause: |
+    The new logical server's firewall blocks all public connections except
+    its rules, and the template only added the office address. App Service
+    sends outbound connections from one of the app's outbound IP addresses,
+    picked at random, so every connection was refused with error 40615
+    before sign-in. Adding rules for all of the app's possible outbound
+    addresses lets it through without opening the server to anyone else.
+  ideal_path:
+    - "Read the app's log: error 40615 names client IP 20.51.9.112."
+    - "List the server's firewall rules: only the office address."
+    - "Find all the app's possible outbound IPs: four addresses."
+    - "Add a rule for each, then read the log again."
+  real_world: |
+    Firewall rules for App Service outbound addresses work but need upkeep:
+    the set can change with the pricing tier. Private endpoints with virtual
+    network integration avoid public addresses entirely. "Allow Azure
+    services" is broader than it sounds: it includes other customers.
+
+concepts:
+  - term: "Server-level IP firewall"
+    text: "Azure SQL's firewall blocks all public connections to a logical server until rules allow specific IP address ranges."
+    url: "https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure"
+  - term: "App Service outbound IPs"
+    text: "An app's outbound connections come from one of a set of shared addresses, chosen at random; possibleOutboundIpAddresses lists every one it might use."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/overview-inbound-outbound-ips"
+  - term: "Managed identity"
+    text: "An identity Azure creates for a resource. A system-assigned identity for an app has the app's name and gets tokens automatically, with no password."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity"
+  - term: "Contained database user"
+    text: "A user created inside a database that maps to a Microsoft Entra identity, so that identity can sign in to that database."
+    url: "https://learn.microsoft.com/en-us/azure/app-service/tutorial-connect-msi-sql-database"
+
+sources:
+  - title: "Azure SQL Database: IP firewall rules (Allow Azure services includes other customers)"
+    url: "https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure"
+    retrieved: 2026-10-02
+  - title: "Azure SQL: Troubleshoot common connection issues (40615, 18456)"
+    url: "https://learn.microsoft.com/en-us/azure/azure-sql/database/troubleshoot-common-errors-issues"
+    retrieved: 2026-10-02
+  - title: "App Service: Inbound and outbound IP addresses"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/overview-inbound-outbound-ips"
+    retrieved: 2026-10-02
+  - title: "App Service: Connect to SQL Database using managed identity (CREATE USER FROM EXTERNAL PROVIDER)"
+    url: "https://learn.microsoft.com/en-us/azure/app-service/tutorial-connect-msi-sql-database"
+    retrieved: 2026-10-02
+
+stages:
+  - id: db-user
+    update: |
+      09:45 Still "Something went wrong" on every page. The firewall change
+      is in, but the log shows a new error.
+    terminal:
+      commands:
+        - match: "az webapp identity show -g rg-inventory -n app-inventory --query [type,principalId]"
+          evidence: identity-on
+          output: |
+            [
+              "SystemAssigned",
+              "6f1d2c3b-8a47-4e95-b0c2-7d3e9a1f5c86"
+            ]
+        - match: "sqlcmd -S sql-acme-inventory.database.windows.net -d inventory -G -Q \"SELECT name, type_desc FROM sys.database_principals WHERE type IN ('E','X')\""
+          when_actions: [create-db-user]
+          output: |
+            name                  type_desc
+            --------------------  ----------------
+            platform-admins       EXTERNAL_GROUP
+            app-inventory         EXTERNAL_USER
+
+            (2 rows affected)
+        - match: "sqlcmd -S sql-acme-inventory.database.windows.net -d inventory -G -Q \"SELECT name, type_desc FROM sys.database_principals WHERE type IN ('E','X')\""
+          evidence: no-db-user
+          output: |
+            name                  type_desc
+            --------------------  ----------------
+            platform-admins       EXTERNAL_GROUP
+
+            (1 rows affected)
+    hypotheses:
+      - id: no-user
+        text: "The app's managed identity has no user in the inventory database, so its sign-in is refused."
+        correct: true
+      - id: firewall-again
+        text: "The firewall is still blocking the app."
+        feedback: "The error changed from 40615 to 18456: the connection now gets through the firewall and fails at sign-in."
+      - id: no-identity
+        text: "The app has no managed identity, so it can't get a token."
+        feedback: "The identity is on (SystemAssigned, with a principal ID), and \"token-identified principal\" means a token was presented. The database just doesn't know who it is."
+      - id: rbac
+        text: "The identity needs an Azure role on the database resource."
+        feedback: "Azure roles manage the database as a resource. Signing in to it and reading data needs a user inside the database."
+    actions:
+      - id: create-db-user
+        label: "As the server's Entra admin, in the inventory database run: CREATE USER [app-inventory] FROM EXTERNAL PROVIDER; ALTER ROLE db_datareader ADD MEMBER [app-inventory]; ALTER ROLE db_datawriter ADD MEMBER [app-inventory];"
+        kind: fix
+        feedback: "The database now has a user mapped to the app's identity (named after the app), with read and write on the data and nothing more."
+      - id: sql-contributor
+        label: "Assign the app's identity the SQL DB Contributor role on the database"
+        kind: wrong
+        feedback: "That lets the identity manage the database resource in Azure (settings, scaling), not sign in to it. The login still fails."
+      - id: back-to-password
+        label: "Put the old SQL login and password back in the connection string"
+        kind: wrong
+        feedback: "The new server uses Microsoft Entra-only authentication, so SQL logins are refused. And moving off passwords was the point of the release."
+      - id: make-admin
+        label: "Make the app's identity the server's Microsoft Entra admin"
+        kind: destructive
+        feedback: "It would sign in, as administrator of every database on the server. Replacing platform-admins also locks the platform team out of their own admin access."
+    solution_paths:
+      - [create-db-user]
+    key_evidence: [login-failed, identity-on, no-db-user]
+    evidence_labels:
+      login-failed: "Error 18456: login failed for a token-identified principal"
+      identity-on: "The app's system-assigned identity is on"
+      no-db-user: "The database has no user for app-inventory"
+    hints:
+      nudge: "It gets through the firewall now. Does the database know who the app is?"
+      direction: "Check the identity exists, then list the database's Entra users."
+      answer: "Create a contained user for the identity in the inventory database (CREATE USER [app-inventory] FROM EXTERNAL PROVIDER) and add it to db_datareader and db_datawriter."
+    debrief:
+      root_cause: |
+        With the firewall open to the app, the connection reached sign-in.
+        The app presented a token for its managed identity, but the inventory
+        database had no user mapped to that identity, so the login failed
+        with error 18456 for a "token-identified principal". A managed
+        identity can only sign in to a database after an Entra admin creates
+        a contained user for it (named after the app) and grants it roles.
+      ideal_path:
+        - "Read the log again: the error is now 18456, a failed login."
+        - "Confirm the app's identity is on."
+        - "List the database's Entra users: none for app-inventory."
+        - "As the Entra admin, CREATE USER [app-inventory] FROM EXTERNAL PROVIDER and grant read and write roles; check the log."

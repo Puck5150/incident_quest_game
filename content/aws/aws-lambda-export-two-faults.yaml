@@ -1,0 +1,255 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: aws-lambda-export-two-faults
+track: aws
+difficulty: 3
+title: "The nightly orders export never arrives, for two different reasons"
+par_minutes: 15
+
+ticket:
+  from: "Finance team"
+  priority: P2
+  body: |
+    The new nightly orders export (a CSV in s3://acme-finance-exports) hasn't
+    arrived once since it went live on Monday. We reconcile from it every
+    morning. The developer says it worked when they ran it on their laptop.
+
+environment: |
+  order-export is a Node.js Lambda function, run at 02:00 by an EventBridge
+  schedule. It's attached to the VPC's private subnets with security group
+  sg-0export, reads yesterday's orders from the PostgreSQL database orders-db
+  (Amazon RDS, security group sg-0ordersdb), and writes a CSV to S3. Its
+  database client gives up on a connection after 2 seconds. The function was
+  created with default settings.
+
+diagram:
+  nodes:
+    - { id: schedule, label: "EventBridge schedule 02:00", col: 0, row: 0, status: ok }
+    - { id: fn, label: "Lambda order-export", col: 1, row: 0, status: down }
+    - { id: db, label: "RDS orders-db (5432)", col: 2, row: 0, status: ok }
+    - { id: s3, label: "S3 acme-finance-exports", col: 2, row: 1, status: ok }
+  edges:
+    - { from: schedule, to: fn }
+    - { from: fn, to: db }
+    - { from: fn, to: s3 }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "aws lambda get-function-configuration --function-name order-export --query [Timeout,VpcConfig.SecurityGroupIds]"
+      when_actions: [raise-timeout]
+      output: |
+        [
+            30,
+            [ "sg-0export" ]
+        ]
+    - match: "aws lambda get-function-configuration --function-name order-export --query [Timeout,VpcConfig.SecurityGroupIds]"
+      evidence: fn-config
+      output: |
+        [
+            3,
+            [ "sg-0export" ]
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0ordersdb --query SecurityGroups[0].IpPermissions"
+      when_actions: [allow-export]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432,
+              "UserIdGroupPairs": [ { "GroupId": "sg-0api", "Description": "orders API" },
+                                    { "GroupId": "sg-0export", "Description": "order-export" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0ordersdb --query SecurityGroups[0].IpPermissions"
+      evidence: db-sg-api-only
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432,
+              "UserIdGroupPairs": [ { "GroupId": "sg-0api", "Description": "orders API" } ] }
+        ]
+    - match: "aws logs tail /aws/lambda/order-export --since 1d"
+      when_actions: [allow-export, raise-timeout]
+      output: |
+        2026-10-02T02:00:04 START RequestId: 7f1c9a2e-5b13-4d8e-9a41-2c0e8f6d1b37 Version: $LATEST
+        2026-10-02T02:00:13 INFO wrote s3://acme-finance-exports/orders-2026-10-01.csv (48,213 rows)
+        2026-10-02T02:00:13 END RequestId: 7f1c9a2e-5b13-4d8e-9a41-2c0e8f6d1b37
+        2026-10-02T02:00:13 REPORT RequestId: 7f1c9a2e-5b13-4d8e-9a41-2c0e8f6d1b37 Duration: 9124.55 ms Billed Duration: 9125 ms Memory Size: 128 MB Max Memory Used: 104 MB
+    - match: "aws logs tail /aws/lambda/order-export --since 1d"
+      when_actions: [allow-export]
+      evidence: task-timeout
+      output: |
+        2026-10-02T02:00:04 START RequestId: 3b8e0d51-91a7-4c2f-8e6b-5d4a7f0c2e19 Version: $LATEST
+        2026-10-02T02:00:04 INFO connected to orders-db, running export query
+        2026-10-02T02:00:07 3b8e0d51-91a7-4c2f-8e6b-5d4a7f0c2e19 Task timed out after 3.00 seconds
+        2026-10-02T02:00:07 REPORT RequestId: 3b8e0d51-91a7-4c2f-8e6b-5d4a7f0c2e19 Duration: 3000.00 ms Billed Duration: 3000 ms Memory Size: 128 MB Max Memory Used: 96 MB
+    - match: "aws logs tail /aws/lambda/order-export --since 1d"
+      evidence: db-conn-timeout
+      output: |
+        2026-10-02T02:00:04 START RequestId: 9d2a4c7e-0f15-4b8a-b3d6-71e5c9a0f824 Version: $LATEST
+        2026-10-02T02:00:06 ERROR Error: Connection terminated due to connection timeout (orders-db.c9xk2mfa1b3q.us-east-1.rds.amazonaws.com:5432)
+        2026-10-02T02:00:06 END RequestId: 9d2a4c7e-0f15-4b8a-b3d6-71e5c9a0f824
+        2026-10-02T02:00:06 REPORT RequestId: 9d2a4c7e-0f15-4b8a-b3d6-71e5c9a0f824 Duration: 2041.17 ms Billed Duration: 2042 ms Memory Size: 128 MB Max Memory Used: 71 MB
+
+hypotheses:
+  - id: db-sg
+    text: "orders-db's security group only allows the orders API's security group on 5432, not the function's."
+    correct: true
+  - id: no-nat
+    text: "The private subnets have no NAT gateway, so the function can't reach anything."
+    feedback: "The database is inside the same VPC: traffic to it never needs a NAT gateway or the internet. The connection is being dropped on the way in to the database."
+  - id: timeout-first
+    text: "The function's 3-second timeout is too short."
+    feedback: "Look at the duration: about 2 seconds, and the error is the database client's own connection timeout. It never connected, so more time wouldn't help yet."
+  - id: wrong-password
+    text: "The function has the wrong database password."
+    feedback: "A wrong password gets an authentication error back from PostgreSQL. This never got an answer at all: the connection timed out."
+
+actions:
+  - id: allow-export
+    label: "aws ec2 authorize-security-group-ingress --group-id sg-0ordersdb --protocol tcp --port 5432 --source-group sg-0export"
+    kind: fix
+    match_regex: "^aws ec2 authorize-security-group-ingress --group-id sg-0ordersdb --protocol tcp --port 5432 --source-group sg-0export$"
+    feedback: "orders-db now accepts PostgreSQL connections from anything with sg-0export: the function, and nothing else new."
+  - id: allow-vpc
+    label: "Allow 5432 into sg-0ordersdb from the whole VPC CIDR (10.0.0.0/16)"
+    kind: wrong
+    feedback: "It works, but every resource in the VPC can now reach the orders database. Reference the function's security group instead."
+  - id: client-timeout
+    label: "Raise the database client's connection timeout from 2 to 30 seconds"
+    kind: wrong
+    feedback: "Nothing answers on 5432 from this function, so the client would just wait longer for an answer that never comes, and the function's own 3-second timeout would stop it first."
+  - id: db-public
+    label: "Make orders-db publicly accessible so the function can reach it"
+    kind: destructive
+    feedback: "That gives the orders database a public IP address. The function is inside the VPC anyway; this only adds exposure, and still doesn't change the security group."
+
+solution_paths:
+  - [allow-export]
+
+key_evidence: [db-conn-timeout, fn-config, db-sg-api-only]
+
+evidence_labels:
+  db-conn-timeout: "The function's database connection times out after 2 seconds"
+  fn-config: "The function runs with security group sg-0export"
+  db-sg-api-only: "orders-db allows 5432 only from sg-0api"
+
+hints:
+  nudge: "The function never gets an answer from the database. What decides who may connect to it?"
+  direction: "Compare the security group the function runs with and the ones orders-db allows in on 5432."
+  answer: "sg-0ordersdb allows 5432 only from sg-0api. Add an inbound rule for 5432 from sg-0export."
+
+analogy:
+  title: "The new clerk isn't on the archive's list"
+  text: |
+    A new clerk is sent down to the archive every night to copy yesterday's
+    orders. The archive door only opens for the sales team's badges, so the
+    clerk waits a moment and leaves empty-handed. Add the clerk's badge.
+    Then you'll find the next problem: the clerk's shift ends before the
+    copying is done.
+
+debrief:
+  root_cause: |
+    A function attached to a VPC uses its own security groups, here sg-0export.
+    orders-db's security group allowed PostgreSQL only from sg-0api, the
+    orders API, so the function's connections were silently dropped and its
+    database client gave up after 2 seconds. Security groups only have allow
+    rules, so a missing rule looks like a timeout, not a refusal.
+  ideal_path:
+    - "Read the function's logs: the database connection times out."
+    - "Note the function's security group, sg-0export."
+    - "Read orders-db's inbound rules: 5432 only from sg-0api."
+    - "Allow 5432 from sg-0export, then run the export and read the logs again."
+  real_world: |
+    The RDS console's "Set up Lambda connection" creates exactly this pair of
+    rules for you. Functions that make many short connections also benefit
+    from RDS Proxy. Either way, size the function timeout to the work: the
+    default is 3 seconds.
+
+concepts:
+  - term: "Lambda in a VPC"
+    text: "A function attached to a VPC reaches resources there through network interfaces in its subnets, using the security groups you give it."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html"
+  - term: "Security group referencing"
+    text: "An inbound rule can allow traffic from another security group instead of an IP range: anything using that group may connect."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  - term: "Function timeout"
+    text: "The longest a function may run per invocation: 3 seconds by default, up to 900 seconds. When it's reached, Lambda stops the invocation."
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-timeout.html"
+
+sources:
+  - title: "Amazon RDS: Automatically connecting a Lambda function and a DB instance (security groups)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/lambda-rds-connect.html"
+    retrieved: 2026-10-02
+  - title: "AWS Lambda: Configure Lambda function timeout (3 seconds by default)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-timeout.html"
+    retrieved: 2026-10-02
+  - title: "AWS Lambda: Troubleshoot invocation issues (Task timed out after 3.00 seconds)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/troubleshooting-invocation.html"
+    retrieved: 2026-10-02
+  - title: "AWS Lambda: Giving Lambda functions access to resources in an Amazon VPC"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html"
+    retrieved: 2026-10-02
+
+stages:
+  - id: function-timeout
+    update: |
+      Next morning: still no CSV. The function now connects to orders-db, but
+      the export still never reaches S3.
+    diagram_status: { db: ok, fn: degraded }
+    logs:
+      - name: "orders-db PostgreSQL log (slow statements, 02:00)"
+        evidence: query-8s
+        lines: |
+          2026-10-02 02:00:12 UTC LOG:  duration: 7845.112 ms  statement: SELECT * FROM orders WHERE created_at >= $1 AND created_at < $2
+    hypotheses:
+      - id: fn-timeout
+        text: "The export query takes about 8 seconds, but the function still has the default 3-second timeout, so Lambda stops it before it writes the file."
+        correct: true
+      - id: sg-again
+        text: "The security group still blocks the database."
+        feedback: "The logs say \"connected to orders-db, running export query\", and the database logged the query. The connection works now."
+      - id: s3-permission
+        text: "The function isn't allowed to write to the S3 bucket."
+        feedback: "It never gets that far. A missing S3 permission would show an AccessDenied error from S3; this invocation was stopped at 3.00 seconds, mid-query."
+      - id: memory
+        text: "The function runs out of memory."
+        feedback: "Max memory used is 96 MB of 128 MB, and the log says the task timed out, not that it ran out of memory."
+    actions:
+      - id: raise-timeout
+        label: "aws lambda update-function-configuration --function-name order-export --timeout 30"
+        kind: fix
+        match_regex: "^aws lambda update-function-configuration --function-name order-export --timeout ([1-9][0-9]|[1-8][0-9]{2}|900)$"
+        feedback: "The function now has time to run the query and write the file. The query takes about 8 seconds; a timeout with headroom, well under the 900-second maximum, keeps a slow night from failing."
+      - id: more-memory
+        label: "Raise the function's memory to 1024 MB"
+        kind: wrong
+        feedback: "More memory gives more CPU, but this time is spent waiting on the database query, not computing. It still stops at 3 seconds."
+      - id: rds-proxy
+        label: "Put RDS Proxy in front of orders-db"
+        kind: wrong
+        feedback: "RDS Proxy pools connections, which helps functions that open many short ones. It doesn't make an 8-second query faster than a 3-second timeout."
+      - id: restart-db
+        label: "Reboot orders-db to clear whatever is slowing it down"
+        kind: destructive
+        feedback: "The orders API loses its database during the reboot, and the query is just as slow afterwards: it reads a full day of orders."
+    solution_paths:
+      - [raise-timeout]
+    key_evidence: [task-timeout, query-8s, fn-config]
+    evidence_labels:
+      task-timeout: "The function connects, then Lambda stops it: \"Task timed out after 3.00 seconds\""
+      query-8s: "The export query takes about 7.8 seconds"
+      fn-config: "The function's timeout is 3 seconds, the default"
+    hints:
+      nudge: "It connects now. How long does the work take, and how long is the function allowed to run?"
+      direction: "Compare the query's duration in the database log with the function's timeout setting."
+      answer: "The query takes about 8 seconds and the function's timeout is the default 3. Raise the timeout (for example to 30 seconds)."
+    debrief:
+      root_cause: |
+        With the database reachable, the function connected and ran the
+        export query, which takes about 8 seconds for a day of orders. But
+        the function was created with the default timeout of 3 seconds, so
+        Lambda stopped it mid-query ("Task timed out after 3.00 seconds") and
+        it never wrote the file. It ran fine on a laptop because nothing
+        there stops a script after 3 seconds.
+      ideal_path:
+        - "Read the logs again: it connects now, then times out at 3.00 seconds."
+        - "Find how long the work takes: the database logged the query at about 7.8 seconds."
+        - "Check the function's timeout: 3 seconds, the default."
+        - "Raise the timeout with headroom, then confirm the CSV arrives."

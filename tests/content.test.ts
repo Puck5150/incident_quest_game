@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { check, loadContent } from '../vite-plugin-content.ts'
-import { ScenarioSchema } from '../src/schema/scenario.ts'
+import { ScenarioSchema, type Scenario } from '../src/schema/scenario.ts'
 import { ChallengeSchema } from '../src/schema/challenge.ts'
 import { evaluate } from '../src/game/challenge.ts'
 import { CanvasChallengeSchema } from '../src/schema/canvas.ts'
@@ -22,20 +22,27 @@ describe('content', () => {
     expect(scenarios.length).toBeGreaterThan(0)
   })
 
-  // Every solution path must actually resolve through the real engine.
-  it.each(loadContent(CONTENT).scenarios.flatMap((s) => s.solution_paths.map((p) => [s.id, p, s] as const)))(
-    '%s is winnable via %j',
-    (_id, path, s) => {
-      const correct = s.hypotheses.find((h) => h.correct)!.id
-      const events: GameEvent[] = [
-        { type: 'START', at: 0 },
-        { type: 'DECLARE_HYPOTHESIS', id: correct, at: 1 },
-        ...path.map((id, i): GameEvent => ({ type: 'TAKE_ACTION', id, at: 2 + i })),
-        { type: 'CLOSE_INCIDENT', at: 100 },
-      ]
-      expect(events.reduce((sess, e) => step(s, sess, e), newSession()).phase).toBe('resolved')
-    },
-  )
+  // Every solution path must actually resolve through the real engine. In a
+  // multi-stage incident, each path is tried for its stage, with the other
+  // stages played by their first path.
+  const stagesOf = (s: Scenario) => [s, ...(s.stages ?? [])]
+  it.each(
+    loadContent(CONTENT).scenarios.flatMap((s) =>
+      stagesOf(s).flatMap((st, k) => st.solution_paths.map((p) => [s.id, k + 1, p, s] as const)),
+    ),
+  )('%s stage %i is winnable via %j', (_id, stage, path, s) => {
+    let at = 0
+    const events: GameEvent[] = [{ type: 'START', at: at++ }]
+    stagesOf(s).forEach((st, k) => {
+      const fix = k + 1 === stage ? path : st.solution_paths[0]
+      events.push(
+        { type: 'DECLARE_HYPOTHESIS', id: st.hypotheses.find((h) => h.correct)!.id, at: at++ },
+        ...fix.map((id): GameEvent => ({ type: 'TAKE_ACTION', id, at: at++ })),
+        { type: 'CLOSE_INCIDENT', at: at++ },
+      )
+    })
+    expect(events.reduce((sess, e) => step(s, sess, e), newSession()).phase).toBe('resolved')
+  })
 
   it('_challenge_template.yaml is itself a valid challenge whose reference design passes', () => {
     const errors: string[] = []
