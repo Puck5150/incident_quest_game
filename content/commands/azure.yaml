@@ -216,6 +216,19 @@
     - { command: "Azure built-in roles reference", note: "Every built-in role's permissions." }
   docs: { title: "Azure CLI: az role definition list", url: "https://learn.microsoft.com/en-us/cli/azure/role/definition?view=azure-cli-latest#az-role-definition-list" }
 
+- id: az-servicebus-namespace-show
+  match: "^az servicebus namespace show"
+  summary: "Shows a Service Bus namespace's settings."
+  parts:
+    - { token: "-g rg-fulfil", meaning: "--resource-group." }
+    - { token: "-n sb-fulfil-prod", meaning: "--name: the namespace." }
+    - { token: "--query disableLocalAuth", meaning: "Just whether local (SAS key) authentication is disabled: true means only Microsoft Entra ID works." }
+  why: "A 401 from a client using a connection string, on a namespace with local auth disabled, is explained in one value."
+  alternatives:
+    - { command: "az monitor activity-log list --resource-id NAMESPACE_ID", note: "When and by whom the setting changed." }
+    - { command: "Azure portal > namespace > Overview > Local Authentication", note: "The same setting." }
+  docs: { title: "Azure CLI: az servicebus namespace", url: "https://learn.microsoft.com/en-us/cli/azure/servicebus/namespace?view=azure-cli-latest" }
+
 - id: az-servicebus-queue-show
   match: "^az servicebus queue show"
   summary: "Shows a Service Bus queue's settings and message counts."
@@ -223,7 +236,7 @@
     - { token: "-g rg-shop", meaning: "--resource-group." }
     - { token: "--namespace-name sb-shop", meaning: "The Service Bus namespace." }
     - { token: "-n orders-to-warehouse", meaning: "--name: the queue." }
-    - { token: "--query countDetails", meaning: "Active, dead-lettered, scheduled and transfer message counts." }
+    - { token: "--query countDetails", meaning: "Active, dead-lettered, scheduled and transfer message counts (or --query maxDeliveryCount for the delivery limit)." }
   why: "A growing dead-letter count means messages are being rejected or expiring, not just processed slowly."
   alternatives:
     - { command: "Service Bus Explorer (portal)", note: "Peek the dead-lettered messages and their reasons." }
@@ -296,6 +309,18 @@
     - { command: "az webapp config appsettings list -n APP -g RG", note: "App settings, with the same slotSetting flag." }
   docs: { title: "Azure CLI: az webapp config connection-string", url: "https://learn.microsoft.com/en-us/cli/azure/webapp/config/connection-string?view=azure-cli-latest" }
 
+- id: az-webapp-appsettings
+  match: "^az webapp config appsettings list"
+  summary: "Lists an App Service app's application settings."
+  parts:
+    - { token: "-g rg-shop", meaning: "--resource-group." }
+    - { token: "-n app-checkout", meaning: "--name: the app." }
+    - { token: "--query \"[?starts_with(name, 'ServiceBus')]\"", meaning: "JMESPath filter: only settings whose name starts with ServiceBus." }
+  why: "Shows how the app connects: a connection string with SharedAccessKey means SAS; a fullyQualifiedNamespace setting means it uses its identity."
+  alternatives:
+    - { command: "Azure portal > App Service > Environment variables", note: "The same settings." }
+  docs: { title: "Azure CLI: az webapp config appsettings", url: "https://learn.microsoft.com/en-us/cli/azure/webapp/config/appsettings?view=azure-cli-latest" }
+
 - id: az-webapp-hostnames
   match: "^az webapp config hostname list"
   summary: "Lists the host names bound to an App Service app."
@@ -346,3 +371,14 @@
   alternatives:
     - { command: "Azure portal > App Service > Properties", note: "Outbound IPs and location." }
   docs: { title: "Azure CLI: az webapp show", url: "https://learn.microsoft.com/en-us/cli/azure/webapp?view=azure-cli-latest#az-webapp-show" }
+
+- id: az-functionapp-scale-config
+  match: "^az functionapp scale config show"
+  summary: "Shows a Flex Consumption function app's scale settings: instance memory and maximum instance count."
+  parts:
+    - { token: "-g rg-fulfil", meaning: "--resource-group." }
+    - { token: "-n func-fulfil", meaning: "--name: the function app." }
+  why: "The maximum instance count (100 by default) bounds how wide the app can fan out against whatever it calls."
+  alternatives:
+    - { command: "az functionapp scale config set -g RG -n APP --maximum-instance-count N", note: "Change the cap." }
+  docs: { title: "Azure CLI: az functionapp scale config", url: "https://learn.microsoft.com/en-us/cli/azure/functionapp/scale/config?view=azure-cli-latest" }

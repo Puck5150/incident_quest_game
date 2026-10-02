@@ -1,0 +1,408 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: azure-orders-backlog-major
+track: azure
+difficulty: 5
+title: "No orders have reached the warehouse since last night"
+par_minutes: 30
+
+ticket:
+  from: "Head of fulfilment"
+  priority: P1
+  body: |
+    The warehouse hasn't received a single order since about 22:00 last
+    night, but the shop is taking orders: customers have confirmation
+    emails. Nothing is red on the dashboards except the CPU alert on the
+    shop's App Service plan, which also started around then. We ship
+    same-day; every hour counts.
+
+environment: |
+  app-checkout (App Service, rg-shop, system-assigned managed identity) takes
+  orders and sends each one to the Service Bus queue fulfilment in namespace
+  sb-fulfil-prod (rg-fulfil). If a send fails, it keeps the order in its own
+  outbox table and retries every minute. func-fulfil (Azure Functions, Flex
+  Consumption, Service Bus trigger, identity-based connection) receives each
+  message and calls the third-party warehouse API, which allows 20 requests a
+  second and answers 429 above that. The queue keeps the default max
+  delivery count of 10.
+
+diagram:
+  nodes:
+    - { id: checkout, label: "app-checkout (App Service)", col: 0, row: 0, status: degraded }
+    - { id: queue, label: "Service Bus queue fulfilment", col: 1, row: 0, status: ok }
+    - { id: func, label: "func-fulfil (Functions)", col: 2, row: 0, status: ok }
+    - { id: wh, label: "Warehouse API (20 req/s)", col: 3, row: 0, status: ok }
+  edges:
+    - { from: checkout, to: queue }
+    - { from: queue, to: func }
+    - { from: func, to: wh }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "az webapp log tail -g rg-shop -n app-checkout"
+      when_actions: [grant-identity]
+      output: |
+        2026-10-02T09:41:12 INFO  outbox: sent 500 orders to sb-fulfil-prod/fulfilment (managed identity)
+        2026-10-02T09:41:14 INFO  outbox: sent 500 orders to sb-fulfil-prod/fulfilment (managed identity)
+        2026-10-02T09:41:15 INFO  order ORD-551208 sent to sb-fulfil-prod/fulfilment
+    - match: "az webapp log tail -g rg-shop -n app-checkout"
+      evidence: send-401
+      output: |
+        2026-10-02T09:40:01 ERROR send to sb-fulfil-prod/fulfilment failed: 401 Unauthorized (auth: SAS key checkout-send). Order ORD-551187 kept in outbox.
+        2026-10-02T09:40:01 WARN  outbox: 14,203 orders waiting; oldest 2026-09-30T22:04:17Z
+    - match: "az servicebus namespace show -g rg-fulfil -n sb-fulfil-prod --query disableLocalAuth"
+      evidence: local-auth-off
+      output: |
+        true
+    - match: "az webapp config appsettings list -g rg-shop -n app-checkout --query \"[?starts_with(name, 'ServiceBus')]\""
+      when_actions: [grant-identity]
+      output: |
+        [
+          { "name": "ServiceBus__fullyQualifiedNamespace", "slotSetting": false, "value": "sb-fulfil-prod.servicebus.windows.net" }
+        ]
+    - match: "az webapp config appsettings list -g rg-shop -n app-checkout --query \"[?starts_with(name, 'ServiceBus')]\""
+      evidence: sas-setting
+      output: |
+        [
+          { "name": "ServiceBus__ConnectionString", "slotSetting": false,
+            "value": "Endpoint=sb://sb-fulfil-prod.servicebus.windows.net/;SharedAccessKeyName=checkout-send;SharedAccessKey=***" }
+        ]
+    - match: "az webapp identity show -g rg-shop -n app-checkout --query principalId -o tsv"
+      output: |
+        5c2e9a71-3d48-4f0b-a6e2-9b1d7c4f8e03
+    - match: "az role assignment list --assignee 5c2e9a71-3d48-4f0b-a6e2-9b1d7c4f8e03 --all --out table"
+      when_actions: [grant-identity]
+      output: |
+        Principal                             Role                           Scope
+        ------------------------------------  -----------------------------  ---------------------------------------------------------------------------------------------------
+        5c2e9a71-3d48-4f0b-a6e2-9b1d7c4f8e03  Key Vault Secrets User         /subscriptions/.../resourceGroups/rg-shop/providers/Microsoft.KeyVault/vaults/kv-shop
+        5c2e9a71-3d48-4f0b-a6e2-9b1d7c4f8e03  Azure Service Bus Data Sender  /subscriptions/.../resourceGroups/rg-fulfil/providers/Microsoft.ServiceBus/namespaces/sb-fulfil-prod/queues/fulfilment
+    - match: "az role assignment list --assignee 5c2e9a71-3d48-4f0b-a6e2-9b1d7c4f8e03 --all --out table"
+      evidence: no-sb-role
+      output: |
+        Principal                             Role                    Scope
+        ------------------------------------  ----------------------  -----------------------------------------------------------------------------
+        5c2e9a71-3d48-4f0b-a6e2-9b1d7c4f8e03  Key Vault Secrets User  /subscriptions/.../resourceGroups/rg-shop/providers/Microsoft.KeyVault/vaults/kv-shop
+    - match: "az servicebus queue show -g rg-fulfil --namespace-name sb-fulfil-prod -n fulfilment --query countDetails"
+      when_actions: [grant-identity, cap-concurrency, resend-dlq]
+      output: |
+        { "activeMessageCount": 0, "deadLetterMessageCount": 3, "scheduledMessageCount": 0,
+          "transferDeadLetterMessageCount": 0, "transferMessageCount": 0 }
+    - match: "az servicebus queue show -g rg-fulfil --namespace-name sb-fulfil-prod -n fulfilment --query countDetails"
+      when_actions: [grant-identity, cap-concurrency]
+      output: |
+        { "activeMessageCount": 0, "deadLetterMessageCount": 3915, "scheduledMessageCount": 0,
+          "transferDeadLetterMessageCount": 0, "transferMessageCount": 0 }
+    - match: "az servicebus queue show -g rg-fulfil --namespace-name sb-fulfil-prod -n fulfilment --query countDetails"
+      when_actions: [grant-identity]
+      output: |
+        { "activeMessageCount": 9874, "deadLetterMessageCount": 1206, "scheduledMessageCount": 0,
+          "transferDeadLetterMessageCount": 0, "transferMessageCount": 0 }
+    - match: "az servicebus queue show -g rg-fulfil --namespace-name sb-fulfil-prod -n fulfilment --query countDetails"
+      output: |
+        { "activeMessageCount": 0, "deadLetterMessageCount": 3, "scheduledMessageCount": 0,
+          "transferDeadLetterMessageCount": 0, "transferMessageCount": 0 }
+
+logs:
+  - name: "Activity log: sb-fulfil-prod (last 24 h)"
+    lines: |
+      2026-09-30T22:03:58Z  Update Service Bus namespace  sb-fulfil-prod  Succeeded
+          caller: policy remediation "SB-baseline-2026Q3" (Service Bus namespaces should have local authentication methods disabled)
+          change: properties.disableLocalAuth false -> true
+
+metrics:
+  - name: "asp-shop (App Service plan): CPU percentage, nightly"
+    unit: "%"
+    evidence: plan-cpu
+    threshold: { value: 80, label: "alert at 80%" }
+    series:
+      - label: "CPU % at 22:30"
+        points: [["09-24", 86], ["09-25", 88], ["09-26", 85], ["09-27", 87], ["09-28", 84], ["09-29", 86], ["09-30", 87]]
+files:
+  - path: "asp-shop: scheduled jobs"
+    content: |
+      product-feed-export   app-feeds (same plan)   every night 22:00-23:15   builds the 400 MB marketplace feed
+
+hypotheses:
+  - id: local-auth
+    text: "Last night's policy remediation disabled SAS (local) authentication on the namespace, and app-checkout still sends with a SAS connection string."
+    correct: true
+  - id: cpu
+    text: "app-checkout is starved of CPU, so it can't send."
+    feedback: "The plan hits 85% every night at 22:30 when the product feed export runs, all week, and orders flowed on every other night. The app is running: it logs a 401 for every send."
+  - id: sas-rotated
+    text: "Someone rotated the checkout-send SAS key."
+    feedback: "A rotated key would fail the same way, but the activity log shows the namespace's disableLocalAuth changing to true at 22:03. With local auth disabled, no SAS key works, old or new."
+  - id: consumer
+    text: "func-fulfil stopped processing the queue."
+    feedback: "The queue is empty except for 3 old dead letters. Nothing is arriving to process: the sends are failing upstream."
+
+actions:
+  - id: grant-identity
+    label: "Assign app-checkout's managed identity Azure Service Bus Data Sender on the fulfilment queue, and switch its setting from ServiceBus__ConnectionString to ServiceBus__fullyQualifiedNamespace"
+    kind: fix
+    feedback: "app-checkout now authenticates with Microsoft Entra ID, which is what the namespace accepts. The outbox starts sending its backlog."
+  - id: reenable-local-auth
+    label: "az servicebus namespace update -g rg-fulfil -n sb-fulfil-prod --disable-local-auth false"
+    kind: wrong
+    match_regex: "^az servicebus namespace update -g rg-fulfil -n sb-fulfil-prod --disable-local-auth false$"
+    feedback: "It would work until the policy's next remediation turns it off again, and it brings back the long-lived shared key the baseline removed. Move the app to its managed identity."
+  - id: rotate-key
+    label: "Regenerate the checkout-send key and update the connection string"
+    kind: wrong
+    feedback: "With local authentication disabled, SAS policies still exist but can't produce working tokens. A new key fails exactly like the old one."
+  - id: data-owner
+    label: "Assign app-checkout Azure Service Bus Data Owner on the namespace"
+    kind: wrong
+    feedback: "It would work (once the app stops using SAS), but Owner can also receive and manage every entity. The app only sends to one queue: Data Sender on that queue."
+
+solution_paths:
+  - [grant-identity]
+
+key_evidence: [send-401, local-auth-off, sas-setting, no-sb-role]
+
+evidence_labels:
+  send-401: "Every send since 22:04 fails 401, using the SAS key checkout-send"
+  local-auth-off: "The namespace has local (SAS) authentication disabled"
+  sas-setting: "app-checkout connects with a SAS connection string"
+  no-sb-role: "app-checkout's identity has no Service Bus role"
+
+red_herrings:
+  - evidence: plan-cpu
+    label: "The CPU alert on asp-shop around 22:00"
+    why: "It fires every night at 22:30 while the product feed export runs on the same plan, including all the nights orders flowed. The checkout app was running all along and logging a 401 for every send."
+
+hints:
+  nudge: "The app is running and the queue is empty. What does the app say when it sends?"
+  direction: "The app's log shows 401 using a SAS key. What changed on the namespace around 22:00, and how does the app authenticate?"
+  answer: "Policy remediation disabled local auth at 22:03. Give app-checkout's managed identity Azure Service Bus Data Sender on the queue and switch it to an identity-based connection."
+
+analogy:
+  title: "The building switched to badges overnight"
+  text: |
+    Security replaced the door codes with staff badges overnight. The night
+    clerk still types the old code, so every parcel piles up in the
+    mailroom. Give the clerk a badge and the mailroom empties at once, so
+    fast that the delivery firm turns most of the vans away, and then
+    someone has to sort through the parcels that came back.
+
+debrief:
+  root_cause: |
+    The "Service Bus namespaces should have local authentication methods
+    disabled" policy remediated sb-fulfil-prod at 22:03, setting
+    disableLocalAuth to true. From then on no SAS key works on that
+    namespace. app-checkout still sent with the checkout-send connection
+    string, so every send got 401 and 14,203 orders piled up in its outbox.
+    func-fulfil already used its managed identity, so the queue looked
+    healthy: just empty.
+  ideal_path:
+    - "Read app-checkout's log: 401 on every send, using a SAS key."
+    - "Check the namespace: disableLocalAuth is true (the activity log says since 22:03)."
+    - "Check the app's settings and its identity's roles: SAS connection string, no Service Bus role."
+    - "Assign Data Sender on the queue and switch to the identity-based setting; watch the outbox drain."
+  real_world: |
+    Microsoft's migration order is: give every app an Entra ID role and
+    switch its code, test with both methods enabled, and only then disable
+    local auth. A policy with a remediation task skips straight to the last
+    step for anything not yet migrated.
+
+concepts:
+  - term: "Disabling local (SAS) authentication"
+    text: "With disableLocalAuth true, a Service Bus namespace accepts only Microsoft Entra ID; SAS policies remain but can't produce working tokens."
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/disable-local-authentication"
+  - term: "Max delivery count and the dead-letter queue"
+    text: "Each abandoned or lock-expired delivery increments a message's delivery count; past the maximum (10 by default) it moves to the DLQ with reason MaxDeliveryCountExceeded."
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues"
+  - term: "Functions concurrency and scale-out"
+    text: "The Service Bus trigger processes up to maxConcurrentCalls (16 by default) messages at once per instance, and the app adds instances as the queue grows; both can be capped."
+    url: "https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-service-bus"
+  - term: "Resending dead-lettered messages"
+    text: "Service Bus Explorer can peek the DLQ and re-send selected messages; it sends a copy, and the original stays in the DLQ until you complete it."
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/explorer"
+
+sources:
+  - title: "Azure Service Bus: Disable local authentication (disableLocalAuth, data roles, migration order)"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/disable-local-authentication"
+    retrieved: 2026-10-02
+  - title: "Azure Service Bus: Dead-letter queues (MaxDeliveryCountExceeded, default 10, no automatic cleanup)"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues"
+    retrieved: 2026-10-02
+  - title: "Azure Functions: Service Bus bindings, host.json settings (maxConcurrentCalls 16 per instance)"
+    url: "https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-service-bus"
+    retrieved: 2026-10-02
+  - title: "Azure Functions: Event-driven scaling, limit scale-out (maximum instance count)"
+    url: "https://learn.microsoft.com/en-us/azure/azure-functions/event-driven-scaling"
+    retrieved: 2026-10-02
+  - title: "Azure Service Bus: Service Bus Explorer (peek, re-send selected messages)"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/explorer"
+    retrieved: 2026-10-02
+
+stages:
+  - id: retry-storm
+    update: |
+      09:41: the outbox is draining and the warehouse has started receiving
+      orders. Ten minutes later the warehouse's account manager calls: we're
+      being throttled, and the dead-letter count on fulfilment is climbing
+      past a thousand.
+    diagram_status: { checkout: ok, func: degraded, wh: degraded }
+    terminal:
+      commands:
+        - match: "az functionapp scale config show -g rg-fulfil -n func-fulfil"
+          when_actions: [cap-concurrency]
+          output: |
+            { "instanceMemoryMB": 2048, "maximumInstanceCount": 2, "triggers": null }
+        - match: "az functionapp scale config show -g rg-fulfil -n func-fulfil"
+          evidence: max-100
+          output: |
+            { "instanceMemoryMB": 2048, "maximumInstanceCount": 100, "triggers": null }
+        - match: "az servicebus queue show -g rg-fulfil --namespace-name sb-fulfil-prod -n fulfilment --query maxDeliveryCount"
+          output: |
+            10
+    logs:
+      - name: "func-fulfil traces (Application Insights, 09:50)"
+        evidence: wh-429
+        lines: |
+          09:50:02 ERROR ORD-548113 warehouse POST /orders -> 429 Too Many Requests (Retry-After: 1). DeliveryCount=7
+          09:50:02 ERROR ORD-548120 warehouse POST /orders -> 429 Too Many Requests (Retry-After: 1). DeliveryCount=10
+          09:50:02 ERROR ORD-548097 warehouse POST /orders -> 429 Too Many Requests (Retry-After: 1). DeliveryCount=9
+          09:50:03 INFO  ORD-548131 warehouse POST /orders -> 201 Created (0.5 s)
+          ... 1,206 messages dead-lettered so far: MaxDeliveryCountExceeded
+    files:
+      - path: "func-fulfil/host.json"
+        evidence: host-default
+        content: |
+          {
+            "version": "2.0",
+            "extensions": { "serviceBus": { "autoCompleteMessages": true } }
+          }
+    metrics:
+      - name: "func-fulfil: instances and warehouse calls"
+        unit: "count"
+        evidence: fanout
+        series:
+          - label: "Instances"
+            points: [["09:40", 1], ["09:42", 4], ["09:44", 9], ["09:46", 14], ["09:48", 14], ["09:50", 14]]
+          - label: "Warehouse calls per second"
+            points: [["09:40", 3], ["09:42", 110], ["09:44", 260], ["09:46", 420], ["09:48", 430], ["09:50", 425]]
+    hypotheses:
+      - id: fanout
+        text: "The backlog made func-fulfil scale to 14 instances, each running 16 calls at once, so it hits the warehouse at ~400 calls a second against a 20/s limit. 429s fail the function, and after 10 deliveries messages are dead-lettered."
+        correct: true
+      - id: lock
+        text: "Message locks expire before the function finishes."
+        feedback: "Successful calls take 0.5 seconds, and the trigger renews locks for up to 5 minutes. The failures are 429s from the warehouse, not lock losses."
+      - id: warehouse-down
+        text: "The warehouse API is down."
+        feedback: "Some calls still get 201 Created. It's up, and telling us to slow down: 429 with Retry-After."
+      - id: max-delivery
+        text: "Max delivery count is too low."
+        feedback: "Raising it only postpones the dead-lettering. Every retry still lands on a warehouse that's over its limit."
+    actions:
+      - id: cap-concurrency
+        label: "Cap func-fulfil at 2 instances (az functionapp scale config set ... --maximum-instance-count 2) and set maxConcurrentCalls to 4 in host.json: at most 8 calls at once, about 16 a second at 0.5 s each"
+        kind: fix
+        match_regex: "^az functionapp scale config set -g rg-fulfil -n func-fulfil --maximum-instance-count [1-2]$"
+        feedback: "At most 8 concurrent calls, under the warehouse's 20 a second. The backlog drains in about 10 minutes instead of being rejected."
+      - id: raise-delivery
+        label: "Raise the queue's max delivery count to 100"
+        kind: wrong
+        feedback: "Messages would bounce longer before dead-lettering, and every bounce is another call to a warehouse that's already refusing us."
+      - id: more-instances
+        label: "Move func-fulfil to a bigger plan so it drains faster"
+        kind: wrong
+        feedback: "Draining faster is the problem: the bottleneck is the warehouse's 20 calls a second, not our compute."
+      - id: purge-queue
+        label: "Purge the fulfilment queue to stop the 429s"
+        kind: destructive
+        feedback: "That deletes 9,874 paid orders that haven't reached the warehouse yet."
+    solution_paths:
+      - [cap-concurrency]
+    key_evidence: [wh-429, fanout, max-100, host-default]
+    evidence_labels:
+      wh-429: "Warehouse calls get 429 and messages hit the delivery limit"
+      fanout: "func-fulfil scaled to 14 instances and ~425 calls a second"
+      max-100: "func-fulfil may scale to 100 instances"
+      host-default: "host.json leaves maxConcurrentCalls at the default 16 per instance"
+    hints:
+      nudge: "The warehouse is up but saying 429. How many calls are we making, and how many may we?"
+      direction: "Compare instances × concurrent calls per instance with the warehouse's 20 a second."
+      answer: "14 instances × 16 calls is far over 20/s. Cap the instances and maxConcurrentCalls so total concurrency fits the warehouse's limit."
+    debrief:
+      root_cause: |
+        Releasing 14,203 orders at once let func-fulfil do what it's built
+        to do: scale out on queue length. With the default maximum (100
+        instances) and maxConcurrentCalls (16 per instance), it reached
+        14 instances and about 425 calls a second against a warehouse that
+        allows 20. The 429s failed the invocations, each failure abandoned
+        the message and raised its delivery count, and after 10 deliveries
+        Service Bus moved it to the dead-letter queue.
+      ideal_path:
+        - "Read func-fulfil's traces: 429 from the warehouse, delivery counts climbing."
+        - "See the fan-out: 14 instances, ~425 calls a second."
+        - "Find the defaults behind it: up to 100 instances, 16 calls each."
+        - "Cap instances and concurrency to fit 20/s, then watch the queue drain."
+
+  - id: dead-letters
+    update: |
+      10:05: the queue is empty, and the warehouse is happy. The dead-letter
+      queue holds 3,915 orders that will never ship unless someone acts.
+    diagram_status: { func: ok, wh: ok }
+    logs:
+      - name: "Service Bus Explorer: fulfilment/$deadletterqueue (peek, grouped by DeadLetterReason)"
+        evidence: dlq-reasons
+        lines: |
+          MaxDeliveryCountExceeded   3,912   enqueued 2026-10-02 09:43-09:58   ORD-544901 ... ORD-551203
+          InvalidAddress                 3   enqueued 2026-09-12 and 2026-09-21  dead-lettered by func-fulfil: "postcode not found"
+    files:
+      - path: "Warehouse API docs: POST /orders (excerpt)"
+        evidence: idempotent
+        content: |
+          Idempotency-Key header (required): send the same key to retry safely.
+          A repeated key returns the original 201 response; no second order is created.
+          func-fulfil sends Idempotency-Key = orderId.
+    hypotheses:
+      - id: resend-selected
+        text: "Re-send the 3,912 MaxDeliveryCountExceeded messages (safe: the warehouse is idempotent on orderId), complete those originals, and leave the 3 InvalidAddress ones for the address fix."
+        correct: true
+      - id: auto
+        text: "Service Bus will retry the dead-lettered messages now that the warehouse is reachable."
+        feedback: "Nothing leaves a dead-letter queue on its own: no automatic cleanup or retry. Someone has to receive and resubmit them."
+      - id: resend-all
+        text: "Re-send everything in the DLQ."
+        feedback: "The 3 InvalidAddress messages failed for a real reason (bad postcode) weeks ago; resending them just dead-letters them again. Resend by reason."
+    actions:
+      - id: resend-dlq
+        label: "In Service Bus Explorer, peek the DLQ, select the 3,912 MaxDeliveryCountExceeded messages, Re-send selected messages, then receive and complete those originals"
+        kind: fix
+        feedback: "Copies of the 3,912 orders go back on the queue and through the capped function; the originals are removed so nobody resends them twice. The 3 bad addresses stay for the address team."
+      - id: resend-no-complete
+        label: "Re-send the 3,912 messages and leave the originals in the DLQ"
+        kind: wrong
+        feedback: "Re-send sends a copy; the originals stay. The DLQ still shows 3,915, and the next person to look will resend them all again."
+      - id: purge-dlq
+        label: "Purge the dead-letter queue: the orders are in the database anyway"
+        kind: destructive
+        feedback: "The database knows the orders exist, but only these messages get them to the warehouse. That's 3,912 paid orders that never ship."
+    solution_paths:
+      - [resend-dlq]
+    key_evidence: [dlq-reasons, idempotent]
+    evidence_labels:
+      dlq-reasons: "3,912 dead-lettered by the retry storm, 3 by the app for bad addresses"
+      idempotent: "The warehouse dedupes on Idempotency-Key = orderId, so resending is safe"
+    hints:
+      nudge: "Not every dead letter is the same. Why is each one there?"
+      direction: "Group the DLQ by DeadLetterReason, and check whether the warehouse would create duplicates."
+      answer: "Re-send only the MaxDeliveryCountExceeded messages (idempotent on orderId), complete the originals, and leave the 3 InvalidAddress ones."
+    debrief:
+      root_cause: |
+        A dead-letter queue has no automatic cleanup or retry: 3,912 orders
+        would sit there forever. They failed for a temporary reason, the
+        throttling, and the warehouse dedupes on orderId, so resending them
+        is safe. Service Bus Explorer's re-send sends a copy, so the
+        originals must be completed afterwards. The 3 InvalidAddress
+        messages failed for a real reason and need the data fixed first.
+      ideal_path:
+        - "Group the DLQ by reason: 3,912 MaxDeliveryCountExceeded, 3 InvalidAddress."
+        - "Confirm resending can't double-ship: the warehouse is idempotent on orderId."
+        - "Re-send the 3,912, complete their originals, leave the 3."
+        - "Check the queue counts: dead letters back to 3."
