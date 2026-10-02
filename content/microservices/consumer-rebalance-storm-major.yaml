@@ -1,0 +1,346 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: consumer-rebalance-storm-major
+track: microservices
+difficulty: 5
+title: "Customers get every text four times, and the notification backlog keeps growing"
+par_minutes: 30
+
+ticket:
+  from: "Customer care manager"
+  priority: P1
+  body: |
+    Since this morning customers are getting the same order and delivery
+    texts three or four times, sometimes hours late, and they're calling
+    to ask if they've been charged repeatedly. Some password-reset codes
+    arrive after they've expired. Engineering also says search got slow
+    this week; is the whole platform struggling?
+
+environment: |
+  notification-service (6 pods, namespace comms) consumes the Kafka topic
+  order-events (6 partitions) in the consumer group notification-service,
+  and sends each event as an SMS or email through the provider's HTTPS
+  API, one at a time per partition. It commits offsets after each batch
+  returned by poll(). Consumer settings are the client defaults. v3.2 was
+  deployed on Monday.
+
+diagram:
+  nodes:
+    - { id: orders, label: "order-service", col: 0, row: 0, status: ok }
+    - { id: topic, label: "Kafka order-events (6 partitions)", col: 1, row: 0, status: degraded }
+    - { id: notify, label: "notification-service x6", col: 2, row: 0, status: down }
+    - { id: provider, label: "SMS / email provider", col: 3, row: 0, status: ok }
+  edges:
+    - { from: orders, to: topic }
+    - { from: topic, to: notify }
+    - { from: notify, to: provider }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notification-service"
+      when_actions: [cap-records, pooled-client, skip-stale]
+      output: |
+        GROUP                 TOPIC         PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  CONSUMER-ID                       HOST         CLIENT-ID
+        notification-service  order-events  0          1204417         1204419         2    consumer-1-6c1e...                /10.42.1.17  notif-7f9c-a
+        notification-service  order-events  1          1198830         1198830         0    consumer-1-0b77...                /10.42.2.31  notif-7f9c-b
+        ... (partitions 2-5: lag 0-3)
+    - match: "kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notification-service"
+      when_actions: [cap-records, pooled-client]
+      evidence: lag-draining-fast
+      output: |
+        GROUP                 TOPIC         PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG    CONSUMER-ID           HOST         CLIENT-ID
+        notification-service  order-events  0          1178102         1204401         26299  consumer-1-6c1e...    /10.42.1.17  notif-7f9c-a
+        notification-service  order-events  1          1172644         1198822         26178  consumer-1-0b77...    /10.42.2.31  notif-7f9c-b
+        ... (partitions 2-5: lag 25,900-26,400, falling ~8/s each)
+    - match: "kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notification-service"
+      when_actions: [cap-records]
+      evidence: lag-slow
+      output: |
+        GROUP                 TOPIC         PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG    CONSUMER-ID           HOST         CLIENT-ID
+        notification-service  order-events  0          1171860         1204388         32528  consumer-1-6c1e...    /10.42.1.17  notif-7f9c-a
+        notification-service  order-events  1          1166417         1198809         32392  consumer-1-0b77...    /10.42.2.31  notif-7f9c-b
+        ... (partitions 2-5: stable members; lag 32,100-32,700, falling ~1/s each)
+    - match: "kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group notification-service"
+      evidence: churn
+      output: |
+        Consumer group 'notification-service' is rebalancing.
+        GROUP                 TOPIC         PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG    CONSUMER-ID  HOST  CLIENT-ID
+        notification-service  order-events  0          1170911         1204371         33460  -            -     -
+        notification-service  order-events  1          1165502         1198790         33288  -            -     -
+        ... (partitions 2-5: lag 33,000-33,600, growing)
+    - match: "kubectl logs deploy/notification-service -n comms --since=15m | grep 'poll timeout'"
+      when_actions: [cap-records]
+      output: ""
+    - match: "kubectl logs deploy/notification-service -n comms --since=15m | grep 'poll timeout'"
+      evidence: poll-timeout
+      output: |
+        09:41:12 WARN  [Consumer clientId=notif-7f9c-a, groupId=notification-service] consumer poll timeout has expired. This means the time between subsequent calls to poll() was longer than the configured max.poll.interval.ms, which typically implies that the poll loop is spending too much time processing messages. You can address this either by increasing max.poll.interval.ms or by reducing the maximum size of batches returned in poll() with max.poll.records.
+        09:41:12 INFO  [Consumer clientId=notif-7f9c-a, groupId=notification-service] Member consumer-1-41aa... sending LeaveGroup request to coordinator kafka-2:9092 due to consumer poll timeout has expired.
+
+metrics:
+  - name: "notification-service: provider send time per message (p50)"
+    unit: seconds
+    evidence: send-0-9
+    series:
+      - label: "p50 send time"
+        points: [["Sun", 0.11], ["Mon 09:00", 0.12], ["Mon 12:00", 0.88], ["Tue", 0.9], ["Wed", 0.91], ["Thu 09:00", 0.9]]
+  - name: "search-service: p99 latency (ms)"
+    unit: ms
+    evidence: search-p99
+    series:
+      - label: "p99"
+        points: [["Sun", 180], ["Mon 09:00", 185], ["Mon 12:00", 420], ["Tue", 410], ["Wed", 415], ["Thu 09:00", 418]]
+logs:
+  - name: "Provider dashboard: duplicate deliveries today"
+    evidence: dupes
+    lines: |
+      +44 7700 900123  "Your order ORD-88213 has shipped"  x4 (09:12, 09:19, 09:27, 09:34)
+      +44 7700 900456  "Your reset code is 551920"          x3 (09:30, 09:37, 09:44)
+      ... 41,882 duplicate sends since 08:00
+  - name: "search-service changelog"
+    lines: |
+      Mon 11:50  reindex products with the new synonyms analyzer (p99 higher until the new caches warm, expected ~1 week)
+
+hypotheses:
+  - id: poll-interval
+    text: "Sends now take ~0.9 s each, so a 500-record batch takes about 450 s, more than max.poll.interval.ms (300 s). The consumer is declared failed before it commits, the group rebalances, and the same batch is delivered again: duplicates and growing lag."
+    correct: true
+  - id: search
+    text: "The platform is overloaded: search is slow too."
+    feedback: "Search's p99 rose on Monday at 11:50 because of a reindex with a new analyzer; its changelog expects that. It shares nothing with notifications."
+  - id: provider-dupes
+    text: "The provider is sending duplicates."
+    feedback: "Each duplicate is a separate API call from us, minutes apart, matching the rebalances. We're sending them."
+  - id: more-pods
+    text: "There aren't enough consumers to keep up."
+    feedback: "6 pods for 6 partitions is one each; more would sit idle. And each one is losing its batch, not just slow."
+
+actions:
+  - id: cap-records
+    label: "Set max.poll.records=50 (50 x 0.9 s is about 45 s per poll, well inside 300 s) and roll out"
+    kind: fix
+    feedback: "Each poll's batch now finishes and commits long before the deadline. The rebalances stop, and with them the duplicates."
+  - id: raise-interval
+    label: "Set max.poll.interval.ms to 3600000 (1 hour)"
+    kind: wrong
+    feedback: "Batches would finish, but a consumer that really hangs would hold its partition for an hour before anyone takes over. The batch is too big for the time per message; shrink the batch."
+  - id: scale-12
+    label: "Scale notification-service to 12 pods"
+    kind: wrong
+    feedback: "There are 6 partitions: 6 pods would get none, and the other 6 would still time out on 500-record batches."
+  - id: reset-latest
+    label: "Reset the group's offsets to the latest to clear the backlog"
+    kind: destructive
+    feedback: "That skips 200,000 notifications, including receipts and password-reset codes customers are waiting for."
+
+solution_paths:
+  - [cap-records]
+
+key_evidence: [churn, poll-timeout, send-0-9, dupes]
+
+evidence_labels:
+  churn: "The group keeps rebalancing; lag grows on every partition"
+  poll-timeout: "Consumers leave the group: consumer poll timeout has expired"
+  send-0-9: "Each send takes ~0.9 s since Monday, so a 500-record batch takes ~450 s"
+  dupes: "Customers receive the same message several times, minutes apart"
+
+red_herrings:
+  - evidence: search-p99
+    label: "Search got slow this week"
+    why: "Its p99 rose at 11:50 on Monday when products were reindexed with a new analyzer, which its changelog expects for about a week. It shares nothing with the notification pipeline."
+
+hints:
+  nudge: "Duplicates minutes apart, and lag that grows. What does the consumer group look like?"
+  direction: "Read the consumer logs for why members leave, and compare batch size x time per message with max.poll.interval.ms."
+  answer: "500 records x 0.9 s is over 300 s. Lower max.poll.records (e.g. 50) so each batch finishes in time."
+
+analogy:
+  title: "The postie who gets fired mid-round"
+  text: |
+    A postie must check in with the depot every 5 minutes or be replaced.
+    Each round now takes 7, so they're replaced mid-round, and the new
+    postie starts the same round from the beginning: everyone gets their
+    letter twice. Give them shorter rounds and they check in on time. Then
+    you notice why rounds got slow: they walk back to the depot for every
+    letter. And the sack is full of "arriving today" notes for yesterday.
+
+debrief:
+  root_cause: |
+    Monday's v3.2 made each send take ~0.9 s instead of ~0.1 s. With the
+    default max.poll.records of 500, processing one poll's batch took
+    about 450 s, longer than the default max.poll.interval.ms of 300 s.
+    The client then declares the consumer failed and leaves the group;
+    the batch's offsets were never committed, so after the rebalance the
+    same records were processed again by whichever member got the
+    partition: duplicates, and a backlog that only grew.
+  ideal_path:
+    - "Describe the consumer group: rebalancing, lag growing."
+    - "Read the consumer log: poll timeout expired, leaving the group."
+    - "Do the arithmetic: 500 x 0.9 s against 300 s."
+    - "Cap max.poll.records so a batch fits; watch the rebalances stop."
+
+concepts:
+  - term: "max.poll.interval.ms and max.poll.records"
+    text: "If poll() isn't called within max.poll.interval.ms (5 minutes by default), the consumer is considered failed and the group rebalances; max.poll.records (500 by default) caps each batch."
+    url: "https://kafka.apache.org/43/configuration/consumer-configs/"
+  - term: "At-least-once delivery"
+    text: "Committing after processing means a batch whose commit never happens is processed again: duplicates rather than losses, so consumers should be idempotent where it matters."
+    url: "https://kafka.apache.org/documentation/#semantics"
+  - term: "HTTP connection reuse"
+    text: "Reusing a pooled connection skips DNS, TCP and TLS setup on every request; httpx recommends one Client for many requests."
+    url: "https://www.python-httpx.org/advanced/clients/"
+
+sources:
+  - title: "Apache Kafka: Consumer configs (max.poll.interval.ms, max.poll.records)"
+    url: "https://kafka.apache.org/43/configuration/consumer-configs/"
+    retrieved: 2026-10-02
+  - title: "Apache Kafka: Message delivery semantics"
+    url: "https://kafka.apache.org/documentation/#semantics"
+    retrieved: 2026-10-02
+  - title: "HTTPX: Clients (why to use a Client, connection pooling)"
+    url: "https://www.python-httpx.org/advanced/clients/"
+    retrieved: 2026-10-02
+
+stages:
+  - id: per-message-tls
+    update: |
+      10:05: no more rebalances or duplicates. But the backlog of about
+      196,000 events is draining at roughly 6 a second: about nine hours.
+    diagram_status: { notify: degraded }
+    traces:
+      - name: "notification-service: send one SMS (10:06)"
+        evidence: tls-each-time
+        spans:
+          - { id: s1, service: notification-service, operation: "send_sms ORD-88301", start_ms: 0, duration_ms: 905 }
+          - { id: s2, parent: s1, service: notification-service, operation: "DNS lookup api.sms-provider.example", start_ms: 2, duration_ms: 28 }
+          - { id: s3, parent: s1, service: notification-service, operation: "TCP connect", start_ms: 31, duration_ms: 88 }
+          - { id: s4, parent: s1, service: notification-service, operation: "TLS handshake", start_ms: 120, duration_ms: 662, note: "new connection (no reuse)" }
+          - { id: s5, parent: s1, service: sms-provider, operation: "POST /v2/messages", start_ms: 784, duration_ms: 118 }
+    files:
+      - path: "notification-service/sms.py (v3.2 diff)"
+        evidence: client-per-call
+        language: python
+        content: |
+          -_client = httpx.Client(base_url=PROVIDER_URL, timeout=10)
+          -
+           def send_sms(to, body):
+          -    return _client.post("/v2/messages", json={"to": to, "body": body})
+          +    # v3.2: per-tenant API keys
+          +    with httpx.Client(base_url=PROVIDER_URL, timeout=10,
+          +                      headers={"Authorization": key_for(to)}) as client:
+          +        return client.post("/v2/messages", json={"to": to, "body": body})
+    hypotheses:
+      - id: no-reuse
+        text: "v3.2 creates a new HTTP client for every message, so every send pays DNS, TCP and a TLS handshake (~0.8 s) before a 0.12 s request."
+        correct: true
+      - id: provider-slow
+        text: "The provider's API got slower."
+        feedback: "The provider's own span is 118 ms, as before. Almost all the time is spent setting up a new connection: 662 ms of TLS handshake."
+      - id: partitions
+        text: "We need more partitions."
+        feedback: "More parallelism would hide it, but each send still wastes ~0.8 s; and adding partitions changes which partition a key maps to, which matters for ordering."
+    actions:
+      - id: pooled-client
+        label: "Use one long-lived httpx.Client (connection pool, keep-alive) and pass the per-tenant Authorization header per request"
+        kind: fix
+        feedback: "Connections are set up once and reused; a send is ~0.12 s again, and the backlog drains about 7x faster."
+      - id: more-cpu
+        label: "Give notification-service more CPU"
+        kind: wrong
+        feedback: "The time is network round trips for setting up connections, not computation."
+      - id: async-fire
+        label: "Send without waiting for the provider's response"
+        kind: wrong
+        feedback: "You'd lose failures and still set up a TLS connection per message. Reuse the connection."
+    solution_paths:
+      - [pooled-client]
+    key_evidence: [lag-slow, tls-each-time, client-per-call]
+    evidence_labels:
+      lag-slow: "With stable members, lag falls only about 1 per second per partition"
+      tls-each-time: "Each send spends 662 ms on a new TLS handshake"
+      client-per-call: "v3.2 opens a new HTTP client for every message"
+    hints:
+      nudge: "Where do the 0.9 seconds of a send go?"
+      direction: "Open the trace of one send, then read the v3.2 change to sms.py."
+      answer: "A new client per call means a new TLS handshake per message. Reuse one pooled client and set the header per request."
+    debrief:
+      root_cause: |
+        v3.2 needed a per-tenant Authorization header and implemented it by
+        creating a new httpx.Client inside send_sms, so every message set
+        up a new DNS lookup, TCP connection and TLS handshake to the
+        provider (~0.8 s) before a ~0.12 s request. A single long-lived
+        client with the header passed per request keeps connections alive
+        and reuses them.
+      ideal_path:
+        - "See the drain rate: about 1 a second per partition."
+        - "Open a send's trace: 662 ms of TLS handshake."
+        - "Read the v3.2 diff: a client per call."
+        - "Reuse one client; re-check the lag."
+
+  - id: stale-backlog
+    update: |
+      10:30: the backlog will drain in about 70 minutes now. Customer care asks
+      what customers are about to receive: it's noon, and many of these
+      events are from this morning.
+    diagram_status: { notify: ok }
+    logs:
+      - name: "Backlog by event type and age (10:30)"
+        evidence: backlog-mix
+        lines: |
+          delivery.out_for_delivery   88,410   oldest 07:52   ("Your parcel arrives today 08:00-10:00")
+          order.shipped               52,120   oldest 07:52
+          payment.receipt             41,006   oldest 07:52
+          account.password_reset       1,214   oldest 08:10   (codes valid 15 minutes)
+          ... 196,388 events
+    files:
+      - path: "notification-service: config reference"
+        evidence: skip-stale-flag
+        content: |
+          NOTIFY_MAX_AGE_<type>   Skip (and log) events of <type> older than this. Unset = never skip.
+          Supported since v3.0. Example: NOTIFY_MAX_AGE_delivery.out_for_delivery=2h
+    hypotheses:
+      - id: skip-stale
+        text: "Set max ages for the time-sensitive types (out-for-delivery windows, password-reset codes) so they're skipped and logged, and let receipts and shipping confirmations go out late."
+        correct: true
+      - id: send-all
+        text: "Send everything: late is better than never."
+        feedback: "88,000 customers would be told at noon that their parcel arrives 08:00-10:00, and 1,214 would get reset codes that expired hours ago."
+      - id: drop-all
+        text: "Skip the whole backlog."
+        feedback: "Receipts and shipping confirmations are still correct and some customers need them; only the time-boxed messages are wrong now."
+    actions:
+      - id: skip-stale
+        label: "Set NOTIFY_MAX_AGE_delivery.out_for_delivery=2h and NOTIFY_MAX_AGE_account.password_reset=15m, then let the backlog drain"
+        kind: fix
+        feedback: "Stale delivery windows and expired codes are skipped and logged for follow-up; receipts and shipping confirmations go out. Customer care gets the list of skipped customers."
+      - id: reset-offsets
+        label: "kafka-consumer-groups.sh --reset-offsets --to-latest --execute for the group"
+        kind: destructive
+        feedback: "Drops receipts and shipping confirmations along with the stale ones, with no record of who missed what."
+      - id: just-drain
+        label: "Let the backlog drain as it is"
+        kind: wrong
+        feedback: "Sends 88,000 wrong delivery windows and 1,214 dead reset codes."
+    solution_paths:
+      - [skip-stale]
+    key_evidence: [backlog-mix, skip-stale-flag, lag-draining-fast]
+    evidence_labels:
+      backlog-mix: "The backlog is mostly time-boxed messages from this morning"
+      skip-stale-flag: "The service can skip events older than a per-type age"
+      lag-draining-fast: "The whole backlog will be sent within about 70 minutes"
+    hints:
+      nudge: "Everything in the backlog will be delivered soon. Is all of it still true?"
+      direction: "Break the backlog down by event type and age, and look at the service's options for stale events."
+      answer: "Set NOTIFY_MAX_AGE for the time-sensitive types and let the rest drain."
+    debrief:
+      root_cause: |
+        A notification is only useful while it's true. After hours of
+        backlog, out-for-delivery windows and password-reset codes were
+        wrong, while receipts and shipping confirmations were merely late.
+        The service's per-type maximum age skips (and logs) the first kind
+        and sends the second; resetting offsets would have dropped both.
+      ideal_path:
+        - "Break the backlog down by type and age."
+        - "Decide per type: wrong-if-late versus late-but-fine."
+        - "Set max ages for the time-boxed types, then let it drain."
+        - "Hand customer care the skipped list."

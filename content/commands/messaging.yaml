@@ -22,3 +22,15 @@
   alternatives:
     - { command: "Management UI > Admin > Policies", note: "The same." }
   docs: { title: "RabbitMQ: policies", url: "https://www.rabbitmq.com/docs/policies" }
+
+- id: kafka-consumer-groups-describe
+  match: "^kafka-consumer-groups(\\.sh)? .*--describe"
+  summary: "Shows a Kafka consumer group's position on each partition: committed offset, end of the log, lag, and which member owns it."
+  parts:
+    - { token: "--bootstrap-server kafka:9092", meaning: "A broker to connect to." }
+    - { token: "--describe", meaning: "Show the group's state per partition." }
+    - { token: "--group notification-service", meaning: "The consumer group." }
+  why: "Lag that grows while members keep changing (or show \"-\" during a rebalance) means consumers are being kicked out, not just slow."
+  alternatives:
+    - { command: "kafka-consumer-groups.sh --bootstrap-server B --describe --group G --members --verbose", note: "The members and their assigned partitions." }
+  docs: { title: "Kafka: Managing consumer groups", url: "https://kafka.apache.org/documentation/#basic_ops_consumer_group" }
