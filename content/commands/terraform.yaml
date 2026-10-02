@@ -33,3 +33,14 @@
   alternatives:
     - { command: "terraform state show ADDRESS", note: "One resource's recorded attributes." }
   docs: { title: "terraform state list", url: "https://developer.hashicorp.com/terraform/cli/commands/state/list" }
+
+- id: terraform-workspace-show
+  match: "^terraform workspace show$"
+  summary: "Prints the workspace the current working directory is using."
+  parts:
+    - { token: "workspace show", meaning: "The selected workspace (stored in .terraform/environment), which decides whose state a plan or apply uses." }
+  why: "The tfvars file you pass doesn't choose the environment; the selected workspace does. Check it before every apply."
+  alternatives:
+    - { command: "terraform workspace list", note: "All workspaces, with * on the current one." }
+    - { command: "echo $TF_WORKSPACE", note: "If set, it overrides the selected workspace." }
+  docs: { title: "terraform workspace show", url: "https://developer.hashicorp.com/terraform/cli/commands/workspace/show" }

@@ -1,0 +1,317 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: wrong-workspace-major
+track: iac
+difficulty: 5
+title: "The orders database shrank overnight, and fixing it in Terraform didn't fix it"
+par_minutes: 30
+
+ticket:
+  from: "Orders team lead"
+  priority: P1
+  body: |
+    Since about 16:40 yesterday every order page is slow and checkout times
+    out at peak. The orders database is at 100% CPU. Nobody has deployed
+    the orders service since Monday. The nightly Terraform drift report also
+    flagged prod again; maybe someone changed something by hand?
+
+environment: |
+  One Terraform configuration (infra/data) manages the orders database for
+  both environments, using workspaces staging and prod with a tfvars file
+  each. Engineers run it from the shared ops box, ops-01. prod's
+  orders-prod is an RDS for PostgreSQL instance (Multi-AZ). The order-sync
+  job pushes new orders to the ERP every 10 minutes and marks an order
+  sync_failed if the database call times out; it doesn't retry those.
+
+diagram:
+  nodes:
+    - { id: ops, label: "ops-01 (terraform)", col: 0, row: 0, status: ok }
+    - { id: state, label: "state: prod workspace", col: 1, row: 0, status: degraded }
+    - { id: db, label: "RDS orders-prod", col: 2, row: 0, status: degraded }
+    - { id: app, label: "orders service", col: 2, row: 1, status: degraded }
+    - { id: sync, label: "order-sync -> ERP", col: 3, row: 1, status: degraded }
+  edges:
+    - { from: ops, to: state }
+    - { from: state, to: db }
+    - { from: app, to: db }
+    - { from: sync, to: db }
+
+terminal:
+  prompt: "you@ops-01:~/infra/data$"
+  commands:
+    - match: "terraform workspace show"
+      evidence: ws-prod
+      output: |
+        prod
+    - match: "aws rds describe-db-instances --db-instance-identifier orders-prod --query \"DBInstances[0].[DBInstanceClass,PendingModifiedValues,PreferredMaintenanceWindow]\""
+      when_actions: [prod-apply, apply-now]
+      output: |
+        [
+            "db.r6g.xlarge",
+            {},
+            "sun:03:00-sun:04:00"
+        ]
+    - match: "aws rds describe-db-instances --db-instance-identifier orders-prod --query \"DBInstances[0].[DBInstanceClass,PendingModifiedValues,PreferredMaintenanceWindow]\""
+      when_actions: [prod-apply]
+      evidence: pending-class
+      output: |
+        [
+            "db.t4g.medium",
+            { "DBInstanceClass": "db.r6g.xlarge" },
+            "sun:03:00-sun:04:00"
+        ]
+    - match: "aws rds describe-db-instances --db-instance-identifier orders-prod --query \"DBInstances[0].[DBInstanceClass,PendingModifiedValues,PreferredMaintenanceWindow]\""
+      evidence: db-small
+      output: |
+        [
+            "db.t4g.medium",
+            {},
+            "sun:03:00-sun:04:00"
+        ]
+    - match: "grep -E 'instance_class|apply_immediately' staging.tfvars prod.tfvars"
+      evidence: tfvars
+      output: |
+        staging.tfvars:db_instance_class = "db.t4g.medium"
+        staging.tfvars:db_apply_immediately = true
+        prod.tfvars:db_instance_class = "db.r6g.xlarge"
+        prod.tfvars:db_apply_immediately = false
+    - match: "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ModifyDBInstance --max-results 1"
+      output: |
+        {
+            "Events": [
+                { "EventName": "ModifyDBInstance", "EventTime": "2026-10-01T16:41:07Z",
+                  "Username": "ops-01-terraform",
+                  "Resources": [ { "ResourceType": "AWS::RDS::DBInstance", "ResourceName": "orders-prod" } ] }
+            ]
+        }
+
+logs:
+  - name: "ops-01: shell history (user dana, 10-01)"
+    evidence: history
+    lines: |
+      14:02  terraform workspace select prod
+      14:05  terraform plan -var-file=prod.tfvars        # checking tag drift for the finance report
+      16:38  # resize staging DB to save money
+      16:40  terraform apply -var-file=staging.tfvars -auto-approve
+  - name: "Nightly drift report (terraform plan -refresh-only, prod)"
+    evidence: tag-drift
+    lines: |
+      09-12 .. 10-02  aws_s3_bucket.orders_exports: tags changed outside Terraform (+ "cost-center" = "fin-ops")
+      Finance applies cost-center tags with Tag Editor monthly; ticket INFRA-2210 to add the tag to code.
+
+hypotheses:
+  - id: wrong-workspace
+    text: "Yesterday at 16:40 staging.tfvars was applied while ops-01's working directory was still on the prod workspace, so prod got staging's settings: a db.t4g.medium, applied immediately."
+    correct: true
+  - id: drift
+    text: "Someone resized the database by hand, as the drift report says."
+    feedback: "The drift report is about finance's cost-center tags on an S3 bucket, every night since September. CloudTrail shows the resize came from ops-01's Terraform."
+  - id: load
+    text: "Traffic grew, and the database needs a bigger class."
+    feedback: "It was a db.r6g.xlarge until yesterday 16:41, when it became a db.t4g.medium. The load didn't change; the database did."
+  - id: deploy
+    text: "A slow query shipped with the last deploy."
+    feedback: "Nothing deployed since Monday, and the CPU jump lines up with the class change at 16:41."
+
+actions:
+  - id: prod-apply
+    label: "terraform apply -var-file=prod.tfvars (in the prod workspace), and add a check that the tfvars' environment matches terraform.workspace"
+    kind: fix
+    match_regex: "^terraform apply -var-file=prod\\.tfvars$"
+    feedback: "Terraform sets orders-prod back to prod's values. Check what RDS did with that change."
+  - id: select-staging
+    label: "terraform workspace select staging, then apply staging.tfvars"
+    kind: wrong
+    feedback: "That's what Dana meant to do, and staging should get it, but it doesn't touch prod."
+  - id: state-rm
+    label: "terraform state rm aws_db_instance.orders so Terraform stops touching it"
+    kind: destructive
+    feedback: "Terraform would forget the production database exists (and plan to create a new one next time). The state is right; the inputs were wrong."
+  - id: console-resize
+    label: "Resize orders-prod in the console"
+    kind: wrong
+    feedback: "Fixes the symptom but goes around Terraform; prod's settings belong in prod.tfvars, applied in the prod workspace."
+
+solution_paths:
+  - [prod-apply]
+
+key_evidence: [db-small, ws-prod, history, tfvars]
+
+evidence_labels:
+  db-small: "orders-prod is a db.t4g.medium now"
+  ws-prod: "ops-01's working directory is on the prod workspace"
+  history: "staging.tfvars was applied at 16:40, after selecting prod at 14:02"
+  tfvars: "staging.tfvars sets db.t4g.medium and apply_immediately = true"
+
+red_herrings:
+  - evidence: tag-drift
+    label: "The nightly drift report"
+    why: "It flags finance's cost-center tags on the exports bucket, every night since 09-12. Real drift, harmless, and nothing to do with the database's class, which Terraform itself changed."
+
+hints:
+  nudge: "Terraform changed the database. Which inputs did it use, and for which environment?"
+  direction: "Check the workspace on ops-01, the shell history, and what each tfvars file sets."
+  answer: "staging.tfvars was applied in the prod workspace. Apply prod.tfvars in prod, and add a guard that the two match."
+
+analogy:
+  title: "The right recipe in the wrong kitchen"
+  text: |
+    A cook means to make the small staff lunch, but the order goes to the
+    restaurant kitchen, which serves it to every table at once. Sending
+    the right order back to the restaurant kitchen only books it for
+    Sunday's delivery. And the waiters who gave up on slow tables wrote
+    those orders off instead of trying again.
+
+debrief:
+  root_cause: |
+    One configuration, two workspaces, and the tfvars file chosen by hand.
+    ops-01's working directory was left on prod at 14:02; at 16:40
+    staging.tfvars was applied there. staging sets a db.t4g.medium and
+    apply_immediately = true, so RDS changed the production database at
+    once, and it ran out of CPU at peak.
+  ideal_path:
+    - "Check orders-prod's class: db.t4g.medium."
+    - "See who changed it: Terraform on ops-01 at 16:41."
+    - "Find why: prod workspace selected, staging.tfvars applied."
+    - "Apply prod.tfvars in prod; add a workspace/tfvars guard."
+  real_world: |
+    A precondition or validation that compares an environment variable
+    with terraform.workspace stops this before planning. Many teams also
+    give each environment its own directory or pipeline, so a person never
+    chooses the pair by hand.
+
+concepts:
+  - term: "Terraform workspaces"
+    text: "Workspaces keep separate state for the same configuration; which one you're in is a property of the working directory, not of the tfvars file you pass."
+    url: "https://developer.hashicorp.com/terraform/cli/workspaces"
+  - term: "RDS pending modifications"
+    text: "Without apply immediately, RDS queues changes for the next maintenance window; applying any change immediately also applies everything in the queue."
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ModifyInstance.ApplyImmediately.html"
+
+sources:
+  - title: "Terraform: Workspaces"
+    url: "https://developer.hashicorp.com/terraform/cli/workspaces"
+    retrieved: 2026-10-02
+  - title: "Amazon RDS: Using the schedule modifications setting (pending modifications, apply immediately)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ModifyInstance.ApplyImmediately.html"
+    retrieved: 2026-10-02
+  - title: "Amazon RDS: Modifying a DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.Modifying.html"
+    retrieved: 2026-10-02
+
+stages:
+  - id: pending
+    update: |
+      10:20: terraform apply with prod.tfvars succeeded: "1 changed".
+      Twenty minutes later the database is still at 100% CPU.
+    diagram_status: { state: ok }
+    hypotheses:
+      - id: queued
+        text: "prod.tfvars sets apply_immediately = false, so RDS queued the class change for the maintenance window, Sunday 03:00. Terraform's apply succeeded because the modification was accepted, not applied."
+        correct: true
+      - id: apply-failed
+        text: "The apply failed silently."
+        feedback: "It reported 1 changed, and RDS shows the change: under PendingModifiedValues."
+      - id: still-load
+        text: "The database is still catching up on load."
+        feedback: "It's still a db.t4g.medium: the bigger class hasn't been applied."
+    actions:
+      - id: apply-now
+        label: "aws rds modify-db-instance --db-instance-identifier orders-prod --db-instance-class db.r6g.xlarge --apply-immediately (Multi-AZ: a failover, about a minute)"
+        kind: fix
+        match_regex: "^aws rds modify-db-instance --db-instance-identifier orders-prod --db-instance-class db\\.r6g\\.xlarge --apply-immediately$"
+        feedback: "RDS applies the change now, along with anything else in the queue (only the class here). The value matches prod.tfvars, so Terraform has nothing to undo."
+      - id: wait
+        label: "Wait for the Sunday maintenance window"
+        kind: wrong
+        feedback: "Three more days of 100% CPU and checkout timeouts at peak."
+      - id: flip-default
+        label: "Set db_apply_immediately = true in prod.tfvars and apply"
+        kind: wrong
+        feedback: "It would work today, but it makes every future prod change take effect mid-day, which is exactly why prod defers them. Apply this one change immediately instead."
+    solution_paths:
+      - [apply-now]
+    key_evidence: [pending-class]
+    evidence_labels:
+      pending-class: "The xlarge class is pending until the Sunday 03:00 window"
+    hints:
+      nudge: "Terraform says changed. What does RDS say the class is?"
+      direction: "Look at PendingModifiedValues and the maintenance window."
+      answer: "It's queued for Sunday. Apply that modification immediately with aws rds modify-db-instance ... --apply-immediately."
+    debrief:
+      root_cause: |
+        prod defers database changes to the maintenance window
+        (apply_immediately = false), so the corrective apply put the class
+        change in RDS's pending modifications queue for Sunday 03:00. The
+        staging values had applied the downsize at once; prod's values
+        delayed the fix. Applying immediately also applies everything
+        already queued, so check PendingModifiedValues first.
+      ideal_path:
+        - "Check the instance: still db.t4g.medium, with the xlarge pending."
+        - "Note why: apply_immediately = false, window Sunday 03:00."
+        - "Check nothing else is queued, then apply the change immediately."
+        - "Confirm the class and CPU."
+
+  - id: sync-failed
+    update: |
+      10:55: the database is back to its normal size and checkout is fast.
+      Finance says the ERP is missing a lot of yesterday evening's orders.
+    diagram_status: { db: ok, app: ok }
+    terminal:
+      commands:
+        - match: "./order-sync --count-failed --since 2026-10-01T16:40Z"
+          when_actions: [retry-failed]
+          output: |
+            0 orders in sync_failed since 2026-10-01T16:40Z
+        - match: "./order-sync --count-failed --since 2026-10-01T16:40Z"
+          evidence: sync-1140
+          output: |
+            1140 orders in sync_failed since 2026-10-01T16:40Z (all: "database statement timeout")
+    files:
+      - path: "order-sync README (excerpt)"
+        evidence: idempotent-sync
+        content: |
+          The ERP's order endpoint is idempotent on order_id: sending an order
+          twice updates it, it doesn't create a second one.
+          --retry-failed re-sends orders in sync_failed. Not run automatically.
+    hypotheses:
+      - id: retry
+        text: "order-sync marked 1,140 orders sync_failed during the slow period and never retries them; re-send them now that the database is fast (the ERP is idempotent on order_id)."
+        correct: true
+      - id: erp-down
+        text: "The ERP was down yesterday evening."
+        feedback: "Every failure says \"database statement timeout\": order-sync couldn't read the orders from our overloaded database."
+    actions:
+      - id: retry-failed
+        label: "./order-sync --retry-failed --since 2026-10-01T16:40Z"
+        kind: fix
+        match_regex: "^\\./order-sync --retry-failed --since 2026-10-01T16:40Z$"
+        feedback: "1,140 orders re-sent; the ERP updates any it already had, so nothing is duplicated."
+      - id: manual-entry
+        label: "Ask finance to key the missing orders into the ERP by hand"
+        kind: wrong
+        feedback: "1,140 orders by hand, with typos, when the sync can re-send them safely."
+      - id: reset-all
+        label: "Reset every order since Monday to unsynced and run a full sync"
+        kind: destructive
+        feedback: "Re-sends thousands of orders that already synced, and the ERP has updated some of those since (shipping, invoicing): you'd overwrite newer data with older."
+    solution_paths:
+      - [retry-failed]
+    key_evidence: [sync-1140, idempotent-sync]
+    evidence_labels:
+      sync-1140: "1,140 orders failed to sync during the slow period"
+      idempotent-sync: "The ERP is idempotent on order_id, and failed orders aren't retried automatically"
+    hints:
+      nudge: "What else ran against the database while it was overloaded?"
+      direction: "Count order-sync's failures since 16:40 yesterday, and check whether re-sending is safe."
+      answer: "Run ./order-sync --retry-failed --since 2026-10-01T16:40Z; the ERP is idempotent on order_id."
+    debrief:
+      root_cause: |
+        While the database was undersized, order-sync's reads timed out and
+        it marked 1,140 orders sync_failed, which it never retries. They're
+        safe to re-send because the ERP treats order_id as an idempotency
+        key. Re-sending only the failed ones avoids overwriting orders the
+        ERP has already moved on.
+      ideal_path:
+        - "Count sync_failed orders since 16:40 yesterday: 1,140, all timeouts."
+        - "Confirm re-sending is safe: idempotent on order_id."
+        - "Retry just those, then count again."

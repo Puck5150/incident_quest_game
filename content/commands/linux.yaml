@@ -429,6 +429,19 @@
     - { command: "rg PATTERN", note: "ripgrep: recursive by default, skips ignored files." }
   docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
 
+- id: order-sync-script
+  match: "^\\./order-sync "
+  summary: "Runs the team's order-sync tool by hand."
+  parts:
+    - { token: "./order-sync", meaning: "The tool in the current directory." }
+    - { token: "--count-failed", meaning: "Only count orders marked sync_failed." }
+    - { token: "--retry-failed", meaning: "Re-send orders marked sync_failed." }
+    - { token: "--since 2026-10-01T16:40Z", meaning: "Only orders from this time on (UTC)." }
+  why: "Counting first sizes the damage; retrying only the failed orders avoids re-sending ones the ERP already has."
+  alternatives:
+    - { command: "SELECT count(*) FROM orders WHERE sync_status = 'sync_failed' AND created_at >= ...", note: "The same count in SQL." }
+  docs: { title: "Bash manual: shell scripts", url: "https://www.gnu.org/software/bash/manual/html_node/Shell-Scripts.html" }
+
 - id: run-local-script
   match: "^\\./\\S+"
   summary: "Runs a script from the current directory."

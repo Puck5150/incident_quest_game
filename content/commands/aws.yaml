@@ -519,3 +519,14 @@
   alternatives:
     - { command: "aws configure list", note: "Which credential source and profile the CLI is using." }
   docs: { title: "AWS CLI: sts get-caller-identity", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sts/get-caller-identity.html" }
+
+- id: aws-cloudtrail-lookup
+  match: "^aws cloudtrail lookup-events"
+  summary: "Searches the last 90 days of CloudTrail management events in this Region."
+  parts:
+    - { token: "--lookup-attributes AttributeKey=EventName,AttributeValue=ModifyDBInstance", meaning: "Only events with this API name (other keys: Username, ResourceName, EventSource...)." }
+    - { token: "--max-results 1", meaning: "Only the newest match." }
+  why: "Answers \"who changed this, when, and from where\" for any API call."
+  alternatives:
+    - { command: "CloudTrail console > Event history", note: "The same search, with filters." }
+  docs: { title: "AWS CLI: cloudtrail lookup-events", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/cloudtrail/lookup-events.html" }
