@@ -59,6 +59,13 @@ describe('scoring', () => {
     expect(relaxed.total).toBe(score(scenario, fast).total - 20) // the 20% time bonus on base 100
   })
 
+  it('in a shift the time bonus is replaced by the shift response targets', () => {
+    const fast = log([...EVIDENCE, ...FIX, 'run df -h'])
+    const shift = score(scenario, fast, false, true)
+    expect(shift.lines.find((x) => x.label.startsWith('Time bonus'))).toEqual({ label: 'Time bonus: see shift response targets', xp: 0 })
+    expect(shift.total).toBe(score(scenario, fast).total - 20)
+  })
+
   it('evidence found only after deciding is not methodical', () => {
     expect(score(scenario, log(['hyp disk-full', ...EVIDENCE, 'act truncate-log', 'act fix-logrotate'])).methodical).toBe(false)
   })

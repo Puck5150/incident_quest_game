@@ -1,6 +1,6 @@
 # Plan: On-call shift mode
 
-Status: **approved 2026-10-01 with the defaults in section 9; S1 done.** Active-time
+Status: **approved 2026-10-01 with the defaults in section 9; S1 and S2 done.** Active-time
 scoring moved from S1 to S2, where the shift first needs it. From PARKING_LOT.md: "Timed
 'on-call shift' mode: multiple incidents queued at once". Fits the Ops Center
 theme (PLAN_THEME.md).
@@ -70,8 +70,8 @@ shift report.
   Each target met adds a small bonus (for example +5% of that incident's base).
   **Triage bonus** if every P1 was acknowledged before any lower-priority page
   that arrived at the same time or later.
-- **Clean shift:** every page resolved, no destructive actions. Counts toward the
-  clean streak once, like a clean incident.
+- **Clean shift:** every page resolved cleanly. Shown in the report; it doesn't
+  add to the clean streak again, since each clean incident already does.
 - **Relaxed mode:** no response targets, no triage bonus, no clock on screen.
   The shift report still lists what happened.
 
@@ -90,9 +90,9 @@ lit by result.
   Terminal rebuilds its transcript from the session log (`RUN_COMMAND` events
   plus `runCommand` output), which also means single incidents survive a
   remount. No engine changes: `step` is already pure.
-- **Active time.** The log gets `FOCUS`/`BLUR` events (or the shift tracks
-  focus intervals) so scoring can count active time; `score()` takes an option
-  to drop the time bonus.
+- **Active time.** The shift tracks it (time advances only for the focused
+  page), so the incident log is unchanged; `score()` takes an `inShift` option
+  that drops the time bonus.
 - **Shift state** is one reducer: pages, arrival schedule, focus, results.
   Pure and unit-tested like the engine. Not saved across reloads in v1: a
   reload ends the shift (completed incidents are already recorded).

@@ -37,8 +37,9 @@ const DESTRUCTIVE_ACTION = 25
 const FLOOR = 10
 
 // `relaxed` turns the time bonus off rather than awarding it, so switching it
-// on can never raise a score.
-export function score(scenario: Scenario, log: GameEvent[], relaxed = false): Score {
+// on can never raise a score. In an on-call shift the time bonus is replaced
+// by the shift's response targets (shift.ts), which count only active time.
+export function score(scenario: Scenario, log: GameEvent[], relaxed = false, inShift = false): Score {
   const base = 100 * scenario.difficulty
   const pct = (p: number) => Math.round((base * p) / 100)
   const lines: ScoreLine[] = [{ label: `Base (difficulty ${scenario.difficulty})`, xp: base }]
@@ -51,7 +52,8 @@ export function score(scenario: Scenario, log: GameEvent[], relaxed = false): Sc
   const elapsedMs = end - start
   const par = scenario.par_minutes * 60_000
   const timeFactor = Math.min(1, Math.max(0, 2 - elapsedMs / par))
-  if (relaxed) lines.push({ label: 'Time bonus: off (relaxed mode)', xp: 0 })
+  if (inShift) lines.push({ label: 'Time bonus: see shift response targets', xp: 0 })
+  else if (relaxed) lines.push({ label: 'Time bonus: off (relaxed mode)', xp: 0 })
   else add(elapsedMs <= par ? 'Time bonus (under par)' : 'Time bonus (partial)', Math.round(pct(TIME_BONUS) * timeFactor))
 
   const isCorrect = (id: string) => scenario.hypotheses.find((h) => h.id === id)?.correct
