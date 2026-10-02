@@ -186,6 +186,7 @@
     - { token: "-u NAME", meaning: "Only messages from this unit (service)." }
     - { token: "-n 50", meaning: "(If given) only the last 50 lines." }
     - { token: "-x -e", meaning: "(In -xeu) add explanatory help text and jump to the end." }
+    - { token: "--since \"10 min ago\"", meaning: "(If given) only messages from that time on; also takes dates and times like \"2026-10-02 14:00\"." }
   why: "A service's own errors are the first clue, and the journal has them along with systemd's own messages about starts, stops and kills."
   alternatives:
     - { command: "journalctl -u NAME --since '-1h' -p warning", note: "Only warnings and worse from the last hour." }
@@ -438,3 +439,36 @@
   alternatives:
     - { command: "bash -x ./script.sh ARGS", note: "Print each command as it runs." }
   docs: { title: "Bash manual: shell scripts", url: "https://www.gnu.org/software/bash/manual/html_node/Shell-Scripts.html" }
+
+- id: lsblk-fs
+  match: "^lsblk -f"
+  summary: "Lists block devices with their filesystem type, label, UUID and mount point."
+  parts:
+    - { token: "-f", meaning: "Show filesystem details: FSTYPE, LABEL, UUID, free space and MOUNTPOINTS." }
+    - { token: "/dev/nvme1n1", meaning: "(If given) only this disk and its partitions." }
+  why: "Gives the real UUID of each filesystem to compare with /etc/fstab, and an empty MOUNTPOINTS column shows it isn't mounted."
+  alternatives:
+    - { command: "sudo blkid /dev/nvme1n1p1", note: "The UUID and type of one device." }
+    - { command: "findmnt --verify", note: "Checks /etc/fstab entries, including ones whose device doesn't exist." }
+  docs: { title: "lsblk(8)", url: "https://man7.org/linux/man-pages/man8/lsblk.8.html" }
+
+- id: mount-bind
+  match: "^(sudo )?mount --bind "
+  summary: "Makes a directory tree visible at a second path."
+  parts:
+    - { token: "--bind", meaning: "Bind mount: the same contents, accessible in two places." }
+    - { token: "/ /mnt/rootfs", meaning: "Show the root filesystem at /mnt/rootfs; a plain bind doesn't include filesystems mounted below it, so you see what's underneath their mount points." }
+  why: "The way to reach files hidden under a mount point without unmounting it."
+  alternatives:
+    - { command: "sudo umount /srv/media", note: "Also reveals them, but takes the mount away while you work." }
+  docs: { title: "mount(8): bind mount operation", url: "https://man7.org/linux/man-pages/man8/mount.8.html" }
+
+- id: ls-plain
+  match: "^ls [^-]"
+  summary: "Lists the contents of one or more directories."
+  parts:
+    - { token: "ls DIR1 DIR2", meaning: "List each directory's entries, under a heading per directory." }
+  why: "A quick look at what's actually there."
+  alternatives:
+    - { command: "ls -l DIR", note: "With owners, sizes and times." }
+  docs: { title: "ls(1)", url: "https://man7.org/linux/man-pages/man1/ls.1.html" }

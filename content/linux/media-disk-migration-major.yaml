@@ -1,0 +1,407 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: media-disk-migration-major
+track: linux
+difficulty: 5
+title: "Every product image older than Saturday is gone, and the root disk is filling"
+par_minutes: 30
+
+ticket:
+  from: "E-commerce lead"
+  priority: P1
+  body: |
+    Since the weekend, every product image uploaded before Saturday shows a
+    broken-image icon: that's most of the catalogue. Images uploaded since
+    then work. Monitoring also says media-01's root disk is at 91% and the
+    old media disk has a SMART warning, so maybe the disk died?
+
+environment: |
+  media-01 (Ubuntu) runs media-api as the user media; it stores uploads under
+  /srv/media/YYYY/MM/DD/ and nginx serves them at media.example.com. On
+  Saturday 09-27 ops moved /srv/media from the old disk /dev/sdb1 to a new
+  1 TB NVMe volume, /dev/nvme1n1p1 (change record below). The old disk is
+  still attached, waiting to be removed. The root filesystem is
+  /dev/nvme0n1p1 (40 GB).
+
+diagram:
+  nodes:
+    - { id: nginx, label: "nginx (media.example.com)", col: 0, row: 0, status: degraded }
+    - { id: api, label: "media-api (user media)", col: 0, row: 1, status: ok }
+    - { id: mount, label: "/srv/media", col: 1, row: 0, status: down }
+    - { id: newdisk, label: "nvme1n1p1 (new 1 TB)", col: 2, row: 0, status: ok }
+    - { id: root, label: "root fs nvme0n1p1 (40 GB)", col: 2, row: 1, status: degraded }
+  edges:
+    - { from: nginx, to: mount }
+    - { from: api, to: mount }
+    - { from: mount, to: newdisk }
+    - { from: mount, to: root }
+
+terminal:
+  prompt: "ops@media-01:~$"
+  commands:
+    - match: "curl -sI https://media.example.com/2026/09/14/p-1182.jpg"
+      when_actions: [fix-fstab]
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+        Content-Type: image/jpeg
+        Content-Length: 184213
+    - match: "curl -sI https://media.example.com/2026/09/14/p-1182.jpg"
+      evidence: old-404
+      output: |
+        HTTP/1.1 404 Not Found
+        Server: nginx
+    - match: "curl -sI https://media.example.com/2026/09/29/p-2019.jpg"
+      when_actions: [fix-fstab, recover-hidden]
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+        Content-Type: image/jpeg
+        Content-Length: 201877
+    - match: "curl -sI https://media.example.com/2026/09/29/p-2019.jpg"
+      when_actions: [fix-fstab]
+      evidence: weekend-404
+      output: |
+        HTTP/1.1 404 Not Found
+        Server: nginx
+    - match: "curl -sI https://media.example.com/2026/09/29/p-2019.jpg"
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+        Content-Type: image/jpeg
+        Content-Length: 201877
+    - match: "findmnt /srv/media"
+      when_actions: [fix-fstab]
+      output: |
+        TARGET     SOURCE         FSTYPE OPTIONS
+        /srv/media /dev/nvme1n1p1 ext4   rw,relatime
+    - match: "findmnt /srv/media"
+      evidence: not-mounted
+      output: ""
+    - match: "df -h / /srv/media"
+      when_actions: [fix-fstab, recover-hidden]
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/nvme0n1p1   40G   24G   16G  60% /
+        /dev/nvme1n1p1  984G  332G  602G  36% /srv/media
+    - match: "df -h / /srv/media"
+      when_actions: [fix-fstab]
+      evidence: root-still-full
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/nvme0n1p1   40G   36G  3.7G  91% /
+        /dev/nvme1n1p1  984G  320G  614G  35% /srv/media
+    - match: "df -h / /srv/media"
+      evidence: same-fs
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/nvme0n1p1   40G   36G  3.7G  91% /
+        /dev/nvme0n1p1   40G   36G  3.7G  91% /
+    - match: "grep media /etc/fstab"
+      when_actions: [fix-fstab]
+      output: |
+        UUID=7d3c1e9a-52b1-4f8e-a0c6-3e9d1b2a4f17  /srv/media  ext4  defaults,nofail  0  2
+    - match: "grep media /etc/fstab"
+      evidence: fstab-uuid
+      output: |
+        UUID=7d3c1e9a-52b1-4f8e-a0c6-3e9d1b2a4f71  /srv/media  ext4  defaults,nofail  0  2
+    - match: "lsblk -f /dev/nvme1n1"
+      evidence: real-uuid
+      output: |
+        NAME        FSTYPE FSVER LABEL UUID                                 FSAVAIL FSUSE% MOUNTPOINTS
+        nvme1n1
+        └─nvme1n1p1 ext4   1.0   media 7d3c1e9a-52b1-4f8e-a0c6-3e9d1b2a4f17
+    - match: "systemctl is-active srv-media.mount"
+      when_actions: [fix-fstab]
+      output: |
+        active
+    - match: "systemctl is-active srv-media.mount"
+      output: |
+        inactive
+
+logs:
+  - name: "Change record: media disk migration (Sat 09-27)"
+    lines: |
+      09:10 mkfs.ext4 -L media /dev/nvme1n1p1; mount /dev/nvme1n1p1 /mnt/new
+      09:12 rsync -r /srv/media/ /mnt/new/          (320 GB, done 11:40)
+      11:45 umount /mnt/new; umount /srv/media     (old disk sdb1)
+      11:47 /etc/fstab: /srv/media now UUID of nvme1n1p1 (typed from blkid on the old console), nofail
+      11:50 reboot; media-01 back up, media-api healthy, test upload OK
+  - name: "Monitoring alert: SMART (media-01)"
+    evidence: smart-old-disk
+    lines: |
+      2026-09-19 03:00 WARN /dev/sdb Reallocated_Sector_Ct 112 (was 96). Ticket OPS-4410: replace media disk.
+      2026-10-02 03:00 WARN /dev/sdb Reallocated_Sector_Ct 118
+
+hypotheses:
+  - id: uuid-nofail
+    text: "/etc/fstab names a UUID that doesn't exist (two digits swapped), and with nofail the boot carried on without mounting /srv/media, so nginx serves the empty directory underneath."
+    correct: true
+  - id: disk-failed
+    text: "The old media disk failed (the SMART warning)."
+    feedback: "/dev/sdb has been warning since 09-19, which is why it was replaced, and it isn't mounted any more. Nothing reads from it: /srv/media is on the root filesystem right now."
+  - id: rsync-incomplete
+    text: "The rsync didn't copy the old images to the new disk."
+    feedback: "The new disk holds 320 GB, but it isn't mounted at all, so nothing on it is being served. Check what /srv/media actually is."
+  - id: nginx-root
+    text: "nginx's root points somewhere else since the reboot."
+    feedback: "New uploads are served fine from the same root. The old files just aren't in the directory nginx is reading."
+
+actions:
+  - id: fix-fstab
+    label: "Correct the UUID in /etc/fstab to 7d3c1e9a-...-3e9d1b2a4f17 (from lsblk), then systemctl daemon-reload and mount /srv/media"
+    kind: fix
+    feedback: "/srv/media is the new disk again, and will be after the next reboot too. The old images are back."
+  - id: manual-mount
+    label: "sudo mount /dev/nvme1n1p1 /srv/media"
+    kind: wrong
+    match_regex: "^sudo mount /dev/nvme1n1p1 /srv/media$"
+    feedback: "It works until the next reboot, when the wrong UUID in fstab leaves /srv/media unmounted again. Fix the entry."
+  - id: drop-nofail
+    label: "Remove nofail from the fstab entry so a missing disk is noticed"
+    kind: wrong
+    feedback: "With the wrong UUID that only stops the boot at the missing mount instead; it doesn't mount anything. The UUID is the fault."
+  - id: mkfs
+    label: "sudo mkfs.ext4 /dev/nvme1n1p1 and copy the images again"
+    kind: destructive
+    feedback: "That wipes the new disk and its 320 GB copy. The disk is fine; fstab is pointing at the wrong UUID."
+
+solution_paths:
+  - [fix-fstab]
+
+key_evidence: [old-404, not-mounted, same-fs, fstab-uuid, real-uuid]
+
+evidence_labels:
+  old-404: "An image from 09-14 returns 404"
+  not-mounted: "findmnt shows nothing mounted at /srv/media"
+  same-fs: "/srv/media is on the root filesystem"
+  fstab-uuid: "fstab mounts UUID ...4f71 with nofail"
+  real-uuid: "The new disk's UUID is ...4f17"
+
+red_herrings:
+  - evidence: smart-old-disk
+    label: "SMART warning on /dev/sdb"
+    why: "That's the old disk, warning since 09-19, which is why it was replaced. It isn't mounted or used by anything; the images are missing because the new disk isn't mounted."
+
+hints:
+  nudge: "Where is /srv/media right now?"
+  direction: "Ask findmnt and df what /srv/media is, then compare the UUID in fstab with the disk's real one."
+  answer: "fstab says ...4f71, the disk is ...4f17, and nofail hid the failure. Correct the UUID, daemon-reload, mount."
+
+analogy:
+  title: "The new filing cabinet was never wheeled in"
+  text: |
+    The archive moved to a bigger cabinet over the weekend, but the label on
+    the door had the cabinet number wrong, so it was never put in place.
+    The clerks kept filing new papers on the floor where it should stand.
+    Fix the label and wheel it in, and you'll find the clerks can't open
+    its drawers, and the papers on the floor are now hidden under it.
+
+debrief:
+  root_cause: |
+    The fstab entry for /srv/media named UUID ...4f71; the new filesystem's
+    UUID is ...4f17. With nofail, systemd only wants that mount at boot,
+    so media-01 started normally without it, and /srv/media was just the
+    empty directory on the root filesystem. Everything uploaded before
+    Saturday is on the unmounted disk.
+  ideal_path:
+    - "Confirm an old image 404s."
+    - "Ask what /srv/media is: findmnt shows nothing; df shows the root filesystem."
+    - "Compare fstab's UUID with lsblk's: two digits swapped."
+    - "Fix fstab, daemon-reload, mount, and re-check the old image."
+  real_world: |
+    Copy UUIDs, don't retype them, and check with findmnt --verify (or
+    mount -a) before rebooting. A service that must not run without its
+    data can say so with RequiresMountsFor=/srv/media.
+
+concepts:
+  - term: "nofail"
+    text: "A mount marked nofail is only wanted, not required, by local-fs.target: the boot continues if the device never appears."
+    url: "https://man7.org/linux/man-pages/man5/systemd.mount.5.html"
+  - term: "Mounting over a directory"
+    text: "Whatever was in a directory, including its owner and mode, becomes invisible while a filesystem is mounted on it."
+    url: "https://man7.org/linux/man-pages/man8/mount.8.html"
+  - term: "rsync -a"
+    text: "Archive mode is -rlptgoD. Without -o, copied files belong to the user running rsync; without -p, permissions are masked by the umask."
+    url: "https://man7.org/linux/man-pages/man1/rsync.1.html"
+  - term: "Bind mounts"
+    text: "mount --bind olddir newdir makes the same contents visible in a second place, including what's underneath a mount point."
+    url: "https://man7.org/linux/man-pages/man8/mount.8.html"
+
+sources:
+  - title: "mount(8): mount points, nofail, --bind"
+    url: "https://man7.org/linux/man-pages/man8/mount.8.html"
+    retrieved: 2026-10-02
+  - title: "systemd.mount(5): nofail (wanted, not required, by local-fs.target)"
+    url: "https://man7.org/linux/man-pages/man5/systemd.mount.5.html"
+    retrieved: 2026-10-02
+  - title: "rsync(1): --archive, --owner, --perms"
+    url: "https://man7.org/linux/man-pages/man1/rsync.1.html"
+    retrieved: 2026-10-02
+
+stages:
+  - id: ownership
+    update: |
+      14:20: /srv/media is mounted and old images are back. Ten minutes
+      later: every new upload fails, and media-api is logging errors.
+    diagram_status: { mount: degraded, api: down, nginx: ok }
+    terminal:
+      commands:
+        - match: "journalctl -u media-api --since \"10 min ago\""
+          when_actions: [chown-media]
+          output: |
+            Oct 02 14:41:07 media-01 media-api[1922]: saved /srv/media/2026/10/02/p-2241.jpg (198 KB)
+        - match: "journalctl -u media-api --since \"10 min ago\""
+          evidence: eacces
+          output: |
+            Oct 02 14:31:12 media-01 media-api[1922]: upload p-2231 failed: PermissionError: [Errno 13] Permission denied: '/srv/media/2026/10/02/p-2231.jpg'
+            Oct 02 14:31:40 media-01 media-api[1922]: upload p-2232 failed: PermissionError: [Errno 13] Permission denied: '/srv/media/2026/10/02'
+        - match: "ls -ld /srv/media /srv/media/2026 /srv/media/2026/10"
+          when_actions: [chown-media]
+          output: |
+            drwxr-xr-x 3 media media 4096 Sep 27 09:10 /srv/media
+            drwxr-xr-x 12 media media 4096 Sep 27 11:31 /srv/media/2026
+            drwxr-xr-x 27 media media 4096 Oct  2 14:41 /srv/media/2026/10
+        - match: "ls -ld /srv/media /srv/media/2026 /srv/media/2026/10"
+          evidence: root-owned
+          output: |
+            drwxr-xr-x 3 root root 4096 Sep 27 09:10 /srv/media
+            drwxr-xr-x 12 root root 4096 Sep 27 11:31 /srv/media/2026
+            drwxr-xr-x 26 root root 4096 Sep 27 11:38 /srv/media/2026/10
+        - match: "systemctl show -p User media-api"
+          evidence: runs-as-media
+          output: |
+            User=media
+    hypotheses:
+      - id: rsync-owner
+        text: "The weekend copy used rsync -r, not -a, so everything on the new disk belongs to root (the user who ran it), and media-api runs as media."
+        correct: true
+      - id: selinux
+        text: "A security module (SELinux or AppArmor) is blocking writes to the new disk."
+        feedback: "The directories are owned by root with mode 755: that alone denies the media user. Ordinary permissions explain it before any security module."
+      - id: ro
+        text: "The new disk is mounted read-only."
+        feedback: "findmnt shows rw, and a read-only filesystem gives \"Read-only file system\" (EROFS), not \"Permission denied\" (EACCES)."
+    actions:
+      - id: chown-media
+        label: "sudo chown -R media:media /srv/media"
+        kind: fix
+        match_regex: "^sudo chown -R media:media /srv/media/?$"
+        feedback: "media owns its tree again, as it did on the old disk. Uploads save."
+      - id: chmod-777
+        label: "sudo chmod -R 777 /srv/media"
+        kind: destructive
+        feedback: "Every user and process on the host can now replace product images. Give the tree to its owner instead."
+      - id: run-as-root
+        label: "Run media-api as root"
+        kind: destructive
+        feedback: "An upload service handling customer files with full control of the host. Fix the ownership."
+      - id: recopy
+        label: "Copy everything again from the old disk with rsync -r"
+        kind: wrong
+        feedback: "Same flags, same result: rsync without -o makes the files belong to whoever runs it. And the old disk is the one with SMART warnings."
+    solution_paths:
+      - [chown-media]
+    key_evidence: [eacces, root-owned, runs-as-media]
+    evidence_labels:
+      eacces: "media-api gets Permission denied writing under /srv/media"
+      root-owned: "The new disk's directories belong to root, mode 755"
+      runs-as-media: "media-api runs as the user media"
+    hints:
+      nudge: "It's EACCES: who is writing, and who owns the directory?"
+      direction: "Compare media-api's user with the owner of /srv/media and its subdirectories, and look at how the data was copied."
+      answer: "rsync -r doesn't preserve owners, so root owns everything. chown -R media:media /srv/media."
+    debrief:
+      root_cause: |
+        The copy ran as root with rsync -r. -a would have kept owners
+        and permissions (it's -rlptgoD); without -o, rsync gives copied
+        files to the user running it. The old disk's tree belonged to
+        media; the new one belonged to root with mode 755, so media-api
+        could read but not create files. While the disk was unmounted
+        nobody noticed, because uploads were going to the root filesystem.
+      ideal_path:
+        - "Read media-api's journal: Permission denied under /srv/media."
+        - "Check who it runs as (media) and who owns the tree (root)."
+        - "Find why: the change record's rsync -r."
+        - "chown -R media:media, then upload again."
+
+  - id: hidden-uploads
+    update: |
+      14:45: uploads save, old images load. But the root disk is still at
+      91%, and the support desk says images customers uploaded over the
+      weekend, which worked this morning, are broken now.
+    diagram_status: { api: ok, mount: ok, root: degraded }
+    terminal:
+      commands:
+        - match: "sudo mount --bind / /mnt/rootfs"
+          output: ""
+        - match: "sudo du -sh /mnt/rootfs/srv/media"
+          when_actions: [recover-hidden]
+          output: |
+            4.0K	/mnt/rootfs/srv/media
+        - match: "sudo du -sh /mnt/rootfs/srv/media"
+          evidence: hidden-12g
+          output: |
+            12G	/mnt/rootfs/srv/media
+        - match: "ls /mnt/rootfs/srv/media/2026/09 /mnt/rootfs/srv/media/2026/10"
+          when_actions: [recover-hidden]
+          output: |
+            /mnt/rootfs/srv/media/2026/09:
+
+            /mnt/rootfs/srv/media/2026/10:
+        - match: "ls /mnt/rootfs/srv/media/2026/09 /mnt/rootfs/srv/media/2026/10"
+          evidence: weekend-dirs
+          output: |
+            /mnt/rootfs/srv/media/2026/09:
+            27  28  29  30
+
+            /mnt/rootfs/srv/media/2026/10:
+            01  02
+    hypotheses:
+      - id: under-mount
+        text: "Uploads from Saturday until the mount went into the root filesystem's /srv/media; mounting the new disk on top hid them (12 GB, still using root disk space)."
+        correct: true
+      - id: deleted
+        text: "Something deleted the weekend uploads when the disk was mounted."
+        feedback: "Mounting doesn't delete anything: it hides what was in the directory. A bind mount of / shows 12 GB still sitting under /srv/media."
+      - id: log-growth
+        text: "The root disk is full of logs."
+        feedback: "The 12 GB under /srv/media on the root filesystem accounts for the jump since Saturday: 4,108 images saved while the disk wasn't mounted."
+    actions:
+      - id: recover-hidden
+        label: "With / bind-mounted at /mnt/rootfs, sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/, check, then delete the copies under /mnt/rootfs/srv/media and unmount /mnt/rootfs"
+        kind: fix
+        match_regex: "^sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/?$"
+        feedback: "The weekend uploads are on the new disk with their owners and times, and 12 GB of root disk is free. No downtime: the bind mount let you reach them without unmounting."
+      - id: umount-copy
+        label: "Unmount /srv/media, copy the weekend files to the new disk, mount it again"
+        kind: wrong
+        feedback: "It works, but every image is unavailable while /srv/media is unmounted. A bind mount of / reaches the hidden files with the site up."
+      - id: rm-root-files
+        label: "Free the root disk: delete everything under /mnt/rootfs/srv/media"
+        kind: destructive
+        feedback: "Those are 4,108 customer uploads that exist nowhere else. Copy them first."
+    solution_paths:
+      - [recover-hidden]
+    key_evidence: [weekend-404, root-still-full, hidden-12g, weekend-dirs]
+    evidence_labels:
+      weekend-404: "An image from 09-29 worked this morning and 404s since the mount"
+      root-still-full: "The root filesystem is still 91% full with the disk mounted"
+      hidden-12g: "12 GB sits under /srv/media on the root filesystem"
+      weekend-dirs: "The hidden directories are 09-27 to 10-02"
+    hints:
+      nudge: "Weekend images worked before you mounted the disk. Where were they?"
+      direction: "Mounting hides what's underneath. A bind mount of / lets you see under /srv/media without unmounting."
+      answer: "Bind-mount / at /mnt/rootfs, rsync -a the 12 GB under srv/media onto /srv/media, then delete the copies on the root filesystem."
+    debrief:
+      root_cause: |
+        From Saturday until today media-api saved uploads into /srv/media
+        on the root filesystem, since nothing was mounted there. Mounting
+        the new disk didn't move or delete them: it hid them, with their
+        12 GB still counted on the root disk. A bind mount of / shows the
+        directory underneath the mount point, so they can be copied across
+        with rsync -a without taking the site down.
+      ideal_path:
+        - "Notice weekend images broke exactly when the disk was mounted, and the root disk didn't shrink."
+        - "Bind-mount / elsewhere and look under srv/media: 12 GB, 09-27 to 10-02."
+        - "rsync -a them onto the new disk, verify, then delete them from the root filesystem."
+        - "Check an image from the weekend and df."
