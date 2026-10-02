@@ -88,8 +88,10 @@ it('theme toggle switches and persists', () => {
 it('hints reveal one tier at a time, analogy with the second', async () => {
   render(<App />)
   await openIncident()
-  // The ticket folds to one line once work starts, so the tools sit higher.
-  expect(screen.getByText(/^Ticket from/).closest('details')!.open).toBe(false)
+  // The ticket stays open after accepting; folding it by hand sticks across re-renders.
+  const ticket = () => screen.getByText(/^Ticket from/).closest('details')!
+  expect(ticket().open).toBe(true)
+  ticket().open = false
   fireEvent.click(screen.getByRole('button', { name: /Show nudge hint/ }))
   expect(screen.getByText(/Errno 28 mean/)).toBeTruthy()
   expect(screen.queryByText(/filing cabinet/)).toBeNull()
@@ -97,6 +99,7 @@ it('hints reveal one tier at a time, analogy with the second', async () => {
   expect(screen.getByText(/filing cabinet/)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: /Show answer hint/ }))
   expect(screen.getByText('No hints left.')).toBeTruthy()
+  expect(ticket().open).toBe(false)
 })
 
 it('typed fix commands wait for the hypothesis, then take the action', async () => {

@@ -174,9 +174,10 @@ export default function IncidentScreen({
         )}
       </header>
 
-      {/* Full context while briefing; once work starts the whole ticket folds
-          to one line so the tools sit near the top of the screen. */}
-      <details open={phase === 'briefing'} className="group rounded-lg border border-line bg-panel p-4">
+      {/* The ticket starts open and stays open after accepting; the player can
+          fold it to one line. React sets `open` only on mount, so their choice
+          sticks. A multi-stage reopen (new key) opens it again to show the update. */}
+      <details key={stage} open className="group rounded-lg border border-line bg-panel p-4">
         <summary className="cursor-pointer text-sm text-muted hover:text-fg">
           Ticket from {scenario.ticket.from}
           <span className="block truncate text-fg group-open:hidden">
