@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: transactional-outbox
+track: microservices
+difficulty: 3
+title: "Some paid orders never reach the warehouse"
+par_minutes: 12
+
+ticket:
+  from: "Warehouse operations"
+  priority: P1
+  body: |
+    Customers are asking where their parcels are. 37 orders from yesterday
+    are paid and show "confirmed" in the order system, but the warehouse
+    never received them. All 37 were placed between 15:10 and 15:25.
+
+environment: |
+  order-service saves each order in its PostgreSQL database, commits, then
+  publishes an OrderPlaced event to the message broker; the warehouse
+  service consumes those events. Yesterday from 15:10 to 15:25 the broker was
+  restarted for an upgrade.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "psql -d orders -Atc \"SELECT count(*) FROM orders WHERE status = 'confirmed' AND created_at BETWEEN '2026-10-01 15:10' AND '2026-10-01 15:25'\""
+      evidence: orders-saved
+      output: |
+        37
+    - match: "kubectl logs deploy/order-service -n shop --since=24h | grep -m3 'publish OrderPlaced'"
+      evidence: publish-failed
+      output: |
+        2026-10-01 15:11:02 ERROR publish OrderPlaced ord_61204 failed: connection refused (broker)  [order already committed]
+        2026-10-01 15:12:47 ERROR publish OrderPlaced ord_61209 failed: connection refused (broker)  [order already committed]
+        2026-10-01 15:14:30 ERROR publish OrderPlaced ord_61215 failed: connection refused (broker)  [order already committed]
+    - match: "psql -d orders -Atc \"SELECT count(*) FROM outbox WHERE published_at IS NULL\""
+      when_actions: [outbox]
+      output: |
+        0
+    - match: "psql -d orders -Atc \"SELECT count(*) FROM outbox WHERE published_at IS NULL\""
+      output: |
+        ERROR:  relation "outbox" does not exist
+    - match: "curl -s https://warehouse.internal/api/orders/ord_61204 -o /dev/null -w '%{http_code}\\n'"
+      when_actions: [republish]
+      output: |
+        200
+    - match: "curl -s https://warehouse.internal/api/orders/ord_61204 -o /dev/null -w '%{http_code}\\n'"
+      evidence: warehouse-missing
+      output: |
+        404
+
+files:
+  - path: "order-service: place_order.py (excerpt)"
+    evidence: dual-write
+    content: |
+      def place_order(order):
+          with db.transaction():
+              db.insert("orders", order)
+          # committed; now tell everyone else
+          broker.publish("OrderPlaced", order)   # may fail: nothing retries it
+
+hypotheses:
+  - id: dual-write
+    text: "order-service commits the order and then publishes the event separately. While the broker was down, the commits succeeded and the publishes failed, and nothing retried them, so the warehouse never heard about those orders."
+    correct: true
+  - id: warehouse-bug
+    text: "The warehouse service dropped the events."
+    feedback: "The events were never sent: order-service logged \"publish failed\" for those orders. The warehouse had nothing to drop."
+  - id: payment
+    text: "The payments failed, so the orders didn't go through."
+    feedback: "The orders are saved as confirmed and paid; only the notification to the warehouse is missing."
+  - id: broker-lost
+    text: "The broker lost messages during its restart."
+    feedback: "The broker never received them: publishes were refused while it was down."
+
+actions:
+  - id: republish
+    label: "Republish OrderPlaced for the 37 orders saved but not delivered (the warehouse consumer ignores duplicates by order id)"
+    kind: fix
+    feedback: "The warehouse receives the missing orders and starts picking them; the consumer's duplicate check makes it safe if any were sent twice."
+  - id: outbox
+    label: "Write each OrderPlaced event to an outbox table in the same transaction as the order, and have a relay publish from the outbox until the broker confirms"
+    kind: fix
+    feedback: "The order and its event now commit together or not at all; if the broker is down, events wait in the outbox and are sent when it's back."
+  - id: publish-first
+    label: "Publish the event before saving the order"
+    kind: wrong
+    feedback: "That flips the failure: if the database write fails after the publish, the warehouse ships an order that doesn't exist."
+  - id: retry-loop
+    label: "Retry the publish in a loop inside the request until it succeeds"
+    kind: wrong
+    feedback: "Checkout hangs while the broker is down, and if order-service restarts mid-loop the event is still lost."
+
+solution_paths:
+  - [republish, outbox]
+
+key_evidence: [orders-saved, publish-failed, dual-write, warehouse-missing]
+
+evidence_labels:
+  orders-saved: "37 confirmed orders from 15:10 to 15:25 are in the database"
+  publish-failed: "Publishing their events failed while the broker was restarting"
+  dual-write: "The order is committed, then the event is published separately, with no retry"
+  warehouse-missing: "The warehouse has never heard of these orders"
+
+hints:
+  nudge: "The orders were saved. Did their events ever leave order-service?"
+  direction: "Read order-service's publish errors, then how it saves and publishes in place_order."
+  answer: "Saving and publishing are two separate writes; the publishes failed during the broker restart. Republish the 37, and use a transactional outbox."
+
+analogy:
+  title: "Filing the order, then phoning the warehouse"
+  text: |
+    The clerk files each order, then phones the warehouse. For fifteen
+    minutes the warehouse phone was off, the calls failed, and nobody wrote
+    down who still needed calling. Put each call on a to-do list in the same
+    folder as the order, and have someone work through the list until every
+    call gets through.
+
+debrief:
+  root_cause: |
+    Placing an order was two separate writes: commit the order to the
+    database, then publish OrderPlaced to the broker. They can't succeed or
+    fail together. During the broker restart the commits succeeded and the
+    publishes failed, and nothing retried them, so 37 paid orders never
+    reached the warehouse. The transactional outbox stores the event in the
+    same database transaction as the order and publishes it afterwards,
+    retrying until the broker accepts it.
+  ideal_path:
+    - "Confirm the orders exist and are confirmed."
+    - "Find their publish errors during the broker restart."
+    - "Read the code: commit, then a separate publish with no retry."
+    - "Republish the 37; move to a transactional outbox; check the warehouse has them."
+  real_world: |
+    Any "save, then send a message" is a dual write. Outbox tables or change
+    data capture make it reliable; consumers should be idempotent because an
+    outbox relay can send an event more than once.
+
+concepts:
+  - term: "Dual write"
+    text: "Updating two systems, such as a database and a message broker, as separate steps that can't succeed or fail together."
+    url: "https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html"
+  - term: "Transactional outbox"
+    text: "Writing outgoing events to a table in the same transaction as the data, then publishing them from that table."
+    url: "https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html"
+
+sources:
+  - title: "AWS Prescriptive Guidance: Transactional outbox pattern"
+    url: "https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html"
+    retrieved: 2026-10-02

@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: breaking-api-field
+track: microservices
+difficulty: 2
+title: "After the API release, the old app shows every product as free"
+par_minutes: 10
+
+ticket:
+  from: "Mobile team"
+  priority: P1
+  body: |
+    Since this morning's catalog-api release, customers on app version 4.x
+    see "£0.00" on every product. Version 5 is fine. About 30% of customers
+    haven't updated. We didn't change anything in the app.
+
+environment: |
+  catalog-api's product responses used to include price (a number). This
+  morning's release replaced it with a structured price_money object
+  (amount and currency), as v5 of the app expects, and removed the old field.
+  The app shows £0.00 when a price is missing.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "curl -s https://api.example.com/catalog/products/p-1182 | jq '{price, price_money}'"
+      when_actions: [restore-field]
+      output: |
+        {
+          "price": 24.99,
+          "price_money": { "amount": "24.99", "currency": "GBP" }
+        }
+    - match: "curl -s https://api.example.com/catalog/products/p-1182 | jq '{price, price_money}'"
+      evidence: price-gone
+      output: |
+        {
+          "price": null,
+          "price_money": { "amount": "24.99", "currency": "GBP" }
+        }
+    - match: "git log --oneline -3 catalog-api/"
+      evidence: change
+      output: |
+        a91c3e7 catalog-api: replace price with price_money (for app v5)
+        5f20d1b catalog-api: add stock badges
+        c8e4a90 catalog-api: tidy logging
+
+logs:
+  - name: "app analytics: active versions today"
+    evidence: old-clients
+    lines: |
+      5.2  64%
+      5.1   6%
+      4.x  30%
+
+hypotheses:
+  - id: removed-field
+    text: "The release removed the price field that app 4.x reads. Removing a field is a breaking change for clients that still use it."
+    correct: true
+  - id: app-bug
+    text: "App 4.x has a bug."
+    feedback: "4.x worked yesterday and hasn't changed. The API response changed underneath it: price is now missing."
+  - id: cache
+    text: "A CDN is caching bad responses."
+    feedback: "A fresh request shows the same thing: price_money is there, price isn't."
+  - id: currency
+    text: "Prices are now in a currency the old app can't show."
+    feedback: "The old app never sees a price at all: the field it reads is gone, so it falls back to £0.00."
+
+actions:
+  - id: restore-field
+    label: "Release catalog-api again returning both price and price_money; remove price only after app 4.x usage drops off (expand, then contract)"
+    kind: fix
+    feedback: "Old apps read price and new apps read price_money, so both work. Removing price later is a planned change once nobody depends on it."
+  - id: force-update
+    label: "Force every user to update to app 5"
+    kind: wrong
+    feedback: "Store review and adoption take days, and 30% of customers see free products until they update. Fix the API now; encourage updates separately."
+  - id: rollback-v5
+    label: "Roll back catalog-api to yesterday's release"
+    kind: wrong
+    feedback: "Old apps work again, and app 5, which expects price_money, breaks instead. Serve both fields."
+  - id: zero-price-orders
+    label: "Leave it; checkout recalculates the real price anyway"
+    kind: destructive
+    feedback: "Customers are shown one price and charged another, which is a trust and consumer-law problem, not a display glitch."
+
+solution_paths:
+  - [restore-field]
+
+key_evidence: [price-gone, change, old-clients]
+
+evidence_labels:
+  price-gone: "The response no longer includes price"
+  change: "This morning's release replaced price with price_money"
+  old-clients: "30% of customers still run app 4.x"
+
+hints:
+  nudge: "The old app didn't change. What did it start receiving?"
+  direction: "Compare today's response with what app 4.x reads, and how many people still use it."
+  answer: "Removing price broke clients that read it. Serve both fields, and only remove price once old versions are gone."
+
+analogy:
+  title: "Moving the sign the regulars rely on"
+  text: |
+    The shop replaced its price tags with a new style. New customers read
+    the new tags fine; regulars still look where the old tags were, see
+    nothing, and assume things are free. Keep both tags up until the
+    regulars have learned the new ones.
+
+debrief:
+  root_cause: |
+    App clients can't all update at once, so an API serves several client
+    versions at the same time. Removing price was a backwards-incompatible
+    change: app 4.x still read it, found nothing, and showed £0.00. The
+    safe path is expand and contract: add the new field alongside the old,
+    let clients move, and only remove the old field when no supported
+    client uses it.
+  ideal_path:
+    - "Compare the response with what old clients read: price is gone."
+    - "Find the change: price replaced by price_money this morning."
+    - "Count who's affected: 30% on app 4.x."
+    - "Serve both fields; schedule price's removal for when 4.x is gone."
+  real_world: |
+    Treat removing or renaming a field as a breaking change requiring a
+    deprecation period (or a new API version). Contract tests from each
+    client against the API catch this before release.
+
+concepts:
+  - term: "Backwards-compatible change"
+    text: "A change existing clients keep working with, such as adding an optional field. Removing or renaming a field isn't one."
+    url: "https://cloud.google.com/apis/design/compatibility"
+  - term: "Expand and contract"
+    text: "Add the new form alongside the old, migrate clients, then remove the old form once nothing uses it."
+    url: "https://cloud.google.com/apis/design/compatibility"
+
+sources:
+  - title: "Google Cloud API design guide: Backwards compatibility (removing or renaming a field is incompatible)"
+    url: "https://cloud.google.com/apis/design/compatibility"
+    retrieved: 2026-10-02
+  - title: "Google Cloud API design guide: Versioning"
+    url: "https://cloud.google.com/apis/design/versioning"
+    retrieved: 2026-10-02

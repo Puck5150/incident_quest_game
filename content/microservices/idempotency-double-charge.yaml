@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: idempotency-double-charge
+track: microservices
+difficulty: 3
+title: "Some customers were charged twice for one order"
+par_minutes: 12
+
+ticket:
+  from: "Customer support"
+  priority: P1
+  body: |
+    Since about 13:00, 41 customers have contacted us about being charged
+    twice for a single order. Each pair of charges is the same amount, a few
+    seconds apart. Payments were slow around then.
+
+environment: |
+  order-service calls payment-service's POST /charges to take payment. Its HTTP
+  client times out after 5 seconds and retries a failed or timed-out request
+  up to twice. payment-service charges the card through the payment
+  provider, which supports idempotency keys; payment-service doesn't send one.
+  The team's ./replay-slow-charge.sh replays a charge against staging with an
+  artificially slow provider.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl logs deploy/order-service -n shop --since=2h | grep ord_77812"
+      evidence: retry-after-timeout
+      output: |
+        13:04:11.020 order ord_77812: POST payment-service/charges amount=59.90
+        13:04:16.021 order ord_77812: timeout after 5000 ms, retrying (1/2)
+        13:04:16.030 order ord_77812: POST payment-service/charges amount=59.90
+        13:04:17.410 order ord_77812: 201 Created charge ch_9Qp2 (status succeeded)
+    - match: "kubectl logs deploy/payment-service -n shop --since=2h | grep ord_77812"
+      evidence: two-charges
+      output: |
+        13:04:11.031 charge for ord_77812 59.90: provider call started
+        13:04:16.034 charge for ord_77812 59.90: provider call started
+        13:04:17.402 charge for ord_77812 59.90: succeeded ch_9Qp2
+        13:04:18.887 charge for ord_77812 59.90: succeeded ch_9Qn8 (response not delivered: client disconnected)
+    - match: "./replay-slow-charge.sh ord_test_42"
+      when_actions: [idempotency-keys]
+      output: |
+        attempt 1: timeout after 5000 ms
+        attempt 2: 201 Created charge ch_T41 (replayed result for Idempotency-Key ord_test_42)
+        provider charges for ord_test_42: 1
+    - match: "./replay-slow-charge.sh ord_test_42"
+      output: |
+        attempt 1: timeout after 5000 ms
+        attempt 2: 201 Created charge ch_T40
+        provider charges for ord_test_42: 2
+
+metrics:
+  - name: "payment provider latency p95 (ms)"
+    unit: "ms"
+    evidence: slow-provider
+    series:
+      - label: "p95"
+        points: [["12:30", 820], ["12:45", 910], ["13:00", 6400], ["13:15", 7100], ["13:30", 900]]
+
+files:
+  - path: "payment-service: charges.ts (excerpt)"
+    evidence: no-key
+    content: |
+      export async function createCharge(order: Order) {
+        return provider.charges.create({
+          amount: order.total,
+          currency: order.currency,
+          source: order.paymentMethod,
+        })   // no idempotency key
+      }
+
+hypotheses:
+  - id: non-idempotent-retry
+    text: "When the provider was slow, order-service timed out and retried while the first charge was still being processed. Without an idempotency key, both requests created a charge."
+    correct: true
+  - id: double-click
+    text: "Customers clicked Pay twice."
+    feedback: "order-service's own log shows one order, one Pay, and a retry five seconds later, sent by the client itself."
+  - id: provider-bug
+    text: "The payment provider charged twice by mistake."
+    feedback: "The provider received two separate charge requests and did exactly what was asked. Nothing told it they were the same payment."
+  - id: no-timeout
+    text: "order-service needs a longer timeout."
+    feedback: "A longer timeout makes this rarer, not impossible: any retry of a charge that might have succeeded can still double-charge."
+
+actions:
+  - id: idempotency-keys
+    label: "Send an idempotency key derived from the order (for example the order id) with every charge request, so a retry returns the first request's result instead of charging again"
+    kind: fix
+    feedback: "The provider saves the result for each key; a retried request with the same key gets the same answer, so a retry can't create a second charge."
+  - id: refund
+    label: "Refund the 41 duplicate charges and tell the affected customers"
+    kind: fix
+    feedback: "The customers get their money back. Find all pairs (same order, same amount, seconds apart), not just the ones who complained."
+  - id: no-retries
+    label: "Turn off retries for payments"
+    kind: wrong
+    feedback: "No more duplicates, but every network blip now fails a payment that would have succeeded on retry. Make the retry safe instead."
+  - id: dedupe-amount
+    label: "In payment-service, reject a second charge with the same amount within a minute"
+    kind: destructive
+    feedback: "Real customers do buy the same thing twice, and two customers can pay the same amount; legitimate payments would be refused."
+
+solution_paths:
+  - [idempotency-keys, refund]
+
+key_evidence: [retry-after-timeout, two-charges, no-key, slow-provider]
+
+evidence_labels:
+  retry-after-timeout: "order-service timed out after 5 s and retried the charge"
+  two-charges: "payment-service created two charges for the same order"
+  no-key: "Charges are created without an idempotency key"
+  slow-provider: "Provider latency jumped past 5 s around 13:00"
+
+hints:
+  nudge: "Follow one double-charged order through both services' logs."
+  direction: "The retry came from order-service. What would let payment-service recognise a retry as the same request?"
+  answer: "Retries of a non-idempotent charge created a second charge. Send an idempotency key (the order id) with each charge, and refund the duplicates."
+
+analogy:
+  title: "Asking twice at the counter"
+  text: |
+    You hand over a cheque and the clerk takes ages, so you hand over
+    another in case the first was lost. Both get cashed. If every cheque
+    carried a reference number, the clerk could say "already paid that one"
+    and hand back the first receipt.
+
+debrief:
+  root_cause: |
+    When the provider slowed down, payment-service's calls took longer than
+    order-service's 5-second timeout. order-service retried, but the first
+    request was still in progress and succeeded too, so two charges were
+    created. A charge is not safe to repeat on its own; an idempotency key
+    makes the server return the first request's result for a retry instead
+    of doing the work again.
+  ideal_path:
+    - "Follow one order: a timeout, then a retry from order-service."
+    - "See both requests succeed in payment-service."
+    - "Note no idempotency key is sent."
+    - "Send a stable idempotency key per order, refund duplicates, and replay a slow charge to confirm one charge."
+  real_world: |
+    Any operation retried across a network must be idempotent or carry an
+    idempotency key, especially anything that moves money or sends
+    messages. Timeouts don't mean failure: the work may have happened.
+
+concepts:
+  - term: "Idempotent"
+    text: "Doing the same request twice has the same effect as doing it once."
+    url: "https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2"
+  - term: "Idempotency key"
+    text: "A unique value sent with a request so the server can recognise retries and return the first result instead of repeating the work."
+    url: "https://docs.stripe.com/api/idempotent_requests"
+
+sources:
+  - title: "RFC 9110: HTTP Semantics (9.2.2 Idempotent methods; POST is not idempotent)"
+    url: "https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2"
+    retrieved: 2026-10-02
+  - title: "Stripe API: Idempotent requests"
+    url: "https://docs.stripe.com/api/idempotent_requests"
+    retrieved: 2026-10-02

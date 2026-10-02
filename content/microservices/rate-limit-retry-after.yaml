@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: rate-limit-retry-after
+track: microservices
+difficulty: 2
+title: "The supplier locked us out for an hour, during the stock sync"
+par_minutes: 10
+
+ticket:
+  from: "Supply chain"
+  priority: P2
+  body: |
+    The supplier's stock API started returning 429 at 09:00 during our
+    hourly sync, and by 09:05 they'd blocked our key for an hour. Their
+    support says we "hammered" them. Stock levels on the site are an hour
+    stale.
+
+environment: |
+  stock-sync calls the supplier's API for each product, in parallel. On any
+  error it retries immediately, up to 10 times. The supplier's API allows
+  20 requests per second and documents 429 responses with a Retry-After
+  header.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl logs job/stock-sync-0900 -n shop | head -6"
+      evidence: immediate-retries
+      output: |
+        09:00:02.101 GET /v2/stock/sku-10442 -> 429 Retry-After: 2
+        09:00:02.104 GET /v2/stock/sku-10442 -> 429 Retry-After: 2   (retry 1)
+        09:00:02.108 GET /v2/stock/sku-10442 -> 429 Retry-After: 2   (retry 2)
+        09:00:02.111 GET /v2/stock/sku-10442 -> 429 Retry-After: 2   (retry 3)
+        09:00:02.115 GET /v2/stock/sku-10443 -> 429 Retry-After: 2
+        09:00:02.118 GET /v2/stock/sku-10443 -> 429 Retry-After: 2   (retry 1)
+    - match: "kubectl logs job/stock-sync-0900 -n shop | grep -c ' -> 429'"
+      evidence: count-429
+      output: |
+        48112
+    - match: "kubectl logs job/stock-sync-1100 -n shop | tail -3"
+      when_actions: [honor-retry-after]
+      output: |
+        11:02:41.900 GET /v2/stock/sku-99820 -> 200
+        11:02:42.004 waited 2.0 s after 429 (Retry-After: 2), 14 times this run
+        11:02:42.010 sync complete: 18,402 products in 2m40s
+    - match: "kubectl logs job/stock-sync-1100 -n shop | tail -3"
+      output: |
+        (job stock-sync-1100 hasn't run yet)
+
+files:
+  - path: "stock-sync: client config"
+    evidence: retry-config
+    content: |
+      concurrency: 100
+      retry:
+        max_attempts: 10
+        backoff: none            # retry immediately on any error
+        respect_retry_after: false
+
+logs:
+  - name: "supplier email, 09:06"
+    evidence: supplier-limit
+    lines: |
+      Your API key exceeded 20 requests/second and kept sending after
+      receiving 429 responses. It has been suspended until 10:05 under our
+      fair-use policy. Please honour Retry-After.
+
+hypotheses:
+  - id: ignore-429
+    text: "The sync runs 100 requests in parallel against a 20/s limit, and on 429 it retries immediately instead of waiting for Retry-After, multiplying the traffic until the supplier blocked the key."
+    correct: true
+  - id: supplier-outage
+    text: "The supplier's API was down."
+    feedback: "It answered every request, with 429 and a Retry-After telling us to wait. It was up and asking us to slow down."
+  - id: key-expired
+    text: "Our API key expired."
+    feedback: "An expired key gets 401. These were 429s until the supplier suspended the key for ignoring them."
+  - id: more-products
+    text: "We have many more products than before."
+    feedback: "The catalogue hasn't changed much. 48,000 responses of 429 came mostly from immediate retries."
+
+actions:
+  - id: honor-retry-after
+    label: "Limit the sync to 20 requests per second, and on 429 wait for Retry-After (with exponential backoff and jitter when there's no header) before retrying"
+    kind: fix
+    feedback: "The sync stays under the supplier's limit, and when it does hit it, it waits as asked instead of piling on."
+  - id: more-keys
+    label: "Ask for more API keys and spread requests across them"
+    kind: wrong
+    feedback: "That dodges the supplier's limit rather than respecting it, and the same retry loop would get those keys suspended too."
+  - id: more-retries
+    label: "Raise max_attempts to 50 so the sync eventually gets through"
+    kind: destructive
+    feedback: "Five times more immediate retries: the key is suspended even sooner and for longer."
+  - id: just-wait
+    label: "Wait for the suspension to end and run the sync again"
+    kind: wrong
+    feedback: "The next sync behaves exactly the same and gets suspended again."
+
+solution_paths:
+  - [honor-retry-after]
+
+key_evidence: [immediate-retries, count-429, retry-config, supplier-limit]
+
+evidence_labels:
+  immediate-retries: "Each 429 is retried within milliseconds, though Retry-After says wait 2 seconds"
+  count-429: "The 09:00 sync received 48,112 responses of 429"
+  retry-config: "The client runs 100 in parallel, retries immediately, and ignores Retry-After"
+  supplier-limit: "The supplier allows 20 requests per second and suspended the key"
+
+hints:
+  nudge: "The supplier answered every request. What did those answers ask the sync to do?"
+  direction: "Read the 429 responses' headers, then the client's retry settings and concurrency."
+  answer: "The sync ignores Retry-After and retries immediately at 100 in parallel. Rate-limit to 20/s and wait as Retry-After says."
+
+analogy:
+  title: "Knocking faster when told to wait"
+  text: |
+    The shopkeeper says "one moment, come back in two seconds". A hundred
+    couriers respond by knocking harder and faster, until the shopkeeper
+    locks the door for an hour. Send fewer couriers, and have them wait
+    when asked.
+
+debrief:
+  root_cause: |
+    The supplier allows 20 requests a second and answers 429 Too Many
+    Requests with Retry-After when that's exceeded. stock-sync sent 100
+    requests in parallel and retried every 429 immediately, up to 10 times,
+    ignoring Retry-After. Each 429 produced more traffic, not less, and the
+    supplier suspended the key for an hour under its fair-use policy.
+  ideal_path:
+    - "Read the log: 429s, each retried within milliseconds."
+    - "Notice the Retry-After header asking for a 2-second wait."
+    - "Check the client: 100 in parallel, no backoff, Retry-After ignored."
+    - "Rate-limit to the documented 20/s and honour Retry-After; confirm the next sync completes."
+  real_world: |
+    Client-side rate limiting and Retry-After handling belong in every client
+    of someone else's API. Exponential backoff with jitter prevents retries
+    from synchronising into waves.
+
+concepts:
+  - term: "429 Too Many Requests"
+    text: "An HTTP status meaning the client sent too many requests; it may include Retry-After saying how long to wait."
+    url: "https://www.rfc-editor.org/rfc/rfc6585#section-4"
+  - term: "Retry-After"
+    text: "A response header giving a number of seconds (or a date) to wait before trying again."
+    url: "https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3"
+  - term: "Exponential backoff with jitter"
+    text: "Waiting longer after each failed retry, with randomness so many clients don't retry at the same moment."
+    url: "https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html"
+
+sources:
+  - title: "RFC 6585: Additional HTTP Status Codes (4. 429 Too Many Requests)"
+    url: "https://www.rfc-editor.org/rfc/rfc6585#section-4"
+    retrieved: 2026-10-02
+  - title: "RFC 9110: HTTP Semantics (10.2.3 Retry-After)"
+    url: "https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3"
+    retrieved: 2026-10-02
+  - title: "AWS SDKs and Tools: Retry behavior (exponential backoff with jitter)"
+    url: "https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html"
+    retrieved: 2026-10-02

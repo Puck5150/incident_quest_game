@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: jwt-clock-skew
+track: microservices
+difficulty: 2
+title: "Freshly signed-in users are rejected by one service"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P2
+  body: |
+    Customers who have just signed in get "Session invalid" on the
+    wishlist page for the first few minutes, then it works. Every other page
+    works straight away. It started after last week's node maintenance.
+
+environment: |
+  auth-service issues JWT access tokens with iat (issued at) and nbf (not
+  before) set to the current time and a 15-minute expiry. Each service
+  checks them; wishlist-service allows 30 seconds of clock leeway. Services
+  run on VMs that keep time with chrony.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "ssh wishlist-01 timedatectl"
+      when_actions: [fix-ntp]
+      output: |2
+                       Local time: Fri 2026-10-02 10:14:08 UTC
+                   Universal time: Fri 2026-10-02 10:14:08 UTC
+        System clock synchronized: yes
+                      NTP service: active
+    - match: "ssh wishlist-01 timedatectl"
+      evidence: not-synced
+      output: |2
+                       Local time: Fri 2026-10-02 10:10:51 UTC
+                   Universal time: Fri 2026-10-02 10:10:51 UTC
+        System clock synchronized: no
+                      NTP service: inactive
+    - match: "date -u +%H:%M:%S"
+      output: |
+        10:14:08
+    - match: "ssh wishlist-01 systemctl is-active chrony"
+      when_actions: [fix-ntp]
+      output: |
+        active
+    - match: "ssh wishlist-01 systemctl is-active chrony"
+      evidence: chrony-off
+      output: |
+        inactive
+
+logs:
+  - name: "wishlist-service log"
+    evidence: nbf-reject
+    lines: |
+      10:10:51 WARN rejected token for user u-2210: token not yet valid (nbf 10:14:06, now 10:10:51, leeway 30s)
+      10:10:52 WARN rejected token for user u-8817: token not yet valid (nbf 10:14:07, now 10:10:52, leeway 30s)
+  - name: "maintenance log (last week)"
+    lines: |
+      wishlist-01: kernel update, reboot. chrony disabled during the update to avoid a time jump; re-enable after.
+
+hypotheses:
+  - id: clock-behind
+    text: "wishlist-01's clock is over three minutes behind, because chrony was left off after maintenance, so new tokens look \"not yet valid\" there until its clock catches up with their nbf."
+    correct: true
+  - id: auth-bug
+    text: "auth-service issues bad tokens."
+    feedback: "Every other service accepts the same tokens straight away. Only wishlist-service rejects them, and only for the first few minutes."
+  - id: leeway-too-small
+    text: "wishlist-service's 30-second leeway is too small."
+    feedback: "The gap is over three minutes because one server's clock is wrong. Leeway is for small differences between well-synchronised clocks."
+  - id: expiry
+    text: "The tokens expire too quickly."
+    feedback: "They're rejected as not yet valid, not expired: the failure happens at the start of their life."
+
+actions:
+  - id: fix-ntp
+    label: "Re-enable and start chrony on wishlist-01 (systemctl enable --now chrony), and confirm the clock is synchronised"
+    kind: fix
+    match_regex: "^ssh wishlist-01 (sudo )?systemctl enable --now chrony(\\.service)?$"
+    feedback: "chrony brings wishlist-01's clock back in line, so new tokens are valid there as soon as they're issued, like everywhere else."
+  - id: big-leeway
+    label: "Raise wishlist-service's leeway to 10 minutes"
+    kind: wrong
+    feedback: "It hides the broken clock, and also accepts tokens up to 10 minutes past their expiry: revoked sessions keep working longer."
+  - id: drop-nbf
+    label: "Stop checking nbf in wishlist-service"
+    kind: wrong
+    feedback: "That removes a validity check to work around one server's clock, which is still wrong for everything else that uses time."
+  - id: set-clock-manually
+    label: "Set wishlist-01's clock by hand with date -s"
+    kind: wrong
+    feedback: "Right for now, drifting again tomorrow: without time synchronisation the clock wanders. Turn chrony back on."
+
+solution_paths:
+  - [fix-ntp]
+
+key_evidence: [nbf-reject, not-synced, chrony-off]
+
+evidence_labels:
+  nbf-reject: "wishlist-service rejects new tokens as not yet valid, by over 3 minutes"
+  not-synced: "wishlist-01's clock is over 3 minutes behind and not synchronised"
+  chrony-off: "chrony isn't running on wishlist-01"
+
+hints:
+  nudge: "\"Not yet valid\" compares the token's time with whose clock?"
+  direction: "Compare wishlist-01's time with the real time, and check whether it's keeping time automatically."
+  answer: "chrony was left off after maintenance and wishlist-01's clock is over 3 minutes slow. Re-enable chrony."
+
+analogy:
+  title: "The guard with the slow watch"
+  text: |
+    Tickets for the show are stamped "valid from 8 pm". One door's guard
+    has a watch running four minutes slow, so at 8 pm by everyone else's
+    time he turns ticket holders away. Set his watch automatically, rather
+    than telling him to accept tickets early.
+
+debrief:
+  root_cause: |
+    A token's nbf says it isn't valid before that time, checked against the
+    receiving service's own clock (RFC 7519 allows a small leeway for clock
+    skew). During maintenance chrony was disabled on wishlist-01 and never
+    re-enabled, so its clock fell more than three minutes behind. Freshly
+    issued tokens therefore looked like they were from the future there, and
+    were rejected until wishlist-01's clock passed their nbf.
+  ideal_path:
+    - "Read the rejection: not yet valid, by over 3 minutes."
+    - "Compare wishlist-01's clock with real time: 3m17s behind, not synchronised."
+    - "Find why: chrony was disabled for maintenance and left off."
+    - "Re-enable chrony and confirm the clock is synchronised."
+  real_world: |
+    Time is a dependency: tokens, certificates, logs and distributed locks
+    all assume synchronised clocks. Alert on unsynchronised clocks, and keep
+    validation leeway small.
+
+concepts:
+  - term: "JWT nbf and exp"
+    text: "Claims saying when a token becomes valid and when it expires, checked against the verifier's clock with a small allowed leeway."
+    url: "https://www.rfc-editor.org/rfc/rfc7519#section-4.1.5"
+  - term: "Time synchronisation (NTP)"
+    text: "Keeps a machine's clock aligned with reference time servers; chrony is a common NTP implementation."
+    url: "https://www.freedesktop.org/software/systemd/man/latest/timedatectl.html"
+
+sources:
+  - title: "RFC 7519: JSON Web Token (4.1.4 exp, 4.1.5 nbf: leeway for clock skew)"
+    url: "https://www.rfc-editor.org/rfc/rfc7519#section-4.1.5"
+    retrieved: 2026-10-02
+  - title: "systemd: timedatectl (System clock synchronized, NTP service)"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/timedatectl.html"
+    retrieved: 2026-10-02

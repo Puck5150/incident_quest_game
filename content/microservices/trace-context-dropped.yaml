@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: trace-context-dropped
+track: microservices
+difficulty: 2
+title: "Checkout is slow, and the trace ends at the pricing service"
+par_minutes: 10
+
+ticket:
+  from: "Checkout team"
+  priority: P2
+  body: |
+    Checkout got 2 seconds slower last week. Our traces show the gateway and
+    checkout-service, then pricing-service taking 2.1 seconds, and nothing
+    under it, though pricing calls three other services. We can't see where
+    the time goes.
+
+environment: |
+  Services are instrumented with OpenTelemetry and propagate W3C Trace
+  Context (the traceparent header). pricing-service was rewritten last
+  month; its new HTTP client was set up by hand.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "kubectl logs deploy/discount-service -n shop --since=10m | grep traceparent | head -2"
+      when_actions: [propagate]
+      output: |
+        10:41:07 inbound GET /discounts?cart=c-8812 traceparent=00-4bf92f3577b34da6a3ce929d0e0e4736-a1c2e3f4b5d6a7b8-01
+        10:41:09 inbound GET /discounts?cart=c-8815 traceparent=00-9e1d55b0aa7c43f1b2c3d4e5f6a7b8c9-c3d4e5f6a7b8c9d0-01
+    - match: "kubectl logs deploy/discount-service -n shop --since=10m | grep traceparent | head -2"
+      evidence: no-header
+      output: |
+        10:41:07 inbound GET /discounts?cart=c-8812 traceparent=(none)
+        10:41:09 inbound GET /discounts?cart=c-8815 traceparent=(none)
+
+traces:
+  - name: "POST /checkout (trace 4bf92f35)"
+    evidence: trace-stops
+    spans:
+      - { id: gw, service: "gateway", operation: "POST /checkout", start_ms: 0, duration_ms: 2490 }
+      - { id: co, parent: gw, service: "checkout-service", operation: "create order", start_ms: 10, duration_ms: 2460 }
+      - { id: pr, parent: co, service: "pricing-service", operation: "price cart", start_ms: 40, duration_ms: 2110, note: "no child spans" }
+  - name: "discount-service: GET /discounts (separate trace e7a1c09b, same time)"
+    evidence: orphan-trace
+    spans:
+      - { id: ds, service: "discount-service", operation: "GET /discounts", start_ms: 0, duration_ms: 1980, note: "root span: no parent trace" }
+      - { id: db, parent: ds, service: "discount-service", operation: "SELECT promotions", start_ms: 15, duration_ms: 1940, status: ok, note: "full table scan" }
+
+files:
+  - path: "pricing-service: http.ts (new client)"
+    evidence: plain-fetch
+    content: |
+      // Hand-rolled client for downstream calls (replaces the old shared library)
+      export async function get(url: string) {
+        const res = await fetch(url, { headers: { accept: 'application/json' } })
+        return res.json()
+      }
+
+hypotheses:
+  - id: no-propagation
+    text: "pricing-service's new HTTP client doesn't pass the traceparent header on, so its downstream calls start new, unconnected traces."
+    correct: true
+  - id: sampling
+    text: "The downstream services are sampled out."
+    feedback: "discount-service records spans; they're in a separate trace with no parent, which happens when no trace context arrives."
+  - id: pricing-slow
+    text: "pricing-service itself is doing the slow work."
+    feedback: "Can't tell from this trace: pricing's 2.1 s has no children because its calls aren't connected. The orphan trace from discount-service at the same time takes 1.98 s."
+  - id: collector
+    text: "The tracing collector is dropping spans."
+    feedback: "The spans arrive, just as separate traces. Dropped spans wouldn't create a new root span in discount-service."
+
+actions:
+  - id: propagate
+    label: "Make pricing-service's client inject the current trace context (traceparent) into outgoing requests, using OpenTelemetry's HTTP instrumentation or propagator"
+    kind: fix
+    feedback: "Downstream calls now join the caller's trace, so the next checkout trace shows pricing's children, including discount-service's slow query."
+  - id: more-sampling
+    label: "Raise the sampling rate to 100%"
+    kind: wrong
+    feedback: "More traces, still broken at the same place: sampling doesn't connect spans that lack context."
+  - id: logs-only
+    label: "Give up on tracing and grep logs by timestamp"
+    kind: wrong
+    feedback: "Matching by time across busy services is guesswork. One header fixes the trace."
+  - id: restart-collector
+    label: "Restart the tracing collector"
+    kind: wrong
+    feedback: "The collector receives everything it's sent. The context is lost in pricing-service before any span is exported."
+
+solution_paths:
+  - [propagate]
+
+key_evidence: [trace-stops, orphan-trace, no-header, plain-fetch]
+
+evidence_labels:
+  trace-stops: "The checkout trace stops at pricing-service, 2.1 s with no children"
+  orphan-trace: "discount-service's matching call is a separate root trace, mostly a slow query"
+  no-header: "discount-service receives no traceparent header"
+  plain-fetch: "pricing-service's new client sends requests without trace context"
+
+hints:
+  nudge: "Spans exist downstream. Why aren't they connected to the checkout trace?"
+  direction: "Check whether downstream services receive a traceparent header, and how pricing-service makes its calls."
+  answer: "pricing-service's new client doesn't propagate traceparent. Use OpenTelemetry's instrumentation or propagator so outgoing calls carry it."
+
+analogy:
+  title: "The parcel lost its tracking number"
+  text: |
+    Every parcel carries a tracking number from depot to depot. One new
+    depot repacks parcels into fresh boxes with no label, so tracking
+    shows the parcel arriving there and nothing after, while the next depots
+    log a "new" parcel from nowhere. Copy the tracking number onto the new
+    box.
+
+debrief:
+  root_cause: |
+    Distributed tracing connects spans across services through the trace
+    context each request carries (the W3C traceparent header). pricing-service's
+    rewritten client made plain requests without it, so every downstream
+    service started a new trace. Checkout traces ended at pricing-service,
+    and the slow part, a full table scan in discount-service, sat in separate,
+    unconnected traces.
+  ideal_path:
+    - "Notice the trace ends at pricing-service with no children."
+    - "Find the downstream spans as separate root traces."
+    - "Confirm downstream requests arrive without traceparent."
+    - "Propagate trace context in pricing-service's client; check the next trace is connected."
+  real_world: |
+    Use your tracing library's instrumentation for HTTP clients rather than
+    hand-rolling calls; a single uninstrumented hop breaks every trace
+    through it. Check context propagation whenever a service changes its
+    HTTP or messaging library.
+
+concepts:
+  - term: "Trace context (traceparent)"
+    text: "A standard HTTP header carrying the trace id and parent span id, so the next service's spans join the same trace."
+    url: "https://www.w3.org/TR/trace-context/"
+  - term: "Context propagation"
+    text: "Passing trace context from service to service so spans form one trace."
+    url: "https://opentelemetry.io/docs/concepts/context-propagation/"
+
+sources:
+  - title: "W3C: Trace Context (traceparent header)"
+    url: "https://www.w3.org/TR/trace-context/"
+    retrieved: 2026-10-02
+  - title: "OpenTelemetry: Context propagation"
+    url: "https://opentelemetry.io/docs/concepts/context-propagation/"
+    retrieved: 2026-10-02

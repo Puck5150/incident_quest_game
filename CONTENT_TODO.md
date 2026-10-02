@@ -398,3 +398,15 @@ from your own experience and tick them off.
 - [ ] Representative output: terraform plan/apply formatting, the S3
       BucketAlreadyOwnedByYou error as the provider prints it, git/grep
       output. The prevent_destroy error wording follows Terraform's message.
+
+## Microservices to 8 (2026-10-02): idempotency-double-charge, breaking-api-field, rate-limit-retry-after, trace-context-dropped, transactional-outbox, jwt-clock-skew
+- [x] Checked on 2026-10-02: Stripe idempotency keys (first result saved and
+      replayed); AWS Prescriptive Guidance transactional outbox (dual write,
+      outbox table, idempotent consumers); RFC 6585 429 may carry Retry-After.
+      The planned deep-health-check incident was dropped: its source (AWS
+      Builders' Library) moved to a page that couldn't be read to verify.
+- [ ] Representative output: service log lines, the Squid-free supplier email,
+      replay script output, trace span timings, timedatectl layout.
+- [ ] From standards/experience, not re-fetched this session: RFC 9110
+      idempotent methods and Retry-After, Google's API compatibility guide,
+      W3C traceparent format, RFC 7519 nbf leeway wording.
