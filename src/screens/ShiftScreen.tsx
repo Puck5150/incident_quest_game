@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { loadItem } from 'virtual:content'
+import content, { loadItem } from 'virtual:content'
 import type { Scenario } from '../schema/scenario.ts'
 import type { GameEvent } from '../game/engine.ts'
 import { score, type Score } from '../game/scoring.ts'
@@ -9,13 +9,14 @@ import { play } from '../game/sound.ts'
 import IncidentScreen from './IncidentScreen.tsx'
 import DebriefScreen from './DebriefScreen.tsx'
 import Card from '../components/Card.tsx'
+import WorldMap, { type Sector } from '../components/WorldMap.tsx'
 
 // An on-call shift (PLAN_ONCALL_SHIFT.md): pick a length, then pages arrive
 // and you switch between them from the queue. The shift logic is pure
 // (game/shift.ts); this screen feeds it time and clicks, keeps the loaded
 // scenarios, and records each resolved incident through App.
 
-export type Candidate = { id: string; title: string; priority: Priority; difficulty: number; resolved: boolean }
+export type Candidate = { id: string; track: string; title: string; priority: Priority; difficulty: number; resolved: boolean }
 type Outcome = { gained: number; rankUp?: string; cleared?: string; unlocked: string[] }
 type Finished = { log: GameEvent[]; score: Score; outcome: Outcome }
 
@@ -77,6 +78,8 @@ export default function ShiftScreen({
     if (newest) play('accept')
   }, [newest])
   const newestPage = newest ? shift!.pages.find((p) => p.id === newest)! : undefined
+  // The pager banner stays until that page is picked up.
+  const paging = newestPage && newestPage.ackAt === undefined ? newestPage : undefined
 
   // The shift bonus is paid once, when the shift ends.
   const paid = useRef(false)
@@ -116,7 +119,15 @@ export default function ShiftScreen({
 
   if (shift.ended)
     return (
-      <ShiftReport shift={shift} report={report!} title={title} finished={finished} onView={setViewing} onExit={onExit} />
+      <ShiftReport
+        shift={shift}
+        report={report!}
+        title={title}
+        finished={finished}
+        sectors={sectors(candidates, shift.pages)}
+        onView={setViewing}
+        onExit={onExit}
+      />
     )
 
   const focused = shift.pages.find((p) => p.id === shift.focus)
@@ -133,7 +144,12 @@ export default function ShiftScreen({
       <aside aria-labelledby="queue-h" className="space-y-3">
         <section className="rounded-lg border border-line bg-panel p-4">
           <h2 id="queue-h">On-call queue</h2>
-          {!relaxed && <p className="mt-2 font-mono text-sm text-muted tabular-nums">Shift time {mmss(shift.clock)}</p>}
+          {!relaxed && (
+            <p className="mt-2 flex items-baseline justify-between font-mono">
+              <span className="text-xs tracking-widest text-muted uppercase">Shift</span>
+              <span className="text-2xl text-accent tabular-nums">{mmss(shift.clock)}</span>
+            </p>
+          )}
           <ul className="mt-3 space-y-2">
             {arrived.map((p) => (
               <li key={p.id}>
@@ -162,6 +178,18 @@ export default function ShiftScreen({
       </aside>
 
       <div className="space-y-4">
+        {paging && paging.id !== shift.focus && (
+          <div className="anim-pager flex flex-wrap items-center justify-between gap-3 rounded-lg border-2 border-crit bg-panel p-3 font-mono">
+            <span>
+              <span className="tracking-widest text-crit uppercase">Page</span> · {missionId(paging.id, 'incident')} ·{' '}
+              <span className={paging.priority === 'P1' ? 'text-crit' : 'text-warn'}>{paging.priority}</span> ·{' '}
+              <span className="font-sans">{title(paging.id)}</span>
+            </span>
+            <button className={`${button} border border-crit text-crit`} onClick={() => dispatch({ type: 'OPEN', id: paging.id })}>
+              Acknowledge
+            </button>
+          </div>
+        )}
         {focused ? (
           scenarios[focused.id] ? (
             <>
@@ -197,6 +225,7 @@ export default function ShiftScreen({
               </Card>
             )}
             <p>{arrived.some((p) => !p.result) ? 'Pick a page from the queue. Urgent ones first.' : 'Queue clear. Stand by for the next page.'}</p>
+            <WorldMap title="Shift wall" sectors={sectors(candidates, arrived)} />
           </>
         )}
       </div>
@@ -263,6 +292,7 @@ function ShiftReport({
   report,
   title,
   finished,
+  sectors,
   onView,
   onExit,
 }: {
@@ -270,6 +300,7 @@ function ShiftReport({
   report: ReturnType<typeof shiftReport>
   title: (id: string) => string
   finished: Record<string, Finished>
+  sectors: Sector[]
   onView: (id: string) => void
   onExit: () => void
 }) {
@@ -288,6 +319,8 @@ function ShiftReport({
           {report.clean && ' · clean shift'}
         </p>
       </header>
+
+      <WorldMap title="Shift wall" sectors={sectors} />
 
       <Card title="Pages">
         <div className="overflow-x-auto">
@@ -322,7 +355,7 @@ function ShiftReport({
                   <td className="py-2">
                     {finished[p.id] ? (
                       <button className="text-accent underline underline-offset-2" onClick={() => onView(p.id)}>
-                        After-action report<span className="sr-only"> for {title(p.id)}</span>
+                        After-action report{' '}<span className="sr-only">for {title(p.id)}</span>
                       </button>
                     ) : (
                       <span className="text-muted">Handed over</span>
@@ -349,6 +382,16 @@ function ShiftReport({
       </button>
     </div>
   )
+}
+
+// The wall map for a shift: one station per sector it paged, lit amber while
+// any of that sector's pages is unresolved (or was handed over), green when clear.
+function sectors(candidates: Candidate[], pages: Page[]): Sector[] {
+  const trackOf = (id: string) => candidates.find((c) => c.id === id)?.track
+  return content.tracks.flatMap((track) => {
+    const mine = pages.filter((p) => trackOf(p.id) === track.id)
+    return mine.length ? [{ track, total: mine.length, open: mine.filter((p) => !p.result).length, locked: false }] : []
+  })
 }
 
 const mmss = (ms: number) => {

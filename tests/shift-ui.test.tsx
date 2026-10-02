@@ -9,11 +9,14 @@ import content from 'virtual:content'
 
 const done = { bestScore: 100, completedAt: '2026-10-01', hintsUsed: 0, clean: true }
 
+// Every incident resolved except full-disk, so it's the shift's first page.
+const seed = (settings: Record<string, unknown> = {}) => {
+  const completed = Object.fromEntries(content.items.filter((x) => x.kind === 'incident' && x.id !== 'full-disk').map((x) => [x.id, done]))
+  localStorage.setItem('incident-quest:v1', JSON.stringify({ version: 1, xp: 0, completed, streak: { current: 0, best: 0 }, settings: { theme: 'dark', ...settings } }))
+}
 beforeEach(() => {
   history.replaceState(null, '', location.pathname)
-  // Every incident resolved except full-disk, so it's the shift's first page.
-  const completed = Object.fromEntries(content.items.filter((x) => x.kind === 'incident' && x.id !== 'full-disk').map((x) => [x.id, done]))
-  localStorage.setItem('incident-quest:v1', JSON.stringify({ version: 1, xp: 0, completed, streak: { current: 0, best: 0 }, settings: { theme: 'dark' } }))
+  seed()
 })
 afterEach(() => {
   cleanup()
@@ -67,11 +70,41 @@ it('start a shift, work a page, switch away and back, resolve it, end early, rea
   fireEvent.click(screen.getByRole('button', { name: 'End shift now' }))
   expect(await screen.findByRole('heading', { name: 'Shift report' })).toBeTruthy()
   expect(screen.getByText('Handed over')).toBeTruthy() // the second page never arrived
+  expect(screen.getByRole('img', { name: 'Linux Admin, Helsinki station: all clear' })).toBeTruthy() // the shift wall
 
-  fireEvent.click(screen.getByRole('button', { name: /^After-action report/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^After-action report for Checkout returning 500s/ }))
   expect(await screen.findByRole('heading', { name: 'Root cause' })).toBeTruthy()
   expect(screen.getByText('Time bonus: see shift response targets')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Replay incident' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Back to shift report' }))
   expect(await screen.findByRole('heading', { name: 'Shift report' })).toBeTruthy()
+})
+
+it('relaxed shift: no clock or targets, the next page arrives once the queue is clear, with a pager banner', async () => {
+  seed({ relaxed: true })
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Start on-call shift' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Short shift: 2 pages' }))
+  fireEvent.click(await queue().findByRole('button', { name: /Checkout returning 500s/ }))
+  expect(queue().queryByText('Shift')).toBeNull() // no clock
+  expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull() // the first page isn't an interruption
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Accept mission' }))
+  fireEvent.click(screen.getByLabelText(/filesystem is full/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  fireEvent.click(screen.getByRole('button', { name: /Truncate/ }))
+  fireEvent.click(screen.getByRole('button', { name: /logrotate/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
+
+  // The second page arrives straight away and pages you.
+  fireEvent.click(await screen.findByRole('button', { name: 'Acknowledge' }))
+  expect(await screen.findByRole('button', { name: 'Accept mission' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'End shift' }))
+  fireEvent.click(screen.getByRole('button', { name: 'End shift now' }))
+  expect(await screen.findByRole('heading', { name: 'Shift report' })).toBeTruthy()
+  expect(screen.queryByRole('columnheader', { name: 'Targets' })).toBeNull()
+  expect(screen.queryByText(/Triage:/)).toBeNull()
+  expect(document.body.textContent).toMatch(/from incidents, 0 shift bonus/)
 })

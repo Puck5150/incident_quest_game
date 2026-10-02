@@ -74,8 +74,8 @@ it('pick a cloud, build on it, and the queue remembers which cloud', async () =>
   unmount()
   render(<App />)
   const card = screen.getByRole('button', { name: /Zone-resilient checkout/ })
-  expect(card.textContent).toMatch(/GCP completed/)
-  expect(card.textContent).not.toMatch(/AWS completed/)
+  expect(card.textContent).toMatch(/GCP, completed/)
+  expect(card.textContent).not.toMatch(/AWS, completed/)
 })
 
 it('slot challenges work on the cloud of your choice too', async () => {

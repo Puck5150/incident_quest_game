@@ -114,7 +114,7 @@ export default function DebriefScreen({
                   {c.text}{' '}
                   <a href={c.url} target="_blank" rel="noreferrer" className="text-accent underline">
                     Docs
-                    <span className="sr-only"> for {c.term} (opens in a new tab)</span>
+                    {' '}<span className="sr-only">for {c.term} (opens in a new tab)</span>
                   </a>
                 </dd>
               </div>

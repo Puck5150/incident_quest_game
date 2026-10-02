@@ -70,7 +70,7 @@ export default function FieldGuide({
                 <dd className="text-muted">
                   {c.text}{' '}
                   <a href={c.url} target="_blank" rel="noreferrer" className="text-accent underline">
-                    Docs<span className="sr-only"> for {c.term} (opens in a new tab)</span>
+                    Docs{' '}<span className="sr-only">for {c.term} (opens in a new tab)</span>
                   </a>
                 </dd>
               </div>

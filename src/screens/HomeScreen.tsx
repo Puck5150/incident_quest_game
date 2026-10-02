@@ -138,7 +138,7 @@ export default function HomeScreen({
                               >
                                 {doneOn && <Icon name="check" className="h-3 w-3" />}
                                 {CLOUD[p]}
-                                {doneOn && <span className="sr-only"> completed</span>}
+                                {doneOn && <span className="sr-only">, completed</span>}
                               </span>
                             )
                           })}

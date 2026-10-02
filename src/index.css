@@ -127,6 +127,10 @@ html {
 .accept-flash { display: none; }
 .stamp { transform: rotate(-8deg); }
 
+@keyframes pager {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 4px color-mix(in oklch, var(--crit) 35%, transparent); }
+}
 @keyframes ping {
   from { opacity: 0.9; transform: scale(1); }
   to { opacity: 0; transform: scale(2.6); }
@@ -134,6 +138,9 @@ html {
 .map-ping { display: none; transform-box: fill-box; transform-origin: center; }
 
 @media (prefers-reduced-motion: no-preference) {
+  html:not(.reduce-motion) .anim-pager {
+    animation: pager 1.2s ease-in-out 3;
+  }
   html:not(.reduce-motion) .map-ping {
     display: inline;
     animation: ping 1.6s ease-out infinite;

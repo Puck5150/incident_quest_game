@@ -1,6 +1,6 @@
 # Plan: On-call shift mode
 
-Status: **approved 2026-10-01 with the defaults in section 9; S1–S3 done.** Active-time
+Status: **approved 2026-10-01 with the defaults in section 9; S1–S4 done.** Active-time
 scoring moved from S1 to S2, where the shift first needs it. From PARKING_LOT.md: "Timed
 'on-call shift' mode: multiple incidents queued at once". Fits the Ops Center
 theme (PLAN_THEME.md).

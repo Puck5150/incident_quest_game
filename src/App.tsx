@@ -325,7 +325,7 @@ export default function App() {
               key={screen.run}
               candidates={items
                 .filter((x) => x.kind === 'incident' && unlocks(progress).has(x.track))
-                .map((x) => ({ id: x.id, title: x.title, priority: x.tag as Priority, difficulty: x.difficulty, resolved: !!progress.completed[x.id] }))}
+                .map((x) => ({ id: x.id, track: x.track, title: x.title, priority: x.tag as Priority, difficulty: x.difficulty, resolved: !!progress.completed[x.id] }))}
               relaxed={relaxed}
               streak={progress.streak.current}
               onRecord={(id, s) => record(id, s, undefined, true)}

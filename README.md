@@ -5,15 +5,17 @@ incident ticket, investigate with a simulated terminal, logs, config files,
 traces, metrics and CI pipeline views, name the root cause, fix it, and get a
 debrief with the ideal path, a non-IT analogy, and links to the official docs.
 
-Current incidents cover DNS, an expired TLS certificate, Linux disk space and
-a systemd memory limit, Kubernetes CrashLoopBackOff and a stuck image pull,
-Terraform state locking and an unsafe refactor, GitHub Actions (a stale lock
-file and token permissions), a microservices cascading failure and a message
-queue poison-message loop, and cloud failures on AWS (a single-AZ database, an IAM permissions boundary,
-Route 53 failover that never failed over), Azure (Application Gateway health
-probes, a publicly readable blob container, an app moved away from its database) and Google Cloud (Cloud Run vs.
-Cloud SQL connections, an autoscaler capped by regional CPU quota, a lifecycle rule on
-the wrong bucket).
+You're a responder on the night shift at a global ops center: incidents arrive
+as missions on the ops board, sectors light up on the wall map, and you clear
+them under your own callsign. There are 53 incidents across Linux, networking,
+containers, infrastructure as code, CI/CD, microservices, and AWS, Azure and
+Google Cloud, from platform basics to multi-step failures. A free **Field
+manual** on every screen explains the concepts in play and how to approach the
+problem without giving the answer; hints are there too, at an XP cost.
+
+**On-call shifts** put several incidents in play at once: pages arrive while you
+work, each priority has a response target, and handling urgent pages first earns
+a triage bonus. Relaxed mode turns every clock off.
 
 **Design challenges** flip it around: you build an architecture from a brief
 (pick a service per tier), run stress tests like a zone outage or a 20× traffic
@@ -43,5 +45,7 @@ npm run check-links   # every source URL still resolves (CI runs it weekly)
 - [AUTHORING.md](AUTHORING.md): write your own incidents and design challenges (they're YAML, no code);
   try a file without any setup on the [preview page](https://puck5150.github.io/incident_quest_game/#/preview)
 - [PLAN_DESIGN_CHALLENGES.md](PLAN_DESIGN_CHALLENGES.md): how design challenges work
+- [PLAN_ONCALL_SHIFT.md](PLAN_ONCALL_SHIFT.md): on-call shifts (arrivals, targets, triage, scoring)
+- [PLAN_THEME.md](PLAN_THEME.md) and [PLAN_GUIDANCE.md](PLAN_GUIDANCE.md): the ops-center theme and the Field manual
 - [CONTENT_TODO.md](CONTENT_TODO.md): output formats still to verify against real systems
 - [PARKING_LOT.md](PARKING_LOT.md): ideas for later

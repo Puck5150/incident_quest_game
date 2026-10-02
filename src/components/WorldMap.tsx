@@ -44,11 +44,19 @@ const y = (lat: number) => ((75 - lat) / 5) * CELL + CELL / 2
 
 export type Sector = { track: Track; open: number; total: number; locked: boolean }
 
-export default function WorldMap({ sectors, onSelect }: { sectors: Sector[]; onSelect: (id: string) => void }) {
+export default function WorldMap({
+  sectors,
+  onSelect,
+  title = 'Ops wall',
+}: {
+  sectors: Sector[]
+  onSelect?: (id: string) => void // without it, stations are display only
+  title?: string
+}) {
   const shown = sectors.filter((s) => s.track.station)
   return (
     <section aria-labelledby="map-h" className="rounded-lg border border-line bg-panel p-4">
-      <h2 id="map-h">Ops wall</h2>
+      <h2 id="map-h">{title}</h2>
       <svg viewBox={`0 0 ${W} ${H}`} className="mt-3 w-full" role="group" aria-label="Sector stations">
         <g aria-hidden className="fill-line">
           {LAND.flatMap((row, r) =>
@@ -60,17 +68,22 @@ export default function WorldMap({ sectors, onSelect }: { sectors: Sector[]; onS
           const state = locked ? 'locked' : open ? 'open' : 'clear'
           const color = { locked: 'var(--muted)', open: 'var(--warn)', clear: 'var(--ok)' }[state]
           const status = locked ? 'locked' : open ? `${open} of ${total} missions open` : 'all clear'
-          const select = () => onSelect(track.id)
+          const select = () => onSelect?.(track.id)
+          const interactive = onSelect
+            ? {
+                role: 'button',
+                tabIndex: 0,
+                onClick: select,
+                onKeyDown: (e: KeyboardEvent) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), select()),
+              }
+            : { role: 'img' }
           const left = side === 'left'
           return (
             <g
               key={track.id}
-              role="button"
-              tabIndex={0}
+              {...interactive}
               aria-label={`${track.name}, ${city} station: ${status}`}
-              onClick={select}
-              onKeyDown={(e: KeyboardEvent) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), select())}
-              className="group cursor-pointer outline-none"
+              className={`group outline-none ${onSelect ? 'cursor-pointer' : ''}`}
             >
               <title>{`${city} station`}</title>
               {state === 'open' && <circle cx={x(lon)} cy={y(lat)} r={5} fill="none" stroke={color} className="map-ping" />}
