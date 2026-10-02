@@ -193,6 +193,35 @@ export function evidenceSeen(scenario: Scenario, log: GameEvent[]): Set<string> 
   return seen
 }
 
+// What the terminal prints for a command typed after the events in `before`.
+// The live terminal and a rebuilt transcript both use this, so they agree.
+export function terminalOutput(scenario: Scenario, input: string, before: GameEvent[]): string {
+  const cmd = normalize(input)
+  if (cmd === 'history')
+    return [...commandsRun(before), cmd].map((h, i) => `${String(i + 1).padStart(5)}  ${h}`).join('\n')
+  const ran = runCommand(scenario, cmd, actionsTaken(before))
+  // A command that takes an action reports the result in the terminal, so
+  // it's visible without looking away.
+  const action = ran.scripted ? undefined : actionFor(scenario, cmd)
+  if (!action) return ran.output
+  const named = before.some((e) => e.type === 'DECLARE_HYPOTHESIS' && scenario.hypotheses.find((h) => h.id === e.id)?.correct)
+  return named ? action.feedback : NOT_YET
+}
+
+export const commandsRun = (log: GameEvent[]) => log.flatMap((e) => (e.type === 'RUN_COMMAND' ? [normalize(e.input)] : []))
+
+// The terminal's transcript, rebuilt from the log (so it survives a remount,
+// such as switching between incidents in a shift). `clear` empties it.
+export function transcript(scenario: Scenario, log: GameEvent[]): { input: string; output: string }[] {
+  let lines: { input: string; output: string }[] = []
+  log.forEach((e, i) => {
+    if (e.type !== 'RUN_COMMAND') return
+    const input = normalize(e.input)
+    lines = input === 'clear' ? [] : [...lines, { input, output: terminalOutput(scenario, input, log.slice(0, i)) }]
+  })
+  return lines
+}
+
 // Fixed when every action of ANY one solution path has been taken, in any order.
 export function fixComplete(scenario: Scenario, log: GameEvent[]): boolean {
   const taken = actionsTaken(log)

@@ -9,6 +9,8 @@ import {
   newSession,
   runCommand,
   step,
+  terminalOutput,
+  transcript,
   type GameEvent,
   type Session,
 } from '../src/game/engine.ts'
@@ -147,5 +149,28 @@ describe('tab completion', () => {
 
   it('does nothing on an empty prompt', () => {
     expect(complete(scenario, '')).toEqual({ input: '' })
+  })
+})
+
+describe('terminal transcript from the log', () => {
+  const truncate = run('truncate -s 0 /var/log/app/app.log')
+
+  it('rebuilds exactly what the live terminal printed, in order', () => {
+    const log = play(start, run('df -h'), truncate, hyp('disk-full'), truncate, run('df -h'), run('history')).log
+    const lines = transcript(scenario, log)
+    expect(lines.map((l) => l.input)).toEqual(['df -h', 'truncate -s 0 /var/log/app/app.log', 'truncate -s 0 /var/log/app/app.log', 'df -h', 'history'])
+    expect(lines[0].output).toMatch(/100%/)
+    expect(lines[1].output).toMatch(/^Not run/) // before the root cause was named
+    expect(lines[2].output).toMatch(/Output redirection truncates/) // after: the action's feedback
+    expect(lines[3].output).toMatch(/28%/) // the fixed state
+    expect(lines[4].output).toMatch(/5 {2}history$/)
+    // Each line matches what terminalOutput gives for the log before it.
+    const runs = log.flatMap((e, i) => (e.type === 'RUN_COMMAND' ? [i] : []))
+    runs.forEach((i, n) => expect(lines[n].output).toBe(terminalOutput(scenario, (log[i] as { input: string }).input, log.slice(0, i))))
+  })
+
+  it('clear empties it', () => {
+    const log = play(start, run('df -h'), run('clear'), run('help')).log
+    expect(transcript(scenario, log).map((l) => l.input)).toEqual(['help'])
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
-import { actionFor, complete, normalize, NOT_YET, runCommand } from '../game/engine.ts'
+import { commandsRun, complete, normalize, terminalOutput, transcript, type GameEvent } from '../game/engine.ts'
 
 type Line = { input: string; output: string; completions?: boolean } // completions: Tab's list, not a run command
 
@@ -8,18 +8,16 @@ type Line = { input: string; output: string; completions?: boolean } // completi
 // Real text (not a canvas) so screen readers and copy/paste just work.
 export default function Terminal({
   scenario,
-  taken,
-  canAct,
+  log,
   onRun,
 }: {
   scenario: Scenario
-  taken: Set<string>
-  canAct: boolean // root cause declared: typed fix commands take effect
+  log: GameEvent[] // the session so far: the transcript and history start from it
   onRun: (input: string) => void
 }) {
   const prompt = scenario.terminal!.prompt
-  const [lines, setLines] = useState<Line[]>([])
-  const [history, setHistory] = useState<string[]>([])
+  const [lines, setLines] = useState<Line[]>(() => transcript(scenario, log))
+  const [history, setHistory] = useState<string[]>(() => commandsRun(log))
   const [cursor, setCursor] = useState<number>() // position while browsing history with ↑/↓
   const [input, setInput] = useState('')
   const out = useRef<HTMLDivElement>(null)
@@ -34,21 +32,10 @@ export default function Terminal({
     setInput('')
     setCursor(undefined)
     if (!cmd) return setLines((l) => [...l, { input: '', output: '' }])
+    const output = terminalOutput(scenario, cmd, log) // `log` is still the session before this command
     onRun(cmd)
     setHistory((h) => [...h, cmd])
     if (cmd === 'clear') return setLines([])
-    const ran = runCommand(scenario, cmd, taken)
-    // A command that takes an action reports the result right here, so it's
-    // visible without looking away from the terminal.
-    const action = ran.scripted ? undefined : actionFor(scenario, cmd)
-    const output =
-      cmd === 'history'
-        ? [...history, cmd].map((h, i) => `${String(i + 1).padStart(5)}  ${h}`).join('\n')
-        : action
-          ? canAct
-            ? action.feedback
-            : NOT_YET
-          : ran.output
     setLines((l) => [...l, { input: cmd, output }])
   }
 

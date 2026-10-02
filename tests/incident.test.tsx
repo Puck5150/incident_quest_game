@@ -216,3 +216,29 @@ it('the ops wall shows each sector station and jumps to its sector', () => {
   fireEvent.keyDown(linux, { key: 'Enter' })
   expect(document.activeElement?.id).toBe('track-linux')
 })
+
+it('an incident resumes where it left off: transcript, order, phase', async () => {
+  const { default: IncidentScreen } = await import('../src/screens/IncidentScreen.tsx')
+  const scenario = (await import('virtual:content')).loadItem
+  const item = await scenario('full-disk')
+  if (item.kind !== 'incident') throw new Error('expected an incident')
+  let saved: import('../src/game/engine.ts').Session | undefined
+  const props = { scenario: item.scenario, onResolved: () => {}, onChange: (s: typeof saved) => (saved = s) }
+
+  const first = render(<IncidentScreen {...props} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
+  type('df -h')
+  const order = () => screen.getAllByRole('radio').map((r) => (r as HTMLInputElement).value)
+  const before = order()
+  first.unmount()
+
+  const second = render(<IncidentScreen {...props} initial={saved} />)
+  expect(output()).toMatch(/df -h[\s\S]*100%/) // transcript rebuilt
+  expect(order()).toEqual(before) // same hypothesis order
+  fireEvent.click(screen.getByLabelText(/filesystem is full/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  second.unmount()
+
+  render(<IncidentScreen {...props} initial={saved} />)
+  expect(screen.getByRole('heading', { name: 'Take action' })).toBeTruthy() // still past the hypothesis
+})

@@ -1,6 +1,7 @@
 # Plan: On-call shift mode
 
-Status: **draft, awaiting approval** (2026-10-01). From PARKING_LOT.md: "Timed
+Status: **approved 2026-10-01 with the defaults in section 9; S1 done.** Active-time
+scoring moved from S1 to S2, where the shift first needs it. From PARKING_LOT.md: "Timed
 'on-call shift' mode: multiple incidents queued at once". Fits the Ops Center
 theme (PLAN_THEME.md).
 
@@ -104,8 +105,8 @@ lit by result.
 
 | # | Work | Done when |
 |---|---|---|
-| S1 | Lift session state; terminal transcript from the log; active-time scoring option | Single incidents behave exactly as before; tests |
-| S2 | Shift reducer (arrivals, picking, targets, bonuses) | Unit tests for scheduling and scoring |
+| S1 | Lift session state; terminal transcript from the log | Single incidents behave exactly as before; tests |
+| S2 | Shift reducer (arrivals, picking, targets, bonuses); active-time scoring | Unit tests for scheduling and scoring |
 | S3 | Shift screen: queue panel, switching, result cards, end shift; shift report | Playable end to end; UI tests |
 | S4 | Theme: pager alerts, shift clock, wall map lighting, relaxed behaviour, docs | Reduce motion and relaxed mode respected |
 

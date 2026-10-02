@@ -1,4 +1,4 @@
-import { useReducer, useState } from 'react'
+import { useMemo, useReducer, useState } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
 import { actionsTaken, fixComplete, hintsUsed, newSession, step, type Feedback, type GameEvent, type Session } from '../game/engine.ts'
 import Terminal from '../components/Terminal.tsx'
@@ -41,17 +41,28 @@ type Intent = WithoutAt<GameEvent>
 
 export default function IncidentScreen({
   scenario,
+  initial,
+  onChange,
   onResolved,
 }: {
   scenario: Scenario
+  initial?: Session // resume where the player left off (a shift switching between incidents)
+  onChange?: (s: Session) => void
   onResolved: (log: GameEvent[]) => void
 }) {
-  const [session, dispatch] = useReducer((s: Session, e: GameEvent) => step(scenario, s, e), undefined, newSession)
-  const send = (e: Intent) => dispatch({ ...e, at: Date.now() } as GameEvent)
+  const [session, dispatch] = useReducer((s: Session, e: GameEvent) => step(scenario, s, e), initial, (i) => i ?? newSession())
+  // `step` is pure, so the next session can be reported without waiting for the reducer.
+  const send = (intent: Intent) => {
+    const e = { ...intent, at: Date.now() } as GameEvent
+    dispatch(e)
+    onChange?.(step(scenario, session, e))
+  }
   const [picked, setPicked] = useState<string>()
-  // Authors list the right answer first; shuffle once per attempt so order isn't a tell.
-  const [hypotheses] = useState(() => shuffle(scenario.hypotheses))
-  const [actions] = useState(() => shuffle(scenario.actions))
+  // Authors list the right answer first; shuffle so order isn't a tell. Seeded
+  // by when the incident was taken, so the order survives a remount.
+  const seed = session.log.find((e) => e.type === 'START')?.at ?? 0
+  const hypotheses = useMemo(() => shuffle(scenario.hypotheses, seed), [scenario, seed])
+  const actions = useMemo(() => shuffle(scenario.actions, seed + 1), [scenario, seed])
   const taken = actionsTaken(session.log)
   const { phase, feedback } = session
 
@@ -66,7 +77,7 @@ export default function IncidentScreen({
     scenario.terminal && {
       id: 'terminal',
       label: 'Terminal',
-      panel: <Terminal scenario={scenario} taken={taken} canAct={phase === 'acting'} onRun={(input) => send({ type: 'RUN_COMMAND', input })} />,
+      panel: <Terminal scenario={scenario} log={session.log} onRun={(input) => send({ type: 'RUN_COMMAND', input })} />,
     },
     scenario.logs && {
       id: 'logs',
@@ -268,10 +279,18 @@ export default function IncidentScreen({
   )
 }
 
-function shuffle<T>(xs: T[]): T[] {
+// Fisher-Yates with a small seeded generator (mulberry32): same seed, same order.
+function shuffle<T>(xs: T[], seed: number): T[] {
+  let t = seed >>> 0
+  const random = () => {
+    t = (t + 0x6d2b79f5) >>> 0
+    let r = Math.imul(t ^ (t >>> 15), 1 | t)
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r)
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296
+  }
   const a = [...xs]
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
+    const j = Math.floor(random() * (i + 1))
     ;[a[i], a[j]] = [a[j], a[i]]
   }
   return a
