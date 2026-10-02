@@ -1,6 +1,19 @@
 # yaml-language-server: $schema=../../schemas/commands.json
 # Command library: database clients. First matching entry wins.
 
+- id: psql-advisory-locks
+  match: "pg_locks .*advisory"
+  summary: "Lists who holds PostgreSQL advisory locks, with each holder's session state and when it connected."
+  parts:
+    - { token: "psql -d billing -c \"SQL\"", meaning: "-d: connect to the billing database; -c: run this query and exit." }
+    - { token: "pg_locks l JOIN pg_stat_activity a USING (pid)", meaning: "Each lock joined to the session (backend) that holds it." }
+    - { token: "l.locktype = 'advisory'", meaning: "Only advisory locks; objid is the lock key for a single bigint key." }
+    - { token: "a.state, a.backend_start", meaning: "Whether the holder is doing anything, and how long it has existed." }
+  why: "An idle backend holding an advisory lock for hours points at a lock that was never released, typical when it was taken through a transaction-pooling proxy."
+  alternatives:
+    - { command: "SELECT pg_terminate_backend(PID)", note: "End the holding session; its session-level locks go with it." }
+  docs: { title: "PostgreSQL: pg_locks", url: "https://www.postgresql.org/docs/current/view-pg-locks.html" }
+
 - id: psql-archiver
   match: "pg_stat_archiver"
   summary: "Shows PostgreSQL's WAL archiving status: the last file archived, when, and how many attempts failed."
@@ -48,6 +61,7 @@
   parts:
     - { token: "ssh HOST", meaning: "(If given) run it on that host." }
     - { token: "sudo -u postgres", meaning: "(If given) as the postgres OS user, which signs in as the superuser through peer authentication." }
+    - { token: "-h db-01 -p 6432 -U pgbouncer", meaning: "(If given) connect to this host, port and user; port 6432 with database pgbouncer is PgBouncer's admin console." }
     - { token: "\"host=... dbname=... user=...\"", meaning: "(If given) a connection string: server, database and user." }
     - { token: "-d shop", meaning: "(If given) the database to connect to." }
     - { token: "-A", meaning: "(If given) unaligned output: no padding." }

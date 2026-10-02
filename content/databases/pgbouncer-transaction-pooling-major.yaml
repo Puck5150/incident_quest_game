@@ -1,0 +1,350 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: pgbouncer-transaction-pooling-major
+track: databases
+difficulty: 5
+title: "Billing broke when we added the connection pooler, and some customers were invoiced twice"
+par_minutes: 30
+
+ticket:
+  from: "Finance operations"
+  priority: P1
+  body: |
+    Since last night half the billing pages error, and this morning several
+    customers called to say they got two September invoices, and some were
+    charged twice. Monthly invoicing runs all day today. The DBA mentioned
+    the reporting replica is lagging; is that related?
+
+environment: |
+  billing-api (Java, PostgreSQL JDBC driver) and three invoice workers used
+  to connect straight to PostgreSQL 16 on db-01. Yesterday at 18:00
+  (CHG-5120) they were switched to PgBouncer 1.23 on db-01:6432 in
+  transaction pooling mode, to fix "too many clients". The invoice job runs
+  every 5 minutes on all three workers; a PostgreSQL advisory lock (key 42)
+  is meant to let only one of them run it at a time.
+
+diagram:
+  nodes:
+    - { id: api, label: "billing-api", col: 0, row: 0, status: degraded }
+    - { id: workers, label: "invoice workers x3", col: 0, row: 1, status: degraded }
+    - { id: bouncer, label: "PgBouncer :6432 (transaction)", col: 1, row: 0, status: ok }
+    - { id: pg, label: "PostgreSQL 16 (billing)", col: 2, row: 0, status: ok }
+    - { id: replica, label: "reporting replica", col: 2, row: 1, status: degraded }
+  edges:
+    - { from: api, to: bouncer }
+    - { from: workers, to: bouncer }
+    - { from: bouncer, to: pg }
+    - { from: pg, to: replica }
+
+terminal:
+  prompt: "ops@db-01:~$"
+  commands:
+    - match: "journalctl -u billing-api --since \"10 min ago\""
+      when_actions: [max-prepared]
+      output: |
+        Oct 02 09:31:02 app-02 billing-api[2210]: GET /invoices/INV-2026-09-18831 200 (38 ms)
+        Oct 02 09:31:03 app-02 billing-api[2210]: GET /customers/C-40712/balance 200 (22 ms)
+    - match: "journalctl -u billing-api --since \"10 min ago\""
+      when_actions: [driver-no-prepare]
+      output: |
+        Oct 02 09:31:02 app-02 billing-api[2210]: GET /invoices/INV-2026-09-18831 200 (41 ms)
+        Oct 02 09:31:03 app-02 billing-api[2210]: GET /customers/C-40712/balance 200 (25 ms)
+    - match: "journalctl -u billing-api --since \"10 min ago\""
+      evidence: prep-missing
+      output: |
+        Oct 02 09:20:11 app-02 billing-api[2210]: GET /invoices/INV-2026-09-18831 500: org.postgresql.util.PSQLException: ERROR: prepared statement "S_3" does not exist
+        Oct 02 09:20:14 app-02 billing-api[2210]: GET /customers/C-40712/balance 200 (24 ms)
+        Oct 02 09:20:15 app-02 billing-api[2210]: GET /customers/C-40712/invoices 500: org.postgresql.util.PSQLException: ERROR: prepared statement "S_7" does not exist
+    - match: "grep -E 'pool_mode|max_prepared_statements' /etc/pgbouncer/pgbouncer.ini"
+      when_actions: [max-prepared]
+      output: |
+        pool_mode = transaction
+        max_prepared_statements = 200
+    - match: "grep -E 'pool_mode|max_prepared_statements' /etc/pgbouncer/pgbouncer.ini"
+      evidence: txn-mode-0
+      output: |
+        pool_mode = transaction
+        max_prepared_statements = 0
+    - match: "psql -h db-01 -p 6432 -U pgbouncer pgbouncer -c \"SHOW VERSION\""
+      output: |2
+              version
+        ------------------
+         PgBouncer 1.23.1
+        (1 row)
+
+logs:
+  - name: "CHG-5120 (10-01 18:00)"
+    lines: |
+      Put PgBouncer in front of the billing database (too many clients during month end).
+      pgbouncer.ini from the platform template; pool_mode = transaction, default_pool_size = 40.
+      billing-api and invoice-worker JDBC URLs -> db-01:6432. Smoke test: login page OK.
+
+metrics:
+  - name: "reporting replica: replay lag (seconds)"
+    unit: seconds
+    evidence: replica-lag
+    series:
+      - label: "replay lag"
+        points: [["09-28 02:00", 2400], ["09-28 06:00", 3], ["09-29 02:00", 2520], ["09-29 06:00", 2], ["10-01 02:00", 2460], ["10-01 06:00", 4], ["10-02 02:00", 2580]]
+
+hypotheses:
+  - id: prepared
+    text: "In transaction pooling, each transaction may run on a different server connection, and with max_prepared_statements = 0 PgBouncer doesn't track the driver's prepared statements, so a statement prepared on one connection is executed on another."
+    correct: true
+  - id: replica
+    text: "Reads go to the lagging reporting replica."
+    feedback: "billing-api doesn't use the reporting replica, and its lag is the nightly reporting batch (02:00 every night, back to seconds by 06:00). The errors are \"prepared statement does not exist\" from the primary path."
+  - id: pool-size
+    text: "The pool is too small, so requests time out."
+    feedback: "These fail instantly with a specific PostgreSQL error, not after waiting for a connection."
+  - id: schema
+    text: "A migration dropped something the queries use."
+    feedback: "The same pages work on some requests and fail on others. A missing table would fail every time."
+
+actions:
+  - id: max-prepared
+    label: "Set max_prepared_statements = 200 in pgbouncer.ini and restart PgBouncer, so it tracks protocol-level prepared statements across server connections"
+    kind: fix
+    feedback: "PgBouncer now prepares each statement on whichever server connection runs it. The driver's prepared statements work in transaction mode."
+  - id: driver-no-prepare
+    label: "Add prepareThreshold=0 to the JDBC URLs so the driver stops using server-side prepared statements"
+    kind: fix
+    feedback: "Also works: no server-side prepared statements, nothing to lose between connections, at a small parsing cost per query."
+  - id: session-mode
+    label: "Change pool_mode to session"
+    kind: wrong
+    feedback: "Prepared statements would work again, but each client holds a server connection for its whole session, so you're back to the too-many-clients problem the pooler was meant to fix."
+  - id: bypass
+    label: "Point billing-api straight at PostgreSQL again"
+    kind: wrong
+    feedback: "Undoes yesterday's fix for too many clients, on the busiest day of the month."
+
+solution_paths:
+  - [max-prepared]
+  - [driver-no-prepare]
+
+key_evidence: [prep-missing, txn-mode-0]
+
+evidence_labels:
+  prep-missing: "Requests fail at random with \"prepared statement S_n does not exist\""
+  txn-mode-0: "PgBouncer runs pool_mode = transaction with max_prepared_statements = 0"
+
+red_herrings:
+  - evidence: replica-lag
+    label: "The reporting replica's lag"
+    why: "It lags every night from 02:00 while the reporting batch runs and catches up by 06:00, for weeks. billing-api and the workers don't read from it."
+
+hints:
+  nudge: "Same page, sometimes fine, sometimes \"prepared statement does not exist\". What changed between the app and the database?"
+  direction: "In transaction pooling, consecutive transactions can run on different server connections. How does PgBouncer handle prepared statements?"
+  answer: "max_prepared_statements is 0. Set it (e.g. 200) and restart PgBouncer, or turn off server-side prepares in the driver."
+
+analogy:
+  title: "A new switchboard between you and the clerks"
+  text: |
+    Calls now go through a switchboard that connects you to whichever
+    clerk is free. You explain your case to one clerk and get another for
+    the follow-up. Worse, the clerk who promised to hold the only key to
+    the ledger keeps it, and anyone put through to that clerk gets the key
+    too. Then someone has to go through the ledger for double entries.
+
+debrief:
+  root_cause: |
+    In transaction pooling, PgBouncer gives a client a server connection
+    only for the length of a transaction, so a client's next transaction
+    can run on a different one. The JDBC driver prepares frequent queries
+    on the server (S_1, S_2...) and reuses them; with
+    max_prepared_statements = 0 PgBouncer doesn't track them, so a
+    statement prepared on one server connection was executed on another
+    that had never seen it.
+  ideal_path:
+    - "Read billing-api's log: \"prepared statement S_n does not exist\", intermittently."
+    - "Link it to the change: PgBouncer in transaction pooling since 18:00."
+    - "Read pgbouncer.ini: max_prepared_statements = 0."
+    - "Enable it (or disable server-side prepares in the driver), then re-check the log."
+
+concepts:
+  - term: "PgBouncer pooling modes"
+    text: "Session pooling gives a client one server connection until it disconnects; transaction pooling only for each transaction, which breaks features that depend on session state."
+    url: "https://www.pgbouncer.org/features.html"
+  - term: "Advisory locks"
+    text: "Session-level advisory locks last until released or the session ends and can be taken again by the same session; transaction-level ones end with the transaction."
+    url: "https://www.postgresql.org/docs/current/explicit-locking.html"
+  - term: "Partial unique indexes"
+    text: "A unique index with a WHERE clause enforces uniqueness only over the rows it matches, such as non-void invoices."
+    url: "https://www.postgresql.org/docs/current/indexes-partial.html"
+
+sources:
+  - title: "PgBouncer: SQL feature map for pooling modes"
+    url: "https://www.pgbouncer.org/features.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Explicit locking, advisory locks"
+    url: "https://www.postgresql.org/docs/current/explicit-locking.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Partial indexes"
+    url: "https://www.postgresql.org/docs/current/indexes-partial.html"
+    retrieved: 2026-10-02
+
+
+command_notes:
+  "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\"": "GROUP BY customer_id with HAVING count(*) > 1 keeps customers with more than one live September invoice; the outer count(*) counts those customers."
+  "psql -d billing -Atc \"SELECT count(*) FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.period = '2026-09' AND i.id NOT IN (SELECT min(id) FROM invoices WHERE period = '2026-09' GROUP BY customer_id)\"": "min(id) per customer is each customer's first invoice; anything NOT IN that set is a duplicate, and the join to payments counts the duplicates that were paid."
+stages:
+  - id: leaked-lock
+    update: |
+      09:32: billing pages work. At 09:35 two invoice workers logged
+      "acquired lock 42, running invoice batch" in the same second, again.
+    diagram_status: { api: ok, workers: down }
+    terminal:
+      commands:
+        - match: "psql -d billing -c \"SELECT l.pid, l.objid, a.state, a.backend_start FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE l.locktype = 'advisory'\""
+          when_actions: [xact-lock]
+          output: |2
+             pid | objid | state | backend_start
+            -----+-------+-------+---------------
+            (0 rows)
+        - match: "psql -d billing -c \"SELECT l.pid, l.objid, a.state, a.backend_start FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE l.locktype = 'advisory'\""
+          evidence: leaked-lock
+          output: |2
+              pid  | objid | state |         backend_start
+            -------+-------+-------+-------------------------------
+             41877 |    42 | idle  | 2026-10-01 18:02:14.511+00
+            (1 row)
+    logs:
+      - name: "invoice-worker logs (09:35)"
+        evidence: two-holders
+        lines: |
+          worker-1 09:35:00.104 pg_try_advisory_lock(42) = true; acquired lock 42, running invoice batch
+          worker-3 09:35:00.388 pg_try_advisory_lock(42) = true; acquired lock 42, running invoice batch
+          worker-2 09:35:00.402 pg_try_advisory_lock(42) = false; another worker is running, skipping
+          worker-1 09:35:41.770 batch done (118 invoices); pg_advisory_unlock(42)
+          worker-1 09:35:41.771 WARNING:  you don't own a lock of type ExclusiveLock
+    files:
+      - path: "invoice-worker/job.py (excerpt)"
+        evidence: session-lock-code
+        language: python
+        content: |
+          # autocommit: each statement is its own transaction
+          if db.scalar("SELECT pg_try_advisory_lock(42)"):
+              try:
+                  run_invoice_batch(db)
+              finally:
+                  db.execute("SELECT pg_advisory_unlock(42)")
+    hypotheses:
+      - id: session-lock
+        text: "pg_try_advisory_lock takes a session-level lock on whichever server connection ran that statement. The unlock ran on a different one and failed, so the lock stayed on server connection 41877, and any worker routed to 41877 gets it again (the same session can re-acquire it)."
+        correct: true
+      - id: clock
+        text: "The workers' clocks are out of sync, so two think it's their turn."
+        feedback: "The lock is meant to make the schedule irrelevant: whoever gets it runs. The problem is two workers getting it."
+      - id: lock-key
+        text: "The workers use different lock keys."
+        feedback: "All three call pg_try_advisory_lock(42); worker-2 was correctly refused. Two got true because both were routed to the session that already held it."
+    actions:
+      - id: xact-lock
+        label: "Run the batch in one transaction with pg_try_advisory_xact_lock(42), deploy it, and pg_terminate_backend(41877) to drop the leaked session lock"
+        kind: fix
+        feedback: "A transaction-level lock lives and dies with the transaction, which transaction pooling keeps on one server connection. The leaked session lock goes with its backend."
+      - id: unlock-all
+        label: "psql -d billing -c \"SELECT pg_advisory_unlock_all()\""
+        kind: wrong
+        match_regex: "^psql -d billing -c \"SELECT pg_advisory_unlock_all\\(\\)\"$"
+        feedback: "That releases advisory locks held by your own session, which holds none. The lock belongs to backend 41877."
+      - id: one-worker
+        label: "Scale the invoice workers down to one"
+        kind: wrong
+        feedback: "It stops today's duplicates, but the job still never releases its lock properly, and a single worker is a single point of failure on invoice day."
+      - id: restart-pg
+        label: "Restart PostgreSQL to clear all locks"
+        kind: destructive
+        feedback: "Drops every connection, including in-flight invoice and payment transactions, on month-end. Terminating one backend does it."
+    solution_paths:
+      - [xact-lock]
+    key_evidence: [two-holders, leaked-lock, session-lock-code]
+    evidence_labels:
+      two-holders: "Two workers got lock 42 in the same second; the unlock warns \"you don't own\" it"
+      leaked-lock: "An idle server connection from 18:02 yesterday holds advisory lock 42"
+      session-lock-code: "The job takes a session-level lock in one transaction and unlocks in another"
+    hints:
+      nudge: "Two workers both got true from pg_try_advisory_lock. Who actually holds lock 42?"
+      direction: "Look at pg_locks for advisory locks, and at how the job takes and releases the lock through the pooler."
+      answer: "Session-level locks don't work through transaction pooling. Use pg_try_advisory_xact_lock inside the batch's transaction, and terminate backend 41877."
+    debrief:
+      root_cause: |
+        The job took a session-level advisory lock in one autocommit
+        statement and released it in another. Through transaction pooling
+        those ran on different server connections: the unlock failed ("you
+        don't own a lock"), and the lock stayed with server connection
+        41877. A session can take its own lock again, so whenever any worker's
+        pg_try_advisory_lock was routed to 41877 it got true, and two
+        workers could run the batch at once.
+      ideal_path:
+        - "Read the worker logs: two holders at once, and an unlock warning."
+        - "Find the holder in pg_locks: an idle pooled connection since 18:02."
+        - "Read the job: session-level lock across separate transactions."
+        - "Switch to pg_try_advisory_xact_lock in one transaction; terminate 41877."
+
+  - id: duplicates
+    update: |
+      09:55: one batch at a time now. Finance needs the double invoices dealt
+      with before customers' payment runs tonight.
+    diagram_status: { workers: ok }
+    terminal:
+      commands:
+        - match: "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\""
+          when_actions: [void-and-index]
+          output: |
+            0
+        - match: "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\""
+          evidence: dup-214
+          output: |
+            214
+        - match: "psql -d billing -Atc \"SELECT count(*) FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.period = '2026-09' AND i.id NOT IN (SELECT min(id) FROM invoices WHERE period = '2026-09' GROUP BY customer_id)\""
+          evidence: charged-9
+          output: |
+            9
+    hypotheses:
+      - id: void-refund
+        text: "Void the later invoice of each of the 214 duplicate pairs (refunding the 9 already paid), then add a unique index on (customer_id, period) for non-void invoices so it can't happen again."
+        correct: true
+      - id: delete
+        text: "Delete the duplicate invoices."
+        feedback: "Invoices are financial records, already emailed to customers and in 9 cases paid. They're voided and refunded, not deleted."
+      - id: index-first
+        text: "Add the unique index first and it will reject the duplicates."
+        feedback: "Creating a unique index fails while duplicate keys exist (\"could not create unique index\"). Void the duplicates first, and make the index partial so voided rows don't count."
+    actions:
+      - id: void-and-index
+        label: "Mark the later invoice in each duplicate pair void, refund the 9 paid ones, then CREATE UNIQUE INDEX ... ON invoices (customer_id, period) WHERE status <> 'void'"
+        kind: fix
+        feedback: "One live invoice per customer per period, the payments put right, and the database now refuses a second one, whatever the job does."
+      - id: delete-dups
+        label: "DELETE the later invoice of each pair"
+        kind: destructive
+        feedback: "Destroys invoices customers have received, and 9 of them are attached to payments. Void and refund instead."
+      - id: unique-now
+        label: "CREATE UNIQUE INDEX ON invoices (customer_id, period)"
+        kind: wrong
+        feedback: "It fails while 214 duplicates exist, and without WHERE status <> 'void' it would also forbid keeping voided duplicates as records."
+    solution_paths:
+      - [void-and-index]
+    key_evidence: [dup-214, charged-9]
+    evidence_labels:
+      dup-214: "214 customers have two live September invoices"
+      charged-9: "9 of the duplicate invoices have already been paid"
+    hints:
+      nudge: "Which customers got two invoices, and has money moved on any of them?"
+      direction: "Group September's non-void invoices by customer, and join the duplicates to payments."
+      answer: "Void the later of each pair, refund the 9 paid ones, then add a partial unique index on (customer_id, period) WHERE status <> 'void'."
+    debrief:
+      root_cause: |
+        Two workers ran the batch together several times since last night,
+        creating 214 duplicate September invoices, 9 already paid. Nothing
+        in the schema said one invoice per customer per period. Voiding
+        keeps the audit trail, and a partial unique index (excluding void
+        invoices) makes the database enforce the rule even if the job
+        misbehaves again.
+      ideal_path:
+        - "Count customers with two live September invoices: 214."
+        - "Find which duplicates were paid: 9."
+        - "Void the later of each pair and refund the paid ones."
+        - "Add a partial unique index, then re-count: 0."

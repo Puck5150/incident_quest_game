@@ -472,3 +472,14 @@
   alternatives:
     - { command: "ls -l DIR", note: "With owners, sizes and times." }
   docs: { title: "ls(1)", url: "https://man7.org/linux/man-pages/man1/ls.1.html" }
+
+- id: grep-extended
+  match: "^(sudo )?grep -E "
+  summary: "Prints the lines of a file that match an extended regular expression."
+  parts:
+    - { token: "-E", meaning: "Extended regex: | means \"or\", and + ? ( ) work without backslashes." }
+    - { token: "'pool_mode|max_prepared_statements'", meaning: "Lines containing either setting name." }
+  why: "Pulls just the settings you care about out of a long config file."
+  alternatives:
+    - { command: "grep -nE 'a|b' FILE", note: "With line numbers." }
+  docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }

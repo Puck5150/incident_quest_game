@@ -1,6 +1,6 @@
 # Plan: Difficulty-5 incidents
 
-Status: **approved 2026-10-02 with the defaults; D1 and D2 done (10 incidents re-rated: 6 up to 4, 4 up from 1 to 2); D3 done (aws-cross-account-replication-dr, azure-orders-backlog-major, gcp-scan-ingest-major); D4 in progress (Linux: media-disk-migration-major; Networking: duplicate-ip-cache-major).** From PARKING_LOT.md: "Every track
+Status: **approved 2026-10-02 with the defaults; D1 and D2 done (10 incidents re-rated: 6 up to 4, 4 up from 1 to 2); D3 done (aws-cross-account-replication-dr, azure-orders-backlog-major, gcp-scan-ingest-major); D4 in progress (Linux: media-disk-migration-major; Networking: duplicate-ip-cache-major; Databases: pgbouncer-transaction-pooling-major).** From PARKING_LOT.md: "Every track
 has at least 8 incidents. Next: difficulty-5 incidents."
 
 ## 1. Where we are
