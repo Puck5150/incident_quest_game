@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: cname-at-apex
+track: networking
+difficulty: 2
+title: "The CDN cutover is blocked: the DNS pipeline won't load the zone"
+par_minutes: 10
+
+ticket:
+  from: "Web platform team"
+  priority: P2
+  body: |
+    Tonight's cutover to the CDN is stuck. The CDN told us to point our
+    domain at shop-7f3a.cdn.example.net with a CNAME. We added it for both
+    example.com and www.example.com, and the DNS pipeline fails its check.
+    The cutover window ends at 22:00.
+
+environment: |
+  example.com is served by the company's own BIND name servers. Zone
+  changes go through a pipeline that runs named-checkzone and only
+  publishes zones that pass. The CDN also publishes fixed anycast addresses
+  for customers who can't use a CNAME.
+
+terminal:
+  prompt: "you@dns-admin:~/zones$"
+  commands:
+    - match: "named-checkzone example.com db.example.com"
+      when_actions: [apex-a]
+      output: |
+        zone example.com/IN: loaded serial 2026100204
+        OK
+    - match: "named-checkzone example.com db.example.com"
+      evidence: cname-other-data
+      output: |
+        db.example.com:12: example.com: CNAME and other data
+        zone example.com/IN: loading from master file db.example.com failed: CNAME and other data
+        zone example.com/IN: not loaded due to errors.
+    - match: "dig +short www.example.com"
+      output: |
+        203.0.113.10
+
+files:
+  - path: "db.example.com (the change, excerpt)"
+    evidence: apex-records
+    content: |
+      $TTL 3600
+      @      IN SOA ns1.example.com. hostmaster.example.com. ( 2026100203 7200 3600 1209600 3600 )
+      @      IN NS  ns1.example.com.
+      @      IN NS  ns2.example.com.
+      @      IN MX  10 mail.example.com.
+      @      IN TXT "v=spf1 mx -all"
+      ; CDN cutover
+      @      IN CNAME shop-7f3a.cdn.example.net.
+      www    IN CNAME shop-7f3a.cdn.example.net.
+  - path: "CDN setup guide (excerpt)"
+    evidence: cdn-anycast
+    content: |
+      Point your hostnames at your CDN hostname with a CNAME record.
+      If you can't use a CNAME (for example, at the zone apex), create A and
+      AAAA records for our anycast addresses instead:
+        A     192.0.2.80
+        AAAA  2001:db8:80::80
+
+hypotheses:
+  - id: apex-cname
+    text: "A name with a CNAME can't have any other records, and the zone apex always has SOA and NS records (here also MX and TXT), so example.com can't be a CNAME."
+    correct: true
+  - id: syntax
+    text: "The CNAME record has a typo."
+    feedback: "The same CNAME line works for www, and the check says \"CNAME and other data\", not a syntax error."
+  - id: cdn-name
+    text: "The CDN hostname doesn't exist yet."
+    feedback: "named-checkzone doesn't look the target up here; it rejects example.com having a CNAME next to its other records."
+  - id: serial
+    text: "The zone serial wasn't increased."
+    feedback: "A stale serial would stop secondaries picking up the change, not make the zone fail to load."
+
+actions:
+  - id: apex-a
+    label: "Replace the apex CNAME with A and AAAA records for the CDN's anycast addresses (keep the www CNAME), bump the serial, and re-run the pipeline"
+    kind: fix
+    feedback: "The apex keeps its SOA, NS, MX and TXT records alongside the new A and AAAA records, www stays a CNAME, and the zone loads."
+  - id: delete-others
+    label: "Delete the MX and TXT records at the apex so the CNAME is the only other record"
+    kind: destructive
+    feedback: "Mail for example.com stops being delivered, and the zone still fails: the apex must keep its SOA and NS records."
+  - id: skip-check
+    label: "Skip the pipeline's named-checkzone step for tonight"
+    kind: destructive
+    feedback: "The name servers would refuse to load the broken zone anyway, and could stop serving example.com entirely."
+  - id: cname-www-only
+    label: "Remove the apex change and only cut over www"
+    kind: wrong
+    feedback: "The zone loads, but example.com still points at the old servers after the old servers are retired tonight. The apex needs to move too."
+
+solution_paths:
+  - [apex-a]
+
+key_evidence: [cname-other-data, apex-records, cdn-anycast]
+
+evidence_labels:
+  cname-other-data: "named-checkzone: example.com: CNAME and other data"
+  apex-records: "The apex already has SOA, NS, MX and TXT records"
+  cdn-anycast: "The CDN publishes A and AAAA addresses for the apex"
+
+hints:
+  nudge: "The same CNAME works for www. What's different about the bare domain?"
+  direction: "Read the rule behind \"CNAME and other data\", then list what else lives at the apex."
+  answer: "The apex can't be a CNAME because it must have SOA and NS records. Use the CDN's A and AAAA records at the apex and keep the CNAME for www."
+
+analogy:
+  title: "A forwarding address for the head office"
+  text: |
+    A branch can put up a sign saying "we've moved, go to the new address".
+    The head office can't: its address is also where the official
+    registration and the post box are, and those have to stay. So the head
+    office lists the new building's street number directly instead.
+
+debrief:
+  root_cause: |
+    DNS doesn't allow a name with a CNAME to have any other records: a
+    CNAME says "this name is really that one", for every record type. The
+    zone apex always has SOA and NS records (here also MX and TXT), so
+    example.com can't be a CNAME. named-checkzone rejected the zone with
+    "CNAME and other data" and the pipeline refused to publish it.
+  ideal_path:
+    - "Read the check: example.com: CNAME and other data."
+    - "Look at the apex: SOA, NS, MX and TXT already live there."
+    - "Find the CDN's alternative: anycast A and AAAA records."
+    - "Use A/AAAA at the apex, keep the CNAME for www, and re-run the pipeline."
+  real_world: |
+    Many DNS providers offer ALIAS, ANAME or CNAME-flattening records that
+    look like a CNAME at the apex but answer with addresses. Standard BIND
+    zones don't; use the provider's addresses, or redirect the apex to www.
+
+concepts:
+  - term: "CNAME record"
+    text: "Says a name is an alias for another name. A name with a CNAME may not have other records."
+    url: "https://www.rfc-editor.org/rfc/rfc1034"
+  - term: "Zone apex"
+    text: "The top name of a zone (example.com itself), which always carries the zone's SOA and NS records."
+    url: "https://www.rfc-editor.org/rfc/rfc2181"
+  - term: "named-checkzone"
+    text: "A BIND tool that checks a zone file the way the name server would load it."
+    url: "https://bind9.readthedocs.io/en/latest/manpages.html"
+
+sources:
+  - title: "RFC 1034: Domain names, concepts and facilities (3.6.2, CNAME and other data)"
+    url: "https://www.rfc-editor.org/rfc/rfc1034"
+    retrieved: 2026-10-02
+  - title: "RFC 2181: Clarifications to the DNS specification (10.1, CNAME resource records)"
+    url: "https://www.rfc-editor.org/rfc/rfc2181"
+    retrieved: 2026-10-02
+  - title: "BIND 9: Manual pages (named-checkzone)"
+    url: "https://bind9.readthedocs.io/en/latest/manpages.html"
+    retrieved: 2026-10-02

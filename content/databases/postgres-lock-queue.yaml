@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-lock-queue
+track: databases
+difficulty: 3
+title: "A one-second migration froze every query on the orders table"
+par_minutes: 12
+
+ticket:
+  from: "On-call bot"
+  priority: P1
+  body: |
+    14:02 ALERT: checkout latency over 30 seconds; requests timing out.
+    The 14:00 deploy included a migration that adds a nullable column to
+    orders, which took under a second in staging.
+
+environment: |
+  PostgreSQL 16. The migration runs
+  ALTER TABLE orders ADD COLUMN gift_message text;
+  Analysts have read access to production for ad-hoc reports through psql.
+
+terminal:
+  prompt: "postgres=#"
+  commands:
+    - match: "SELECT pid, state, wait_event_type, now() - xact_start AS xact_age, left(query, 50) AS query FROM pg_stat_activity WHERE datname = 'shop' ORDER BY xact_start;"
+      when_actions: [terminate-idle]
+      output: |2
+          pid  | state  | wait_event_type | xact_age |                      query
+        -------+--------+-----------------+----------+------------------------------------------------
+         61540 | active |                 | 00:00:00 | SELECT * FROM orders WHERE id = $1
+        (1 row)
+    - match: "SELECT pid, state, wait_event_type, now() - xact_start AS xact_age, left(query, 50) AS query FROM pg_stat_activity WHERE datname = 'shop' ORDER BY xact_start;"
+      when_actions: [cancel-migration]
+      output: |2
+          pid  | state               | wait_event_type | xact_age |                      query
+        -------+---------------------+-----------------+----------+------------------------------------------------
+         58210 | idle in transaction | Client          | 00:51:08 | SELECT count(*) FROM orders WHERE created_at >
+         61540 | active              |                 | 00:00:00 | SELECT * FROM orders WHERE id = $1
+        (2 rows)
+    - match: "SELECT pid, state, wait_event_type, now() - xact_start AS xact_age, left(query, 50) AS query FROM pg_stat_activity WHERE datname = 'shop' ORDER BY xact_start;"
+      evidence: activity
+      output: |2
+          pid  | state               | wait_event_type | xact_age |                      query
+        -------+---------------------+-----------------+----------+------------------------------------------------
+         58210 | idle in transaction | Client          | 00:51:08 | SELECT count(*) FROM orders WHERE created_at >
+         60977 | active              | Lock            | 00:02:41 | ALTER TABLE orders ADD COLUMN gift_message tex
+         61002 | active              | Lock            | 00:02:39 | SELECT * FROM orders WHERE id = $1
+         61005 | active              | Lock            | 00:02:39 | INSERT INTO orders (customer_email, total) VAL
+         61013 | active              | Lock            | 00:02:38 | SELECT * FROM orders WHERE id = $1
+        (5 rows)
+    - match: "SELECT pid, pg_blocking_pids(pid) FROM pg_stat_activity WHERE wait_event_type = 'Lock';"
+      evidence: blockers
+      output: |2
+          pid  | pg_blocking_pids
+        -------+------------------
+         60977 | {58210}
+         61002 | {60977}
+         61005 | {60977}
+         61013 | {60977}
+        (4 rows)
+    - match: "SELECT usename, client_addr, backend_start FROM pg_stat_activity WHERE pid = 58210;"
+      output: |2
+         usename  | client_addr | backend_start
+        ----------+-------------+-------------------------------
+         analyst2 | 10.40.0.77  | 2026-10-02 13:09:55.104+00
+
+hypotheses:
+  - id: lock-queue
+    text: "An analyst's session has been idle in an open transaction for 51 minutes, holding a lock on orders. The ALTER TABLE is waiting for it, and every new query on orders is queued behind the ALTER."
+    correct: true
+  - id: slow-migration
+    text: "The migration is rewriting the whole table."
+    feedback: "Adding a nullable column without a default doesn't rewrite the table; it's quick once it gets its lock. pg_stat_activity shows it waiting on a Lock, not working."
+  - id: cpu
+    text: "The database is overloaded."
+    feedback: "Everything is waiting, not running: wait_event_type is Lock for every stuck query."
+  - id: deadlock
+    text: "It's a deadlock."
+    feedback: "PostgreSQL detects deadlocks and cancels one side within a second or so. This is a plain queue: one blocker, one waiter, everyone else behind it."
+
+actions:
+  - id: terminate-idle
+    label: "SELECT pg_terminate_backend(58210);"
+    kind: fix
+    match_regex: "^SELECT pg_terminate_backend\\(58210\\);?$"
+    feedback: "The idle transaction ends and releases its lock, the ALTER TABLE finishes in milliseconds, and the queued queries run. Tell analyst2 their session was closed."
+  - id: cancel-migration
+    label: "SELECT pg_cancel_backend(60977); (cancel the migration; rerun it later with a lock_timeout)"
+    kind: fix
+    match_regex: "^SELECT pg_cancel_backend\\(60977\\);?$"
+    feedback: "With the ALTER gone from the queue, the waiting queries go ahead, since they don't conflict with the analyst's read lock. Rerun the migration with SET lock_timeout so it gives up quickly instead of queuing everyone."
+  - id: restart
+    label: "Restart PostgreSQL"
+    kind: destructive
+    feedback: "Every connection and in-flight transaction is dropped, including checkouts being paid for, and the deploy's migration runs again into whatever else is open."
+  - id: kill-selects
+    label: "Terminate the waiting SELECT and INSERT sessions"
+    kind: wrong
+    feedback: "New requests queue up behind the ALTER straight away. The queue is caused by the blocker at its head."
+
+solution_paths:
+  - [terminate-idle]
+  - [cancel-migration]
+
+key_evidence: [activity, blockers]
+
+evidence_labels:
+  activity: "One session is idle in transaction for 51 minutes; the ALTER and all orders queries wait on locks"
+  blockers: "The ALTER is blocked by the idle session; every other query is blocked by the ALTER"
+
+hints:
+  nudge: "Nothing is busy; everything is waiting. Waiting for what, and behind whom?"
+  direction: "Look at pg_stat_activity's states and wait events, then use pg_blocking_pids to find the head of the queue."
+  answer: "An idle-in-transaction session blocks the ALTER, and everything queues behind the ALTER. Terminate the idle session (or cancel the migration), then add lock_timeout to migrations."
+
+analogy:
+  title: "A van waiting for one parked car"
+  text: |
+    A delivery van needs the whole loading bay to itself and waits for one
+    car whose driver went to lunch with the engine off. Everyone arriving
+    after the van queues behind it, even those who only needed a minute.
+    Move the parked car, or send the van round again later, and tell it
+    not to block the road while it waits.
+
+debrief:
+  root_cause: |
+    ALTER TABLE ... ADD COLUMN takes an ACCESS EXCLUSIVE lock, which
+    conflicts with every other lock, even a plain SELECT's. An analyst's
+    session had read from orders inside a transaction 51 minutes earlier
+    and left it open (idle in transaction), still holding its lock. The
+    ALTER waited for it, and new queries on orders queued behind the
+    waiting ALTER, so a sub-second migration froze checkout.
+  ideal_path:
+    - "Check pg_stat_activity: everything waits on Lock; one session is idle in transaction."
+    - "Find the head of the queue with pg_blocking_pids: the idle session blocks the ALTER."
+    - "Terminate the idle session (or cancel the migration)."
+    - "Prevent it: lock_timeout on migrations, idle_in_transaction_session_timeout for ad-hoc users."
+  real_world: |
+    Schema changes should always set a short lock_timeout and retry, so a
+    blocked migration gives up instead of queuing the whole app. Long open
+    transactions from consoles and BI tools are a classic blocker.
+
+concepts:
+  - term: "ACCESS EXCLUSIVE lock"
+    text: "The strongest table lock: it conflicts with every other lock, including the one a plain SELECT takes. Many ALTER TABLE forms need it."
+    url: "https://www.postgresql.org/docs/current/explicit-locking.html"
+  - term: "Idle in transaction"
+    text: "A session that started a transaction and is waiting for its client, still holding the locks it took."
+    url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
+  - term: "lock_timeout"
+    text: "Makes a statement give up if it waits longer than the set time to get a lock."
+    url: "https://www.postgresql.org/docs/current/runtime-config-client.html"
+
+sources:
+  - title: "PostgreSQL: Explicit Locking (ACCESS EXCLUSIVE, ALTER TABLE)"
+    url: "https://www.postgresql.org/docs/current/explicit-locking.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Client Connection Defaults (lock_timeout, idle_in_transaction_session_timeout)"
+    url: "https://www.postgresql.org/docs/current/runtime-config-client.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: The Cumulative Statistics System (pg_stat_activity)"
+    url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: System Information Functions (pg_blocking_pids)"
+    url: "https://www.postgresql.org/docs/current/functions-info.html"
+    retrieved: 2026-10-02

@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: load-average-nfs
+track: linux
+difficulty: 3
+title: "Load average 48 on an idle server"
+par_minutes: 12
+
+ticket:
+  from: "Monitoring"
+  priority: P2
+  body: |
+    ALERT web-04 load average 48 (8 CPUs). Customer uploads are hanging,
+    but other pages are fine. Someone suggested adding CPUs, but the CPU
+    graph is almost flat.
+
+environment: |
+  web-04 serves the site and stores uploaded files on an NFS share from
+  files-01, mounted at /mnt/uploads with the default hard option. files-01
+  was patched and rebooted at 09:00 this morning.
+
+diagram:
+  nodes:
+    - { id: users, label: "customers", col: 0, row: 0, status: degraded }
+    - { id: web, label: "web-04 (8 CPUs)", col: 1, row: 0, status: degraded }
+    - { id: nfs, label: "files-01 (NFS server)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: users, to: web }
+    - { from: web, to: nfs }
+
+terminal:
+  prompt: "ops@web-04:~$"
+  commands:
+    - match: "uptime"
+      when_actions: [start-nfs]
+      output: |
+        10:51:12 up 41 days,  3:02,  1 user,  load average: 0.92, 9.84, 31.07
+    - match: "uptime"
+      evidence: load-48
+      output: |
+        10:31:12 up 41 days,  2:42,  1 user,  load average: 48.21, 47.90, 41.33
+    - match: "top -bn1 | head -3"
+      evidence: cpu-idle
+      output: |
+        top - 10:31:15 up 41 days,  2:42,  1 user,  load average: 48.21, 47.90, 41.33
+        Tasks: 312 total,   1 running, 263 sleeping,   0 stopped,   0 zombie
+        %Cpu(s):  2.1 us,  0.8 sy,  0.0 ni, 96.9 id,  0.0 wa,  0.0 hi,  0.2 si,  0.0 st
+    - match: "ps -eo state,pid,wchan:20,cmd | awk '$1==\"D\"' | head -4"
+      evidence: d-state
+      output: |
+        D  20311 rpc_wait_bit_killabl php-fpm: pool www
+        D  20318 rpc_wait_bit_killabl php-fpm: pool www
+        D  20402 rpc_wait_bit_killabl php-fpm: pool www
+        D  20417 rpc_wait_bit_killabl php-fpm: pool www
+    - match: "findmnt /mnt/uploads"
+      output: |
+        TARGET       SOURCE                   FSTYPE OPTIONS
+        /mnt/uploads files-01:/export/uploads nfs4   rw,relatime,vers=4.2,hard,proto=tcp,timeo=600,retrans=2
+    - match: "ssh files-01 systemctl is-enabled nfs-server"
+      when_actions: [start-nfs]
+      output: |
+        enabled
+    - match: "ssh files-01 systemctl is-enabled nfs-server"
+      output: |
+        disabled
+    - match: "ssh files-01 systemctl is-active nfs-server"
+      when_actions: [start-nfs]
+      output: |
+        active
+    - match: "ssh files-01 systemctl is-active nfs-server"
+      evidence: nfs-inactive
+      output: |
+        inactive
+
+logs:
+  - name: "web-04 kernel log (dmesg)"
+    evidence: not-responding
+    lines: |
+      [3549021.118] nfs: server files-01 not responding, still trying
+      [3549021.120] nfs: server files-01 not responding, still trying
+
+hypotheses:
+  - id: nfs-down
+    text: "files-01's NFS server didn't start after the reboot, so every process touching /mnt/uploads waits forever in state D, and those waiting processes count toward the load average."
+    correct: true
+  - id: cpu-bound
+    text: "A runaway process is using all the CPUs."
+    feedback: "The CPUs are 96.9% idle. Load average also counts processes waiting in uninterruptible sleep (state D), and there are dozens of those."
+  - id: disk-local
+    text: "web-04's own disk is failing."
+    feedback: "The waiting processes are in rpc_wait (NFS calls to files-01), and the kernel says the NFS server isn't responding."
+  - id: memory
+    text: "web-04 is swapping."
+    feedback: "Swapping would show up as I/O wait and memory pressure. The stuck processes are all waiting on NFS calls."
+
+actions:
+  - id: start-nfs
+    label: "ssh files-01 sudo systemctl enable --now nfs-server"
+    kind: fix
+    match_regex: "^ssh files-01 (sudo )?systemctl enable --now nfs-server(\\.service)?$"
+    feedback: "The NFS server starts (and will start on the next boot). The hard mount's retries succeed, the waiting processes finish, and the load average falls."
+  - id: add-cpus
+    label: "Resize web-04 to 16 CPUs"
+    kind: wrong
+    feedback: "The CPUs were idle. More of them won't answer an NFS call to a server that isn't running."
+  - id: soft-mount
+    label: "Remount /mnt/uploads with the soft option"
+    kind: wrong
+    feedback: "Calls would fail with errors instead of waiting, so uploads still fail, and soft mounts can silently lose writes. The share needs its server back."
+  - id: reboot-web
+    label: "Reboot web-04"
+    kind: destructive
+    feedback: "Every customer loses their session, and as soon as web-04 is back, the first upload hangs on the same missing NFS server."
+
+solution_paths:
+  - [start-nfs]
+
+key_evidence: [load-48, cpu-idle, d-state, not-responding, nfs-inactive]
+
+evidence_labels:
+  load-48: "Load average is 48 on 8 CPUs"
+  cpu-idle: "Yet the CPUs are 97% idle"
+  d-state: "Dozens of processes are in state D, waiting on NFS calls"
+  not-responding: "Kernel: nfs: server files-01 not responding, still trying"
+  nfs-inactive: "files-01's nfs-server service isn't running"
+
+hints:
+  nudge: "Load average isn't the same thing as CPU usage. What else does it count?"
+  direction: "Look for processes in state D and what they're waiting on, then check the server they're waiting for."
+  answer: "nfs-server on files-01 is disabled and didn't start after the reboot. Start and enable it."
+
+analogy:
+  title: "A long queue at a closed counter"
+  text: |
+    The building's queue counter shows 48 people waiting, so someone
+    suggests hiring more staff. But the staff are idle: everyone's
+    waiting at the parcel counter, which hasn't opened since the morning
+    delivery. Open the parcel counter.
+
+debrief:
+  root_cause: |
+    files-01 was rebooted after patching, and its nfs-server service was
+    disabled, so it didn't start. web-04 mounts the share with the default
+    hard option, which retries NFS requests indefinitely, so every PHP
+    worker that touched /mnt/uploads waited in uninterruptible sleep (state
+    D). Linux's load average counts processes in state D as well as those
+    running, so load climbed to 48 while the CPUs sat idle.
+  ideal_path:
+    - "Compare load with CPU: load 48, CPUs 97% idle."
+    - "Find what's waiting: dozens of processes in state D on NFS calls."
+    - "Read the kernel log: files-01 not responding."
+    - "Check files-01: nfs-server inactive since the reboot; start and enable it."
+  real_world: |
+    High load with idle CPUs means waiting, usually on storage or network
+    filesystems. Check for state D processes and their wchan before buying
+    hardware. And check that services you depend on are enabled, not only
+    started.
+
+concepts:
+  - term: "Load average"
+    text: "The average number of jobs that are running or runnable (state R) or waiting for disk I/O (state D), over 1, 5 and 15 minutes."
+    url: "https://man7.org/linux/man-pages/man5/proc_loadavg.5.html"
+  - term: "Process state D"
+    text: "Uninterruptible sleep, usually waiting on I/O. Shown as D in ps."
+    url: "https://man7.org/linux/man-pages/man1/ps.1.html"
+  - term: "NFS hard and soft mounts"
+    text: "With hard, NFS requests are retried indefinitely; with soft, they fail after a number of retries."
+    url: "https://man7.org/linux/man-pages/man5/nfs.5.html"
+
+sources:
+  - title: "Linux man-pages: proc_loadavg(5) (state R or D)"
+    url: "https://man7.org/linux/man-pages/man5/proc_loadavg.5.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: ps(1) (process state codes)"
+    url: "https://man7.org/linux/man-pages/man1/ps.1.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: nfs(5) (hard and soft mount options)"
+    url: "https://man7.org/linux/man-pages/man5/nfs.5.html"
+    retrieved: 2026-10-02
+  - title: "systemd: systemctl(1) (enable --now)"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html"
+    retrieved: 2026-10-02

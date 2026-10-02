@@ -64,7 +64,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   expect(screen.getByText('The root filesystem is at 100%')).toBeTruthy() // evidence label, not the tag id
   expect(location.hash).toBe('#/done/full-disk') // a reload opens the queue, not a fresh run
   expect(screen.getByText(/Clearance raised: Operator/)).toBeTruthy()
-  expect(screen.queryByText(/Sector cleared/)).toBeNull() // the other Linux incident is still open
+  expect(screen.queryByText(/Sector cleared/)).toBeNull() // other Linux incidents are still open
   // Linux was Containers' only prerequisite.
   expect(screen.getByRole('button', { name: /Track unlocked: Containers & Kubernetes/ })).toBeTruthy()
 
@@ -209,7 +209,14 @@ it('finishing the last mission in a sector says so', async () => {
   const done = { bestScore: 100, completedAt: '2026-10-01', hintsUsed: 0, clean: true }
   localStorage.setItem(
     'incident-quest:v1',
-    JSON.stringify({ version: 1, xp: 100, completed: { 'oom-killed-service': done }, streak: { current: 1, best: 1 }, settings: { theme: 'dark' } }),
+    JSON.stringify({
+      version: 1,
+      xp: 100,
+      // every other Linux mission already done
+      completed: Object.fromEntries(content.items.filter((x) => x.track === 'linux' && x.id !== 'full-disk').map((x) => [x.id, done])),
+      streak: { current: 1, best: 1 },
+      settings: { theme: 'dark' },
+    }),
   )
   render(<App />)
   await openIncident()
@@ -223,7 +230,8 @@ it('finishing the last mission in a sector says so', async () => {
 
 it('the ops wall shows each sector station and jumps to its sector', () => {
   render(<App />)
-  const linux = screen.getByRole('button', { name: /^Linux Admin, Helsinki station: 2 of 2 missions open/ })
+  const n = content.items.filter((x) => x.track === 'linux').length
+  const linux = screen.getByRole('button', { name: `Linux Admin, Helsinki station: ${n} of ${n} missions open` })
   expect(screen.getByRole('button', { name: /^Containers & Kubernetes, Seattle station: locked/ })).toBeTruthy()
   fireEvent.keyDown(linux, { key: 'Enter' })
   expect(document.activeElement?.id).toBe('track-linux')

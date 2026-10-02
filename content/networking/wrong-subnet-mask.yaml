@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: wrong-subnet-mask
+track: networking
+difficulty: 2
+title: "The new server can reach its neighbours, but not the monitoring server"
+par_minutes: 10
+
+ticket:
+  from: "Infrastructure team"
+  priority: P3
+  body: |
+    db-02 was racked yesterday. It talks to everything in its own subnet,
+    and it can reach the internet, but monitoring at 10.20.5.10 can't be
+    reached from it at all. Every other server in the rack can reach
+    monitoring fine.
+
+environment: |
+  The server subnet is 10.20.0.0/24, with the router at 10.20.0.1. The
+  monitoring subnet, 10.20.5.0/24, is a different VLAN behind the same
+  router. db-02 was configured by hand with netplan.
+
+diagram:
+  nodes:
+    - { id: db02, label: "db-02 (10.20.0.15)", col: 0, row: 0, status: degraded }
+    - { id: rtr, label: "router 10.20.0.1", col: 1, row: 0, status: ok }
+    - { id: mon, label: "monitoring 10.20.5.10", col: 2, row: 0, status: ok }
+  edges:
+    - { from: db02, to: rtr }
+    - { from: rtr, to: mon }
+
+terminal:
+  prompt: "ops@db-02:~$"
+  commands:
+    - match: "ip -br addr show eth0"
+      when_actions: [fix-prefix]
+      output: |
+        eth0             UP             10.20.0.15/24
+    - match: "ip -br addr show eth0"
+      evidence: prefix-16
+      output: |
+        eth0             UP             10.20.0.15/16
+    - match: "ip route"
+      when_actions: [fix-prefix]
+      output: |
+        default via 10.20.0.1 dev eth0 proto static
+        10.20.0.0/24 dev eth0 proto kernel scope link src 10.20.0.15
+    - match: "ip route"
+      evidence: onlink-16
+      output: |
+        default via 10.20.0.1 dev eth0 proto static
+        10.20.0.0/16 dev eth0 proto kernel scope link src 10.20.0.15
+    - match: "ip route get 10.20.5.10"
+      when_actions: [fix-prefix]
+      output: |
+        10.20.5.10 via 10.20.0.1 dev eth0 src 10.20.0.15 uid 1000
+    - match: "ip route get 10.20.5.10"
+      evidence: route-direct
+      output: |
+        10.20.5.10 dev eth0 src 10.20.0.15 uid 1000
+    - match: "ip neigh show 10.20.5.10"
+      evidence: arp-failed
+      output: |
+        10.20.5.10 dev eth0 FAILED
+    - match: "ping -c 2 10.20.5.10"
+      when_actions: [fix-prefix]
+      output: |
+        64 bytes from 10.20.5.10: icmp_seq=1 ttl=63 time=0.61 ms
+        64 bytes from 10.20.5.10: icmp_seq=2 ttl=63 time=0.58 ms
+    - match: "ping -c 2 10.20.5.10"
+      output: |
+        From 10.20.0.15 icmp_seq=1 Destination Host Unreachable
+        From 10.20.0.15 icmp_seq=2 Destination Host Unreachable
+
+files:
+  - path: "/etc/netplan/50-db02.yaml"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          eth0:
+            addresses: [10.20.0.15/16]
+            routes:
+              - to: default
+                via: 10.20.0.1
+
+hypotheses:
+  - id: mask
+    text: "db-02 has a /16 instead of a /24, so it thinks 10.20.5.10 is on its own network and tries to reach it directly instead of through the router."
+    correct: true
+  - id: monitoring-down
+    text: "The monitoring server is down."
+    feedback: "Every other server in the rack reaches it. And db-02 never even sends to the router: it's looking for 10.20.5.10 on its own segment."
+  - id: firewall
+    text: "A firewall blocks db-02."
+    feedback: "A firewall would drop or reject packets on the way. These never leave: db-02 asks its own network for 10.20.5.10 and gets no answer."
+  - id: gateway
+    text: "db-02's default gateway is wrong."
+    feedback: "The default route is 10.20.0.1, correct, and the internet works through it. 10.20.5.10 just doesn't use the default route."
+
+actions:
+  - id: fix-prefix
+    label: "Change the address to 10.20.0.15/24 in /etc/netplan/50-db02.yaml and run sudo netplan apply"
+    kind: fix
+    feedback: "db-02's connected route is now 10.20.0.0/24, so 10.20.5.10 goes via the router like everything else outside the subnet."
+  - id: static-route
+    label: "Add a static route: 10.20.5.0/24 via 10.20.0.1"
+    kind: wrong
+    feedback: "Monitoring would work, since the more specific route wins. But the mask is still wrong, so every other 10.20.x.x subnet is still unreachable from db-02. Fix the cause."
+  - id: restart-router
+    label: "Restart the router"
+    kind: destructive
+    feedback: "Every server in the rack loses its network for a few minutes, and db-02 still never sends this traffic to the router."
+  - id: reboot-db02
+    label: "Reboot db-02"
+    kind: wrong
+    feedback: "It comes back with the same /16 from the same netplan file."
+
+solution_paths:
+  - [fix-prefix]
+
+key_evidence: [prefix-16, onlink-16, route-direct, arp-failed]
+
+evidence_labels:
+  prefix-16: "db-02's address is 10.20.0.15/16; the subnet is a /24"
+  onlink-16: "Its connected route covers all of 10.20.0.0/16"
+  route-direct: "So 10.20.5.10 is sent directly on eth0, not via the router"
+  arp-failed: "ARP for 10.20.5.10 fails: it isn't on this segment"
+
+hints:
+  nudge: "Does db-02 send traffic for 10.20.5.10 to the router at all?"
+  direction: "Ask the kernel how it would reach 10.20.5.10 (ip route get), then compare db-02's prefix length with the subnet's."
+  answer: "db-02 is configured as /16, so it treats 10.20.5.10 as local. Set it to /24 in netplan and apply."
+
+analogy:
+  title: "Thinking the whole city is your street"
+  text: |
+    A new neighbour thinks the whole district is one street, so to deliver
+    a letter across town they walk up and down their own road knocking on
+    doors, and never use the post office. Tell them which houses really
+    are on their street; everything else goes through the post office.
+
+debrief:
+  root_cause: |
+    The prefix length tells a host which addresses are on its own network
+    (reached directly, via ARP) and which need the router. db-02 was given
+    /16 instead of /24, so it believed all of 10.20.0.0 to 10.20.255.255 was
+    local. For 10.20.5.10 it sent ARP requests on its own segment instead
+    of using the router; nobody answered, so the host was unreachable.
+  ideal_path:
+    - "Ask the routing table: 10.20.5.10 goes direct on eth0, not via the router."
+    - "Check the address: /16, where the subnet is /24."
+    - "Confirm: ARP for 10.20.5.10 fails."
+    - "Fix the prefix in netplan, apply, and ping monitoring."
+  real_world: |
+    A too-wide mask only breaks traffic to the "extra" range, so it can go
+    unnoticed for weeks. ip route get answers "which way would this go?"
+    instantly. Templates or DHCP beat hand-typed addresses.
+
+concepts:
+  - term: "Prefix length (subnet mask)"
+    text: "The /24 or /16 after an address: how many leading bits name the network. Addresses with the same network bits are on-link."
+    url: "https://www.rfc-editor.org/rfc/rfc4632"
+  - term: "Connected route"
+    text: "The route the kernel adds for the address's own network, sending those destinations directly out of the interface."
+    url: "https://man7.org/linux/man-pages/man8/ip-route.8.html"
+  - term: "ARP"
+    text: "How a host finds the hardware address of an on-link IPv4 address; ip neigh shows the results."
+    url: "https://man7.org/linux/man-pages/man8/ip-neighbour.8.html"
+
+sources:
+  - title: "RFC 4632: Classless Inter-domain Routing (CIDR) (prefix notation)"
+    url: "https://www.rfc-editor.org/rfc/rfc4632"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: ip-route(8) (ip route get)"
+    url: "https://man7.org/linux/man-pages/man8/ip-route.8.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: ip-neighbour(8)"
+    url: "https://man7.org/linux/man-pages/man8/ip-neighbour.8.html"
+    retrieved: 2026-10-02
+  - title: "Netplan: YAML configuration reference"
+    url: "https://netplan.readthedocs.io/en/stable/netplan-yaml/"
+    retrieved: 2026-10-02

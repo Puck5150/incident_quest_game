@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-replica-read-after-write
+track: databases
+difficulty: 2
+title: "Customers save their new address, and the old one comes back"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P2
+  body: |
+    Customers keep reporting that they change their delivery address,
+    press Save, get "Saved!", and the page that loads next shows the old
+    address. Refreshing a few seconds later shows the new one. It's worst
+    in the evenings.
+
+environment: |
+  The account service writes to the PostgreSQL primary and sends all reads
+  to a streaming replica, to keep load off the primary. Replication is
+  asynchronous. A nightly product import starts at 18:00 and writes heavily
+  for about three hours.
+
+terminal:
+  prompt: "postgres=# (on the primary)"
+  commands:
+    - match: "SELECT application_name, state, write_lag, flush_lag, replay_lag FROM pg_stat_replication;"
+      evidence: replay-lag
+      output: |2
+         application_name |   state   |    write_lag    |    flush_lag    |   replay_lag
+        ------------------+-----------+-----------------+-----------------+-----------------
+         replica_1        | streaming | 00:00:00.002183 | 00:00:00.004410 | 00:00:04.381229
+        (1 row)
+    - match: "SHOW synchronous_standby_names;"
+      output: |2
+         synchronous_standby_names
+        ---------------------------
+
+        (1 row)
+
+files:
+  - path: "account-service: database routing (excerpt)"
+    evidence: reads-to-replica
+    content: |
+      # every write goes to the primary, every read to the replica
+      def save_address(user_id, address):
+          primary.execute("UPDATE addresses SET ... WHERE user_id = %s", ...)
+          return redirect("/account")        # next page load reads...
+
+      def account_page(user_id):
+          return replica.query("SELECT ... FROM addresses WHERE user_id = %s", ...)
+
+metrics:
+  - name: "replica_1 replay lag (seconds)"
+    unit: "s"
+    evidence: lag-evenings
+    series:
+      - label: "replay lag"
+        points: [["16:00", 0.01], ["17:00", 0.02], ["18:00", 3.1], ["19:00", 4.4], ["20:00", 3.9], ["21:00", 0.02]]
+
+hypotheses:
+  - id: read-after-write
+    text: "The page after saving reads from the asynchronous replica, which is a few seconds behind the primary during the evening import, so it still has the old address."
+    correct: true
+  - id: cache
+    text: "The browser caches the account page."
+    feedback: "A refresh a few seconds later shows the new address, and the delay tracks replication lag, which grows during the import."
+  - id: lost-write
+    text: "The save sometimes fails silently."
+    feedback: "The new address always appears a few seconds later: the write succeeded on the primary and reached the replica afterwards."
+  - id: replica-broken
+    text: "Replication is broken."
+    feedback: "It's streaming, and caught up most of the day. It just runs a few seconds behind while the import writes heavily."
+
+actions:
+  - id: read-your-writes
+    label: "Read from the primary for requests that follow the user's own write (for example, for a few seconds after a save, or for the account pages)"
+    kind: fix
+    feedback: "Users always see their own change; other reads can still go to the replica, which keeps most of the load off the primary."
+  - id: sync-apply
+    label: "Make replication synchronous with synchronous_commit = remote_apply for all transactions"
+    kind: wrong
+    feedback: "It would guarantee the replica has applied every commit before it returns, so every write in the system waits for the replica, including the whole import. Solve it where it matters: reads after a user's own write."
+  - id: bigger-replica
+    label: "Give the replica a bigger server"
+    kind: wrong
+    feedback: "Lag might shrink, but asynchronous replication is never zero-lag. A read straight after a write can still beat it."
+  - id: no-replica
+    label: "Send every read to the primary and delete the replica"
+    kind: destructive
+    feedback: "The primary takes all the load during the import, and you lose your standby for failover."
+
+solution_paths:
+  - [read-your-writes]
+
+key_evidence: [replay-lag, lag-evenings, reads-to-replica]
+
+evidence_labels:
+  replay-lag: "The replica replays changes about 4.4 seconds behind the primary"
+  lag-evenings: "Lag rises to several seconds during the 18:00 to 21:00 import"
+  reads-to-replica: "The page after a save reads from the replica"
+
+hints:
+  nudge: "The write worked. Where does the next page read from?"
+  direction: "Check how far behind the replica is during the evening, and where the account page reads."
+  answer: "Reads after a user's own write go to an asynchronous replica a few seconds behind. Read those from the primary (read-your-writes)."
+
+analogy:
+  title: "Asking the copy, not the original"
+  text: |
+    You hand an updated form to the front desk, and a clerk photocopies
+    it for the records room a few minutes later. If you then ask the records
+    room straight away, they read you the old copy. For the next few
+    minutes, ask the front desk.
+
+debrief:
+  root_cause: |
+    With asynchronous streaming replication the replica applies changes
+    shortly after the primary commits them; during the heavy evening import
+    that delay reached several seconds. The save went to the primary, but
+    the page shown straight after it read from the replica, which hadn't
+    replayed the change yet, so users saw their old address until it caught
+    up.
+  ideal_path:
+    - "Notice the pattern: correct a few seconds later, worse in the evening."
+    - "Measure replica lag: replay_lag about 4 seconds during the import."
+    - "Find where the next page reads: the replica."
+    - "Read a user's own data from the primary after they write it."
+  real_world: |
+    Read replicas trade freshness for capacity. Decide per query whether
+    stale data is acceptable; for "I just changed this" screens it never
+    is. Monitor replay lag and alert well before users would notice.
+
+concepts:
+  - term: "Asynchronous streaming replication"
+    text: "The primary commits without waiting for the standby; the standby receives and replays changes shortly afterwards."
+    url: "https://www.postgresql.org/docs/current/warm-standby.html"
+  - term: "Replication lag"
+    text: "How far a standby is behind the primary; pg_stat_replication shows write, flush and replay lag."
+    url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
+  - term: "synchronous_commit"
+    text: "How long a commit waits: up to remote_apply, which waits until synchronous standbys have applied it."
+    url: "https://www.postgresql.org/docs/current/runtime-config-wal.html"
+
+sources:
+  - title: "PostgreSQL: Log-Shipping Standby Servers (streaming replication, asynchronous by default)"
+    url: "https://www.postgresql.org/docs/current/warm-standby.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: The Cumulative Statistics System (pg_stat_replication lag columns)"
+    url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Write Ahead Log settings (synchronous_commit)"
+    url: "https://www.postgresql.org/docs/current/runtime-config-wal.html"
+    retrieved: 2026-10-02

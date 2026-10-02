@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-pitr-accidental-delete
+track: databases
+difficulty: 3
+title: "48,000 customers were deleted at 10:42, and orders keep coming in"
+par_minutes: 15
+
+ticket:
+  from: "Data team"
+  priority: P1
+  body: |
+    At 10:42 a cleanup script ran a DELETE on customers without its date
+    condition and removed 48,213 rows. Customers whose records were deleted
+    can't log in. The shop is still taking orders from everyone else, so
+    we can't lose this morning's orders.
+
+environment: |
+  PostgreSQL 16 on db-01. A base backup is taken every night at 01:00 and
+  WAL is continuously archived to object storage, so the database can be
+  restored to any point in time since the oldest base backup kept. A
+  spare server, db-restore, is available.
+
+terminal:
+  prompt: "ops@db-01:~$"
+  commands:
+    - match: "sudo -u postgres psql -Atc 'SELECT last_archived_wal, last_archived_time, failed_count FROM pg_stat_archiver'"
+      evidence: archiving-ok
+      output: |
+        0000000100000A1F000000C4|2026-10-02 11:05:12.441+00|0
+    - match: "sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM customers'"
+      output: |
+        113902
+    - match: "sudo -u postgres psql -d shop -Atc 'SELECT count(*) FROM orders WHERE created_at >= now()::date'"
+      evidence: orders-today
+      output: |
+        2941
+    - match: "ls /backups/base"
+      output: |
+        2026-09-30T01:00  2026-10-01T01:00  2026-10-02T01:00
+
+logs:
+  - name: "PostgreSQL log (statements that modify data)"
+    evidence: delete-time
+    lines: |
+      2026-10-02 10:42:07.318 UTC [77120] cleanup@shop LOG:  statement: DELETE FROM customers WHERE status = 'inactive' OR TRUE
+      2026-10-02 10:42:09.902 UTC [77120] cleanup@shop LOG:  duration: 2584.311 ms
+
+hypotheses:
+  - id: pitr-side
+    text: "Restore last night's base backup plus archived WAL onto the spare server, stopping just before 10:42:07, and copy the deleted customer rows back into production."
+    correct: true
+  - id: restore-prod
+    text: "Restore production itself to 10:42."
+    feedback: "That brings the customers back and throws away every order and change made since: 2,941 orders today alone. Only the customers were lost."
+  - id: nightly-only
+    text: "Restore last night's backup over production."
+    feedback: "That loses everything since 01:00, including this morning's orders, and customer changes made before 10:42."
+  - id: gone
+    text: "The rows are unrecoverable: a committed DELETE can't be undone."
+    feedback: "The base backup plus archived WAL can rebuild the database as it was at any moment since the backup, including one second before the DELETE."
+
+actions:
+  - id: restore-side
+    label: "On db-restore, restore the 2026-10-02T01:00 base backup and recover with recovery_target_time = '2026-10-02 10:42:07' (recovery_target_inclusive = false)"
+    kind: fix
+    feedback: "db-restore replays the archived WAL up to just before the DELETE and stops: it has every customer as they were at 10:42:06, and production keeps running."
+  - id: copy-back
+    label: "Copy the customers missing from production from db-restore back into production (for example, export them with \\copy and insert them back)"
+    kind: fix
+    feedback: "The 48,213 customers are back, with this morning's orders untouched. Check foreign keys and any changes made to those customers in between."
+  - id: restore-in-place
+    label: "Stop production and restore it to 10:42:06"
+    kind: destructive
+    feedback: "The customers come back, and every order, payment and change since 10:42 is gone, with the shop down during the restore."
+  - id: retry-script
+    label: "Fix the script's condition and run it again"
+    kind: wrong
+    feedback: "That stops it happening again tomorrow, but doesn't bring back today's 48,213 customers."
+
+solution_paths:
+  - [restore-side, copy-back]
+
+key_evidence: [delete-time, archiving-ok, orders-today]
+
+evidence_labels:
+  delete-time: "The DELETE ran at 10:42:07"
+  archiving-ok: "WAL archiving is working, with no failures"
+  orders-today: "2,941 orders have arrived today and must be kept"
+
+hints:
+  nudge: "You need the customers as they were one second before 10:42:07, without losing anything else. Where could that version of the data exist?"
+  direction: "Check that WAL archiving is healthy, then think about restoring somewhere other than production."
+  answer: "Do a point-in-time recovery of last night's backup onto db-restore, stopping just before 10:42:07, and copy the deleted customers back into production."
+
+analogy:
+  title: "A photo and a diary"
+  text: |
+    You have a photo of the warehouse taken last night and a diary of every
+    change since. Someone emptied one aisle at 10:42. Build a copy of the
+    warehouse next door from the photo and the diary, stopping at 10:41,
+    and carry just that aisle's boxes back. Don't rebuild the main
+    warehouse, where the morning's deliveries are.
+
+debrief:
+  root_cause: |
+    The cleanup's DELETE lost its condition and removed 48,213 customers at
+    10:42:07. Continuous WAL archiving on top of nightly base backups allows
+    point-in-time recovery: restore the base backup and replay WAL to a
+    chosen moment. Doing it on a separate server, stopping just before the
+    DELETE, recovers the customers without rolling back production, where
+    orders kept arriving.
+  ideal_path:
+    - "Find the exact time of the damage: 10:42:07."
+    - "Confirm WAL archiving is healthy, so recovery can reach that time."
+    - "Restore last night's base backup on db-restore with recovery_target_time just before it."
+    - "Copy the missing customers back into production; check related data."
+  real_world: |
+    Practise point-in-time recovery before you need it, and keep base
+    backups plus archived WAL long enough to cover mistakes noticed late.
+    For risky scripts, run deletes in a transaction and check the row count
+    before committing.
+
+concepts:
+  - term: "Base backup"
+    text: "A copy of the whole database cluster, the starting point for restoring it."
+    url: "https://www.postgresql.org/docs/current/continuous-archiving.html"
+  - term: "WAL archiving"
+    text: "Copying each completed WAL file to safe storage, so changes after a base backup can be replayed."
+    url: "https://www.postgresql.org/docs/current/continuous-archiving.html"
+  - term: "Point-in-time recovery"
+    text: "Restoring a base backup and replaying archived WAL up to a chosen moment, set with recovery_target_time."
+    url: "https://www.postgresql.org/docs/current/runtime-config-wal.html"
+
+sources:
+  - title: "PostgreSQL: Continuous Archiving and Point-in-Time Recovery (PITR)"
+    url: "https://www.postgresql.org/docs/current/continuous-archiving.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Write Ahead Log settings (recovery_target_time, recovery_target_inclusive)"
+    url: "https://www.postgresql.org/docs/current/runtime-config-wal.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: The Cumulative Statistics System (pg_stat_archiver)"
+    url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
+    retrieved: 2026-10-02

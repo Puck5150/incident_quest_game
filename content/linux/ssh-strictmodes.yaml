@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: ssh-strictmodes
+track: linux
+difficulty: 2
+title: "Deploys stopped: the deploy key is suddenly refused"
+par_minutes: 10
+
+ticket:
+  from: "Release engineering"
+  priority: P2
+  body: |
+    Since lunchtime every deploy to app-03 fails at the SSH step with
+    "Permission denied (publickey)". Same key, same user (deploy) as
+    yesterday, and the other app servers accept it fine. Someone was
+    "fixing permissions" on app-03 this morning.
+
+environment: |
+  app-03 runs Ubuntu with OpenSSH's sshd at its default settings. The
+  deploy pipeline signs in as deploy with an SSH key listed in
+  /home/deploy/.ssh/authorized_keys. Password sign-in is disabled.
+
+terminal:
+  prompt: "admin@app-03:~$"
+  commands:
+    - match: "ls -ld /home/deploy /home/deploy/.ssh /home/deploy/.ssh/authorized_keys"
+      when_actions: [fix-home]
+      output: |
+        drwxr-xr-x 6 deploy deploy 4096 Oct  2 12:41 /home/deploy
+        drwx------ 2 deploy deploy 4096 Sep  1 08:10 /home/deploy/.ssh
+        -rw------- 1 deploy deploy  398 Sep  1 08:10 /home/deploy/.ssh/authorized_keys
+    - match: "ls -ld /home/deploy /home/deploy/.ssh /home/deploy/.ssh/authorized_keys"
+      evidence: home-777
+      output: |
+        drwxrwxrwx 6 deploy deploy 4096 Oct  2 11:58 /home/deploy
+        drwx------ 2 deploy deploy 4096 Sep  1 08:10 /home/deploy/.ssh
+        -rw------- 1 deploy deploy  398 Sep  1 08:10 /home/deploy/.ssh/authorized_keys
+    - match: "sudo sshd -T | grep -i strictmodes"
+      evidence: strictmodes-yes
+      output: |
+        strictmodes yes
+    - match: "sudo grep -c deploy@pipeline /home/deploy/.ssh/authorized_keys"
+      output: |
+        1
+
+logs:
+  - name: "/var/log/auth.log (sshd)"
+    evidence: bad-modes
+    lines: |
+      Oct  2 12:03:17 app-03 sshd[48211]: Authentication refused: bad ownership or modes for directory /home/deploy
+      Oct  2 12:03:17 app-03 sshd[48211]: Connection closed by authenticating user deploy 198.51.100.40 port 50532 [preauth]
+  - name: "admin shell history (this morning)"
+    lines: |
+      sudo chmod 777 /home/deploy   # app couldn't write its upload temp dir
+
+hypotheses:
+  - id: home-writable
+    text: "/home/deploy was made world-writable, so sshd refuses to trust the authorized_keys under it."
+    correct: true
+  - id: key-removed
+    text: "The deploy key was removed from authorized_keys."
+    feedback: "The key's still in the file. sshd refused to use the file at all: \"bad ownership or modes for directory /home/deploy\"."
+  - id: key-perms
+    text: "authorized_keys has the wrong permissions."
+    feedback: "authorized_keys is -rw------- and .ssh is drwx------, both fine. The log names the home directory itself."
+  - id: password-off
+    text: "Password sign-in being disabled is blocking the deploy."
+    feedback: "The pipeline uses a key, not a password, and password sign-in was disabled yesterday too."
+
+actions:
+  - id: fix-home
+    label: "sudo chmod 755 /home/deploy"
+    kind: fix
+    match_regex: "^(sudo )?chmod (755|750|700|go-w|g-w,o-w|o-w,g-w) /home/deploy/?$"
+    feedback: "Only deploy can write to its home directory again, so sshd trusts the keys file and the deploy key works. (Give the app its own temp directory for uploads instead.)"
+  - id: strictmodes-no
+    label: "Set StrictModes no in sshd_config and reload sshd"
+    kind: destructive
+    feedback: "Keys work again, for every account, even where anyone on the server could have swapped in their own key. The check exists for exactly this situation."
+  - id: new-key
+    label: "Generate a new key pair for the pipeline and add it to authorized_keys"
+    kind: wrong
+    feedback: "The new key sits in the same file sshd refuses to use, so it fails the same way."
+  - id: enable-passwords
+    label: "Turn on password sign-in for deploy"
+    kind: wrong
+    feedback: "That weakens sign-in for the server, and the pipeline has no password to use anyway."
+
+solution_paths:
+  - [fix-home]
+
+key_evidence: [bad-modes, home-777, strictmodes-yes]
+
+evidence_labels:
+  bad-modes: "sshd: Authentication refused: bad ownership or modes for directory /home/deploy"
+  home-777: "/home/deploy is drwxrwxrwx: anyone can write to it"
+  strictmodes-yes: "sshd checks file modes (StrictModes yes, the default)"
+
+hints:
+  nudge: "The key didn't change. Read sshd's own reason in the auth log."
+  direction: "sshd checks who can write to the keys file and every folder above it. Look at the home directory's mode."
+  answer: "/home/deploy was chmod 777. Make it 755 (no group or world write) and sshd will use authorized_keys again."
+
+analogy:
+  title: "A guest list on a public noticeboard"
+  text: |
+    The doorman lets in anyone whose name is on the guest list. This
+    morning someone moved the list to a noticeboard anyone can write on.
+    The doorman, quite rightly, stops trusting it. Put the list back
+    somewhere only the host can change it.
+
+debrief:
+  root_cause: |
+    This morning /home/deploy was made world-writable (chmod 777). With
+    StrictModes on, the default, sshd refuses to use an authorized_keys file
+    if the file, ~/.ssh or the home directory is writable by other users,
+    because anyone could have replaced the keys. It logged "bad ownership or
+    modes for directory /home/deploy" and the key was rejected.
+  ideal_path:
+    - "Read sshd's reason in the auth log: bad modes for /home/deploy."
+    - "Check the modes along the path: the home directory is drwxrwxrwx."
+    - "Remove group and world write from /home/deploy."
+    - "Run a deploy to confirm the key works."
+  real_world: |
+    "Permission denied (publickey)" from the client rarely says why; the
+    server's auth log does. chmod 777 is almost never the right fix: give
+    the app its own writable directory instead.
+
+concepts:
+  - term: "authorized_keys"
+    text: "The list of public keys allowed to sign in as a user, in that user's ~/.ssh folder."
+    url: "https://man.openbsd.org/sshd.8"
+  - term: "StrictModes"
+    text: "An sshd setting that checks the ownership and modes of a user's files and home directory before accepting a login."
+    url: "https://man.openbsd.org/sshd_config.5"
+
+sources:
+  - title: "OpenSSH: sshd(8) (authorized_keys and writable home directories)"
+    url: "https://man.openbsd.org/sshd.8"
+    retrieved: 2026-10-02
+  - title: "OpenSSH: sshd_config(5) (StrictModes)"
+    url: "https://man.openbsd.org/sshd_config.5"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: chmod(1)"
+    url: "https://man7.org/linux/man-pages/man1/chmod.1.html"
+    retrieved: 2026-10-02

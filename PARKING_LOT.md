@@ -16,6 +16,12 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - Postmortem-writing exercise after the debrief (SRE track)
 
 ## Content
+- **Next: continuity pass on every incident.** Commands that the hints, ideal path or
+  debrief tell the player to run must actually be runnable in that incident's terminal
+  (reported: expired-tls-certificate tells you to verify the certificate but offers no
+  openssl commands). Expand each incident's commands so every verification step has
+  evidence to gather; consider a build check that flags commands named in the text
+  but missing from the terminal.
 - More cloud content: priority AWS, then Azure, then Google Cloud. Shipped: PLAN_CLOUD_COVERAGE.md
   phases A-D and design challenges on the exam-outline gaps (ingestion, caching, containers,
   identity) for all three clouds, and 4 multi-stage incidents. Candidates: Azure DNS, canvas

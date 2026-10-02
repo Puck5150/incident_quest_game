@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: pmtu-black-hole
+track: networking
+difficulty: 3
+title: "Small pages load over the VPN, big ones hang forever"
+par_minutes: 14
+
+ticket:
+  from: "Branch office (Leeds)"
+  priority: P2
+  body: |
+    Since Tuesday, the intranet half-works from the Leeds branch: the home
+    page loads, but the reports page and any file download just spin. SSH
+    to HQ servers logs in, then freezes on commands with long output.
+    Everything works fine from HQ itself.
+
+environment: |
+  Leeds reaches HQ (10.10.0.0/16) over a site-to-site IPsec VPN; the tunnel
+  adds overhead, so its path MTU is 1400 bytes, less than the usual 1500.
+  On Tuesday the HQ firewall team applied a new baseline rule set that
+  "blocks ICMP".
+
+diagram:
+  nodes:
+    - { id: leeds, label: "Leeds PCs", col: 0, row: 0, status: degraded }
+    - { id: vpn, label: "IPsec VPN (path MTU 1400)", col: 1, row: 0, status: ok }
+    - { id: fw, label: "HQ firewall", col: 2, row: 0, status: ok }
+    - { id: web, label: "intranet 10.10.1.20", col: 3, row: 0, status: ok }
+  edges:
+    - { from: leeds, to: vpn }
+    - { from: vpn, to: fw }
+    - { from: fw, to: web }
+
+terminal:
+  prompt: "you@leeds-pc:~$"
+  commands:
+    - match: "ping -c 3 -M do -s 1372 10.10.1.20"
+      evidence: small-df-ok
+      output: |
+        PING 10.10.1.20 (10.10.1.20) 1372(1400) bytes of data.
+        1380 bytes from 10.10.1.20: icmp_seq=1 ttl=62 time=18.4 ms
+        1380 bytes from 10.10.1.20: icmp_seq=2 ttl=62 time=18.1 ms
+        1380 bytes from 10.10.1.20: icmp_seq=3 ttl=62 time=18.3 ms
+
+        --- 10.10.1.20 ping statistics ---
+        3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+    - match: "ping -c 3 -M do -s 1472 10.10.1.20"
+      evidence: big-df-silent
+      output: |
+        PING 10.10.1.20 (10.10.1.20) 1472(1500) bytes of data.
+
+        --- 10.10.1.20 ping statistics ---
+        3 packets transmitted, 0 received, 100% packet loss, time 2041ms
+    - match: "curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' --max-time 20 http://10.10.1.20/"
+      output: |
+        200 1180
+    - match: "curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' --max-time 20 http://10.10.1.20/reports"
+      when_actions: [allow-frag-needed]
+      output: |
+        200 482113
+    - match: "curl -s -o /dev/null -w '%{http_code} %{size_download}\\n' --max-time 20 http://10.10.1.20/reports"
+      evidence: big-hangs
+      output: |
+        000 0
+
+files:
+  - path: "HQ firewall: baseline rules added Tuesday (excerpt)"
+    evidence: icmp-blocked
+    content: |
+      rule 10  deny  icmp  any -> any   "Block ICMP (security baseline)"
+      rule 20  allow tcp   vpn-leeds -> 10.10.0.0/16 ports 22,80,443
+
+hypotheses:
+  - id: pmtud-blocked
+    text: "Full-size packets don't fit through the VPN, and the firewall now drops the ICMP \"fragmentation needed\" messages that would tell the servers to send smaller ones."
+    correct: true
+  - id: web-slow
+    text: "The intranet server is overloaded."
+    feedback: "From HQ everything is fast, and from Leeds small responses arrive in 18 ms. Only large packets go missing, whatever the server."
+  - id: tcp-blocked
+    text: "The firewall blocks the intranet's ports from Leeds."
+    feedback: "Port 80 is allowed: the home page loads and connections open. Something drops only the big packets."
+  - id: vpn-down
+    text: "The VPN tunnel is flapping."
+    feedback: "Small packets get through every time with no loss. A flapping tunnel would drop packets of any size."
+
+actions:
+  - id: allow-frag-needed
+    label: "On the HQ firewall, allow ICMP type 3 code 4 (fragmentation needed) ahead of the ICMP block"
+    kind: fix
+    feedback: "The VPN gateway's \"fragmentation needed\" messages reach the servers again, which lower their packet size for Leeds to 1400. Large pages load."
+  - id: mss-clamp
+    label: "On the Leeds VPN gateway, clamp TCP MSS to the path MTU (iptables TCPMSS --clamp-mss-to-pmtu)"
+    kind: fix
+    feedback: "TCP connections through the tunnel now agree on segments small enough to fit, so TCP traffic works even without the ICMP messages."
+  - id: lower-client-mtu
+    label: "Set the MTU to 1400 on every Leeds PC"
+    kind: wrong
+    feedback: "TCP would mostly recover, since each PC would advertise a smaller segment size, but it's a setting on every machine, every new device breaks again, and non-TCP traffic still disappears. Fix the path once."
+  - id: allow-all-icmp
+    label: "Remove the ICMP block entirely"
+    kind: wrong
+    feedback: "It would work, but undoes the security team's rule wholesale. Only one ICMP message is needed here: fragmentation needed."
+  - id: bypass-vpn
+    label: "Publish the intranet on the internet so Leeds can skip the VPN"
+    kind: destructive
+    feedback: "Internal reports and files would be reachable from anywhere to work around one firewall rule."
+
+solution_paths:
+  - [allow-frag-needed]
+  - [mss-clamp]
+
+key_evidence: [big-hangs, small-df-ok, big-df-silent, icmp-blocked]
+
+evidence_labels:
+  big-hangs: "Large pages never arrive, small ones do"
+  small-df-ok: "1400-byte packets with Don't Fragment get through"
+  big-df-silent: "1500-byte packets with Don't Fragment vanish, with no error back"
+  icmp-blocked: "Since Tuesday the HQ firewall drops all ICMP"
+
+hints:
+  nudge: "It's size, not the page. What happens to a packet that's too big for the tunnel?"
+  direction: "Test packet sizes with ping -M do, then check what the new firewall rules do to ICMP."
+  answer: "Path MTU discovery depends on ICMP \"fragmentation needed\", which the new baseline blocks. Allow ICMP type 3 code 4 (or clamp TCP MSS on the VPN gateway)."
+
+analogy:
+  title: "The low bridge with no warning sign"
+  text: |
+    Lorries from HQ take a road with a low bridge. Normally a sign tells a
+    driver who's too tall to take smaller vans. Someone took the signs
+    down as clutter, so tall lorries just get stuck, while small vans
+    still get through. Put the warning signs back, or send small vans
+    from the start.
+
+debrief:
+  root_cause: |
+    The VPN's overhead leaves room for 1400-byte packets, not 1500. Path MTU
+    discovery handles that: the tunnel gateway drops a too-big packet marked
+    "don't fragment" and sends back ICMP "fragmentation needed", and the
+    sender uses smaller packets. Tuesday's baseline blocked all ICMP, so
+    those messages never arrived: small responses worked, but full-size
+    packets for large pages disappeared, a PMTUD black hole.
+  ideal_path:
+    - "Notice the pattern: small responses work, large ones hang."
+    - "Test sizes with Don't Fragment: 1400 bytes pass, 1500 vanish without an error."
+    - "Find what removed the error: the new rule drops all ICMP."
+    - "Allow ICMP fragmentation-needed (or clamp TCP MSS at the VPN), then reload a large page."
+  real_world: |
+    "Blocking ICMP" breaks path MTU discovery; firewall baselines should
+    allow fragmentation-needed (and packet-too-big for IPv6). On tunnels,
+    MSS clamping is a common belt-and-braces addition.
+
+concepts:
+  - term: "MTU"
+    text: "The largest packet a link can carry. Tunnels like IPsec add headers, so less fits inside them."
+    url: "https://www.rfc-editor.org/rfc/rfc1191"
+  - term: "Path MTU discovery"
+    text: "Senders mark packets \"don't fragment\"; a router that can't forward one sends back ICMP \"fragmentation needed\" with the size that fits."
+    url: "https://www.rfc-editor.org/rfc/rfc1191"
+  - term: "TCP MSS clamping"
+    text: "A gateway rewrites the maximum segment size TCP endpoints agree on, so segments fit the path."
+    url: "https://man7.org/linux/man-pages/man8/iptables-extensions.8.html"
+
+sources:
+  - title: "RFC 1191: Path MTU Discovery"
+    url: "https://www.rfc-editor.org/rfc/rfc1191"
+    retrieved: 2026-10-02
+  - title: "RFC 2923: TCP Problems with Path MTU Discovery (black holes)"
+    url: "https://www.rfc-editor.org/rfc/rfc2923"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: iptables-extensions(8) (TCPMSS --clamp-mss-to-pmtu)"
+    url: "https://man7.org/linux/man-pages/man8/iptables-extensions.8.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: ping(8) (-M do, -s)"
+    url: "https://man7.org/linux/man-pages/man8/ping.8.html"
+    retrieved: 2026-10-02

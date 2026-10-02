@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: inodes-exhausted
+track: linux
+difficulty: 2
+title: "\"No space left on device\", on a disk that's 40% full"
+par_minutes: 10
+
+ticket:
+  from: "Product team"
+  priority: P2
+  body: |
+    Image uploads on the catalogue site fail with "could not save
+    thumbnail". The app log says "No space left on device", but the disk
+    is only 40% full. We've already checked twice.
+
+environment: |
+  img-01 runs the thumbnail service. It writes one small cached thumbnail
+  file per image size per request into /var/cache/thumbs, on the /var
+  filesystem (ext4, 200 GB). Nothing cleans that folder up; a cleanup job
+  was planned but never added.
+
+terminal:
+  prompt: "ops@img-01:~$"
+  commands:
+    - match: "df -h /var"
+      evidence: bytes-free
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/sdb1       197G   79G  108G  43% /var
+    - match: "df -i /var"
+      when_actions: [clean-old]
+      output: |
+        Filesystem       Inodes   IUsed    IFree IUse% Mounted on
+        /dev/sdb1      13107200 2981334 10125866   23% /var
+    - match: "df -i /var"
+      evidence: inodes-full
+      output: |
+        Filesystem       Inodes   IUsed IFree IUse% Mounted on
+        /dev/sdb1      13107200 13107200     0  100% /var
+    - match_regex: "^(sudo )?find /var/cache/thumbs -type f( -print)? \\| wc -l$"
+      evidence: thumbs-count
+      output: |
+        12844102
+    - match: "du -sh /var/cache/thumbs"
+      output: |
+        31G	/var/cache/thumbs
+
+logs:
+  - name: "thumbnail service log"
+    evidence: enospc
+    lines: |
+      2026-10-02 11:20:41 ERROR could not save thumbnail /var/cache/thumbs/9f/3a/9f3a71c2_480.webp: [Errno 28] No space left on device
+      2026-10-02 11:20:43 ERROR could not save thumbnail /var/cache/thumbs/0c/e1/0ce1b88d_160.webp: [Errno 28] No space left on device
+
+hypotheses:
+  - id: inodes
+    text: "The filesystem has run out of inodes: 12.8 million tiny cached thumbnails used every one, so no new file can be created even though there's free space."
+    correct: true
+  - id: bytes
+    text: "The disk is actually full; df is wrong."
+    feedback: "df -h shows 108 GB available. The error is about creating a new file, which needs an inode as well as space."
+  - id: quota
+    text: "A disk quota for the service's user is exceeded."
+    feedback: "A quota error looks different (\"Disk quota exceeded\", EDQUOT). This is ENOSPC, errno 28, for the whole filesystem."
+  - id: permissions
+    text: "The service lost permission to write to /var/cache/thumbs."
+    feedback: "That would be \"Permission denied\" (EACCES). The kernel says there's no space, not that access is refused."
+
+actions:
+  - id: clean-old
+    label: "sudo find /var/cache/thumbs -type f -mtime +7 -delete"
+    kind: fix
+    match_regex: "^(sudo )?find /var/cache/thumbs -type f -mtime \\+[0-9]+ -delete$"
+    feedback: "Ten million cached thumbnails older than a week are gone; the service regenerates any it needs. New files can be created again."
+  - id: tmpfiles-rule
+    label: "Add a systemd-tmpfiles rule so /var/cache/thumbs is cleaned of files older than 7 days every day"
+    kind: fix
+    feedback: "systemd-tmpfiles-clean runs daily and removes files in that folder older than the age you set, so the cache can't grow forever again."
+  - id: delete-logs
+    label: "Delete the large log files in /var/log to free up space"
+    kind: wrong
+    feedback: "That frees bytes, which the filesystem already has plenty of. It frees only a handful of inodes, and the thumbnails take them straight back."
+  - id: mkfs
+    label: "Reformat /var with more inodes"
+    kind: destructive
+    feedback: "Reformatting wipes everything on /var, including databases and logs, to fix what deleting old cache files fixes in minutes."
+
+solution_paths:
+  - [clean-old, tmpfiles-rule]
+
+key_evidence: [enospc, bytes-free, inodes-full, thumbs-count]
+
+evidence_labels:
+  enospc: "Saving a thumbnail fails with errno 28, No space left on device"
+  bytes-free: "/var still has 108 GB free"
+  inodes-full: "/var has used 100% of its inodes"
+  thumbs-count: "/var/cache/thumbs holds 12.8 million files"
+
+hints:
+  nudge: "Every file needs two things from a filesystem, and space is only one of them."
+  direction: "Check inode usage with df -i, then count files in the cache folder."
+  answer: "/var is out of inodes, used up by 12.8 million cached thumbnails. Delete old ones with find -mtime +7 -delete and add a tmpfiles rule to keep it clean."
+
+analogy:
+  title: "A warehouse with no labels left"
+  text: |
+    The warehouse has plenty of shelf space, but every box needs a numbered
+    tag, and the roll of tags has run out because thousands of tiny
+    samples each took one. Clear out old samples, and set up a weekly
+    clear-out so the tags never run out again.
+
+debrief:
+  root_cause: |
+    Every file needs an inode, and ext4 creates a fixed number of them when
+    the filesystem is made. The thumbnail cache wrote millions of tiny files
+    and nothing ever deleted them, so /var used all 13.1 million inodes while
+    only 43% of its space was used. Creating any new file then failed with
+    ENOSPC, "No space left on device", the same error as a full disk.
+  ideal_path:
+    - "Read the error: errno 28, No space left on device."
+    - "Notice df -h disagrees: 108 GB free."
+    - "Check inodes: df -i shows 100%."
+    - "Find what used them: 12.8 million cached thumbnails."
+    - "Delete old ones, and add a daily cleanup rule."
+  real_world: |
+    When "no space left" meets a half-empty disk, run df -i. Caches,
+    session files and mail queues are the usual inode eaters. Give every
+    cache a cleanup rule when you create it.
+
+concepts:
+  - term: "Inode"
+    text: "The record a filesystem keeps for each file (owner, mode, where its data is). Every file and directory uses one."
+    url: "https://man7.org/linux/man-pages/man7/inode.7.html"
+  - term: "df -i"
+    text: "Shows how many inodes a filesystem has, and how many are used, instead of bytes."
+    url: "https://man7.org/linux/man-pages/man1/df.1.html"
+  - term: "systemd-tmpfiles"
+    text: "Creates, cleans and removes files and directories according to rules, including deleting files older than a given age."
+    url: "https://www.freedesktop.org/software/systemd/man/latest/tmpfiles.d.html"
+
+sources:
+  - title: "Linux man-pages: df(1) (-i, inode information)"
+    url: "https://man7.org/linux/man-pages/man1/df.1.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: inode(7)"
+    url: "https://man7.org/linux/man-pages/man7/inode.7.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: errno(3) (ENOSPC)"
+    url: "https://man7.org/linux/man-pages/man3/errno.3.html"
+    retrieved: 2026-10-02
+  - title: "systemd: tmpfiles.d (age-based cleanup)"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/tmpfiles.d.html"
+    retrieved: 2026-10-02

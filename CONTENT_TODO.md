@@ -337,3 +337,27 @@ from your own experience and tick them off.
 - [ ] Judgment: in the ALB incident, users see errors "while instances are
       swapped" during Auto Scaling churn; the exact symptom depends on
       deregistration delay and connection draining.
+
+## Linux, Networking and Databases expansion (2026-10-02): 6 Linux, 6 Networking, 8 Databases
+- [x] Checked against docs on 2026-10-02: path_resolution search permission;
+      df -i; sshd(8) refusing authorized_keys under group/world-writable dirs
+      (StrictModes); crontab(5) environment (cron sets SHELL, HOME, LOGNAME;
+      crontabs can set variables) - neither man7 nor Debian documents a
+      default PATH, so the incident shows a captured env instead of claiming
+      one; RHEL 9 SELinux troubleshooting (ausearch, restorecon, semanage);
+      proc_loadavg (states R and D); nginx certificate chains (browsers may
+      cache intermediates); Express trust proxy; curl NO_PROXY leading dot;
+      RFC 1034 CNAME rule; PostgreSQL listen_addresses default localhost,
+      max_connections default ~100 (both need restart), replication slots can
+      fill pg_wal, ACCESS EXCLUSIVE blocks SELECT, lock_timeout and
+      idle_in_transaction_session_timeout; MySQL deadlock victim rollback,
+      isolation level doesn't affect deadlocks, consistent lock order.
+- [ ] Representative output, not captured from real systems: nginx/Apache
+      error lines (AH00132 wording), namei/df/ss/ip layouts, the cron env
+      dump, auth.log lines, the AVC record, top/ps/dmesg lines, ping output,
+      OpenSSL 3's s_client chain formatting, Squid access log fields,
+      named-checkzone wording, psql table layouts, EXPLAIN ANALYZE numbers,
+      the InnoDB status excerpt (abridged with "..."), PostgreSQL log lines.
+- [ ] Judgment/behaviour from experience, not quoted docs: "mv keeps a file's
+      SELinux label" (vs. cp); new queries queueing behind a waiting ACCESS
+      EXCLUSIVE request; lowering client MTU shrinking the advertised TCP MSS.

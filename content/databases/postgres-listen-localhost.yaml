@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-listen-localhost
+track: databases
+difficulty: 1
+title: "The app can't connect to the new database server"
+par_minutes: 8
+
+ticket:
+  from: "App team"
+  priority: P2
+  body: |
+    We built the new PostgreSQL server db-01 yesterday. psql works fine on
+    db-01 itself, but the app on app-01 gets "Connection refused". There's
+    no firewall on db-01. Go-live is this afternoon.
+
+environment: |
+  db-01 (10.0.2.15) runs PostgreSQL 16, installed from packages with its
+  default configuration. The app on app-01 (10.0.2.30) connects to db-01
+  on port 5432 as user shop, database shop, with a password.
+
+diagram:
+  nodes:
+    - { id: app, label: "app-01 (10.0.2.30)", col: 0, row: 0, status: degraded }
+    - { id: db, label: "db-01 PostgreSQL (10.0.2.15:5432)", col: 1, row: 0, status: ok }
+  edges:
+    - { from: app, to: db }
+
+terminal:
+  prompt: "ops@db-01:~$"
+  commands:
+    - match: "ss -ltn sport = :5432"
+      when_actions: [listen, hba]
+      output: |
+        State   Recv-Q  Send-Q   Local Address:Port   Peer Address:Port
+        LISTEN  0       200          127.0.0.1:5432        0.0.0.0:*
+        LISTEN  0       200          10.0.2.15:5432        0.0.0.0:*
+    - match: "ss -ltn sport = :5432"
+      evidence: listen-loopback
+      output: |
+        State   Recv-Q  Send-Q   Local Address:Port   Peer Address:Port
+        LISTEN  0       200          127.0.0.1:5432        0.0.0.0:*
+    - match: "sudo -u postgres psql -Atc 'SHOW listen_addresses'"
+      when_actions: [listen, hba]
+      output: |
+        localhost,10.0.2.15
+    - match: "sudo -u postgres psql -Atc 'SHOW listen_addresses'"
+      evidence: listen-default
+      output: |
+        localhost
+    - match: "sudo grep -v '^#' /etc/postgresql/16/main/pg_hba.conf | grep -v '^$'"
+      when_actions: [hba]
+      output: |
+        local   all             postgres                                peer
+        local   all             all                                     peer
+        host    all             all             127.0.0.1/32            scram-sha-256
+        host    all             all             ::1/128                 scram-sha-256
+        host    shop            shop            10.0.2.30/32            scram-sha-256
+    - match: "sudo grep -v '^#' /etc/postgresql/16/main/pg_hba.conf | grep -v '^$'"
+      evidence: hba-local-only
+      output: |
+        local   all             postgres                                peer
+        local   all             all                                     peer
+        host    all             all             127.0.0.1/32            scram-sha-256
+        host    all             all             ::1/128                 scram-sha-256
+    - match: "sudo ufw status"
+      output: |
+        Status: inactive
+
+logs:
+  - name: "app-01: app log"
+    evidence: refused
+    lines: |
+      2026-10-02 10:12:44 ERROR connection to server at "10.0.2.15", port 5432 failed: Connection refused
+      	Is the server running on that host and accepting TCP/IP connections?
+
+hypotheses:
+  - id: localhost-only
+    text: "PostgreSQL only listens on localhost (its default), so nothing on db-01 accepts connections on 10.0.2.15:5432."
+    correct: true
+  - id: firewall
+    text: "A firewall blocks port 5432."
+    feedback: "There's no firewall running (ufw is inactive), and a firewall usually drops packets, so you'd see a timeout. \"Refused\" means nothing is listening on that address."
+  - id: password
+    text: "The shop user's password is wrong."
+    feedback: "The app never got as far as signing in. A wrong password is \"password authentication failed\"; this connection was refused."
+  - id: down
+    text: "PostgreSQL isn't running."
+    feedback: "It's running: psql works locally, and it's listening on 127.0.0.1:5432."
+
+actions:
+  - id: listen
+    label: "Set listen_addresses = 'localhost,10.0.2.15' in postgresql.conf and restart PostgreSQL"
+    kind: fix
+    feedback: "PostgreSQL now also listens on db-01's network address. listen_addresses can only change at server start, so the restart is needed."
+  - id: hba
+    label: "Add 'host shop shop 10.0.2.30/32 scram-sha-256' to pg_hba.conf and reload"
+    kind: fix
+    feedback: "PostgreSQL now accepts the shop user, from app-01 only, with a password. Without it, the connection would get through and be rejected with \"no pg_hba.conf entry\"."
+  - id: open-firewall
+    label: "sudo ufw allow 5432/tcp"
+    kind: wrong
+    feedback: "The firewall is off already; opening a port doesn't make PostgreSQL listen on it."
+  - id: trust-all
+    label: "Set listen_addresses = '*' and add 'host all all 0.0.0.0/0 trust' to pg_hba.conf"
+    kind: destructive
+    feedback: "That lets anyone who can reach db-01 sign in as any user, including postgres, with no password."
+
+solution_paths:
+  - [listen, hba]
+
+key_evidence: [refused, listen-loopback, listen-default, hba-local-only]
+
+evidence_labels:
+  refused: "The app's connection to 10.0.2.15:5432 is refused"
+  listen-loopback: "PostgreSQL listens only on 127.0.0.1:5432"
+  listen-default: "listen_addresses is localhost, the default"
+  hba-local-only: "pg_hba.conf only allows connections from the server itself"
+
+hints:
+  nudge: "\"Refused\" means the connection reached db-01 and nothing was listening. Which addresses is PostgreSQL listening on?"
+  direction: "Check listen_addresses, then check whether pg_hba.conf would let app-01 in once it can connect."
+  answer: "listen_addresses is the default, localhost. Add db-01's address, restart, and add a pg_hba.conf line for the shop user from app-01."
+
+analogy:
+  title: "A shop that only serves through the back door"
+  text: |
+    The shop is open, but by default it only serves staff at the back
+    door, so customers at the front door find it shut. Open the front door,
+    and give the doorman a list saying which customers may come in.
+
+debrief:
+  root_cause: |
+    PostgreSQL's listen_addresses defaults to localhost, which only accepts
+    TCP connections from the server itself. psql on db-01 worked, but
+    connections to 10.0.2.15:5432 found nothing listening and were refused.
+    Opening it up takes two settings: listen_addresses (which needs a
+    restart) to listen on the network address, and a pg_hba.conf entry to
+    allow the app's user from the app server.
+  ideal_path:
+    - "Read the error: connection refused, so nothing is listening there."
+    - "Check what PostgreSQL listens on: only 127.0.0.1."
+    - "Set listen_addresses to include 10.0.2.15 and restart."
+    - "Allow the shop user from app-01 in pg_hba.conf, reload, and connect from the app."
+  real_world: |
+    "Refused" (nothing listening) and "timed out" (something dropping
+    packets) point at different layers. Only listen on the addresses you
+    need, and keep pg_hba.conf entries as narrow as the app needs.
+
+concepts:
+  - term: "listen_addresses"
+    text: "Which IP addresses PostgreSQL accepts TCP connections on. Changing it needs a server restart."
+    url: "https://www.postgresql.org/docs/current/runtime-config-connection.html"
+  - term: "pg_hba.conf"
+    text: "PostgreSQL's client authentication file: which users may connect to which databases, from where, and how they prove who they are."
+    url: "https://www.postgresql.org/docs/current/auth-pg-hba-conf.html"
+
+sources:
+  - title: "PostgreSQL: Connections and Authentication (listen_addresses, default localhost)"
+    url: "https://www.postgresql.org/docs/current/runtime-config-connection.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: The pg_hba.conf File"
+    url: "https://www.postgresql.org/docs/current/auth-pg-hba-conf.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Server setup, client connection problems (Connection refused)"
+    url: "https://www.postgresql.org/docs/current/server-start.html"
+    retrieved: 2026-10-02

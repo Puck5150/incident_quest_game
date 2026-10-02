@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-missing-index
+track: databases
+difficulty: 2
+title: "The new \"find my order\" page takes eight seconds"
+par_minutes: 10
+
+ticket:
+  from: "Customer support"
+  priority: P2
+  body: |
+    The new "find my order by email" page went live yesterday. It takes
+    about eight seconds to load, and the whole site feels slower when
+    support uses it a lot. Everything else on the site was fine before.
+
+environment: |
+  The orders table in PostgreSQL has 12 million rows and indexes on its
+  primary key and created_at. The new page runs
+  SELECT ... FROM orders WHERE customer_email = $1. Orders are written all
+  day, so the table can't be locked against writes during business hours.
+
+terminal:
+  prompt: "shop=>"
+  commands:
+    - match: "EXPLAIN ANALYZE SELECT id, created_at, total FROM orders WHERE customer_email = 'jo@example.com';"
+      when_actions: [index-concurrently]
+      output: |
+        Index Scan using orders_customer_email_idx on orders  (cost=0.56..24.71 rows=6 width=22) (actual time=0.041..0.058 rows=4 loops=1)
+          Index Cond: (customer_email = 'jo@example.com'::text)
+        Planning Time: 0.112 ms
+        Execution Time: 0.079 ms
+    - match: "EXPLAIN ANALYZE SELECT id, created_at, total FROM orders WHERE customer_email = 'jo@example.com';"
+      evidence: seq-scan
+      output: |
+        Gather  (cost=1000.00..612934.11 rows=6 width=22) (actual time=7914.218..7962.004 rows=4 loops=1)
+          Workers Planned: 2
+          Workers Launched: 2
+          ->  Parallel Seq Scan on orders  (cost=0.00..611933.51 rows=2 width=22) (actual time=5288.120..7955.871 rows=1 loops=3)
+                Filter: (customer_email = 'jo@example.com'::text)
+                Rows Removed by Filter: 3999998
+        Planning Time: 0.098 ms
+        Execution Time: 7962.051 ms
+    - match: "\\d orders"
+      evidence: no-email-index
+      output: |2
+                              Table "public.orders"
+            Column      |           Type           | Nullable
+        ----------------+--------------------------+----------
+         id             | bigint                   | not null
+         customer_email | text                     | not null
+         created_at     | timestamp with time zone | not null
+         total          | numeric(10,2)            | not null
+        Indexes:
+            "orders_pkey" PRIMARY KEY, btree (id)
+            "orders_created_at_idx" btree (created_at)
+
+hypotheses:
+  - id: no-index
+    text: "There's no index on customer_email, so every search reads all 12 million rows."
+    correct: true
+  - id: stale-stats
+    text: "The table's statistics are out of date."
+    feedback: "The planner estimated 6 rows and found 4: its statistics are fine. It chose a full scan because there's no index to use."
+  - id: server-small
+    text: "The database server is too small."
+    feedback: "Reading 12 million rows to return 4 would be slow on any server. The query needs a way to go straight to the matching rows."
+  - id: network
+    text: "The network to the database is slow."
+    feedback: "EXPLAIN ANALYZE measures the time inside the database: 7.9 seconds, almost all in the scan."
+
+actions:
+  - id: index-concurrently
+    label: "CREATE INDEX CONCURRENTLY orders_customer_email_idx ON orders (customer_email);"
+    kind: fix
+    match_regex: "^CREATE INDEX CONCURRENTLY (orders_customer_email_idx )?ON orders ?\\(customer_email\\);?$"
+    feedback: "The index builds while orders keep being written, and searches now go straight to the matching rows: under a millisecond."
+  - id: index-plain
+    label: "CREATE INDEX orders_customer_email_idx ON orders (customer_email);"
+    kind: wrong
+    feedback: "It would give the same index, but a plain CREATE INDEX blocks writes to orders while it builds, which on 12 million rows means checkout stops for minutes."
+  - id: analyze
+    label: "ANALYZE orders;"
+    kind: wrong
+    feedback: "Fresh statistics don't help: with no index on customer_email, a full scan is the only plan there is."
+  - id: vacuum-full
+    label: "VACUUM FULL orders;"
+    kind: destructive
+    feedback: "That rewrites the whole table under an exclusive lock: no reads or writes on orders until it finishes, and the search still has no index."
+
+solution_paths:
+  - [index-concurrently]
+
+key_evidence: [seq-scan, no-email-index]
+
+evidence_labels:
+  seq-scan: "The search scans all 12 million rows and takes 7.9 seconds"
+  no-email-index: "orders has no index on customer_email"
+
+hints:
+  nudge: "Ask PostgreSQL how it runs the query."
+  direction: "EXPLAIN ANALYZE the search, then look at which indexes the table has."
+  answer: "There's no index on customer_email. Create one with CREATE INDEX CONCURRENTLY so writes aren't blocked."
+
+analogy:
+  title: "A phone book with no alphabetical order"
+  text: |
+    To find one customer, the clerk reads every page of a twelve-million-
+    line ledger. Add an alphabetical index at the back, and do it without
+    taking the ledger away from the people still writing in it.
+
+debrief:
+  root_cause: |
+    The new page searches orders by customer_email, but the table only had
+    indexes on id and created_at. With no index to use, PostgreSQL read all
+    12 million rows for each search (a sequential scan): about eight seconds
+    each, using disk and CPU the rest of the site needed. An index on
+    customer_email lets it go straight to the few matching rows.
+  ideal_path:
+    - "Run EXPLAIN ANALYZE: a parallel sequential scan, 7.9 seconds."
+    - "Check the table's indexes: none on customer_email."
+    - "Build one with CREATE INDEX CONCURRENTLY, so writes continue."
+    - "Run EXPLAIN ANALYZE again: an index scan, under a millisecond."
+  real_world: |
+    Review the query plan of every new query against a big table before
+    release. On busy tables, build indexes CONCURRENTLY: it takes longer and
+    can't run inside a transaction, but doesn't stop writes.
+
+concepts:
+  - term: "EXPLAIN ANALYZE"
+    text: "Runs a query and shows the plan PostgreSQL chose, with real timings and row counts for each step."
+    url: "https://www.postgresql.org/docs/current/using-explain.html"
+  - term: "Index"
+    text: "A separate structure, usually a B-tree, that lets PostgreSQL find rows by a column's value without reading the whole table."
+    url: "https://www.postgresql.org/docs/current/indexes-intro.html"
+  - term: "CREATE INDEX CONCURRENTLY"
+    text: "Builds an index without locking out inserts, updates and deletes; a plain CREATE INDEX blocks writes while it runs."
+    url: "https://www.postgresql.org/docs/current/sql-createindex.html"
+
+sources:
+  - title: "PostgreSQL: Using EXPLAIN"
+    url: "https://www.postgresql.org/docs/current/using-explain.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: CREATE INDEX (building indexes concurrently)"
+    url: "https://www.postgresql.org/docs/current/sql-createindex.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Indexes, introduction"
+    url: "https://www.postgresql.org/docs/current/indexes-intro.html"
+    retrieved: 2026-10-02

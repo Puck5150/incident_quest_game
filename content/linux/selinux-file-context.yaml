@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: selinux-file-context
+track: linux
+difficulty: 3
+title: "Permissions are right, and Apache still says Forbidden"
+par_minutes: 12
+
+ticket:
+  from: "Web team"
+  priority: P3
+  body: |
+    We moved the new docs site into /var/www/html on docs-01 and every page
+    is "403 Forbidden". The files are owned by root and world-readable,
+    exactly like the old site's. We've checked the permissions three times.
+
+environment: |
+  docs-01 runs Red Hat Enterprise Linux 9 with Apache httpd and SELinux in
+  enforcing mode (the default). The team built the site in /home/web/site
+  and moved it into place with mv /home/web/site/* /var/www/html/.
+
+terminal:
+  prompt: "[admin@docs-01 ~]$"
+  commands:
+    - match: "ls -l /var/www/html/index.html"
+      output: |
+        -rw-r--r--. 1 root root 10422 Oct  2 10:05 /var/www/html/index.html
+    - match: "ls -Z /var/www/html/index.html"
+      when_actions: [restorecon]
+      output: |
+        system_u:object_r:httpd_sys_content_t:s0 /var/www/html/index.html
+    - match: "ls -Z /var/www/html/index.html"
+      evidence: user-home-label
+      output: |
+        unconfined_u:object_r:user_home_t:s0 /var/www/html/index.html
+    - match: "getenforce"
+      output: |
+        Enforcing
+    - match: "sudo ausearch -m AVC,USER_AVC -ts recent"
+      evidence: avc-denied
+      output: |
+        ----
+        time->Thu Oct  2 10:07:12 2026
+        type=AVC msg=audit(1791367632.418:2291): avc:  denied  { read } for  pid=5129 comm="httpd" name="index.html" dev="dm-0" ino=3407921 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=0
+
+logs:
+  - name: "/var/log/httpd/error_log"
+    evidence: ah00132
+    lines: |
+      [Thu Oct 02 10:07:12.418833 2026] [core:error] [pid 5129:tid 5160] (13)Permission denied: [client 10.0.4.22:51834] AH00132: file permissions deny server access: /var/www/html/index.html
+
+hypotheses:
+  - id: selinux-label
+    text: "The moved files kept their home-directory SELinux label (user_home_t), which httpd isn't allowed to read, even though the normal permissions allow it."
+    correct: true
+  - id: unix-perms
+    text: "The files' normal permissions are wrong."
+    feedback: "They're -rw-r--r--, owned by root: readable by everyone. The denial comes from SELinux, which checks something else."
+  - id: httpd-config
+    text: "Apache's configuration denies access to /var/www/html."
+    feedback: "The old site was served from the same directory with the same configuration. The audit log shows the kernel refusing the read, not Apache's rules."
+  - id: disk
+    text: "The files are corrupt after the move."
+    feedback: "The read is refused before any data is read: the audit log records an SELinux denial."
+
+actions:
+  - id: restorecon
+    label: "sudo restorecon -Rv /var/www/html"
+    kind: fix
+    match_regex: "^(sudo )?restorecon (-Rv|-vR|-R -v|-v -R|-R) /var/www/html/?$"
+    feedback: "restorecon resets each file to the label the policy defines for that location, httpd_sys_content_t, and httpd can read the site."
+  - id: chcon
+    label: "sudo chcon -R -t httpd_sys_content_t /var/www/html"
+    kind: wrong
+    feedback: "It works today, but chcon labels aren't part of the policy, so the next relabel or restorecon puts the wrong label back. Restore the labels the policy already defines."
+  - id: chmod-777
+    label: "sudo chmod -R 777 /var/www/html"
+    kind: wrong
+    feedback: "The normal permissions were never the problem, so the 403 stays, and now the site is world-writable."
+  - id: setenforce-0
+    label: "sudo setenforce 0"
+    kind: destructive
+    feedback: "The site loads because SELinux stops protecting every service on the server, not just httpd. Fix the label instead."
+
+solution_paths:
+  - [restorecon]
+
+key_evidence: [ah00132, avc-denied, user-home-label]
+
+evidence_labels:
+  ah00132: "Apache: file permissions deny server access to index.html"
+  avc-denied: "SELinux denied httpd (httpd_t) reading a file labelled user_home_t"
+  user-home-label: "index.html is labelled user_home_t, a home-directory label"
+
+hints:
+  nudge: "ls -l looks fine. Is there another kind of permission on this system?"
+  direction: "Look for SELinux denials in the audit log, and compare the files' SELinux labels with what web content should have."
+  answer: "mv kept the user_home_t label. Run restorecon -Rv /var/www/html to apply the right label (httpd_sys_content_t)."
+
+analogy:
+  title: "The right shelf, the wrong sticker"
+  text: |
+    The library only lets the public see books with a green "public"
+    sticker. The new books were carried straight in from the staff room
+    with their red "staff only" stickers still on, so the librarian won't
+    hand them out, even though they're on the right shelf. Re-sticker
+    them for the shelf they're on.
+
+debrief:
+  root_cause: |
+    SELinux gives every file a label, and the policy only lets httpd (type
+    httpd_t) read certain labels, such as httpd_sys_content_t. Files created
+    in /home/web got user_home_t, and mv keeps a file's label, so the moved
+    site kept user_home_t. The kernel denied httpd's reads (an AVC denial
+    in the audit log) even though the normal permissions allowed them, and
+    Apache returned 403.
+  ideal_path:
+    - "Read Apache's error: permission denied, though ls -l looks fine."
+    - "Search the audit log for AVC denials: httpd denied reading user_home_t."
+    - "Check the labels: ls -Z shows user_home_t."
+    - "restorecon -Rv /var/www/html, then load the page."
+  real_world: |
+    On SELinux systems, "permissions look right but access is denied" means
+    check ausearch first. For content kept outside the default paths, add a
+    rule with semanage fcontext so restorecon applies the right label there
+    too. Disabling SELinux is never the fix.
+
+concepts:
+  - term: "SELinux label (context)"
+    text: "A label on every file and process. The policy decides which process types may do what to which file types, in addition to normal permissions."
+    url: "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/using_selinux/troubleshooting-problems-related-to-selinux_using-selinux"
+  - term: "AVC denial"
+    text: "An audit log record of an access SELinux refused, naming the process type (scontext), the object's type (tcontext) and the class."
+    url: "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/using_selinux/troubleshooting-problems-related-to-selinux_using-selinux"
+
+sources:
+  - title: "Red Hat Enterprise Linux 9: Using SELinux, Troubleshooting problems related to SELinux (ausearch, restorecon, semanage fcontext)"
+    url: "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/using_selinux/troubleshooting-problems-related-to-selinux_using-selinux"
+    retrieved: 2026-10-02

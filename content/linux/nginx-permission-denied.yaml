@@ -1,0 +1,175 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: nginx-permission-denied
+track: linux
+difficulty: 1
+title: "The new promo site says 403 Forbidden"
+par_minutes: 8
+
+ticket:
+  from: "Marketing"
+  priority: P3
+  body: |
+    The promo site for Friday's launch is live at promo.example.com, but
+    every page says "403 Forbidden". Alice copied the files onto the web
+    server this morning and says index.html is definitely there.
+
+environment: |
+  web-01 runs Ubuntu with nginx, as user www-data. The promo site is served
+  from root /srv/www/promo. Alice created that folder with mkdir in her own
+  session and copied the site in with cp -r.
+
+diagram:
+  nodes:
+    - { id: users, label: "visitors", col: 0, row: 0, status: degraded }
+    - { id: nginx, label: "nginx on web-01 (www-data)", col: 1, row: 0, status: degraded }
+    - { id: files, label: "/srv/www/promo", col: 2, row: 0, status: ok }
+  edges:
+    - { from: users, to: nginx }
+    - { from: nginx, to: files }
+
+terminal:
+  prompt: "alice@web-01:~$"
+  commands:
+    - match: "curl -sI http://promo.example.com/"
+      when_actions: [chmod-dir]
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+        Content-Type: text/html
+    - match: "curl -sI http://promo.example.com/"
+      evidence: http-403
+      output: |
+        HTTP/1.1 403 Forbidden
+        Server: nginx
+        Content-Type: text/html
+    - match: "namei -l /srv/www/promo/index.html"
+      when_actions: [chmod-dir]
+      output: |
+        f: /srv/www/promo/index.html
+        drwxr-xr-x root  root  /
+        drwxr-xr-x root  root  srv
+        drwxr-xr-x root  root  www
+        drwxr-xr-x alice alice promo
+        -rw-r--r-- alice alice index.html
+    - match: "namei -l /srv/www/promo/index.html"
+      evidence: dir-700
+      output: |
+        f: /srv/www/promo/index.html
+        drwxr-xr-x root  root  /
+        drwxr-xr-x root  root  srv
+        drwxr-xr-x root  root  www
+        drwx------ alice alice promo
+        -rw-r--r-- alice alice index.html
+    - match: "ls -l /srv/www/promo"
+      output: |
+        total 24
+        drwxr-xr-x 2 alice alice 4096 Oct  2 09:02 css
+        -rw-r--r-- 1 alice alice 8812 Oct  2 09:02 index.html
+        drwxr-xr-x 2 alice alice 4096 Oct  2 09:02 img
+    - match: "ps -o user,cmd -C nginx"
+      output: |
+        USER     CMD
+        root     nginx: master process /usr/sbin/nginx
+        www-data nginx: worker process
+        www-data nginx: worker process
+
+logs:
+  - name: "/var/log/nginx/error.log"
+    evidence: eacces
+    lines: |
+      2026/10/02 09:14:03 [error] 2214#2214: *17 open() "/srv/www/promo/index.html" failed (13: Permission denied), client: 203.0.113.9, server: promo.example.com, request: "GET / HTTP/1.1", host: "promo.example.com"
+
+hypotheses:
+  - id: dir-no-search
+    text: "The promo folder is mode 700 (only Alice can enter it), so nginx's www-data workers can't reach index.html inside it."
+    correct: true
+  - id: file-missing
+    text: "index.html isn't in /srv/www/promo."
+    feedback: "It's there (ls shows it). A missing file is a 404, and the error log says \"Permission denied\", not \"No such file or directory\"."
+  - id: file-mode
+    text: "index.html itself isn't readable."
+    feedback: "index.html is -rw-r--r--: anyone may read it. But to open a file you also need search (x) permission on every folder in its path."
+  - id: nginx-down
+    text: "nginx isn't running."
+    feedback: "nginx is answering: the 403 comes from it. Its workers are running as www-data."
+
+actions:
+  - id: chmod-dir
+    label: "sudo chmod 755 /srv/www/promo"
+    kind: fix
+    match_regex: "^(sudo )?chmod (755|o\\+rx|o\\+x|a\\+rx|go\\+rx) /srv/www/promo/?$"
+    feedback: "Other users, including www-data, can now enter the folder. nginx opens index.html and the site loads. Only Alice can still change the files."
+  - id: chmod-777
+    label: "sudo chmod -R 777 /srv/www/promo"
+    kind: destructive
+    feedback: "The site loads, and now anyone on the server, including a compromised process, can rewrite the site's pages. Read and enter is all nginx needs."
+  - id: restart-nginx
+    label: "sudo systemctl restart nginx"
+    kind: wrong
+    feedback: "nginx comes back and gets the same Permission denied: the folder's mode didn't change."
+  - id: nginx-as-root
+    label: "Change nginx to run its workers as root"
+    kind: destructive
+    feedback: "Then every request is handled with full control of the server. Fix the folder's permissions instead."
+
+solution_paths:
+  - [chmod-dir]
+
+key_evidence: [http-403, eacces, dir-700]
+
+evidence_labels:
+  http-403: "Every page returns 403 Forbidden"
+  eacces: "nginx can't open index.html: Permission denied"
+  dir-700: "The promo folder is drwx------, owned by Alice"
+
+hints:
+  nudge: "The file is readable. What else does nginx need to get to it?"
+  direction: "Check the permissions of every directory on the way to index.html, not just the file."
+  answer: "/srv/www/promo is mode 700, so www-data can't enter it. chmod 755 /srv/www/promo."
+
+analogy:
+  title: "A readable letter in a locked room"
+  text: |
+    The letter on the desk isn't sealed, so anyone could read it. But it's
+    inside a room only Alice has the key to, and the courier who's supposed
+    to deliver it can't get through the door. Unlock the door, not the
+    letter.
+
+debrief:
+  root_cause: |
+    mkdir in Alice's session created /srv/www/promo as drwx------ (her
+    umask made it private to her). Opening a file needs search (x)
+    permission on every directory in its path, so nginx's worker, running as
+    www-data, got "Permission denied" opening index.html even though the file
+    itself was world-readable, and returned 403.
+  ideal_path:
+    - "Read nginx's error log: open() failed, 13: Permission denied."
+    - "Check every directory on the path with namei -l: promo is drwx------."
+    - "Give others read and search on the folder: chmod 755."
+    - "Fetch the page again: 200."
+  real_world: |
+    Most "403 but the file is there" cases are a directory on the path,
+    not the file. namei -l shows the whole path at once. Deploy tools that
+    set ownership and modes explicitly avoid it entirely.
+
+concepts:
+  - term: "Search (execute) permission on a directory"
+    text: "To reach a file, a process needs x permission on every directory in its path. Read (r) only lets you list a directory's names."
+    url: "https://man7.org/linux/man-pages/man7/path_resolution.7.html"
+  - term: "File mode bits"
+    text: "Each file has read, write and execute permission for its owner, its group and everyone else, shown as rwx in ls -l."
+    url: "https://man7.org/linux/man-pages/man1/chmod.1.html"
+  - term: "namei"
+    text: "Follows a path one component at a time and can show each component's mode and owner."
+    url: "https://man7.org/linux/man-pages/man1/namei.1.html"
+
+sources:
+  - title: "Linux man-pages: path_resolution(7) (search permission on each directory)"
+    url: "https://man7.org/linux/man-pages/man7/path_resolution.7.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: chmod(1)"
+    url: "https://man7.org/linux/man-pages/man1/chmod.1.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: namei(1)"
+    url: "https://man7.org/linux/man-pages/man1/namei.1.html"
+    retrieved: 2026-10-02

@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-too-many-clients
+track: databases
+difficulty: 2
+title: "We scaled the app up for the sale, and half the requests fail"
+par_minutes: 10
+
+ticket:
+  from: "E-commerce team"
+  priority: P1
+  body: |
+    For tonight's sale we scaled the shop API from 4 to 20 instances. Since
+    then about half of all requests fail with a database error. The
+    database server's CPU is fine.
+
+environment: |
+  The shop API connects directly to PostgreSQL on db-01, which runs with
+  default connection settings. Each API instance keeps a connection pool
+  configured in the app's settings.
+
+terminal:
+  prompt: "ops@db-01:~$"
+  commands:
+    - match: "sudo -u postgres psql -Atc 'SHOW max_connections'"
+      evidence: max-100
+      output: |
+        100
+    - match: "sudo -u postgres psql -c \"SELECT application_name, count(*) FROM pg_stat_activity WHERE backend_type = 'client backend' GROUP BY 1 ORDER BY 2 DESC\""
+      evidence: conns-full
+      output: |2
+         application_name | count
+        ------------------+-------
+         shop-api         |    96
+         psql             |     1
+        (2 rows)
+    - match: "kubectl get deploy shop-api -o jsonpath='{.spec.replicas}'"
+      output: |
+        20
+    - match: "kubectl get configmap shop-api -o jsonpath='{.data.DB_POOL_SIZE}'"
+      evidence: pool-10
+      output: |
+        10
+
+logs:
+  - name: "shop-api log"
+    evidence: too-many
+    lines: |
+      2026-10-02 19:04:11 ERROR could not get connection: FATAL:  sorry, too many clients already
+      2026-10-02 19:04:11 ERROR could not get connection: FATAL:  sorry, too many clients already
+
+hypotheses:
+  - id: pool-math
+    text: "20 instances each opening up to 10 connections want 200, but PostgreSQL allows 100, so new connections are refused."
+    correct: true
+  - id: cpu
+    text: "The database is overloaded."
+    feedback: "Its CPU is fine. The error is about the number of connections, not the work they do."
+  - id: network
+    text: "The network between the API and the database is dropping connections."
+    feedback: "PostgreSQL answers with an error of its own: \"sorry, too many clients already\". The network delivered it fine."
+  - id: leak
+    text: "One instance is leaking connections."
+    feedback: "The 96 connections are spread across the API; the limit is reached because of how many instances there are, times each pool."
+
+actions:
+  - id: pooler
+    label: "Put PgBouncer in transaction pooling mode between the API and PostgreSQL, so 200 client connections share a few dozen server connections"
+    kind: fix
+    feedback: "The API instances connect to PgBouncer, which hands out a small set of real server connections per transaction. The database stays well under 100."
+  - id: smaller-pool
+    label: "Set DB_POOL_SIZE to 4, so 20 instances use at most 80 connections"
+    kind: fix
+    feedback: "Total connections now fit under max_connections with room for admins. Size pools from the total, not per instance."
+  - id: max-1000
+    label: "Raise max_connections to 1000 and restart"
+    kind: wrong
+    feedback: "It needs a restart in the middle of the sale, and PostgreSQL allocates resources per allowed connection; hundreds of busy connections usually make it slower, not faster."
+  - id: kill-loop
+    label: "Run a script that terminates the oldest connections every minute"
+    kind: destructive
+    feedback: "Requests in flight on those connections fail, and the pools reconnect straight away."
+
+solution_paths:
+  - [pooler]
+  - [smaller-pool]
+
+key_evidence: [too-many, max-100, conns-full, pool-10]
+
+evidence_labels:
+  too-many: "PostgreSQL refuses new connections: sorry, too many clients already"
+  max-100: "max_connections is 100"
+  conns-full: "The shop API holds 96 connections"
+  pool-10: "Each of the 20 instances has a pool of 10"
+
+hints:
+  nudge: "The error is about how many connections there are. How many could the API open now?"
+  direction: "Multiply instances by pool size, and compare with max_connections."
+  answer: "20 x 10 = 200 connections against a limit of 100. Use a pooler like PgBouncer, or shrink each instance's pool so the total fits."
+
+analogy:
+  title: "More waiters, same number of tables"
+  text: |
+    The restaurant hired five times as many waiters for the busy night, and
+    each one reserves ten tables just in case. There are only 100 tables,
+    so most waiters can't seat anyone. Either reserve fewer tables per
+    waiter, or have a host who seats people at whichever table is free.
+
+debrief:
+  root_cause: |
+    Each API instance keeps its own pool of up to 10 connections. Scaling
+    from 4 to 20 instances raised the possible total from 40 to 200, but
+    PostgreSQL's max_connections is 100 (with a few reserved for
+    superusers), so connection attempts beyond the limit were refused with
+    "sorry, too many clients already". The database wasn't busy; it ran out
+    of connection slots.
+  ideal_path:
+    - "Read the error: too many clients."
+    - "Check the limit: max_connections 100."
+    - "Count who holds them: 96 from the API."
+    - "Do the math: 20 instances x pool 10 = 200."
+    - "Pool through PgBouncer, or size the per-instance pool to fit."
+  real_world: |
+    Connection count is a shared budget; every autoscaling app must divide
+    it. A transaction-level pooler lets many app connections share few
+    server connections, and is standard in front of PostgreSQL for apps that
+    scale out.
+
+concepts:
+  - term: "max_connections"
+    text: "The most concurrent connections PostgreSQL allows (typically 100 by default). Changing it needs a restart, and resources are sized from it."
+    url: "https://www.postgresql.org/docs/current/runtime-config-connection.html"
+  - term: "Connection pool"
+    text: "A set of open database connections an app reuses instead of opening one per request."
+    url: "https://www.pgbouncer.org/features.html"
+  - term: "PgBouncer"
+    text: "A lightweight connection pooler for PostgreSQL. In transaction mode, a server connection is assigned to a client only for each transaction."
+    url: "https://www.pgbouncer.org/features.html"
+
+sources:
+  - title: "PostgreSQL: Connections and Authentication (max_connections, superuser_reserved_connections)"
+    url: "https://www.postgresql.org/docs/current/runtime-config-connection.html"
+    retrieved: 2026-10-02
+  - title: "PgBouncer: Features (pooling modes)"
+    url: "https://www.pgbouncer.org/features.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: The Cumulative Statistics System (pg_stat_activity)"
+    url: "https://www.postgresql.org/docs/current/monitoring-stats.html"
+    retrieved: 2026-10-02

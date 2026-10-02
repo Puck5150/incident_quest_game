@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: cron-environment
+track: linux
+difficulty: 2
+title: "The backup works when I run it, but never from cron"
+par_minutes: 10
+
+ticket:
+  from: "Finance systems"
+  priority: P2
+  body: |
+    The nightly upload of our ledger backups to S3 hasn't run for three
+    nights. When I run /home/ops/bin/backup.sh myself it works perfectly.
+    cron is definitely running it at 01:30; we can see it in the logs.
+
+environment: |
+  ledger-01 runs Ubuntu. backup.sh dumps the ledger files into a tarball and
+  uploads it with the AWS CLI, which was installed last week with Amazon's
+  installer into /usr/local/bin. The job is in ops's crontab:
+  30 1 * * * /home/ops/bin/backup.sh >> /home/ops/backup.log 2>&1
+
+terminal:
+  prompt: "ops@ledger-01:~$"
+  commands:
+    - match: "crontab -l"
+      when_actions: [crontab-path]
+      output: |
+        PATH=/usr/local/bin:/usr/bin:/bin
+        30 1 * * * /home/ops/bin/backup.sh >> /home/ops/backup.log 2>&1
+    - match: "crontab -l"
+      output: |
+        30 1 * * * /home/ops/bin/backup.sh >> /home/ops/backup.log 2>&1
+    - match: "command -v aws"
+      evidence: aws-local-bin
+      output: |
+        /usr/local/bin/aws
+    - match: "echo $PATH"
+      output: |
+        /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+    - match: "sed -n 10,14p /home/ops/bin/backup.sh"
+      output: |
+        tar czf /tmp/ledger-$(date +%F).tgz /srv/ledger
+        aws s3 cp /tmp/ledger-$(date +%F).tgz s3://acme-ledger-backups/
+        rm -f /tmp/ledger-$(date +%F).tgz
+
+logs:
+  - name: "/home/ops/backup.log"
+    evidence: not-found
+    lines: |
+      2026-10-02T01:30:01 starting backup
+      /home/ops/bin/backup.sh: line 11: aws: command not found
+  - name: "syslog (CRON)"
+    lines: |
+      Oct  2 01:30:01 ledger-01 CRON[90211]: (ops) CMD (/home/ops/bin/backup.sh >> /home/ops/backup.log 2>&1)
+  - name: "env, as seen by a test cron job (* * * * * env > /tmp/cron-env)"
+    evidence: cron-path
+    lines: |
+      HOME=/home/ops
+      LOGNAME=ops
+      PATH=/usr/bin:/bin
+      SHELL=/bin/sh
+      PWD=/home/ops
+
+hypotheses:
+  - id: cron-env
+    text: "cron runs the script with its own minimal environment, whose PATH doesn't include /usr/local/bin, so the script can't find aws."
+    correct: true
+  - id: not-executable
+    text: "backup.sh isn't executable."
+    feedback: "cron ran it: the log has \"starting backup\" and an error from line 11. It got as far as calling aws."
+  - id: cron-down
+    text: "cron isn't running."
+    feedback: "syslog shows CRON running ops's job at 01:30 each night."
+  - id: aws-creds
+    text: "The AWS credentials expired."
+    feedback: "That would be an error from aws itself. Here the shell never found the aws command at all."
+
+actions:
+  - id: crontab-path
+    label: "Add PATH=/usr/local/bin:/usr/bin:/bin as the first line of ops's crontab"
+    kind: fix
+    feedback: "cron passes that PATH to every job in this crontab, so the script finds /usr/local/bin/aws at 01:30 just like in your shell. (Using the full path, /usr/local/bin/aws, in the script works too.)"
+  - id: chmod-script
+    label: "chmod +x /home/ops/bin/backup.sh"
+    kind: wrong
+    feedback: "It's already executable; cron ran it. The failure is inside the script."
+  - id: run-as-root
+    label: "Move the job into root's crontab"
+    kind: wrong
+    feedback: "root's cron jobs get the same kind of minimal environment, so aws still isn't found, and the backup now runs with root's full access."
+  - id: link-everything
+    label: "Symlink everything in /usr/local/bin into /usr/bin"
+    kind: destructive
+    feedback: "That mixes hand-installed tools into the directory the package manager owns, where a future upgrade can overwrite or conflict with them. Set the job's PATH instead."
+
+solution_paths:
+  - [crontab-path]
+
+key_evidence: [not-found, aws-local-bin, cron-path]
+
+evidence_labels:
+  not-found: "From cron, the script fails: aws: command not found"
+  aws-local-bin: "aws is installed in /usr/local/bin"
+  cron-path: "Under cron, PATH is just /usr/bin:/bin"
+
+hints:
+  nudge: "Same script, same user, different result. What's different about the environment it runs in?"
+  direction: "Compare where aws lives with the PATH a cron job actually gets."
+  answer: "cron's PATH is /usr/bin:/bin and aws is in /usr/local/bin. Set PATH at the top of the crontab (or call /usr/local/bin/aws)."
+
+analogy:
+  title: "The night shift has a shorter phone list"
+  text: |
+    During the day you call the courier from your desk, where the number is
+    on your speed dial. The night shift uses the lobby phone, which only
+    has a few numbers on it, so the call never goes through. Give the night
+    shift the number.
+
+debrief:
+  root_cause: |
+    cron starts jobs with a small environment of its own (SHELL, HOME,
+    LOGNAME, a short PATH), not the environment of your login shell. Here
+    that PATH was /usr/bin:/bin, while the AWS CLI is installed in
+    /usr/local/bin, so the script's call to aws failed with "command not
+    found" every night, though the same script worked in an interactive
+    shell.
+  ideal_path:
+    - "Read the job's output: line 11, aws: command not found."
+    - "Find where aws lives: /usr/local/bin."
+    - "Check the environment a cron job really gets: PATH=/usr/bin:/bin."
+    - "Set PATH in the crontab (or use the full path), then confirm the next run."
+  real_world: |
+    "Works in my shell, not in cron" is almost always environment: PATH,
+    variables set in .bashrc, or the working directory. Use full paths in
+    scheduled scripts, set the environment explicitly, and always send
+    the output somewhere you'll see it.
+
+concepts:
+  - term: "crontab"
+    text: "A user's list of scheduled commands. Besides commands, it can hold environment settings (name = value) that apply to the jobs below them."
+    url: "https://man7.org/linux/man-pages/man5/crontab.5.html"
+  - term: "PATH"
+    text: "The list of directories the shell searches, in order, for a command typed without a full path."
+    url: "https://man7.org/linux/man-pages/man7/environ.7.html"
+
+sources:
+  - title: "Linux man-pages: crontab(5) (environment settings; what cron sets itself)"
+    url: "https://man7.org/linux/man-pages/man5/crontab.5.html"
+    retrieved: 2026-10-02
+  - title: "Linux man-pages: environ(7) (PATH)"
+    url: "https://man7.org/linux/man-pages/man7/environ.7.html"
+    retrieved: 2026-10-02
+  - title: "AWS CLI: Installing or updating to the latest version (default location /usr/local/bin)"
+    url: "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+    retrieved: 2026-10-02

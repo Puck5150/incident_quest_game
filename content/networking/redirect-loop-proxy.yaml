@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: redirect-loop-proxy
+track: networking
+difficulty: 2
+title: "Behind the new load balancer, the shop redirects to itself forever"
+par_minutes: 10
+
+ticket:
+  from: "E-commerce team"
+  priority: P1
+  body: |
+    We moved the shop behind the new load balancer an hour ago. Every
+    browser now shows "This page isn't working: shop.example.com
+    redirected you too many times." Clearing cookies didn't help.
+
+environment: |
+  The shop is a Node.js Express app on port 3000. The new load balancer
+  terminates HTTPS on 443 and forwards plain HTTP to the app, adding
+  X-Forwarded-For and X-Forwarded-Proto headers. Before the move, the app
+  served HTTPS itself. It redirects any non-HTTPS request to https://.
+
+diagram:
+  nodes:
+    - { id: users, label: "shoppers (HTTPS)", col: 0, row: 0, status: degraded }
+    - { id: lb, label: "load balancer (TLS ends here)", col: 1, row: 0, status: ok }
+    - { id: app, label: "Express app :3000 (plain HTTP)", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: users, to: lb }
+    - { from: lb, to: app }
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "curl -sI https://shop.example.com/"
+      when_actions: [trust-proxy]
+      output: |
+        HTTP/2 200
+        content-type: text/html; charset=utf-8
+    - match: "curl -sI https://shop.example.com/"
+      evidence: self-redirect
+      output: |
+        HTTP/2 301
+        location: https://shop.example.com/
+    - match: "curl -sI -H 'X-Forwarded-Proto: https' http://10.0.3.14:3000/"
+      evidence: header-ignored
+      output: |
+        HTTP/1.1 301 Moved Permanently
+        Location: https://shop.example.com/
+
+files:
+  - path: "app.js (excerpt)"
+    evidence: req-secure
+    content: |
+      const app = express()
+
+      // Always use HTTPS.
+      app.use((req, res, next) => {
+        if (!req.secure) return res.redirect(301, 'https://' + req.hostname + req.originalUrl)
+        next()
+      })
+  - path: "load balancer listener (excerpt)"
+    content: |
+      listener 443 HTTPS  certificate: shop.example.com
+        forward to: http://10.0.3.14:3000
+        add headers: X-Forwarded-For, X-Forwarded-Proto
+      listener 80 HTTP
+        redirect to: https://#{host}#{path}
+
+hypotheses:
+  - id: proxy-proto
+    text: "The app checks req.secure, but it now only sees plain HTTP from the load balancer and doesn't trust X-Forwarded-Proto, so it redirects every request, even ones that arrived over HTTPS."
+    correct: true
+  - id: lb-redirect
+    text: "The load balancer's port 80 redirect is looping."
+    feedback: "The browser's request is already HTTPS on 443, and the 301 comes back with the app's own redirect to the same URL."
+  - id: cookies
+    text: "Old cookies from the previous setup cause the loop."
+    feedback: "curl, with no cookies at all, gets the same 301 to the same URL."
+  - id: dns
+    text: "shop.example.com still points at the old server."
+    feedback: "The response comes from the new setup: the app behind the load balancer answers, with a redirect."
+
+actions:
+  - id: trust-proxy
+    label: "In app.js, add app.set('trust proxy', 1) so Express trusts X-Forwarded-Proto from the load balancer"
+    kind: fix
+    feedback: "Express now takes the protocol from the load balancer's X-Forwarded-Proto: requests that arrived over HTTPS have req.secure true, and only real HTTP requests are redirected."
+  - id: app-tls
+    label: "Remove TLS from the load balancer and pass HTTPS through to the app"
+    kind: wrong
+    feedback: "It could work, but undoes the reason for the load balancer (certificates and TLS in one place), and needs certificates back on every app server. Teach the app to trust the proxy instead."
+  - id: drop-https
+    label: "Delete the HTTPS redirect from the app and the load balancer"
+    kind: destructive
+    feedback: "The loop stops because nothing insists on HTTPS any more: shoppers could check out over plain HTTP."
+  - id: clear-cookies
+    label: "Ask customers to clear their cookies"
+    kind: wrong
+    feedback: "The loop isn't stored in the browser; the app sends the same redirect for every request."
+
+solution_paths:
+  - [trust-proxy]
+
+key_evidence: [self-redirect, req-secure, header-ignored]
+
+evidence_labels:
+  self-redirect: "https://shop.example.com/ redirects to https://shop.example.com/"
+  req-secure: "The app redirects whenever req.secure is false"
+  header-ignored: "The app ignores X-Forwarded-Proto: https and redirects anyway"
+
+hints:
+  nudge: "The browser asked over HTTPS. What protocol does the app see?"
+  direction: "Look at how the app decides a request is secure, and whether it believes the header the load balancer adds."
+  answer: "Behind the load balancer the app only sees HTTP, and Express ignores X-Forwarded-Proto until you set 'trust proxy'. Add app.set('trust proxy', 1)."
+
+analogy:
+  title: "The receptionist who can't see the front door"
+  text: |
+    Visitors must come in through the secure front entrance. The new
+    receptionist sits behind the security desk, so everyone reaches them
+    from the corridor, and the receptionist sends each visitor back
+    round to the front entrance, forever. Security already pins a note to
+    each visitor saying "came in the front"; the receptionist just needs
+    to trust it.
+
+debrief:
+  root_cause: |
+    Moving TLS to the load balancer meant every request reached the app as
+    plain HTTP, and the app's rule redirected anything where req.secure was
+    false. The load balancer reports the original protocol in
+    X-Forwarded-Proto, but Express only uses that header when 'trust proxy'
+    is set. So every HTTPS request was redirected to the same HTTPS URL, in
+    a loop.
+  ideal_path:
+    - "Reproduce with curl: https://shop/ redirects to the same URL."
+    - "Read the app's rule: redirect when req.secure is false."
+    - "Confirm the header is ignored: X-Forwarded-Proto: https still gets a 301."
+    - "Set 'trust proxy' to the number of proxies in front, then reload the page."
+  real_world: |
+    Any app behind a TLS-terminating proxy needs to trust exactly that
+    proxy's forwarded headers, and the proxy must overwrite them so
+    clients can't fake them. Frameworks name it differently, but the bug is
+    always the same.
+
+concepts:
+  - term: "TLS termination"
+    text: "A load balancer or proxy decrypts HTTPS and forwards the request to the app, often as plain HTTP on a private network."
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-Proto"
+  - term: "X-Forwarded-Proto"
+    text: "A header a proxy adds to tell the app which protocol the client used to reach the proxy."
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-Proto"
+  - term: "Express trust proxy"
+    text: "A setting that makes Express read X-Forwarded-* headers from trusted proxies for req.protocol, req.secure and req.ip."
+    url: "https://expressjs.com/en/guide/behind-proxies.html"
+
+sources:
+  - title: "Express: Express behind proxies (trust proxy, X-Forwarded-Proto)"
+    url: "https://expressjs.com/en/guide/behind-proxies.html"
+    retrieved: 2026-10-02
+  - title: "MDN: X-Forwarded-Proto"
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Forwarded-Proto"
+    retrieved: 2026-10-02

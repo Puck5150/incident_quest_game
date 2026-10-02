@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: mysql-deadlock
+track: databases
+difficulty: 3
+title: "Some money transfers fail with \"Deadlock found\""
+par_minutes: 12
+
+ticket:
+  from: "Payments team"
+  priority: P2
+  body: |
+    A few times an hour, a transfer between two customer wallets fails with
+    "Deadlock found when trying to get lock". The customer has to try
+    again. It started when we launched the "split the bill" feature, where
+    friends send each other money at the same time.
+
+environment: |
+  Wallets are rows in an InnoDB table, wallets, in MySQL 8.4. A transfer
+  runs in one transaction: debit the sender's row, then credit the
+  recipient's row, each with UPDATE wallets ... WHERE id = ?. The app
+  doesn't retry failed transactions.
+
+terminal:
+  prompt: "mysql>"
+  commands:
+    - match: "SHOW ENGINE INNODB STATUS\\G"
+      evidence: latest-deadlock
+      output: |
+        ------------------------
+        LATEST DETECTED DEADLOCK
+        ------------------------
+        2026-10-02 18:41:07
+        *** (1) TRANSACTION:
+        TRANSACTION 9411203, ACTIVE 0 sec starting index read
+        UPDATE wallets SET balance = balance + 12.50 WHERE id = 42
+        *** (1) HOLDS THE LOCK(S):
+        RECORD LOCKS ... index PRIMARY of table `pay`.`wallets` ... lock_mode X locks rec but not gap  (id 17)
+        *** (1) WAITING FOR THIS LOCK TO BE GRANTED:
+        RECORD LOCKS ... index PRIMARY of table `pay`.`wallets` ... lock_mode X locks rec but not gap waiting  (id 42)
+        *** (2) TRANSACTION:
+        TRANSACTION 9411204, ACTIVE 0 sec starting index read
+        UPDATE wallets SET balance = balance + 12.50 WHERE id = 17
+        *** (2) HOLDS THE LOCK(S):
+        RECORD LOCKS ... index PRIMARY of table `pay`.`wallets` ... lock_mode X locks rec but not gap  (id 42)
+        *** (2) WAITING FOR THIS LOCK TO BE GRANTED:
+        RECORD LOCKS ... index PRIMARY of table `pay`.`wallets` ... lock_mode X locks rec but not gap waiting  (id 17)
+        *** WE ROLL BACK TRANSACTION (2)
+    - match: "SHOW VARIABLES LIKE 'transaction_isolation';"
+      output: |
+        +-----------------------+-----------------+
+        | Variable_name         | Value           |
+        +-----------------------+-----------------+
+        | transaction_isolation | REPEATABLE-READ |
+        +-----------------------+-----------------+
+
+logs:
+  - name: "payments app log"
+    evidence: err-1213
+    lines: |
+      18:41:07 ERROR transfer 17->42 12.50 ok
+      18:41:07 ERROR transfer 42->17 12.50 failed: (1213, 'Deadlock found when trying to get lock; try restarting transaction')
+
+files:
+  - path: "transfer.py (excerpt)"
+    evidence: lock-order
+    content: |
+      def transfer(sender, recipient, amount):
+          with db.transaction():
+              db.execute("UPDATE wallets SET balance = balance - %s WHERE id = %s", amount, sender)
+              db.execute("UPDATE wallets SET balance = balance + %s WHERE id = %s", amount, recipient)
+
+hypotheses:
+  - id: opposite-order
+    text: "Two transfers between the same wallets in opposite directions lock the two rows in opposite orders, so each waits for the other and InnoDB rolls one back."
+    correct: true
+  - id: isolation
+    text: "The REPEATABLE READ isolation level causes it; READ COMMITTED would fix it."
+    feedback: "MySQL's documentation is explicit: isolation level changes how reads behave, and deadlocks come from writes. These two UPDATEs would deadlock the same way."
+  - id: timeout
+    text: "Transactions time out waiting for locks; the wait timeout is too short."
+    feedback: "That's error 1205, a lock wait timeout. 1213 means InnoDB found a cycle and rolled one transaction back at once."
+  - id: table-lock
+    text: "Something holds a lock on the whole wallets table."
+    feedback: "The status shows two record locks, on rows 17 and 42, each held by one transfer and wanted by the other."
+
+actions:
+  - id: consistent-order
+    label: "Lock both wallets in a fixed order (lower id first) inside the transfer transaction, then debit and credit"
+    kind: fix
+    feedback: "Every transfer between 17 and 42 now takes row 17 first, so two of them queue instead of each holding the row the other needs."
+  - id: retry
+    label: "Retry the whole transaction (a few times, with a short backoff) when it fails with error 1213"
+    kind: fix
+    feedback: "Deadlocks can still happen in rare cases, and a retried transfer simply succeeds. MySQL recommends always handling this."
+  - id: read-committed
+    label: "Switch the isolation level to READ COMMITTED"
+    kind: wrong
+    feedback: "Deadlocks come from the order writes take locks in, which isolation level doesn't change."
+  - id: lock-tables
+    label: "Run LOCK TABLES wallets WRITE at the start of every transfer"
+    kind: destructive
+    feedback: "No deadlocks, because only one transfer (and nothing else touching wallets, including balance reads) can run at a time. Payments slow to a crawl at peak."
+
+solution_paths:
+  - [consistent-order, retry]
+
+key_evidence: [err-1213, latest-deadlock, lock-order]
+
+evidence_labels:
+  err-1213: "Transfers fail with error 1213, Deadlock found"
+  latest-deadlock: "Two transfers each hold one wallet row and wait for the other's"
+  lock-order: "A transfer locks the sender's row first, then the recipient's"
+
+hints:
+  nudge: "Read InnoDB's report of the latest deadlock: who held what, and who waited for what?"
+  direction: "Compare the order the two transactions locked rows 17 and 42 in, and how the code chooses that order."
+  answer: "Transfers in opposite directions lock the rows in opposite orders. Lock both rows in a fixed order (lower id first), and retry on error 1213."
+
+analogy:
+  title: "Two people, two doors, opposite directions"
+  text: |
+    Two people walk towards each other through a pair of narrow doors. Each
+    gets through their first door and holds it, waiting for the other to
+    clear the second. Agree that everyone takes the left door first, and
+    they simply queue.
+
+debrief:
+  root_cause: |
+    A transfer updates the sender's row and then the recipient's, taking an
+    exclusive lock on each. With "split the bill", 17 paying 42 and 42 paying
+    17 can run at the same moment: one locks 17 and waits for 42, the other
+    locks 42 and waits for 17. InnoDB detects the cycle and rolls one back
+    with error 1213, and the app didn't retry it.
+  ideal_path:
+    - "Read the error: 1213, a deadlock, not a timeout."
+    - "Read the latest deadlock: rows 17 and 42 locked in opposite orders."
+    - "Find why in the code: sender first, then recipient."
+    - "Lock rows in a consistent order, and retry deadlocked transactions."
+  real_world: |
+    Deadlocks are normal in busy databases; the fixes are consistent lock
+    ordering, short transactions, and retrying the whole transaction.
+    innodb_print_all_deadlocks logs every one, not just the latest.
+
+concepts:
+  - term: "Deadlock"
+    text: "Two or more transactions each hold a lock another needs, so none can continue. InnoDB detects this and rolls one back."
+    url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html"
+  - term: "Row lock"
+    text: "InnoDB locks the index records an UPDATE touches, so other transactions can't change them until it commits."
+    url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html"
+
+sources:
+  - title: "MySQL 8.4: Deadlocks in InnoDB"
+    url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html"
+    retrieved: 2026-10-02
+  - title: "MySQL 8.4: How to Minimize and Handle Deadlocks"
+    url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks-handling.html"
+    retrieved: 2026-10-02
+  - title: "MySQL 8.4: InnoDB Locking"
+    url: "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html"
+    retrieved: 2026-10-02

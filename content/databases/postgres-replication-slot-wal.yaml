@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: postgres-replication-slot-wal
+track: databases
+difficulty: 3
+title: "The primary's disk is filling, and the database is barely used"
+par_minutes: 12
+
+ticket:
+  from: "Monitoring"
+  priority: P1
+  body: |
+    ALERT db-primary /var/lib/postgresql at 94%, up from 40% a month ago,
+    growing steadily. The data itself hasn't grown much. At this rate the
+    disk is full in about two days, and PostgreSQL stops when it can't
+    write.
+
+environment: |
+  PostgreSQL 16 primary db-primary with one streaming replica, db-replica-2.
+  Last month the old replica, db-replica-1, was decommissioned (its VM was
+  deleted). Replicas connect using physical replication slots.
+
+terminal:
+  prompt: "postgres=#"
+  commands:
+    - match: "SELECT slot_name, active, wal_status, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained FROM pg_replication_slots;"
+      when_actions: [drop-slot]
+      output: |2
+          slot_name   | active | wal_status | retained
+        --------------+--------+------------+----------
+         db_replica_2 | t      | reserved   | 112 MB
+        (1 row)
+    - match: "SELECT slot_name, active, wal_status, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained FROM pg_replication_slots;"
+      evidence: inactive-slot
+      output: |2
+          slot_name   | active | wal_status | retained
+        --------------+--------+------------+----------
+         db_replica_1 | f      | extended   | 412 GB
+         db_replica_2 | t      | reserved   | 112 MB
+        (2 rows)
+    - match: "sudo du -sh /var/lib/postgresql/16/main/base /var/lib/postgresql/16/main/pg_wal"
+      evidence: wal-big
+      output: |
+        61G	/var/lib/postgresql/16/main/base
+        413G	/var/lib/postgresql/16/main/pg_wal
+    - match: "SHOW max_slot_wal_keep_size;"
+      evidence: no-limit
+      output: |2
+         max_slot_wal_keep_size
+        ------------------------
+         -1
+        (1 row)
+    - match: "SELECT client_addr, state, replay_lag FROM pg_stat_replication;"
+      output: |2
+         client_addr |   state   |   replay_lag
+        -------------+-----------+-----------------
+         10.0.8.22   | streaming | 00:00:00.004112
+        (1 row)
+
+hypotheses:
+  - id: abandoned-slot
+    text: "The decommissioned replica's replication slot still exists, so the primary keeps every WAL file since that replica disappeared."
+    correct: true
+  - id: data-growth
+    text: "The tables have grown."
+    feedback: "The data directory's tables (base) are 61 GB. Nearly all the space is in pg_wal: 413 GB of write-ahead log."
+  - id: archiving
+    text: "WAL archiving is failing, so WAL files can't be removed."
+    feedback: "A failing archive_command does hold WAL, but here one slot alone accounts for 412 GB retained, and it's inactive."
+  - id: replica-lag
+    text: "The current replica is lagging."
+    feedback: "db-replica-2 is streaming with a replay lag of 4 ms, and its slot retains only 112 MB."
+
+actions:
+  - id: drop-slot
+    label: "SELECT pg_drop_replication_slot('db_replica_1');"
+    kind: fix
+    match_regex: "^SELECT pg_drop_replication_slot\\('db_replica_1'\\);?$"
+    feedback: "The slot no one will ever read from is gone. At the next checkpoint PostgreSQL removes the WAL files it no longer needs, and pg_wal shrinks to normal."
+  - id: keep-size
+    label: "Set max_slot_wal_keep_size (for example 50GB) so no slot can hold more WAL than that again"
+    kind: fix
+    feedback: "If a replica disappears again, its slot is invalidated once it would hold more than the limit, instead of filling the disk. That replica would need rebuilding, which is the right trade-off."
+  - id: delete-wal
+    label: "Delete the oldest files in pg_wal by hand"
+    kind: destructive
+    feedback: "PostgreSQL manages pg_wal itself; deleting files there can leave the database unable to recover after a crash. Remove the reason they're kept instead."
+  - id: bigger-disk
+    label: "Grow the disk to 2 TB"
+    kind: wrong
+    feedback: "It buys a few months, then fills again: the slot keeps every new WAL file forever."
+
+solution_paths:
+  - [drop-slot, keep-size]
+
+key_evidence: [wal-big, inactive-slot, no-limit]
+
+evidence_labels:
+  wal-big: "pg_wal holds 413 GB; the tables only 61 GB"
+  inactive-slot: "Slot db_replica_1 is inactive and retains 412 GB of WAL"
+  no-limit: "max_slot_wal_keep_size is -1: no limit"
+
+hints:
+  nudge: "The data didn't grow. What else lives in the data directory?"
+  direction: "Compare base and pg_wal sizes, then look at the replication slots."
+  answer: "The old replica's slot is inactive and holds 412 GB of WAL. Drop it with pg_drop_replication_slot, and set max_slot_wal_keep_size."
+
+analogy:
+  title: "Keeping the newspapers for a reader who moved away"
+  text: |
+    The library promised to keep every newspaper until each subscriber has
+    read it. One subscriber moved away a month ago and nobody cancelled
+    the subscription, so the papers pile up in the corridor. Cancel the
+    subscription, and set a limit on how many papers anyone can hold.
+
+debrief:
+  root_cause: |
+    A replication slot makes the primary keep every WAL file the slot's
+    replica hasn't received yet, even while that replica is disconnected.
+    db-replica-1 was deleted but its slot wasn't, so for a month the primary
+    kept all WAL since then: 412 GB in pg_wal, while the tables were 61 GB.
+    With max_slot_wal_keep_size unlimited (-1), nothing stopped it before
+    the disk filled.
+  ideal_path:
+    - "Find what's large: pg_wal, not the tables."
+    - "List replication slots: db_replica_1 is inactive, holding 412 GB."
+    - "Drop the abandoned slot; WAL is cleaned up at the next checkpoint."
+    - "Set max_slot_wal_keep_size so an abandoned slot can't fill the disk again."
+  real_world: |
+    Decommissioning a replica (or a logical replication consumer) must
+    include dropping its slot. Alert on inactive slots and on retained WAL
+    size, not just on disk usage.
+
+concepts:
+  - term: "WAL (write-ahead log)"
+    text: "PostgreSQL's log of every change, kept in pg_wal and used for crash recovery and replication."
+    url: "https://www.postgresql.org/docs/current/wal-intro.html"
+  - term: "Replication slot"
+    text: "Makes the primary keep the WAL a particular standby still needs, even while it's disconnected."
+    url: "https://www.postgresql.org/docs/current/warm-standby.html"
+  - term: "max_slot_wal_keep_size"
+    text: "The most WAL replication slots may keep. Beyond it, a slot is invalidated instead of filling the disk."
+    url: "https://www.postgresql.org/docs/current/runtime-config-replication.html"
+
+sources:
+  - title: "PostgreSQL: Log-Shipping Standby Servers (replication slots can fill pg_wal)"
+    url: "https://www.postgresql.org/docs/current/warm-standby.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Replication settings (max_slot_wal_keep_size)"
+    url: "https://www.postgresql.org/docs/current/runtime-config-replication.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: System Administration Functions (pg_drop_replication_slot)"
+    url: "https://www.postgresql.org/docs/current/functions-admin.html"
+    retrieved: 2026-10-02
+  - title: "PostgreSQL: Write-Ahead Logging (WAL)"
+    url: "https://www.postgresql.org/docs/current/wal-intro.html"
+    retrieved: 2026-10-02

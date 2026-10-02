@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: no-proxy-internal
+track: networking
+difficulty: 2
+title: "After the proxy rollout, internal calls fail and external ones work"
+par_minutes: 10
+
+ticket:
+  from: "Supply chain"
+  priority: P2
+  body: |
+    Since the new outbound proxy went live on Monday, the stock sync on
+    sync-01 fails every run. Oddly, the part that calls our supplier on
+    the internet works; it's the call to our own stock service that fails.
+
+environment: |
+  Servers may no longer reach the internet directly: all outbound web
+  traffic must go through proxy.corp.example:3128, set for every login and
+  service in /etc/environment. The proxy only forwards to the internet; it
+  refuses internal destinations. Internal services live under
+  .corp.example. The sync job uses curl.
+
+terminal:
+  prompt: "ops@sync-01:~$"
+  commands:
+    - match: "cat /etc/environment"
+      when_actions: [no-proxy]
+      output: |
+        PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        http_proxy=http://proxy.corp.example:3128
+        https_proxy=http://proxy.corp.example:3128
+        HTTPS_PROXY=http://proxy.corp.example:3128
+        no_proxy=localhost,127.0.0.1,.corp.example
+        NO_PROXY=localhost,127.0.0.1,.corp.example
+    - match: "cat /etc/environment"
+      evidence: no-proxy-short
+      output: |
+        PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        http_proxy=http://proxy.corp.example:3128
+        https_proxy=http://proxy.corp.example:3128
+        HTTPS_PROXY=http://proxy.corp.example:3128
+        no_proxy=localhost,127.0.0.1
+        NO_PROXY=localhost,127.0.0.1
+    - match: "curl -sS https://stock.corp.example/v2/levels -o /dev/null -w '%{http_code}\\n'"
+      when_actions: [no-proxy]
+      output: |
+        200
+    - match: "curl -sS https://stock.corp.example/v2/levels -o /dev/null -w '%{http_code}\\n'"
+      evidence: connect-403
+      output: |
+        curl: (56) CONNECT tunnel failed, response 403
+    - match: "curl -sS https://api.supplier.example.net/feed -o /dev/null -w '%{http_code}\\n'"
+      output: |
+        200
+    - match: "curl -sS --noproxy '*' https://stock.corp.example/v2/levels -o /dev/null -w '%{http_code}\\n'"
+      evidence: direct-works
+      output: |
+        200
+
+logs:
+  - name: "proxy.corp.example access log (sync-01)"
+    evidence: proxy-denied
+    lines: |
+      1791406201.553 0 10.30.1.17 TCP_DENIED/403 3982 CONNECT stock.corp.example:443 - HIER_NONE/- text/html
+      1791406201.902 214 10.30.1.17 TCP_TUNNEL/200 8810 CONNECT api.supplier.example.net:443 - HIER_DIRECT/203.0.113.80 -
+
+hypotheses:
+  - id: no-proxy-missing
+    text: "NO_PROXY doesn't list .corp.example, so curl sends the internal call to the proxy, which refuses internal destinations."
+    correct: true
+  - id: stock-down
+    text: "The stock service is down."
+    feedback: "Called directly, bypassing the proxy, it answers 200. The 403 comes from the proxy, not the stock service."
+  - id: proxy-down
+    text: "The proxy is down."
+    feedback: "The supplier call goes through the same proxy and works. The proxy is up; it's denying this one destination."
+  - id: tls
+    text: "The stock service's certificate is broken."
+    feedback: "The failure happens before TLS with the stock service: the proxy refused to open the tunnel (CONNECT ... 403)."
+
+actions:
+  - id: no-proxy
+    label: "Add .corp.example to NO_PROXY and no_proxy in /etc/environment, then restart the sync service"
+    kind: fix
+    feedback: "curl now connects to anything under .corp.example directly and still uses the proxy for the internet. The leading dot covers every internal host."
+  - id: unset-proxy
+    label: "Remove the proxy variables from sync-01"
+    kind: wrong
+    feedback: "The internal call works, and the supplier call breaks: servers can't reach the internet directly any more."
+  - id: allow-internal
+    label: "Ask the proxy team to let the proxy forward to internal destinations"
+    kind: wrong
+    feedback: "That turns the internet proxy into a path into every internal service, and sends internal traffic on a detour. Internal calls shouldn't use it."
+  - id: open-firewall
+    label: "Open the firewall for direct internet access from sync-01 and drop the proxy"
+    kind: destructive
+    feedback: "That undoes the security change Monday's rollout made, for one host, to fix an internal call."
+
+solution_paths:
+  - [no-proxy]
+
+key_evidence: [connect-403, proxy-denied, no-proxy-short, direct-works]
+
+evidence_labels:
+  connect-403: "The internal call fails: CONNECT tunnel failed, response 403"
+  proxy-denied: "The proxy denied CONNECT stock.corp.example:443"
+  no-proxy-short: "NO_PROXY lists only localhost and 127.0.0.1"
+  direct-works: "Bypassing the proxy, the stock service answers 200"
+
+hints:
+  nudge: "The external call goes through the proxy and works. Should the internal call go through it at all?"
+  direction: "Read the proxy variables, especially the list of destinations that should skip the proxy."
+  answer: "NO_PROXY doesn't include .corp.example. Add it (with the leading dot) to NO_PROXY and no_proxy."
+
+analogy:
+  title: "Sending internal mail through the post office"
+  text: |
+    The company now sends all outgoing mail through the post office.
+    Someone also sent the memos for the next office along the corridor
+    through it, and the post office won't deliver inside the building.
+    Internal mail goes by the internal route; only outside mail goes to
+    the post office.
+
+debrief:
+  root_cause: |
+    The rollout set HTTPS_PROXY for every service, so curl sends HTTPS
+    requests through the proxy unless the host matches NO_PROXY. NO_PROXY
+    listed only localhost and 127.0.0.1, so the call to
+    stock.corp.example went to the proxy too, which refuses internal
+    destinations and answered the CONNECT with 403. The supplier call is
+    external, so it worked through the proxy as intended.
+  ideal_path:
+    - "Read the error: the proxy refused the CONNECT (403)."
+    - "Confirm in the proxy log: denied CONNECT stock.corp.example:443."
+    - "Check NO_PROXY: internal domains aren't listed."
+    - "Add .corp.example, restart the job, and run it again."
+  real_world: |
+    Proxy rollouts break internal calls whenever NO_PROXY is incomplete.
+    Different tools read different spellings (NO_PROXY, no_proxy) and match
+    domains slightly differently, so set both, use leading dots for whole
+    domains, and test with each tool you use.
+
+concepts:
+  - term: "HTTPS_PROXY"
+    text: "An environment variable telling tools like curl to send HTTPS requests through a proxy, using a CONNECT tunnel."
+    url: "https://everything.curl.dev/usingcurl/proxies/env.html"
+  - term: "NO_PROXY"
+    text: "A comma-separated list of hosts that should be reached directly. A leading dot matches a whole domain."
+    url: "https://everything.curl.dev/usingcurl/proxies/env.html"
+
+sources:
+  - title: "Everything curl: Proxy environment variables (NO_PROXY, leading dot matching)"
+    url: "https://everything.curl.dev/usingcurl/proxies/env.html"
+    retrieved: 2026-10-02
+  - title: "curl: man page (--noproxy, proxy environment variables)"
+    url: "https://curl.se/docs/manpage.html"
+    retrieved: 2026-10-02

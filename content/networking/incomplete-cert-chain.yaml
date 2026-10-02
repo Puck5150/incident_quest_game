@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: incomplete-cert-chain
+track: networking
+difficulty: 2
+title: "Browsers are happy with the new certificate; the partner's integration isn't"
+par_minutes: 10
+
+ticket:
+  from: "Partner integrations"
+  priority: P2
+  body: |
+    We renewed the certificate on api.example.com yesterday. Every browser
+    shows the padlock, but Northwind's order integration has failed since
+    with "unable to get local issuer certificate". They say nothing
+    changed on their side.
+
+environment: |
+  api.example.com runs nginx on api-01. The new certificate came from the
+  CA as two files: api.example.com.crt (the server certificate) and
+  ca-bundle.crt (the intermediate certificate). Northwind calls the API
+  from a Linux server with curl and the system's standard CA store.
+
+terminal:
+  prompt: "you@laptop:~$"
+  commands:
+    - match: "curl -sS https://api.example.com/v1/health"
+      when_actions: [fullchain]
+      output: |
+        {"status":"ok"}
+    - match: "curl -sS https://api.example.com/v1/health"
+      evidence: curl-60
+      output: |
+        curl: (60) SSL certificate problem: unable to get local issuer certificate
+        More details here: https://curl.se/docs/sslcerts.html
+    - match: "openssl s_client -connect api.example.com:443 -servername api.example.com </dev/null 2>/dev/null | grep -E '^ [0-9] s:|Verify return'"
+      when_actions: [fullchain]
+      output: |2
+         0 s:CN=api.example.com
+         1 s:C=US, O=Example Trust, CN=Example Trust TLS RSA CA G2
+        Verify return code: 0 (ok)
+    - match: "openssl s_client -connect api.example.com:443 -servername api.example.com </dev/null 2>/dev/null | grep -E '^ [0-9] s:|Verify return'"
+      evidence: chain-one
+      output: |2
+         0 s:CN=api.example.com
+        Verify return code: 21 (unable to verify the first certificate)
+    - match: "ssh api-01 grep ssl_certificate /etc/nginx/sites-enabled/api"
+      evidence: leaf-only-config
+      output: |
+            ssl_certificate     /etc/ssl/api/api.example.com.crt;
+            ssl_certificate_key /etc/ssl/api/api.example.com.key;
+    - match: "ssh api-01 ls /etc/ssl/api"
+      output: |
+        api.example.com.crt  api.example.com.key  ca-bundle.crt
+
+hypotheses:
+  - id: chain
+    text: "nginx sends only the server certificate, not the intermediate. Browsers fill the gap themselves, but curl can't link the certificate to a root it trusts."
+    correct: true
+  - id: expired
+    text: "The new certificate is already expired."
+    feedback: "An expired certificate gets \"certificate has expired\". This one fails earlier: the client can't find who issued it."
+  - id: partner-store
+    text: "Northwind's CA store is out of date."
+    feedback: "Their store has the root, which is long established. What's missing is the intermediate, which the server is supposed to send: openssl shows only one certificate in the chain."
+  - id: hostname
+    text: "The certificate is for the wrong hostname."
+    feedback: "Browsers accept it for api.example.com, and a name mismatch has its own error. This is about the issuer."
+
+actions:
+  - id: fullchain
+    label: "On api-01: cat api.example.com.crt ca-bundle.crt > api.example.com.chained.crt, point ssl_certificate at it, nginx -t, and reload"
+    kind: fix
+    feedback: "nginx now sends the server certificate followed by the intermediate, so any client with the root in its store can build the chain."
+  - id: insecure
+    label: "Ask Northwind to call the API with certificate verification turned off (curl -k)"
+    kind: destructive
+    feedback: "Their integration would accept any certificate at all, so anyone able to intercept the traffic could read and change orders."
+  - id: wrong-order
+    label: "Concatenate ca-bundle.crt first, then api.example.com.crt"
+    kind: wrong
+    feedback: "nginx expects the server certificate first. In the wrong order it fails to start, with a key values mismatch, since the key belongs to the server certificate."
+  - id: reissue
+    label: "Ask the CA to reissue the certificate"
+    kind: wrong
+    feedback: "The certificate is fine. A reissued one would be installed the same way, without its intermediate."
+
+solution_paths:
+  - [fullchain]
+
+key_evidence: [curl-60, chain-one, leaf-only-config]
+
+evidence_labels:
+  curl-60: "curl: unable to get local issuer certificate"
+  chain-one: "The server sends only one certificate, and it can't be verified"
+  leaf-only-config: "nginx is configured with the server certificate alone"
+
+hints:
+  nudge: "Browsers and curl disagree. What could a browser know that curl doesn't?"
+  direction: "Look at the certificate chain the server actually sends, then at nginx's ssl_certificate."
+  answer: "nginx sends only the server certificate. Concatenate it with ca-bundle.crt (server certificate first), point ssl_certificate at that file, and reload."
+
+analogy:
+  title: "A reference letter without the referee's details"
+  text: |
+    A candidate brings a letter signed by someone the employer has never
+    heard of, without the note showing who vouches for that person. Some
+    employers have met that referee before and accept it; a new one can't
+    check it. Send the whole chain of references every time.
+
+debrief:
+  root_cause: |
+    A server certificate is signed by an intermediate, which is signed by
+    a root that clients trust. The server must send its certificate
+    followed by the intermediates; nginx sends whatever is in the
+    ssl_certificate file, and that held only the server certificate.
+    Browsers often already have common intermediates and didn't complain,
+    but curl with the standard store couldn't build a path to a trusted
+    root and refused the connection.
+  ideal_path:
+    - "Reproduce with curl: unable to get local issuer certificate."
+    - "Inspect the chain the server sends: only certificate 0."
+    - "Check nginx: ssl_certificate is the server certificate alone."
+    - "Concatenate server certificate then bundle, reload, and verify again."
+  real_world: |
+    "Works in the browser" proves little about a certificate chain. Check
+    with openssl s_client or an online TLS checker after every renewal,
+    and use the CA's full-chain file when there is one.
+
+concepts:
+  - term: "Certificate chain"
+    text: "The server certificate, then the intermediates that link it to a root CA the client already trusts. The server is expected to send all but the root."
+    url: "https://nginx.org/en/docs/http/configuring_https_servers.html"
+  - term: "openssl s_client"
+    text: "Opens a TLS connection and shows the certificates the server sent and whether they verify."
+    url: "https://docs.openssl.org/master/man1/openssl-s_client/"
+
+sources:
+  - title: "nginx: Configuring HTTPS servers (SSL certificate chains)"
+    url: "https://nginx.org/en/docs/http/configuring_https_servers.html"
+    retrieved: 2026-10-02
+  - title: "curl: SSL certificate verification"
+    url: "https://curl.se/docs/sslcerts.html"
+    retrieved: 2026-10-02
+  - title: "OpenSSL: openssl-s_client"
+    url: "https://docs.openssl.org/master/man1/openssl-s_client/"
+    retrieved: 2026-10-02
