@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: Kubernetes (kubectl). First matching entry wins.
+
+- id: kubectl-logs-grep-count
+  match: "^kubectl logs .*\\| grep -c "
+  summary: "Counts how many recent log lines from a workload contain a message."
+  parts:
+    - { token: "logs deploy/NAME", meaning: "Logs from a pod of this deployment." }
+    - { token: "--since=5m", meaning: "Only the last five minutes." }
+    - { token: "| grep -c 'text'", meaning: "Count matching lines instead of printing them." }
+  why: "A count is easy to compare before and after a fix."
+  alternatives:
+    - { command: "kubectl logs -l app=NAME --since=5m", note: "All pods with this label, not just one." }
+  docs: { title: "kubectl logs", url: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/" }
+
+- id: kubectl-get-jsonpath
+  match: "^kubectl get .*-o jsonpath="
+  summary: "Prints one field of a Kubernetes object."
+  parts:
+    - { token: "get configmap NAME", meaning: "The object." }
+    - { token: "-o jsonpath='{.data.KEY}'", meaning: "Output only this path: the KEY entry in the ConfigMap's data." }
+  why: "Gives a single value to check, without reading the whole manifest."
+  alternatives:
+    - { command: "kubectl get configmap NAME -o yaml", note: "The whole object." }
+  docs: { title: "kubectl JSONPath support", url: "https://kubernetes.io/docs/reference/kubectl/jsonpath/" }

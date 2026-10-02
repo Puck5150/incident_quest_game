@@ -389,3 +389,16 @@
     - { command: "grep -n PATTERN FILE", note: "With line numbers." }
     - { command: "grep -rn PATTERN DIR", note: "Every file under a directory." }
   docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
+
+- id: grep-strip-comments
+  match: "^(sudo )?grep -v '\\^#'"
+  summary: "Prints a config file without its comment lines and blank lines."
+  parts:
+    - { token: "sudo", meaning: "Run as root: the file isn't readable by other users." }
+    - { token: "-v", meaning: "Invert: print lines that do NOT match." }
+    - { token: "'^#'", meaning: "Regex: lines starting with #, i.e. comments." }
+    - { token: "| grep -v '^$'", meaning: "Then drop empty lines (^$ matches a line with nothing between start and end)." }
+  why: "Leaves only the rules that are in effect, in order, which matters for files read top to bottom like pg_hba.conf."
+  alternatives:
+    - { command: "grep -Ev '^\\s*(#|$)' FILE", note: "One grep: also skips indented comments." }
+  docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }

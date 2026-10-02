@@ -1,17 +1,177 @@
 # yaml-language-server: $schema=../../schemas/commands.json
 # Command library: database clients. First matching entry wins.
 
+- id: psql-archiver
+  match: "pg_stat_archiver"
+  summary: "Shows PostgreSQL's WAL archiving status: the last file archived, when, and how many attempts failed."
+  parts:
+    - { token: "sudo -u postgres psql", meaning: "Run psql as the postgres OS user, which can sign in as the database superuser through peer authentication." }
+    - { token: "-A", meaning: "Unaligned output: no padding or borders." }
+    - { token: "-t", meaning: "Tuples only: no column headers or row count." }
+    - { token: "-c 'SQL'", meaning: "Run this command and exit." }
+    - { token: "last_archived_wal, last_archived_time, failed_count", meaning: "The newest archived WAL file, when it was archived, and the number of failed archive attempts." }
+  why: "If archiving fails, WAL piles up in pg_wal until the disk fills, and point-in-time recovery has a gap; this shows both the failure count and how stale the last success is."
+  alternatives:
+    - { command: "SELECT last_failed_wal, last_failed_time FROM pg_stat_archiver", note: "Which file failed and when." }
+    - { command: "journalctl -u postgresql", note: "The archive_command's error output." }
+  docs: { title: "PostgreSQL: pg_stat_archiver", url: "https://www.postgresql.org/docs/current/monitoring-stats.html" }
+
+- id: psql-show-setting
+  match: "psql .*'SHOW \\w+'"
+  summary: "Prints the current value of a PostgreSQL server setting."
+  parts:
+    - { token: "sudo -u postgres psql", meaning: "Run psql as the postgres OS user (peer authentication as the superuser)." }
+    - { token: "-A", meaning: "Unaligned output." }
+    - { token: "-t", meaning: "Tuples only: just the value." }
+    - { token: "-c 'SHOW name'", meaning: "Run SHOW for one setting, such as listen_addresses or max_connections, and exit." }
+  why: "Shows the value the server is actually running with, which can differ from the config file until a reload or restart."
+  alternatives:
+    - { command: "SELECT name, setting, pending_restart FROM pg_settings WHERE name = 'NAME'", note: "Also whether a changed value is waiting for a restart." }
+  docs: { title: "PostgreSQL: SHOW", url: "https://www.postgresql.org/docs/current/sql-show.html" }
+
+- id: psql-connections-by-app
+  match: "psql .*pg_stat_activity"
+  summary: "Counts client connections to PostgreSQL by application."
+  parts:
+    - { token: "sudo -u postgres psql", meaning: "Run psql as the postgres OS user (peer authentication as the superuser)." }
+    - { token: "-c \"SQL\"", meaning: "Run this query and exit." }
+    - { token: "backend_type = 'client backend'", meaning: "Only client connections, not background workers." }
+    - { token: "GROUP BY 1 ORDER BY 2 DESC", meaning: "Group by the first column (application) and sort by the second (count), biggest first." }
+  why: "When the server hits max_connections, this shows which application is holding them."
+  alternatives:
+    - { command: "SELECT count(*) FROM pg_stat_activity", note: "Just the total." }
+  docs: { title: "PostgreSQL: pg_stat_activity", url: "https://www.postgresql.org/docs/current/monitoring-stats.html" }
+
 - id: psql-command
-  match: "^psql .*-c "
+  match: "^(ssh \\S+ )?(sudo -u postgres )?psql "
   summary: "Connects to PostgreSQL and runs one SQL command."
   parts:
-    - { token: "\"host=... dbname=... user=...\"", meaning: "A connection string: server, database and user." }
-    - { token: "-c \"select 1\"", meaning: "Run this command and exit; select 1 just proves the connection and login work." }
-  why: "The error, if any, says which step failed: name resolution, connection, TLS, or authentication."
+    - { token: "ssh HOST", meaning: "(If given) run it on that host." }
+    - { token: "sudo -u postgres", meaning: "(If given) as the postgres OS user, which signs in as the superuser through peer authentication." }
+    - { token: "\"host=... dbname=... user=...\"", meaning: "(If given) a connection string: server, database and user." }
+    - { token: "-d shop", meaning: "(If given) the database to connect to." }
+    - { token: "-A", meaning: "(If given) unaligned output: no padding." }
+    - { token: "-t", meaning: "(If given) tuples only: no headers or row count, so a count prints as a bare number." }
+    - { token: "-c 'SQL'", meaning: "Run this command and exit." }
+  why: "One query answers one question (does it connect, how many rows), and -At output is easy to compare before and after a fix."
   alternatives:
     - { command: "pg_isready -h HOST", note: "Only whether the server accepts connections." }
-    - { command: "nc -zv HOST 5432", note: "Only the TCP connection." }
+    - { command: "psql -d DB", note: "An interactive session." }
   docs: { title: "PostgreSQL: psql", url: "https://www.postgresql.org/docs/current/app-psql.html" }
+
+- id: psql-describe
+  match: "^\\\\d "
+  summary: "psql meta-command: describes a table: columns, types, indexes, constraints and triggers."
+  parts:
+    - { token: "\\d orders", meaning: "Describe the orders table." }
+  why: "Shows at a glance which indexes exist, which is what you compare with the query's WHERE clause."
+  alternatives:
+    - { command: "\\d+ orders", note: "Also storage and size details." }
+    - { command: "SELECT indexdef FROM pg_indexes WHERE tablename = 'orders'", note: "Just the index definitions, in SQL." }
+  docs: { title: "PostgreSQL: psql meta-commands", url: "https://www.postgresql.org/docs/current/app-psql.html" }
+
+- id: psql-shell-escape
+  match: "^\\\\! "
+  summary: "psql meta-command: runs a shell command without leaving psql."
+  parts:
+    - { token: "\\! COMMAND", meaning: "Run COMMAND in a shell and show its output." }
+  why: "Lets you run a check script and query the database in the same session."
+  alternatives:
+    - { command: "Run the script from a separate terminal", note: "Same result." }
+  docs: { title: "PostgreSQL: psql meta-commands", url: "https://www.postgresql.org/docs/current/app-psql.html" }
+
+- id: pg-explain-analyze
+  match: "^EXPLAIN ANALYZE "
+  summary: "Runs a query and shows the plan PostgreSQL chose, with actual row counts and times for each step."
+  parts:
+    - { token: "EXPLAIN", meaning: "Show the plan." }
+    - { token: "ANALYZE", meaning: "Actually execute the query, and report real timings and rows, not just estimates." }
+  why: "A Seq Scan reading millions of rows to return a few is the signature of a missing index."
+  alternatives:
+    - { command: "EXPLAIN SELECT ...", note: "Plan only, without running it (safe for writes)." }
+    - { command: "pg_stat_statements", note: "Which queries take the most total time." }
+  docs: { title: "PostgreSQL: EXPLAIN", url: "https://www.postgresql.org/docs/current/sql-explain.html" }
+
+- id: pg-stat-replication
+  match: "pg_stat_replication"
+  summary: "Shows each standby connected to this primary and how far behind it is."
+  parts:
+    - { token: "application_name", meaning: "Which standby." }
+    - { token: "write_lag, flush_lag, replay_lag", meaning: "How long until recent WAL was written, flushed, and applied on the standby." }
+  why: "replay_lag is how stale reads from that replica are."
+  alternatives:
+    - { command: "SELECT now() - pg_last_xact_replay_timestamp() (on the standby)", note: "The standby's own view of its delay." }
+  docs: { title: "PostgreSQL: pg_stat_replication", url: "https://www.postgresql.org/docs/current/monitoring-stats.html" }
+
+- id: pg-blocking-pids
+  match: "pg_blocking_pids"
+  summary: "Lists sessions waiting on a lock, and which sessions block them."
+  parts:
+    - { token: "pg_blocking_pids(pid)", meaning: "The process ids holding the locks this session waits for." }
+    - { token: "wait_event_type = 'Lock'", meaning: "Only sessions waiting on a lock." }
+  why: "Follow the blocking pids to the session at the head of the chain, often one idle in transaction."
+  alternatives:
+    - { command: "SELECT * FROM pg_locks WHERE NOT granted", note: "The raw lock requests." }
+  docs: { title: "PostgreSQL: system information functions", url: "https://www.postgresql.org/docs/current/functions-info.html" }
+
+- id: pg-stat-activity
+  match: "^SELECT .*pg_stat_activity"
+  summary: "Lists sessions in a database: their state, what they wait on, and how long their transaction has been open."
+  parts:
+    - { token: "state", meaning: "active, idle, or idle in transaction (holding a transaction open while doing nothing)." }
+    - { token: "wait_event_type", meaning: "What it's waiting on, such as Lock." }
+    - { token: "now() - xact_start AS xact_age", meaning: "How long its current transaction has been open." }
+    - { token: "left(query, 50)", meaning: "The first 50 characters of its latest query." }
+    - { token: "ORDER BY xact_start", meaning: "Oldest transaction first." }
+  why: "A long-open idle in transaction session holds locks and blocks vacuum; ordering by xact_start puts it at the top."
+  alternatives:
+    - { command: "SELECT pg_terminate_backend(PID)", note: "End a session once you've found it." }
+  docs: { title: "PostgreSQL: pg_stat_activity", url: "https://www.postgresql.org/docs/current/monitoring-stats.html" }
+
+- id: pg-replication-slots
+  match: "pg_replication_slots"
+  summary: "Lists replication slots, whether a consumer is attached, and how much WAL each is holding back."
+  parts:
+    - { token: "active", meaning: "Whether a consumer is connected to the slot right now." }
+    - { token: "wal_status", meaning: "reserved or extended: WAL is kept; unreserved or lost: it's past max_slot_wal_keep_size." }
+    - { token: "pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)", meaning: "Bytes between the current WAL position and the oldest the slot still needs." }
+    - { token: "pg_size_pretty(...)", meaning: "Print bytes as kB, MB, GB." }
+  why: "An inactive slot keeps every WAL file since its consumer left, which is a classic way for pg_wal to fill the disk."
+  alternatives:
+    - { command: "SELECT pg_drop_replication_slot('NAME')", note: "Remove a slot nobody will use again." }
+  docs: { title: "PostgreSQL: pg_replication_slots", url: "https://www.postgresql.org/docs/current/view-pg-replication-slots.html" }
+
+- id: pg-show
+  match: "^SHOW \\w+;"
+  summary: "Prints the current value of a PostgreSQL setting."
+  parts:
+    - { token: "SHOW name;", meaning: "The setting's current value, such as max_slot_wal_keep_size (-1 means no limit) or synchronous_standby_names (empty means commits don't wait for any standby)." }
+  why: "Shows the value the server is running with right now, which is what decides its behaviour."
+  alternatives:
+    - { command: "SELECT setting, unit, source FROM pg_settings WHERE name = 'NAME'", note: "With its unit and where it was set." }
+  docs: { title: "PostgreSQL: SHOW", url: "https://www.postgresql.org/docs/current/sql-show.html" }
+
+- id: mysql-innodb-status
+  match: "^SHOW ENGINE INNODB STATUS"
+  summary: "MySQL: prints InnoDB's status report, including the most recent deadlock."
+  parts:
+    - { token: "SHOW ENGINE INNODB STATUS", meaning: "InnoDB's internal status: transactions, locks, buffer pool and more." }
+    - { token: "\\G", meaning: "End the statement with vertical output, so the long report is readable." }
+  why: "The LATEST DETECTED DEADLOCK section shows both transactions, the locks they held and wanted, and which one was rolled back."
+  alternatives:
+    - { command: "SET GLOBAL innodb_print_all_deadlocks = ON", note: "Log every deadlock to the error log, not just the latest." }
+  docs: { title: "MySQL: SHOW ENGINE", url: "https://dev.mysql.com/doc/refman/8.4/en/show-engine.html" }
+
+- id: mysql-innodb-metrics
+  match: "INNODB_METRICS"
+  summary: "MySQL: reads an InnoDB counter, here the number of deadlocks."
+  parts:
+    - { token: "information_schema.INNODB_METRICS", meaning: "InnoDB's performance counters." }
+    - { token: "name = 'lock_deadlocks'", meaning: "The deadlock counter." }
+  why: "Running it before and after a change shows whether deadlocks keep happening."
+  alternatives:
+    - { command: "SHOW ENGINE INNODB STATUS\\G", note: "Details of the most recent one." }
+  docs: { title: "MySQL: INNODB_METRICS", url: "https://dev.mysql.com/doc/refman/8.4/en/information-schema-innodb-metrics-table.html" }
 
 - id: sqlcmd-query
   match: "^sqlcmd "

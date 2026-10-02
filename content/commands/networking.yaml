@@ -295,3 +295,19 @@
     - { command: "sudo iptables -S", note: "The underlying rules." }
     - { command: "sudo nft list ruleset", note: "On nftables systems." }
   docs: { title: "ufw(8)", url: "https://manpages.ubuntu.com/manpages/noble/en/man8/ufw.8.html" }
+
+- id: ss-listening
+  match: "^(sudo )?ss -l"
+  summary: "Lists listening sockets."
+  parts:
+    - { token: "ss", meaning: "Socket statistics (replaces netstat)." }
+    - { token: "-l", meaning: "Listening sockets only." }
+    - { token: "-t", meaning: "TCP only." }
+    - { token: "-n", meaning: "Numeric: show 5432, not \"postgresql\"." }
+    - { token: "-p", meaning: "(If given, needs root) the process that owns each socket." }
+    - { token: "sport = :5432", meaning: "(If given) a filter: only local port 5432." }
+  why: "Answers \"is anything listening, and on which address?\": 127.0.0.1 means only local clients can connect."
+  alternatives:
+    - { command: "netstat -ltnp", note: "Older tool." }
+    - { command: "lsof -iTCP -sTCP:LISTEN", note: "Also shows the process." }
+  docs: { title: "ss(8)", url: "https://man7.org/linux/man-pages/man8/ss.8.html" }

@@ -1,7 +1,7 @@
 # Plan: Command breakdown in the debrief
 
 Status: **approved 2026-10-02 (key + verify + what you ran; shared library); B1
-done with Linux as the first track; B2 done (AWS, Azure, Google Cloud); B3 in progress (Networking done).** Requested: "a breakdown of
+done with Linux as the first track; B2 done (AWS, Azure, Google Cloud); B3 in progress (Networking, Databases done).** Requested: "a breakdown of
 the commands that are used to troubleshoot these challenges ... what each
 command does, explain the switches and regex (if needed), and why this command
 is the best one, show some alternative commands ... available after
