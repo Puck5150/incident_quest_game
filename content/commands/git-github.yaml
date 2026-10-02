@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: git and the GitHub CLI (gh). First matching entry wins.
+# --json picks fields from gh's JSON output; --jq filters it with a jq
+# expression: .[] walks a list, \(.x) inserts a field into a string.
+
+- id: gh-run-log-grep
+  match: "^gh run view .*--log \\| grep "
+  summary: "Prints a workflow run's full log and keeps only the lines you care about."
+  parts:
+    - { token: "run view [ID]", meaning: "A workflow run (without an id, gh asks which one)." }
+    - { token: "--log", meaning: "Print the log of every step of every job." }
+    - { token: "| grep -i 'cache'", meaning: "Keep matching lines; -i ignores case." }
+    - { token: "-E 'dist|Runner|Machine name'", meaning: "(If given) extended regex, so | means \"or\": keep lines matching any of them." }
+  why: "Logs are long; one grep finds whether the cache was restored, which version was installed, or which runner did the work."
+  alternatives:
+    - { command: "gh run view ID --log-failed", note: "Only the failed steps." }
+    - { command: "Actions tab > run > job > search box", note: "Search the log in the browser." }
+  docs: { title: "gh run view", url: "https://cli.github.com/manual/gh_run_view" }
+
+- id: gh-run-log-failed
+  match: "^gh run view .*--log-failed"
+  summary: "Prints the log of only the failed steps of a workflow run."
+  parts:
+    - { token: "run view [ID]", meaning: "A workflow run (without an id, gh asks which one)." }
+    - { token: "--log-failed", meaning: "Only the steps that failed." }
+  why: "Goes straight to the error instead of scrolling past every successful step."
+  alternatives:
+    - { command: "gh run view ID --log", note: "Every step." }
+    - { command: "gh run rerun ID --failed", note: "Rerun just the failed jobs." }
+  docs: { title: "gh run view", url: "https://cli.github.com/manual/gh_run_view" }
+
+- id: gh-run-list
+  match: "^gh run list"
+  summary: "Lists recent GitHub Actions workflow runs with their result."
+  parts:
+    - { token: "--workflow ci.yml", meaning: "(If given) only runs of this workflow." }
+    - { token: "--limit 3", meaning: "Only the newest 3 runs." }
+    - { token: "--json databaseId,headSha,...", meaning: "(If given) output these fields as JSON." }
+    - { token: "--jq '.[] | \"\\(.databaseId) \\(.headSha[0:7]) ...\"'", meaning: "For each run, print one line: id, the first 7 characters of the commit, title, and the time part ([11:19]) of start and finish." }
+  why: "Shows when runs started failing and which commit each ran on; start and finish times show two deploys overlapping."
+  alternatives:
+    - { command: "gh run list --branch main --status failure", note: "Only failed runs on main." }
+    - { command: "Actions tab", note: "The same list in the browser." }
+  docs: { title: "gh run list", url: "https://cli.github.com/manual/gh_run_list" }
+
+- id: gh-pr-list
+  match: "^gh pr list"
+  summary: "Lists pull requests."
+  parts:
+    - { token: "--state all", meaning: "Open, closed and merged, not just open." }
+    - { token: "--limit 4", meaning: "Only the newest 4." }
+    - { token: "--json number,title,headRepositoryOwner", meaning: "Output these fields as JSON." }
+    - { token: "--jq '.[] | \"\\(.number) \\(.headRepositoryOwner.login) \\(.title)\"'", meaning: "One line per PR: number, the owner of the repository it comes from, and title." }
+  why: "A PR from a fork (a different head owner) gets a read-only token and no secrets, which explains workflows that fail only for outside contributors."
+  alternatives:
+    - { command: "gh pr view N --json isCrossRepository", note: "Whether one PR comes from a fork." }
+  docs: { title: "gh pr list", url: "https://cli.github.com/manual/gh_pr_list" }
+
+- id: gh-pr-view
+  match: "^gh pr view"
+  summary: "Shows a pull request's details."
+  parts:
+    - { token: "412", meaning: "The PR number." }
+    - { token: "--json labels", meaning: "Output its labels as JSON." }
+    - { token: "--jq .labels[].name", meaning: "Print just each label's name." }
+  why: "Workflows can be gated on labels; this shows exactly which labels the PR has."
+  alternatives:
+    - { command: "gh pr view 412 --web", note: "Open it in the browser." }
+  docs: { title: "gh pr view", url: "https://cli.github.com/manual/gh_pr_view" }
+
+- id: gh-pr-checks
+  match: "^gh pr checks"
+  summary: "Shows the status of every check on a pull request."
+  parts:
+    - { token: "590", meaning: "The PR number." }
+  why: "Shows which checks ran, passed, failed or never reported, which is what branch protection compares with its required checks."
+  alternatives:
+    - { command: "gh pr checks 590 --watch", note: "Wait until they finish." }
+  docs: { title: "gh pr checks", url: "https://cli.github.com/manual/gh_pr_checks" }
+
+- id: gh-pr-diff-names
+  match: "^gh pr diff"
+  summary: "Shows what a pull request changes."
+  parts:
+    - { token: "590", meaning: "The PR number." }
+    - { token: "--name-only", meaning: "Only the changed file names, not the diff." }
+  why: "Path filters skip workflows when no matching file changed; the file list shows why a check didn't run."
+  alternatives:
+    - { command: "git diff --name-only main...BRANCH", note: "The same with git." }
+  docs: { title: "gh pr diff", url: "https://cli.github.com/manual/gh_pr_diff" }
+
+- id: gh-api
+  match: "^gh api "
+  summary: "Calls the GitHub REST API with your gh credentials."
+  parts:
+    - { token: "repos/OWNER/REPO/branches/main/protection/required_status_checks", meaning: "The endpoint: the checks branch protection requires on main." }
+    - { token: "--jq .contexts", meaning: "Print just the list of required check names." }
+  why: "A required check whose name no workflow reports (after a job rename, say) stays \"expected\" forever and blocks every merge."
+  alternatives:
+    - { command: "Settings > Branches (or Rules) in the repository", note: "The same settings in the browser." }
+  docs: { title: "gh api", url: "https://cli.github.com/manual/gh_api" }
+
+- id: git-log-oneline
+  match: "^git log --oneline"
+  summary: "Lists recent commits, one line each."
+  parts:
+    - { token: "--oneline", meaning: "Short hash and subject only." }
+    - { token: "-3", meaning: "Only the last 3 commits." }
+  why: "Matches commits to the short SHAs shown on workflow runs."
+  alternatives:
+    - { command: "git log --oneline --graph --all", note: "With branches drawn." }
+  docs: { title: "git log", url: "https://git-scm.com/docs/git-log" }
+
+- id: git-show-stat
+  match: "^git show --stat"
+  summary: "Shows a commit's message and which files it changed, with line counts."
+  parts:
+    - { token: "--stat", meaning: "A per-file summary of lines added and removed, instead of the full diff." }
+    - { token: "HEAD", meaning: "The current commit." }
+  why: "Shows what the triggering commit actually touched, such as the lockfile."
+  alternatives:
+    - { command: "git show HEAD -- FILE", note: "The full diff for one file." }
+  docs: { title: "git show", url: "https://git-scm.com/docs/git-show" }

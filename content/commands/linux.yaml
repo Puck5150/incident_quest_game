@@ -402,3 +402,15 @@
   alternatives:
     - { command: "grep -Ev '^\\s*(#|$)' FILE", note: "One grep: also skips indented comments." }
   docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
+
+- id: grep-after-context
+  match: "^grep -A\\d+ "
+  summary: "Prints the lines matching a pattern plus the lines right after each."
+  parts:
+    - { token: "-A1 / -A2", meaning: "Also print 1 (or 2) lines After each match." }
+    - { token: "'\"node_modules/NAME\"'", meaning: "The pattern, quoted for the shell so the double quotes are part of it: the package's key in package-lock.json." }
+  why: "In package-lock.json the line after a package's key is its \"version\"; this shows the exact version installed without opening the file."
+  alternatives:
+    - { command: "npm ls NAME", note: "The installed version and what depends on it." }
+    - { command: "jq '.packages[\"node_modules/NAME\"].version' package-lock.json", note: "Exactly the version field." }
+  docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
