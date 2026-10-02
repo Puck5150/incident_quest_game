@@ -11,14 +11,16 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 ## Gameplay
 - Stateful terminal simulation (filesystem that actually changes, `cd`, pipes)
 - Daily-play streak (MVP uses a clean-resolution streak; see PLAN.md open question 3)
-- Timed "on-call shift" mode: multiple incidents queued at once
+- Timed "on-call shift" mode: multiple incidents queued at once (planned: PLAN_ONCALL_SHIFT.md)
 - Multi-stage incidents (fix reveals a second problem)
 - Postmortem-writing exercise after the debrief (SRE track)
 
 ## Content
-- More design challenges (slot, canvas and "pick your cloud"; see AUTHORING.md)
-- More cloud content: priority AWS, then Azure, then Google Cloud (PLAN_CLOUD_COVERAGE.md
-  phases A-D shipped; candidates: Lambda timeouts, Azure DNS, more design challenges)
+- More cloud content: priority AWS, then Azure, then Google Cloud. Shipped: PLAN_CLOUD_COVERAGE.md
+  phases A-D and design challenges on the exam-outline gaps (ingestion, caching, containers,
+  identity) for all three clouds. Candidates: Lambda timeouts, Azure DNS, canvas challenges
+  on the newer topics
+- `concepts` for design challenges (PLAN_GUIDANCE.md G4; option facts stand in for now)
 - Amazon Builders' Library source for timeouts/retries (page couldn't be fetched)
 - More tracks: Fundamentals, Windows/identity, Scripting and code, Configuration as Code (Ansible/GitOps), Observability as its own track, SRE, Security/DevSecOps
 - More scenarios per track (each original track has two as of 2026-10-01) and difficulty 5
