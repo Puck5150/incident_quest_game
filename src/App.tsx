@@ -14,6 +14,7 @@ import type { Challenge, Picks } from './schema/challenge.ts'
 import type { Design } from './schema/canvas.ts'
 import type { CrossCloud } from './components/CrossCloud.tsx'
 import Icon from './components/Icon.tsx'
+import Callsign from './components/Callsign.tsx'
 
 // Home and skill tree load up front; play and debrief screens load on first use.
 const IncidentScreen = lazy(() => import('./screens/IncidentScreen.tsx'))
@@ -63,7 +64,7 @@ export default function App() {
   const canvas =
     multi?.kind === 'canvas' && provider ? multi.variants[provider] : item?.kind === 'canvas' ? item.canvas : undefined
   const { rank, next } = rankFor(progress.xp)
-  const { theme, motion = 'system', relaxed = false } = progress.settings
+  const { theme, motion = 'system', relaxed = false, callsign } = progress.settings
 
   useEffect(() => saveProgress(progress), [progress])
   useEffect(() => {
@@ -207,13 +208,14 @@ export default function App() {
           <span className="font-semibold tracking-tight">
             Incident <span className="text-accent">Quest</span>
           </span>
+          <Callsign value={callsign} onChange={(c) => setting({ callsign: c })} />
           <nav aria-label="Main" className="flex gap-1">
-            {navButton('Queue', '#/', screen.name === 'home')}
-            {navButton('Skill tree', '#/tree', screen.name === 'tree')}
+            {navButton('Ops board', '#/', screen.name === 'home')}
+            {navButton('Clearance map', '#/tree', screen.name === 'tree')}
           </nav>
           <dl className="flex flex-wrap gap-x-5 text-sm">
             <div className="flex gap-1.5">
-              <dt className="text-muted">Rank</dt>
+              <dt className="text-muted">Clearance</dt>
               <dd>{rank.name}</dd>
             </div>
             <div className="flex gap-1.5">

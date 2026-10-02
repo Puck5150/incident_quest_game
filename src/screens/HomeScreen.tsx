@@ -45,7 +45,7 @@ export default function HomeScreen({
   return (
     <div className="space-y-8">
       <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
-        Incident queue
+        Ops board
       </h1>
       {tracks.map((track) => {
         const items = allItems.filter((s) => s.track === track.id).sort((a, b) => a.difficulty - b.difficulty)

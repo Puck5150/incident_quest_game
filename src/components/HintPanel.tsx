@@ -17,7 +17,7 @@ export default function HintPanel({
   return (
     <section aria-labelledby="hints-h" className="rounded-lg border border-line bg-panel p-4">
       <h2 id="hints-h" className="mb-2 font-semibold">
-        Hints
+        Ask HQ
       </h2>
       <ol className="space-y-3 text-sm">
         {HINT_TIERS.slice(0, used).map((t) => (

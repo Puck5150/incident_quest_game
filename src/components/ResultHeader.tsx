@@ -46,7 +46,7 @@ export default function ResultHeader({
             className="anim-rise flex items-center gap-1.5 rounded-md border border-warn px-2.5 py-1 text-warn"
             style={{ '--delay': '1150ms' } as CSSProperties}
           >
-            <Icon name="star" /> Promoted to {rankUp}
+            <Icon name="star" /> Clearance raised: {rankUp}
           </strong>
         )}
         {unlocked.map((t, i) => (

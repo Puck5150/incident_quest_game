@@ -106,7 +106,7 @@ commit the result (a test fails if you forget).
 
 Any incident can add `concepts`: 1 to 4 terms, each with a plain-English `text`
 and a `url` to the provider's own docs. Players see them **during play**, free, in
-the Field guide panel, and again in the debrief after the root cause. Write them
+the Field manual panel, and again in the debrief after the root cause. Write them
 for someone who has never used the platform: what the thing is and why it
 exists, not how to configure it.
 

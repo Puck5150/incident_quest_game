@@ -66,7 +66,7 @@ export default function SkillTreeScreen({
   return (
     <div className="space-y-4">
       <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
-        Skill tree
+        Clearance map
       </h1>
       <p className="max-w-prose text-muted">
         Finish an incident or challenge in a track to unlock the tracks that build on it. Select a track to see its incidents.

@@ -54,10 +54,10 @@ export default function DebriefScreen({
       <ResultHeader
         status={
           score.relaxed ? (
-            'Incident resolved'
+            'Mission clear'
           ) : (
             <>
-              Incident resolved in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
+              Mission clear in <span className="tabular-nums">{mmss(score.elapsedMs)}</span>
             </>
           )
         }
@@ -184,7 +184,7 @@ export default function DebriefScreen({
 
       <div className="flex flex-wrap gap-3">
         <button onClick={onHome} className="rounded-md bg-accent px-4 py-2 font-medium text-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-          Back to queue
+          Back to ops board
         </button>
         <button onClick={onReplay} className="rounded-md border border-line px-4 py-2 hover:border-accent focus-visible:outline-2 focus-visible:outline-accent">
           Replay incident

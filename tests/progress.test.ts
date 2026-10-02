@@ -51,10 +51,10 @@ describe('recordResult', () => {
 
 describe('ranks', () => {
   it('maps XP to rank and next rank', () => {
-    expect(rankFor(0).rank.name).toBe('Help Desk')
-    expect(rankFor(299).next?.xp).toBe(300)
-    expect(rankFor(5000).rank.name).toBe('Principal Engineer')
-    expect(rankFor(5000).next).toBeUndefined()
+    expect(rankFor(0).rank.name).toBe('Recruit')
+    expect(rankFor(599).next?.xp).toBe(600)
+    expect(rankFor(9000).rank.name).toBe('Ops Director')
+    expect(rankFor(9000).next).toBeUndefined()
   })
 })
 
@@ -117,7 +117,7 @@ describe('storage', () => {
     xp: 40,
     completed: { a: { bestScore: 40, completedAt: '2026-09-30', hintsUsed: 0, clean: true, providers: ['aws'] } },
     streak: { current: 1, best: 1 },
-    settings: { theme: 'light', motion: 'reduce', relaxed: true },
+    settings: { theme: 'light', motion: 'reduce', relaxed: true, callsign: 'NIGHTOWL-7' },
   }
   const loads = (patch: (v: typeof valid & Record<string, unknown>) => void) => {
     const v = structuredClone(valid) as typeof valid & Record<string, unknown>
@@ -132,6 +132,7 @@ describe('storage', () => {
       loads((v) => {
         delete (v.settings as Partial<typeof valid.settings>).motion
         delete (v.settings as Partial<typeof valid.settings>).relaxed
+        delete (v.settings as Partial<typeof valid.settings>).callsign
         delete (v.completed.a as Partial<typeof valid.completed.a>).providers
       }),
     ).toBe(true)
@@ -148,6 +149,8 @@ describe('storage', () => {
     ['unknown theme', (v: Record<string, unknown>) => ((v.settings as typeof valid.settings).theme = 'sepia')],
     ['unknown motion', (v: Record<string, unknown>) => ((v.settings as typeof valid.settings).motion = 'fast')],
     ['relaxed not a boolean', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).relaxed = 'yes')],
+    ['callsign with markup', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).callsign = '<b>owl</b>')],
+    ['empty callsign', (v: Record<string, unknown>) => ((v.settings as Record<string, unknown>).callsign = '')],
     ['not an object', (v: Record<string, unknown>) => Object.keys(v).forEach((k) => delete v[k])],
   ])('rejects a save with %s', (_, patch) => {
     expect(loads(patch)).toBe(false)

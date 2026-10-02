@@ -56,7 +56,7 @@ export default function FieldGuide({
   return (
     <section aria-labelledby="guide-h" className="rounded-lg border border-line bg-panel p-4 text-sm">
       <h2 id="guide-h" className="mb-2 font-semibold">
-        Field guide <span className="font-normal text-muted">(free)</span>
+        Field manual <span className="font-normal text-muted">(free)</span>
       </h2>
       {coach && <p>{coach}</p>}
 

@@ -15,7 +15,7 @@ afterEach(cleanup)
 // Play and debrief screens load lazily, so the first query after a screen change awaits.
 const openIncident = async () => {
   fireEvent.click(screen.getByRole('button', { name: /Checkout returning 500s/ }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Take incident' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Accept mission' }))
 }
 
 const type = (cmd: string) => {
@@ -55,7 +55,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   type('df -h')
   expect(output()).toMatch(/28%/)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Close incident' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
 
   // Debrief: 100 base + 20 time + 20 methodical + 10 verified - 10 wrong hyp - 25 destructive = 115
   // The XP counts up visually; screen readers (and this test) get the final value.
@@ -63,7 +63,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   expect(screen.getByRole('heading', { name: 'Root cause' })).toBeTruthy()
   expect(screen.getByText('The root filesystem is at 100%')).toBeTruthy() // evidence label, not the tag id
   expect(location.hash).toBe('#/done/full-disk') // a reload opens the queue, not a fresh run
-  expect(screen.getByText(/Promoted to Support Engineer/)).toBeTruthy()
+  expect(screen.getByText(/Clearance raised: Operator/)).toBeTruthy()
   // Linux was Containers' only prerequisite.
   expect(screen.getByRole('button', { name: /Track unlocked: Containers & Kubernetes/ })).toBeTruthy()
 
@@ -71,7 +71,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   unmount()
   render(<App />)
   expect(screen.getByRole('button', { name: /best 115 XP/ })).toBeTruthy()
-  expect(screen.getByText('Support Engineer')).toBeTruthy()
+  expect(screen.getByText('Operator')).toBeTruthy()
 })
 
 it('theme toggle switches and persists', () => {
@@ -135,7 +135,7 @@ it('shuffles hypotheses so the right answer is not always first', async () => {
 
 it('skill tree shows only tracks with content, with lock state and requirements', async () => {
   render(<App />)
-  fireEvent.click(screen.getByRole('button', { name: 'Skill tree' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Clearance map' }))
   // (The phone layout renders the same nodes; jsdom doesn't apply the CSS that hides it.)
   const tracks = within(await screen.findByRole('list', { name: 'Tracks' })) // navigation goes through the URL
   expect(document.activeElement?.id).toBe('screen-title') // focus follows the screen change
@@ -172,11 +172,22 @@ it('reduce motion setting persists and marks the document', () => {
 it('the field guide is there from the start, free, and its coaching follows the phase', async () => {
   render(<App />)
   await openIncident()
-  const guide = () => screen.getByRole('region', { name: /Field guide/ })
+  const guide = () => screen.getByRole('region', { name: /Field manual/ })
   expect(guide().textContent).toMatch(/Collect evidence/)
   expect(within(guide()).getByText('How to approach it')).toBeTruthy()
 
   fireEvent.click(screen.getByLabelText(/filesystem is full/))
   fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
   expect(guide().textContent).toMatch(/smallest safe change/)
+})
+
+it('choose a callsign: cleaned up, saved, and shown after a reload', async () => {
+  const { unmount } = render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Choose callsign' }))
+  fireEvent.change(screen.getByLabelText('Callsign'), { target: { value: 'night owl!7' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(screen.getByRole('button', { name: 'NIGHTOWL7' })).toBeTruthy()
+  unmount()
+  render(<App />)
+  expect(screen.getByRole('button', { name: 'NIGHTOWL7' })).toBeTruthy()
 })

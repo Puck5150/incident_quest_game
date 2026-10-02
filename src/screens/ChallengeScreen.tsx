@@ -62,7 +62,7 @@ export default function ChallengeScreen({
         <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
           {c.title}
         </h1>
-        <span className="rounded border border-accent px-2 py-0.5 text-sm text-accent">Design challenge</span>
+        <span className="rounded border border-accent px-2 py-0.5 text-sm text-accent">Build order</span>
         <span className="rounded border border-line px-2 py-0.5 font-mono text-sm text-muted uppercase">{c.provider}</span>
       </header>
 

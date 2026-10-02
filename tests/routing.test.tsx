@@ -34,10 +34,10 @@ it('opens an incident from a deep link, and Back returns to the queue', async ()
   history.pushState(null, '', '#/')
   history.pushState(null, '', '#/play/full-disk')
   render(<App />)
-  expect(await screen.findByRole('button', { name: 'Take incident' })).toBeTruthy()
+  expect(await screen.findByRole('button', { name: 'Accept mission' })).toBeTruthy()
 
   history.back()
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Take incident' })).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Accept mission' })).toBeNull())
   expect(location.hash).toBe('#/')
   expect(screen.getByRole('button', { name: /Checkout returning 500s/ })).toBeTruthy()
 })
@@ -45,7 +45,7 @@ it('opens an incident from a deep link, and Back returns to the queue', async ()
 it('playing from the queue updates the URL', async () => {
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: /Checkout returning 500s/ }))
-  await screen.findByRole('button', { name: 'Take incident' })
+  await screen.findByRole('button', { name: 'Accept mission' })
   expect(location.hash).toBe('#/play/full-disk')
 })
 
@@ -60,7 +60,7 @@ it('a locked item opens its track instead', async () => {
   location.hash = '#/play/crashloopbackoff' // Containers needs Linux first
   render(<App />)
   await waitFor(() => expect(document.activeElement?.id).toBe('track-containers'))
-  expect(screen.queryByRole('button', { name: 'Take incident' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Accept mission' })).toBeNull()
 })
 
 it('an unknown item falls back to the queue', async () => {
@@ -83,12 +83,12 @@ describe('preview page', () => {
     expect(screen.getByText(/nothing is saved to your progress/)).toBeTruthy()
 
     // Play it through: the debrief appears, but no progress is saved and the URL stays put.
-    fireEvent.click(screen.getByRole('button', { name: 'Take incident' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
     fireEvent.click(screen.getByLabelText(/filesystem is full/))
     fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
     fireEvent.click(screen.getByRole('button', { name: /Truncate app\.log/ }))
     fireEvent.click(screen.getByRole('button', { name: /Fix the path typo/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Close incident' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
     expect(await screen.findByRole('heading', { name: 'Root cause' })).toBeTruthy()
     expect(JSON.parse(localStorage.getItem('incident-quest:v1') ?? '{"completed":{}}').completed).toEqual({})
     expect(location.hash).toBe('#/preview')
@@ -102,7 +102,7 @@ describe('preview page', () => {
     await paste(fullDisk.replace('[truncate-log, fix-logrotate]', '[truncate-log, typo]'))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toMatch(/"typo" is not an action with kind: fix/)
-    expect(screen.queryByRole('button', { name: 'Take incident' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Accept mission' })).toBeNull()
   })
 
   it('checks the track exists', async () => {

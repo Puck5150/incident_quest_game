@@ -152,7 +152,7 @@ export default function IncidentScreen({
 
       {phase === 'briefing' ? (
         <button className={`${button} bg-accent text-bg`} onClick={() => send({ type: 'START' })}>
-          Take incident
+          Accept mission
         </button>
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
@@ -215,7 +215,7 @@ export default function IncidentScreen({
                 </ul>
                 {fixComplete(scenario, session.log) && (
                   <button className={`${button} mt-4 w-full bg-ok text-bg`} onClick={close}>
-                    Close incident
+                    Close out
                   </button>
                 )}
               </section>

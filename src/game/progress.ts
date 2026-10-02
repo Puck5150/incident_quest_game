@@ -22,8 +22,8 @@ export type Progress = {
   >
   // Consecutive incidents resolved "clean": no hints, no destructive actions.
   streak: { current: number; best: number }
-  // `motion` and `relaxed` were added after v1 shipped, so they're optional: old saves stay valid.
-  settings: { theme: 'dark' | 'light'; motion?: 'system' | 'reduce'; relaxed?: boolean }
+  // Everything after `theme` was added after v1 shipped, so it's optional: old saves stay valid.
+  settings: { theme: 'dark' | 'light'; motion?: 'system' | 'reduce'; relaxed?: boolean; callsign?: string }
 }
 
 // Saved data is untrusted: a player can edit it, and an old app version may
@@ -58,7 +58,15 @@ export const isProgress = (p: unknown): p is Progress =>
   isObj(p.settings) &&
   oneOf('dark', 'light')(p.settings.theme) &&
   optional(p.settings.motion, oneOf('system', 'reduce')) &&
-  optional(p.settings.relaxed, (r) => typeof r === 'boolean')
+  optional(p.settings.relaxed, (r) => typeof r === 'boolean') &&
+  optional(p.settings.callsign, (c) => typeof c === 'string' && c === toCallsign(c) && c !== '')
+
+// Callsigns are short, upper-case radio names: letters, digits and dashes.
+export const toCallsign = (s: string) =>
+  s
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]+/g, '')
+    .slice(0, 16)
 
 export const newProgress = (): Progress => ({
   version: 1,
@@ -125,15 +133,17 @@ export function recordResult(
   }
 }
 
-// ponytail: thresholds sized for the six MVP incidents (~1,100 base XP total).
-// Retune when more content lands.
+// Clearance levels. ponytail: sized for 63 items (~13,100 base XP); the first
+// mission always promotes, the top needs most of the catalogue. Retune when
+// content roughly doubles.
 export const RANKS = [
-  { name: 'Help Desk', xp: 0 },
-  { name: 'Support Engineer', xp: 100 },
-  { name: 'Systems Engineer', xp: 300 },
-  { name: 'Senior Engineer', xp: 600 },
-  { name: 'Staff Engineer', xp: 1000 },
-  { name: 'Principal Engineer', xp: 1500 },
+  { name: 'Recruit', xp: 0 },
+  { name: 'Operator', xp: 100 },
+  { name: 'Specialist', xp: 600 },
+  { name: 'Senior Specialist', xp: 1500 },
+  { name: 'Lead Responder', xp: 3000 },
+  { name: 'Duty Commander', xp: 5500 },
+  { name: 'Ops Director', xp: 9000 },
 ] as const
 
 export function rankFor(xp: number) {
