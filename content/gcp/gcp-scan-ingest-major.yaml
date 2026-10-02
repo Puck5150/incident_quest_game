@@ -1,0 +1,425 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: gcp-scan-ingest-major
+track: gcp
+difficulty: 5
+title: "Scanned claims stopped landing in the data lake, and the backlog is growing"
+par_minutes: 30
+
+ticket:
+  from: "Claims operations"
+  priority: P1
+  body: |
+    Since yesterday afternoon no scanned claim forms have shown up for our
+    assessors. Customers' uploads succeed (they get a reference number),
+    but nothing reaches the claims queue, and our regulator-set deadline is
+    5 working days from upload. The platform team says the cluster has been
+    noisy for weeks with autoscaler warnings, if that helps.
+
+environment: |
+  Customers upload scans to uploads-api, which publishes one Pub/Sub message
+  per scan to the topic scans (project apps-prod). scan-ingest, a GKE
+  deployment in namespace scans (cluster apps-prod-gke, europe-west1), pulls
+  from the subscription scan-ingest-sub and writes each scan to the bucket
+  gs://acme-scans-raw in project data-lake-prod, creating each object with
+  an ifGenerationMatch=0 precondition. Yesterday at 14:00 (CHG-3310)
+  scan-ingest moved to a new node pool with Workload Identity Federation for
+  GKE and its own IAM service account, scan-ingest@apps-prod.iam.gserviceaccount.com.
+
+diagram:
+  nodes:
+    - { id: api, label: "uploads-api", col: 0, row: 0, status: ok }
+    - { id: topic, label: "Pub/Sub scans", col: 1, row: 0, status: ok }
+    - { id: ingest, label: "scan-ingest (GKE)", col: 2, row: 0, status: down }
+    - { id: bucket, label: "gs://acme-scans-raw (data-lake-prod)", col: 3, row: 0, status: ok }
+    - { id: dlq, label: "Pub/Sub scan-ingest-dlq", col: 2, row: 1, status: degraded }
+  edges:
+    - { from: api, to: topic }
+    - { from: topic, to: ingest }
+    - { from: ingest, to: bucket }
+    - { from: ingest, to: dlq }
+
+terminal:
+  prompt: "you@cloudshell:~ (apps-prod)$"
+  commands:
+    - match: "kubectl logs deploy/scan-ingest -n scans --since=10m"
+      when_actions: [bind-wi, ingress-rule]
+      output: |
+        10:31:04 INFO  SCN-91877 written gs://acme-scans-raw/2026-10-02/SCN-91877.pdf (generation 1759401064112093)
+        10:31:05 INFO  SCN-91878 written gs://acme-scans-raw/2026-10-02/SCN-91878.pdf (generation 1759401065240117)
+    - match: "kubectl logs deploy/scan-ingest -n scans --since=10m"
+      when_actions: [bind-wi]
+      evidence: vpcsc-403
+      output: |
+        10:12:40 ERROR SCN-91802 write gs://acme-scans-raw/2026-10-02/SCN-91802.pdf: 403 Request is prohibited by organization's policy. vpcServiceControlsUniqueIdentifier: Kq8vR2xN0bT7pLmZ3wYc
+        10:12:40 WARN  SCN-91802 nacked (delivery attempt 2 of 5)
+    - match: "kubectl logs deploy/scan-ingest -n scans --since=10m"
+      evidence: token-denied
+      output: |
+        10:02:11 ERROR SCN-91744 credentials: GKE metadata server could not get a token for scan-ingest@apps-prod.iam.gserviceaccount.com: PERMISSION_DENIED: Permission 'iam.serviceAccounts.getAccessToken' denied
+        10:02:11 WARN  SCN-91744 nacked (delivery attempt 4 of 5)
+    - match: "kubectl get serviceaccount scan-ingest -n scans -o yaml"
+      evidence: ksa-annotated
+      output: |
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: scan-ingest
+          namespace: scans
+          annotations:
+            iam.gke.io/gcp-service-account: scan-ingest@apps-prod.iam.gserviceaccount.com
+    - match: "gcloud iam service-accounts get-iam-policy scan-ingest@apps-prod.iam.gserviceaccount.com --format=json"
+      when_actions: [bind-wi]
+      output: |
+        {
+          "bindings": [
+            { "members": [ "serviceAccount:apps-prod.svc.id.goog[scans/scan-ingest]" ],
+              "role": "roles/iam.workloadIdentityUser" }
+          ],
+          "etag": "BwYxQ3Lk2m8=",
+          "version": 1
+        }
+    - match: "gcloud iam service-accounts get-iam-policy scan-ingest@apps-prod.iam.gserviceaccount.com --format=json"
+      evidence: no-wi-binding
+      output: |
+        {
+          "etag": "ACAB"
+        }
+    - match: "gcloud container node-pools describe pool-wi --cluster apps-prod-gke --region europe-west1 --format=\"value(config.workloadMetadataConfig.mode)\""
+      output: |
+        GKE_METADATA
+    - match: "gcloud storage buckets get-iam-policy gs://acme-scans-raw"
+      output: |
+        bindings:
+        - members:
+          - serviceAccount:scan-ingest@apps-prod.iam.gserviceaccount.com
+          role: roles/storage.objectCreator
+        - members:
+          - projectOwner:data-lake-prod
+          role: roles/storage.legacyBucketOwner
+        etag: CAI=
+
+logs:
+  - name: "CHG-3310 change record (10-01 14:00)"
+    lines: |
+      Move scan-ingest off the node pool's default service account to Workload Identity Federation for GKE.
+      - new node pool pool-wi (--workload-metadata=GKE_METADATA); scan-ingest scheduled there
+      - IAM service account scan-ingest@apps-prod created; roles/storage.objectCreator on gs://acme-scans-raw
+      - Kubernetes SA scans/scan-ingest annotated with iam.gke.io/gcp-service-account
+      Verified: pods Running on pool-wi.
+  - name: "Kubernetes events: cluster-autoscaler (last 30 days)"
+    evidence: autoscaler-noise
+    lines: |
+      09-03..10-02  (x1,284)  NoScaleDown  node gke-apps-prod-default-7c1f-x2kq: pod monitoring/prom-0 has local storage
+      09-03..10-02  (x1,277)  NoScaleDown  node gke-apps-prod-default-7c1f-p9wd: pod kube-system/metrics-server-7d9c is not replicated
+
+hypotheses:
+  - id: wi-binding
+    text: "The IAM service account has no roles/iam.workloadIdentityUser binding for scans/scan-ingest, so the GKE metadata server can't get it a token."
+    correct: true
+  - id: annotation
+    text: "The Kubernetes service account isn't annotated with the IAM service account."
+    feedback: "It is: iam.gke.io/gcp-service-account points at scan-ingest@apps-prod. Linking needs that annotation and an allow policy on the IAM service account; it's the second that's missing."
+  - id: bucket-iam
+    text: "scan-ingest@apps-prod can't write to the bucket."
+    feedback: "The bucket grants it roles/storage.objectCreator. It never gets that far: the error is about getting a token, before any call to Cloud Storage."
+  - id: autoscaler
+    text: "The cluster autoscaler is failing, so scan-ingest can't scale."
+    feedback: "Those NoScaleDown events are about removing nodes from the default pool, and they've repeated for a month. scan-ingest is Running; every message fails at authentication."
+  - id: node-pool
+    text: "The new node pool doesn't have Workload Identity enabled."
+    feedback: "pool-wi reports GKE_METADATA, and the error comes from the GKE metadata server itself, so it's in place."
+
+actions:
+  - id: bind-wi
+    label: "gcloud iam service-accounts add-iam-policy-binding scan-ingest@apps-prod.iam.gserviceaccount.com --role roles/iam.workloadIdentityUser --member \"serviceAccount:apps-prod.svc.id.goog[scans/scan-ingest]\""
+    kind: fix
+    match_regex: "^gcloud iam service-accounts add-iam-policy-binding scan-ingest@apps-prod\\.iam\\.gserviceaccount\\.com --role[ =]roles/iam\\.workloadIdentityUser --member[ =]\"?serviceAccount:apps-prod\\.svc\\.id\\.goog\\[scans/scan-ingest\\]\"?$"
+    feedback: "The Kubernetes service account scans/scan-ingest may now act as the IAM service account, so pods get tokens for it."
+  - id: node-sa-role
+    label: "Grant the node pool's service account roles/storage.objectCreator on the bucket"
+    kind: wrong
+    feedback: "Pods on a GKE_METADATA node pool don't use the node's service account; that's the point of Workload Identity Federation. It changes nothing for scan-ingest."
+  - id: token-creator-all
+    label: "Grant roles/iam.serviceAccountTokenCreator on scan-ingest@apps-prod to allAuthenticatedUsers"
+    kind: destructive
+    feedback: "That lets anyone with a Google account mint tokens for a service account that can write to the claims bucket. Grant one Kubernetes service account."
+  - id: roll-back
+    label: "Move scan-ingest back to the old node pool"
+    kind: wrong
+    feedback: "It would run as the shared node service account again, the access the migration was meant to remove. The missing piece is a single binding."
+
+solution_paths:
+  - [bind-wi]
+
+key_evidence: [token-denied, ksa-annotated, no-wi-binding]
+
+evidence_labels:
+  token-denied: "The metadata server is denied iam.serviceAccounts.getAccessToken for scan-ingest@apps-prod"
+  ksa-annotated: "The Kubernetes service account is annotated with the IAM service account"
+  no-wi-binding: "The IAM service account's allow policy is empty: no workloadIdentityUser binding"
+
+red_herrings:
+  - evidence: autoscaler-noise
+    label: "A month of cluster-autoscaler warnings"
+    why: "NoScaleDown means the autoscaler won't remove a node from the default pool (local storage, an unreplicated pod). It's been firing since early September, it's about scaling in, not out, and scan-ingest is Running."
+
+hints:
+  nudge: "scan-ingest is running. What does it say when it tries to work?"
+  direction: "It can't get a token. Linking a Kubernetes service account to an IAM service account takes two things; check both."
+  answer: "The annotation is there, but the IAM service account has no roles/iam.workloadIdentityUser for serviceAccount:apps-prod.svc.id.goog[scans/scan-ingest]. Add that binding."
+
+analogy:
+  title: "The new badge, the vault and the mail room"
+  text: |
+    A clerk gets a new personal badge instead of the shared office key.
+    The badge is printed with the clerk's name, but nobody registered it at
+    the front desk, so the door won't open. Register it and the clerk gets
+    to the archive building, where security now checks that visitors come
+    from an approved site. And all the while, letters nobody could deliver
+    have been going to the returns shelf.
+
+debrief:
+  root_cause: |
+    Linking a Kubernetes service account to an IAM service account takes
+    both an annotation on the KSA and an allow policy on the IAM service
+    account granting roles/iam.workloadIdentityUser to
+    serviceAccount:apps-prod.svc.id.goog[scans/scan-ingest]. CHG-3310 did
+    the annotation and the bucket role but not the binding, so the GKE
+    metadata server couldn't get a token, every message failed, and after 5
+    attempts Pub/Sub sent it to the dead-letter topic.
+  ideal_path:
+    - "Read scan-ingest's logs: the metadata server is denied getAccessToken."
+    - "Check the KSA: annotated correctly."
+    - "Check the IAM service account's allow policy: empty."
+    - "Add the workloadIdentityUser binding, then read the logs again."
+  real_world: |
+    You can skip the IAM service account entirely by granting roles straight
+    to the KSA's principal identifier
+    (principal://iam.googleapis.com/projects/NUMBER/locations/global/workloadIdentityPools/PROJECT.svc.id.goog/subject/ns/NAMESPACE/sa/KSA).
+    With the linking method, a change review should look for both halves.
+
+concepts:
+  - term: "Workload Identity Federation for GKE"
+    text: "Pods authenticate as their Kubernetes service account, either granted roles directly or linked to an IAM service account (annotation plus roles/iam.workloadIdentityUser)."
+    url: "https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity"
+  - term: "VPC Service Controls"
+    text: "A service perimeter blocks API access to its projects' resources from outside, even for callers whose IAM allows it, unless an ingress rule, bridge or shared perimeter permits it."
+    url: "https://docs.cloud.google.com/vpc-service-controls/docs/troubleshooting"
+  - term: "Dead-letter topics"
+    text: "After the maximum delivery attempts (5 by default), Pub/Sub forwards a message to the dead-letter topic with attributes saying where it came from. A topic with no subscription drops it."
+    url: "https://docs.cloud.google.com/pubsub/docs/handling-failures"
+  - term: "Generation preconditions"
+    text: "ifGenerationMatch=0 makes an upload succeed only if no live object has that name, so a retried write can't overwrite or duplicate one."
+    url: "https://docs.cloud.google.com/storage/docs/request-preconditions"
+
+sources:
+  - title: "GKE: Authenticate to Google Cloud APIs from GKE workloads (annotation and workloadIdentityUser both required)"
+    url: "https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity"
+    retrieved: 2026-10-02
+  - title: "VPC Service Controls: Troubleshoot common issues (\"Request is prohibited by organization's policy\")"
+    url: "https://docs.cloud.google.com/vpc-service-controls/docs/troubleshooting"
+    retrieved: 2026-10-02
+  - title: "Pub/Sub: Handle message failures (dead-letter topics, 5 attempts by default, topics with no subscriptions)"
+    url: "https://docs.cloud.google.com/pubsub/docs/handling-failures"
+    retrieved: 2026-10-02
+  - title: "Cloud Storage: Request preconditions"
+    url: "https://docs.cloud.google.com/storage/docs/request-preconditions"
+    retrieved: 2026-10-02
+
+stages:
+  - id: perimeter
+    update: |
+      10:12: scan-ingest gets tokens now, and every write to the bucket still
+      fails, with a different 403.
+    diagram_status: { ingest: degraded, bucket: degraded }
+    terminal:
+      commands:
+        - match: "gcloud access-context-manager perimeters describe pr_datalake --policy=518273645190 --format=\"yaml(status.resources,status.restrictedServices,status.ingressPolicies)\""
+          when_actions: [ingress-rule]
+          output: |
+            status:
+              ingressPolicies:
+              - ingressFrom:
+                  identities:
+                  - serviceAccount:scan-ingest@apps-prod.iam.gserviceaccount.com
+                  sources:
+                  - resource: projects/412345678901
+                ingressTo:
+                  operations:
+                  - serviceName: storage.googleapis.com
+                    methodSelectors:
+                    - method: google.storage.objects.create
+                  resources:
+                  - projects/731904428156
+              resources:
+              - projects/731904428156
+              restrictedServices:
+              - storage.googleapis.com
+              - bigquery.googleapis.com
+        - match: "gcloud access-context-manager perimeters describe pr_datalake --policy=518273645190 --format=\"yaml(status.resources,status.restrictedServices,status.ingressPolicies)\""
+          evidence: no-ingress
+          output: |
+            status:
+              resources:
+              - projects/731904428156
+              restrictedServices:
+              - storage.googleapis.com
+              - bigquery.googleapis.com
+    logs:
+      - name: "CHG-3318 change record (10-01 16:00)"
+        evidence: enforced
+        lines: |
+          Security: switch service perimeter pr_datalake (data-lake-prod, project 731904428156) from dry-run to enforced.
+          Dry-run violations reviewed: "none significant".
+      - name: "data-lake-prod audit log: VPC Service Controls (10:12)"
+        evidence: ingress-violation
+        lines: |
+          severity: ERROR  protoPayload.metadata.@type: type.googleapis.com/google.cloud.audit.VpcServiceControlAuditMetadata
+          vpcServiceControlsUniqueId: Kq8vR2xN0bT7pLmZ3wYc
+          methodName: google.storage.objects.create
+          authenticationInfo.principalEmail: scan-ingest@apps-prod.iam.gserviceaccount.com
+          ingressViolations:
+          - targetResource: projects/731904428156
+            servicePerimeter: accessPolicies/518273645190/servicePerimeters/pr_datalake
+          note: the same request appears in dry-run violations daily since 09-01 (then as the node service account)
+    hypotheses:
+      - id: perimeter-ingress
+        text: "Security enforced the pr_datalake perimeter yesterday, and nothing allows scan-ingest, running in apps-prod outside the perimeter, into it."
+        correct: true
+      - id: iam-again
+        text: "scan-ingest@apps-prod still lacks permission on the bucket."
+        feedback: "It has roles/storage.objectCreator, and \"prohibited by organization's policy\" with a vpcServiceControlsUniqueIdentifier is VPC Service Controls, not IAM. IAM can allow it and the perimeter still refuses."
+      - id: org-policy
+        text: "An organization policy constraint blocks the write."
+        feedback: "The unique identifier leads to a VPC Service Controls audit entry with an ingress violation on pr_datalake. That's the perimeter."
+    actions:
+      - id: ingress-rule
+        label: "Add an ingress rule to pr_datalake: identity scan-ingest@apps-prod, source project apps-prod, storage.googleapis.com objects.create on data-lake-prod (gcloud access-context-manager perimeters update ... --set-ingress-policies=ingress.yaml)"
+        kind: fix
+        match_regex: "^gcloud access-context-manager perimeters update pr_datalake --policy=518273645190 --set-ingress-policies=\\S+$"
+        feedback: "One identity from one project may create objects in data-lake-prod's storage. Everything else stays outside the perimeter."
+      - id: add-project
+        label: "Add the apps-prod project to the pr_datalake perimeter"
+        kind: wrong
+        feedback: "A real option, but it puts every workload in apps-prod inside the data lake's perimeter (and restricts how they reach everything outside it). One ingress rule for one service account does the job."
+      - id: dry-run
+        label: "Switch pr_datalake back to dry-run mode"
+        kind: destructive
+        feedback: "That removes the perimeter's protection from the whole data lake to fix one writer."
+      - id: storage-admin
+        label: "Grant scan-ingest@apps-prod roles/storage.admin on the bucket"
+        kind: wrong
+        feedback: "VPC Service Controls is checked separately from IAM. More IAM permission doesn't get a request through a perimeter."
+    solution_paths:
+      - [ingress-rule]
+    key_evidence: [vpcsc-403, ingress-violation, no-ingress, enforced]
+    evidence_labels:
+      vpcsc-403: "Writes fail with \"Request is prohibited by organization's policy\""
+      ingress-violation: "The audit log records an ingress violation on pr_datalake for scan-ingest"
+      no-ingress: "The perimeter restricts storage and has no ingress policies"
+      enforced: "pr_datalake went from dry-run to enforced yesterday at 16:00"
+    hints:
+      nudge: "A different 403. What does \"prohibited by organization's policy\" with a unique identifier point to?"
+      direction: "Look up the identifier in data-lake-prod's audit logs and read the perimeter's configuration."
+      answer: "pr_datalake was enforced yesterday with no ingress rules. Add an ingress rule for scan-ingest@apps-prod creating objects in data-lake-prod."
+    debrief:
+      root_cause: |
+        At 16:00 yesterday security switched the pr_datalake perimeter from
+        dry-run to enforced. It restricts Cloud Storage in data-lake-prod,
+        and scan-ingest runs in apps-prod, outside it, with no ingress rule.
+        VPC Service Controls is evaluated separately from IAM, so the
+        bucket's objectCreator grant didn't help. Dry-run had logged this
+        exact request every day for a month.
+      ideal_path:
+        - "Read the new error: prohibited by organization's policy, with a unique identifier."
+        - "Find it in the audit log: an ingress violation on pr_datalake."
+        - "Read the perimeter: storage restricted, no ingress policies; enforced yesterday."
+        - "Add a narrow ingress rule, then check the logs for written objects."
+
+  - id: replay
+    update: |
+      10:31: new scans land in the bucket again. Assessors are asking about
+      the ones customers uploaded since yesterday afternoon.
+    diagram_status: { ingest: ok, bucket: ok }
+    terminal:
+      commands:
+        - match: "gcloud pubsub subscriptions describe scan-ingest-sub --format=\"yaml(deadLetterPolicy,messageRetentionDuration)\""
+          evidence: dlq-policy
+          output: |
+            deadLetterPolicy:
+              deadLetterTopic: projects/apps-prod/topics/scan-ingest-dlq
+              maxDeliveryAttempts: 5
+            messageRetentionDuration: 604800s
+        - match: "gcloud pubsub topics list-subscriptions scan-ingest-dlq"
+          evidence: dlq-has-sub
+          output: |
+            ---
+              projects/apps-prod/subscriptions/scan-ingest-dlq-sub
+        - match: "gcloud storage ls gs://acme-scans-raw/2026-10-01/SCN-90412.pdf"
+          when_actions: [redrive]
+          output: |
+            gs://acme-scans-raw/2026-10-01/SCN-90412.pdf
+        - match: "gcloud storage ls gs://acme-scans-raw/2026-10-01/SCN-90412.pdf"
+          evidence: scan-missing
+          output: |
+            ERROR: (gcloud.storage.ls) One or more URLs matched no objects.
+    metrics:
+      - name: "scan-ingest-dlq-sub: unacked messages"
+        unit: messages
+        evidence: dlq-backlog
+        series:
+          - label: "num_undelivered_messages"
+            points: [["10-01 14:00", 0], ["10-01 18:00", 1210], ["10-01 22:00", 2304], ["10-02 06:00", 3980], ["10-02 10:00", 6118], ["10-02 10:30", 6140]]
+    hypotheses:
+      - id: redrive
+        text: "6,140 messages went to the dead-letter topic during the outage and are held by scan-ingest-dlq-sub; republish them to scans. ifGenerationMatch=0 makes any duplicate write a harmless 412."
+        correct: true
+      - id: lost
+        text: "The messages are gone: Pub/Sub gave up after 5 attempts."
+        feedback: "It forwarded them to scan-ingest-dlq, and that topic has a subscription, so they're kept (7 days of retention). Without a subscription they would have been lost."
+      - id: auto-retry
+        text: "Pub/Sub will redeliver them to scan-ingest-sub now that writes work."
+        feedback: "Once forwarded to the dead-letter topic they're no longer on scan-ingest-sub. Nothing moves them back unless you republish them."
+    actions:
+      - id: redrive
+        label: "Republish everything in scan-ingest-dlq-sub to the scans topic (./redrive.sh scan-ingest-dlq-sub scans), acking each after it's published"
+        kind: fix
+        match_regex: "^\\./redrive\\.sh scan-ingest-dlq-sub scans$"
+        feedback: "6,140 scans go back through scan-ingest. Any that had in fact been written fail their ifGenerationMatch=0 precondition with 412 and are treated as done, so nothing is duplicated."
+      - id: seek
+        label: "Seek scan-ingest-sub back to yesterday 14:00"
+        kind: wrong
+        feedback: "Seek only replays messages the subscription still retains, and dead-lettered messages were forwarded away. It would also re-deliver everything that already succeeded."
+      - id: delete-dlq-sub
+        label: "Delete scan-ingest-dlq-sub; uploads-api still has the files"
+        kind: destructive
+        feedback: "uploads-api keeps files for 24 hours. The dead-letter subscription is the only list of which 6,140 scans never arrived."
+      - id: raise-attempts
+        label: "Raise maxDeliveryAttempts on scan-ingest-sub to 100"
+        kind: wrong
+        feedback: "That changes future failures, not the 6,140 messages already forwarded to the dead-letter topic."
+    solution_paths:
+      - [redrive]
+    key_evidence: [dlq-backlog, dlq-policy, dlq-has-sub, scan-missing]
+    evidence_labels:
+      dlq-backlog: "6,140 messages waiting in scan-ingest-dlq-sub since 14:00 yesterday"
+      dlq-policy: "After 5 attempts scan-ingest-sub forwards to scan-ingest-dlq"
+      dlq-has-sub: "The dead-letter topic has a subscription, so the messages were kept"
+      scan-missing: "A scan from yesterday afternoon isn't in the bucket"
+    hints:
+      nudge: "Pub/Sub stopped retrying after 5 attempts. Where did those messages go?"
+      direction: "Read scan-ingest-sub's dead-letter policy, and check the dead-letter topic has a subscription."
+      answer: "They're in scan-ingest-dlq-sub. Republish them to scans; the ifGenerationMatch=0 precondition makes it safe."
+    debrief:
+      root_cause: |
+        Every failed message was delivered 5 times and then forwarded to
+        scan-ingest-dlq. Because that topic has a subscription, the 6,140
+        messages were kept rather than lost, but nothing sends them back:
+        they have to be republished. scan-ingest creates objects with
+        ifGenerationMatch=0, so replaying one that had actually been written
+        gets a 412 instead of a duplicate or an overwrite.
+      ideal_path:
+        - "Check a scan from yesterday: not in the bucket."
+        - "Read the subscription's dead-letter policy and the dead-letter backlog."
+        - "Confirm the dead-letter topic has a subscription (otherwise they'd be gone)."
+        - "Republish the backlog to scans, then check the scan exists."

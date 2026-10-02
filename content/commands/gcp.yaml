@@ -170,3 +170,47 @@
   alternatives:
     - { command: "gcloud storage restore gs://bucket/OBJECT#GENERATION", note: "Restore one soft-deleted object." }
   docs: { title: "gcloud storage ls", url: "https://docs.cloud.google.com/sdk/gcloud/reference/storage/ls" }
+
+- id: gcloud-iam-sa-policy
+  match: "^gcloud iam service-accounts get-iam-policy"
+  summary: "Prints the allow policy on a service account: who may act as it, or manage it."
+  parts:
+    - { token: "scan-ingest@apps-prod.iam.gserviceaccount.com", meaning: "The service account (as a resource, not as a caller)." }
+    - { token: "--format=json", meaning: "Print as JSON." }
+  why: "For Workload Identity linking, this policy must grant roles/iam.workloadIdentityUser to the Kubernetes service account; an empty policy means no workload can use it."
+  alternatives:
+    - { command: "gcloud projects get-iam-policy PROJECT", note: "Roles the service account holds, as a caller." }
+  docs: { title: "gcloud iam service-accounts get-iam-policy", url: "https://docs.cloud.google.com/sdk/gcloud/reference/iam/service-accounts/get-iam-policy" }
+
+- id: gcloud-vpcsc-perimeter
+  match: "^gcloud access-context-manager perimeters describe"
+  summary: "Shows a VPC Service Controls perimeter: its projects, restricted services and ingress/egress rules."
+  parts:
+    - { token: "pr_datalake", meaning: "The perimeter." }
+    - { token: "--policy=518273645190", meaning: "The access policy that contains it." }
+    - { token: "--format=\"yaml(status.resources,status.restrictedServices,status.ingressPolicies)\"", meaning: "Only the enforced configuration (status, as opposed to the dry-run spec): projects inside, services restricted, and ingress rules." }
+  why: "If a service is restricted and no ingress rule matches the caller, requests from outside are refused whatever IAM says."
+  alternatives:
+    - { command: "VPC Service Controls troubleshooter (console), with the unique identifier", note: "Explains one denied request." }
+  docs: { title: "gcloud access-context-manager perimeters describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/access-context-manager/perimeters/describe" }
+
+- id: gcloud-pubsub-sub-describe
+  match: "^gcloud pubsub subscriptions describe"
+  summary: "Shows a Pub/Sub subscription's settings."
+  parts:
+    - { token: "scan-ingest-sub", meaning: "The subscription." }
+    - { token: "--format=\"yaml(deadLetterPolicy,messageRetentionDuration)\"", meaning: "Only the dead-letter policy (topic and max attempts) and how long unacked messages are kept." }
+  why: "Tells you where messages went after failing, and how long you have to recover them."
+  alternatives:
+    - { command: "Console > Pub/Sub > Subscriptions > subscription > Dead lettering", note: "The same settings." }
+  docs: { title: "gcloud pubsub subscriptions describe", url: "https://docs.cloud.google.com/sdk/gcloud/reference/pubsub/subscriptions/describe" }
+
+- id: gcloud-pubsub-topic-subs
+  match: "^gcloud pubsub topics list-subscriptions"
+  summary: "Lists the subscriptions attached to a topic."
+  parts:
+    - { token: "scan-ingest-dlq", meaning: "The topic." }
+  why: "Messages published to a topic with no subscriptions are lost, so a dead-letter topic without one silently drops everything."
+  alternatives:
+    - { command: "gcloud pubsub subscriptions list --filter=topic:NAME", note: "The same, filtered from all subscriptions." }
+  docs: { title: "gcloud pubsub topics list-subscriptions", url: "https://docs.cloud.google.com/sdk/gcloud/reference/pubsub/topics/list-subscriptions" }
