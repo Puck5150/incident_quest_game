@@ -22,6 +22,9 @@ const terminalCommand = z
   .strictObject({
     match: z.string().min(1).optional(),
     match_regex: z.string().min(1).optional(),
+    // For match_regex commands: one concrete command it accepts. `help` lists it
+    // and Tab completes it, so every investigation command is discoverable.
+    example: z.string().min(1).optional(),
     when_actions: z.array(id).optional(),
     evidence: evidenceTag,
     output: z.string(),
@@ -272,11 +275,22 @@ export const ScenarioSchema = z
         })
         if (c.match_regex !== undefined) {
           try {
-            new RegExp(c.match_regex)
+            const rx = new RegExp(c.match_regex)
+            if (c.example !== undefined && !rx.test(c.example.trim().replace(/\s+/g, ' ')))
+              issue(`example "${c.example}" doesn't match match_regex`, [...path, i, 'example'])
           } catch (e) {
             issue(`invalid regex: ${(e as Error).message}`, [...path, i, 'match_regex'])
           }
-        }
+        } else if (c.example !== undefined) issue('example is only for match_regex commands (help lists `match` as is)', [...path, i, 'example'])
+      }),
+    )
+    // Every pattern command must be discoverable: some entry with the same
+    // pattern (they often come in before/after-the-fix pairs) gives an example.
+    const allCommands = commandLists.flatMap(([, commands]) => commands)
+    commandLists.forEach(([path, commands]) =>
+      commands.forEach((c, i) => {
+        if (c.match_regex !== undefined && !allCommands.some((o) => o.match_regex === c.match_regex && o.example))
+          issue('match_regex commands need an `example` (on this entry or another with the same pattern) so players can find them', [...path, i, 'example'])
       }),
     )
     stages.forEach((x, k) => {

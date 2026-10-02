@@ -41,6 +41,7 @@ terminal:
         Filesystem      Size  Used Avail Use% Mounted on
         /dev/sda1        40G   40G     0 100% /
     - match_regex: "^(sudo )?du -sh /var/log/?\\*?$"
+      example: "sudo du -sh /var/log/*"
       output: |
         29G     /var/log/app
         112M    /var/log/journal
@@ -74,6 +75,7 @@ terminal:
             missingok
         }
     - match_regex: "^(sudo )?journalctl -u checkout"
+      example: "journalctl -u checkout"
       evidence: write-failure
       output: |
         Sep 30 02:14:03 web-01 checkout[1190]: ERROR writing order audit record

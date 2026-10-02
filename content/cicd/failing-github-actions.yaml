@@ -52,6 +52,7 @@ terminal:
          package.json | 2 +-
          1 file changed, 1 insertion(+), 1 deletion(-)
     - match_regex: "^git diff HEAD~1( -- package\\.json)?$"
+      example: "git diff HEAD~1 -- package.json"
       output: |
         --- a/package.json
         +++ b/package.json

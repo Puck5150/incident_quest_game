@@ -83,6 +83,7 @@ terminal:
             }
         }
     - match_regex: "^aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::111122223333:role/orders-api-task-role --action-names secretsmanager:GetSecretValue( .*)?$"
+      example: "aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::111122223333:role/orders-api-task-role --action-names secretsmanager:GetSecretValue"
       when_actions: [boundary-allows]
       output: |
         {

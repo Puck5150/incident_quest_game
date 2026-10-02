@@ -98,12 +98,18 @@ stage reopens the incident into the next one (see below).
   command (`kubectl rollout undo …`, `sudo reboot`); leave multi-step fixes as
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.
-- **`help` in the terminal** lists your `match` commands, but not the regex ones.
-  Tab completion follows the same rule: it completes command names and arguments
-  from `match` commands, plus file and log paths that start with `/`, never
-  regex-only commands or typed fixes.
-  Use `match` for the obvious first steps and `match_regex` for the deeper digging
-  you want players to think of themselves. `clear` and `history` are built in.
+- **Every investigation command is discoverable.** A `match_regex` command needs an
+  `example`: one concrete command its pattern accepts (the validator checks it
+  matches). `help` lists `match` commands as written and pattern commands by their
+  example, and Tab completes from the same list plus file and log paths that start
+  with `/`. Typed fixes are never listed: they're already action buttons.
+  `clear` and `history` are built in.
+- **Continuity: if the text tells players to check something, they must be able
+  to.** Every step in the hints, `ideal_path` and debrief that says to run, check
+  or verify something needs a command or artifact in that incident that does it,
+  and verification after the fix needs a command whose output changes
+  (`when_actions`). Read your ideal path back against `help`'s list before
+  shipping.
 - **The analogy should use no IT words.** If you need jargon to explain it, it's
   not an analogy yet.
 

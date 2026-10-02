@@ -55,6 +55,7 @@ terminal:
       output: |
         gs://acme-user-docs/customers/1042/2026-10-01-delivery-note.pdf
     - match_regex: "^gcloud storage ls \"?gs://acme-user-docs/\\*\\*\"? --soft-deleted( \\| head.*)?$"
+      example: "gcloud storage ls \"gs://acme-user-docs/**\" --soft-deleted"
       evidence: soft-deleted
       output: |
         gs://acme-user-docs/customers/1042/2026-03-14-id-scan.pdf#1710412800443120

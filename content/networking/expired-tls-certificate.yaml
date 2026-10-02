@@ -39,6 +39,7 @@ terminal:
   prompt: "ops@edge-01:~$"
   commands:
     - match_regex: "^openssl x509 -(enddate|dates) -noout -in /etc/letsencrypt/live/api\\.example\\.com/(fullchain|cert)\\.pem$"
+      example: "openssl x509 -enddate -noout -in /etc/letsencrypt/live/api.example.com/cert.pem"
       when_actions: [renew]
       output: |
         notAfter=Dec 30 23:14:07 2026 GMT
@@ -47,6 +48,7 @@ terminal:
       output: |
         notAfter=Oct  1 00:07:51 2026 GMT
     - match_regex: "^(sudo )?certbot certificates$"
+      example: "sudo certbot certificates"
       when_actions: [renew]
       output: |
         Found the following certs:
@@ -65,6 +67,7 @@ terminal:
             Certificate Path: /etc/letsencrypt/live/api.example.com/fullchain.pem
             Private Key Path: /etc/letsencrypt/live/api.example.com/privkey.pem
     - match_regex: "^curl (-sS?I? )?https://api\\.example\\.com\\S*$"
+      example: "curl -sSI https://api.example.com/"
       when_actions: [renew]
       output: |
         HTTP/1.1 200 OK
@@ -75,6 +78,7 @@ terminal:
         curl: (60) SSL certificate problem: certificate has expired
         More details here: https://curl.se/docs/sslcerts.html
     - match_regex: "^(sudo )?ufw status( verbose| numbered)?$"
+      example: "sudo ufw status verbose"
       when_actions: [allow-80]
       output: |
         Status: active
@@ -95,6 +99,7 @@ terminal:
         443/tcp                    ALLOW       Anywhere
         80/tcp                     DENY        Anywhere
     - match_regex: "^(sudo )?(tail|cat|less)( -n ?\\d+)? /var/log/letsencrypt/letsencrypt\\.log$"
+      example: "sudo tail -n 50 /var/log/letsencrypt/letsencrypt.log"
       evidence: renewal-failing
       output: |
         2026-09-30 12:31:04,118:INFO:certbot._internal.renewal:Certificate is due for renewal, auto-renewing...
@@ -108,6 +113,7 @@ terminal:
           Detail: 203.0.113.40: Fetching http://api.example.com/.well-known/acme-challenge/kXw3...: Timeout during connect (likely firewall problem)
         2026-09-30 12:31:15,380:ERROR:certbot._internal.renewal:Failed to renew certificate api.example.com with error: Some challenges have failed.
     - match_regex: "^(sudo )?certbot renew --dry-run$"
+      example: "sudo certbot renew --dry-run"
       when_actions: [allow-80]
       output: |
         Processing /etc/letsencrypt/renewal/api.example.com.conf
@@ -128,6 +134,7 @@ terminal:
         All simulated renewals failed. The following certificates could not be renewed:
           /etc/letsencrypt/live/api.example.com/fullchain.pem (failure)
     - match_regex: "^(sudo )?systemctl (status|list-timers) (certbot\\.timer|certbot)$"
+      example: "systemctl status certbot.timer"
       output: |
         ● certbot.timer - Run certbot twice daily
              Loaded: loaded (/usr/lib/systemd/system/certbot.timer; enabled; preset: enabled)

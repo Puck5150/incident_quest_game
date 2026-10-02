@@ -36,6 +36,7 @@ terminal:
   prompt: "you@bastion:~$"
   commands:
     - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db$"
+      example: "aws rds describe-db-instances --db-instance-identifier shop-db"
       evidence: single-az
       output: |
         {
@@ -53,6 +54,7 @@ terminal:
             ]
         }
     - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      example: "aws rds describe-db-instances --db-instance-identifier shop-db-reports"
       when_actions: [enable-multi-az]
       output: |
         {

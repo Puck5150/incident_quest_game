@@ -71,6 +71,7 @@ terminal:
         Default   Active   10.10.0.0/16      VnetLocal
         Default   Active   0.0.0.0/0         Internet
     - match_regex: "^(nc -zv(w ?\\d+)?|nc -z -v -w ?\\d+) 10\\.20\\.1\\.5 5432$"
+      example: "nc -zv 10.20.1.5 5432"
       when_actions: [create-other-side]
       output: |
         Connection to 10.20.1.5 5432 port [tcp/postgresql] succeeded!

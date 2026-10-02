@@ -103,6 +103,7 @@ terminal:
   prompt: "ops@bastion:~$"
   commands:
     - match_regex: "^(sudo )?rabbitmqctl list_queues( name)?( \\S+)*$"
+      example: "sudo rabbitmqctl list_queues name messages consumers"
       when_actions: [reject-permanent]
       output: |
         name                     type     messages_ready  messages_unacknowledged  consumers
@@ -114,6 +115,7 @@ terminal:
         name                     type     messages_ready  messages_unacknowledged  consumers
         qq.order-emails          quorum   24610           30                       3
     - match_regex: "^(sudo )?rabbitmqctl list_policies$"
+      example: "sudo rabbitmqctl list_policies"
       when_actions: [add-dlx]
       output: |
         vhost  name          pattern              apply-to       definition                                                    priority
@@ -123,12 +125,14 @@ terminal:
       output: |
         vhost  name  pattern  apply-to  definition  priority
     - match_regex: "^kubectl get pods( -l app=email-worker)?( -n shop)?$"
+      example: "kubectl get pods -l app=email-worker -n shop"
       output: |
         NAME                     READY   STATUS    RESTARTS   AGE
         email-worker-7d9c-2xq    1/1     Running   0          3d
         email-worker-7d9c-8kn    1/1     Running   0          3d
         email-worker-7d9c-tz4    1/1     Running   0          3d
     - match_regex: "^(sudo )?rabbitmq-diagnostics (status|cluster_status|check_running)$"
+      example: "sudo rabbitmq-diagnostics status"
       output: |
         Cluster status of node rabbit@mq-1 ...
         Running Nodes

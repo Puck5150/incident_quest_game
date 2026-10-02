@@ -32,6 +32,7 @@ terminal:
   prompt: "you@laptop:~/shop-deploy$"
   commands:
     - match_regex: "^kubectl get pods( -n shop)?$"
+      example: "kubectl get pods -n shop"
       when_actions: [fix-manifest]
       output: |
         NAME                           READY   STATUS    RESTARTS   AGE
@@ -54,11 +55,13 @@ terminal:
         pricing-api-6f4d9c7b8-mw7zp    1/1     Running            0          6d
         pricing-api-7c9d8f6b4-x2kqp    0/1     ImagePullBackOff   0          14m
     - match_regex: "^kubectl get (rs|replicasets?)( -n shop)?$"
+      example: "kubectl get rs -n shop"
       output: |
         NAME                     DESIRED   CURRENT   READY   AGE
         pricing-api-6f4d9c7b8    3         3         3       6d
         pricing-api-7c9d8f6b4    1         1         0       14m
     - match_regex: "^kubectl describe pods? pricing-api-7c9d8f6b4-x2kqp( -n shop)?$"
+      example: "kubectl describe pod pricing-api-7c9d8f6b4-x2kqp -n shop"
       evidence: tag-not-found
       output: |
         Name:             pricing-api-7c9d8f6b4-x2kqp
@@ -82,6 +85,7 @@ terminal:
           Normal   BackOff    4m (x41 over 14m)   kubelet            Back-off pulling image "registry.example.internal/shop/pricing-api:v2.3.0"
           Warning  Failed     4m (x41 over 14m)   kubelet            Error: ImagePullBackOff
     - match_regex: "^kubectl rollout status deployment/pricing-api( -n shop)?$"
+      example: "kubectl rollout status deployment/pricing-api -n shop"
       when_actions: [fix-manifest]
       output: |
         deployment "pricing-api" successfully rolled out
@@ -93,6 +97,7 @@ terminal:
       output: |
         Waiting for rollout to finish: 1 out of 3 new replicas have been updated...
     - match_regex: "^kubectl describe deployments?( pricing-api)?( -n shop)?$"
+      example: "kubectl describe deployment pricing-api -n shop"
       output: |
         Name:                   pricing-api
         Namespace:              shop
@@ -111,6 +116,7 @@ terminal:
         OldReplicaSets:  pricing-api-6f4d9c7b8 (3/3 replicas created)
         NewReplicaSet:   pricing-api-7c9d8f6b4 (1/1 replicas created)
     - match_regex: "^(cat|less) k8s/pricing-api\\.ya?ml$"
+      example: "cat k8s/pricing-api.yaml"
       output: |
           apiVersion: apps/v1
           kind: Deployment

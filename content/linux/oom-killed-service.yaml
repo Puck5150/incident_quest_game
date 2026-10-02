@@ -34,6 +34,7 @@ terminal:
   prompt: "ops@worker-02:~$"
   commands:
     - match_regex: "^(sudo )?systemctl status report-worker(\\.service)?$"
+      example: "systemctl status report-worker"
       when_actions: [raise-limit]
       output: |
         ● report-worker.service - Invoice PDF worker
@@ -55,6 +56,7 @@ terminal:
            Main PID: 50912 (code=killed, signal=KILL)
              Memory: 256.0M (max: 256.0M available: 0B peak: 256.0M)
     - match_regex: "^(sudo )?journalctl (-u report-worker(\\.service)?|-xeu report-worker(\\.service)?)( -n ?\\d+| --since.*)?$"
+      example: "journalctl -u report-worker -n 50"
       evidence: oom-journal
       output: |
         Oct 01 08:40:31 worker-02 systemd[1]: Started report-worker.service - Invoice PDF worker.
@@ -65,6 +67,7 @@ terminal:
         Oct 01 08:41:03 worker-02 systemd[1]: report-worker.service: Failed with result 'oom-kill'.
         Oct 01 08:41:08 worker-02 systemd[1]: report-worker.service: Scheduled restart job, restart counter is at 43.
     - match_regex: "^(sudo )?(dmesg( -T)?|journalctl -k)( \\| (grep|tail).*)?$"
+      example: "sudo dmesg -T | tail"
       evidence: cgroup-oom
       output: |
         [Thu Oct  1 08:41:03 2026] python3 invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=0
@@ -78,6 +81,7 @@ terminal:
         Mem:            15Gi       3.1Gi       8.2Gi        12Mi       4.1Gi        11Gi
         Swap:             0B          0B          0B
     - match_regex: "^(sudo )?systemctl cat report-worker(\\.service)?$"
+      example: "systemctl cat report-worker"
       when_actions: [raise-limit]
       output: |
         # /etc/systemd/system/report-worker.service
@@ -117,6 +121,7 @@ terminal:
         [Service]
         MemoryMax=256M
     - match_regex: "^(sudo )?systemctl show (-p |--property=)MemoryMax report-worker(\\.service)?$"
+      example: "systemctl show -p MemoryMax report-worker"
       when_actions: [raise-limit]
       output: |
         MemoryMax=1073741824
@@ -124,6 +129,7 @@ terminal:
       output: |
         MemoryMax=268435456
     - match_regex: "^(sudo )?systemctl status invoice-api(\\.service)?$"
+      example: "systemctl status invoice-api"
       output: |
         ● invoice-api.service - Invoice API
              Loaded: loaded (/etc/systemd/system/invoice-api.service; enabled; preset: enabled)

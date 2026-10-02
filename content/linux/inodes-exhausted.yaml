@@ -38,6 +38,7 @@ terminal:
         Filesystem       Inodes   IUsed IFree IUse% Mounted on
         /dev/sdb1      13107200 13107200     0  100% /var
     - match_regex: "^(sudo )?find /var/cache/thumbs -type f( -print)? \\| wc -l$"
+      example: "sudo find /var/cache/thumbs -type f | wc -l"
       evidence: thumbs-count
       output: |
         12844102

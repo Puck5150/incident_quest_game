@@ -80,6 +80,10 @@
                 "type": "string",
                 "minLength": 1
               },
+              "example": {
+                "type": "string",
+                "minLength": 1
+              },
               "when_actions": {
                 "type": "array",
                 "items": {
@@ -713,6 +717,10 @@
                       "minLength": 1
                     },
                     "match_regex": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "example": {
                       "type": "string",
                       "minLength": 1
                     },

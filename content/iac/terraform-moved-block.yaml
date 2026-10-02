@@ -82,6 +82,7 @@ terminal:
   prompt: "you@laptop:~/infra-prod (refactor/orders-db-module)$"
   commands:
     - match_regex: "^git diff (main|origin/main)( --stat)?$"
+      example: "git diff main"
       evidence: refactor-diff
       output: |2
          main.tf                   | 24 +-----------------------
@@ -105,6 +106,7 @@ terminal:
         aws_security_group.orders_db
         aws_vpc.main
     - match_regex: "^grep -rn moved( \\.)?$|^grep -rn \"moved\"( \\.)?$"
+      example: "grep -rn moved ."
       when_actions: [moved-block]
       output: |
         ./main.tf:5:moved {

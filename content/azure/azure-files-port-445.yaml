@@ -36,6 +36,7 @@ terminal:
   prompt: "PS C:\\Users\\maria (office PC)>"
   commands:
     - match_regex: "^net use [A-Z]: \\\\\\\\stacmefiles\\.file\\.core\\.windows\\.net\\\\finance( .*)?$"
+      example: "net use Z: \\\\stacmefiles.file.core.windows.net\\finance"
       when_actions: [vpn-private-endpoint]
       output: |
         The command completed successfully.

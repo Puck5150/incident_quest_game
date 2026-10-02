@@ -30,6 +30,7 @@ terminal:
   prompt: "you@laptop:~/shop-deploy$"
   commands:
     - match_regex: "^kubectl get pods( -n shop)?$"
+      example: "kubectl get pods -n shop"
       when_actions: [fix-env]
       output: |
         NAME                          READY   STATUS    RESTARTS   AGE
@@ -51,6 +52,7 @@ terminal:
         orders-api-7f8c6d9b4-b5n8r    0/1     CrashLoopBackOff   6 (75s ago)   9m
         orders-api-7f8c6d9b4-kz4hd    0/1     CrashLoopBackOff   6 (70s ago)   9m
     - match_regex: "^kubectl describe pod orders-api-7f8c6d9b4-7lq2x( -n shop)?$"
+      example: "kubectl describe pod orders-api-7f8c6d9b4-7lq2x -n shop"
       evidence: exit-code-1
       output: |
         Name:             orders-api-7f8c6d9b4-7lq2x
@@ -75,21 +77,25 @@ terminal:
           ... Normal   Pulled   Container image "registry.example.com/orders-api:2.0.0" already present on machine
           ... Warning  BackOff  Back-off restarting failed container
     - match_regex: "^kubectl logs (--previous|-p) orders-api-7f8c6d9b4-7lq2x( -n shop)?$"
+      example: "kubectl logs --previous orders-api-7f8c6d9b4-7lq2x -n shop"
       evidence: missing-env
       output: |
         2026-09-30T10:14:51Z INFO  orders-api 2.0.0 starting
         2026-09-30T10:14:51Z FATAL config: required environment variable DATABASE_URL is not set
     - match_regex: "^kubectl logs orders-api-7f8c6d9b4-7lq2x( -n shop)?$"
+      example: "kubectl logs orders-api-7f8c6d9b4-7lq2x -n shop"
       output: |
         2026-09-30T10:16:13Z INFO  orders-api 2.0.0 starting
         2026-09-30T10:16:13Z FATAL config: required environment variable DATABASE_URL is not set
     - match_regex: "^kubectl rollout history deployment/orders-api( -n shop)?$"
+      example: "kubectl rollout history deployment/orders-api -n shop"
       output: |
         deployment.apps/orders-api
         REVISION  CHANGE-CAUSE
         11        <none>
         12        <none>
     - match_regex: "^kubectl rollout status deployment/orders-api( -n shop)?$"
+      example: "kubectl rollout status deployment/orders-api -n shop"
       when_actions: [fix-env]
       output: |
         deployment "orders-api" successfully rolled out

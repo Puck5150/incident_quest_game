@@ -80,6 +80,7 @@ terminal:
           { "name": "orders-pg-weu", "location": "West Europe", "role": "AsyncReplica" }
         ]
     - match_regex: "^psql .*orders-pg\\.postgres\\.database\\.azure\\.com.*select 1.*$"
+      example: "psql \"host=orders-pg.postgres.database.azure.com dbname=orders user=app\" -c \"select 1\""
       evidence: round-trip
       output: |
         Timing is on.

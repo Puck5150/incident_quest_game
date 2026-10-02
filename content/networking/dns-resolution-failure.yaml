@@ -68,6 +68,7 @@ terminal:
         --- 10.0.8.21 ping statistics ---
         3 packets transmitted, 3 received, 0% packet loss, time 2003ms
     - match_regex: "^curl (-s )?https://api\\.internal\\.example\\.com"
+      example: "curl -s https://api.internal.example.com/v1/reports"
       when_actions: [update-resolv]
       output: |
         {"status":"ok"}

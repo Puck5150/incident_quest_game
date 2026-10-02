@@ -132,9 +132,9 @@ export function runCommand(
   if (!t) return { output: '' }
 
   if (cmd === 'help') {
-    // Lists only exact-match commands. Regex entries are left for the player
-    // to discover (see AUTHORING.md).
-    const known = [...new Set(t.commands.flatMap((c) => (c.match ? [c.match] : [])))]
+    // Every investigation command is listed: exact ones as written, pattern
+    // ones by their example. (Typed fixes aren't: they're action buttons.)
+    const known = [...new Set(t.commands.flatMap((c) => (c.match ? [c.match] : c.example ? [c.example] : [])))]
     return { output: ['Commands you might try here:', ...known.map((k) => `  ${k}`), '  clear, history'].join('\n') }
   }
 
@@ -152,10 +152,10 @@ export function runCommand(
 }
 
 // Tab completion, bash-style. Draws only on what `help` already reveals
-// (exact-match commands) plus the scenario's file and log paths, so it never
-// gives away regex-only commands or typed fixes.
+// (exact commands and pattern commands' examples) plus the scenario's file and
+// log paths, so it never gives away typed fixes.
 export function complete(scenario: Scenario, input: string): { input: string; options?: string[] } {
-  const exact = (scenario.terminal?.commands ?? []).flatMap((c) => (c.match ? [normalize(c.match)] : []))
+  const exact = (scenario.terminal?.commands ?? []).flatMap((c) => (c.match ? [normalize(c.match)] : c.example ? [normalize(c.example)] : []))
   const words = input.replace(/^\s+/, '').split(' ')
   const word = words.at(-1)!
   const first = words.length === 1

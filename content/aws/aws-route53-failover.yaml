@@ -96,6 +96,7 @@ terminal:
             ]
         }
     - match_regex: "^curl (-s )?(-o /dev/null )?(-w '%\\{http_code\\}\\\\n' )?https://shop-usw2-alb-4521\\.us-west-2\\.elb\\.amazonaws\\.com/healthz$"
+      example: "curl -s https://shop-usw2-alb-4521.us-west-2.elb.amazonaws.com/healthz"
       output: |
         200
     - match: "aws ec2 describe-security-groups --group-ids sg-0usw2alb --query SecurityGroups[0].IpPermissions"

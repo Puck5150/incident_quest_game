@@ -101,9 +101,11 @@ describe('terminal', () => {
     expect(runCommand(scenario, 'foo --bar', none).output).toMatch(/^foo: no simulated output/)
   })
 
-  it('help lists exact-match commands once each', () => {
+  it('help lists every investigation command once: exact ones, and pattern ones by their example', () => {
     const out = runCommand(scenario, 'help', none).output
     expect(out.match(/df -h/g)).toHaveLength(1)
+    expect(out).toMatch(/journalctl -u checkout/) // a pattern command, listed by its example
+    expect(out).not.toMatch(/truncate/) // typed fixes are action buttons, not listed
   })
 })
 
@@ -141,8 +143,8 @@ describe('tab completion', () => {
     expect(complete(scenario, 'ls -lh /v').input).toBe('ls -lh /var/log/')
   })
 
-  it('never reveals regex-only commands or typed fixes', () => {
-    expect(complete(scenario, 'journ')).toEqual({ input: 'journ' }) // journalctl is regex-matched
+  it('completes pattern commands from their example, but never typed fixes', () => {
+    expect(complete(scenario, 'journ').input).toBe('journalctl ') // a pattern command's example
     expect(complete(scenario, 'trunc')).toEqual({ input: 'trunc' }) // a typed fix
     expect(complete(scenario, 'reb')).toEqual({ input: 'reb' })
   })

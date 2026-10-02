@@ -45,6 +45,7 @@ terminal:                     # optional
       output: |
         (output before the fix)
     - match_regex: "^journalctl -u example"  # regex alternative to `match`
+      example: "journalctl -u example -n 50"   # required for match_regex: shown in help, Tab-completes; must match
       output: |
         (output)
   unknown_output: "bash: {cmd}: command not found"   # optional; default says "no simulated output"
