@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: stale-dependency-cache
+track: cicd
+difficulty: 2
+title: "We upgraded the date library, but CI keeps testing the old one"
+par_minutes: 10
+
+ticket:
+  from: "Web team"
+  priority: P3
+  body: |
+    Last week we upgraded date-fns from v2 to v3 and committed the new
+    package-lock.json. Tests pass locally. In CI, the new tests fail with
+    errors that only make sense for v2, as if the upgrade never happened.
+
+environment: |
+  The web app's CI workflow restores node_modules from the GitHub Actions
+  cache before running npm install, to save time. The cache step was
+  written two years ago.
+
+terminal:
+  prompt: "you@laptop:~/web$"
+  commands:
+    - match: "gh run view --log | grep -i 'cache'"
+      when_actions: [hash-key]
+      output: |
+        build	Restore node_modules	Cache not found for input keys: Linux-node-modules-5e1f0a9c27d4...
+        build	Post Restore node_modules	Cache saved with key: Linux-node-modules-5e1f0a9c27d4...
+    - match: "gh run view --log | grep -i 'cache'"
+      evidence: cache-hit
+      output: |
+        build	Restore node_modules	Cache restored from key: Linux-node-modules
+        build	Install dependencies	Skipped: steps.cache.outputs.cache-hit != 'true' was false
+        build	Post Restore node_modules	Cache hit occurred on the primary key Linux-node-modules, not saving cache.
+    - match: "gh run view --log | grep date-fns"
+      evidence: old-version
+      output: |
+        build	Run npm test	FAIL src/dates.test.ts > formats ISO week
+        build	Run npm test	TypeError: (0 , date_fns.formatISOWeek) is not a function   (date-fns 2.30.0)
+    - match: "grep -A1 '\"node_modules/date-fns\"' package-lock.json"
+      evidence: lock-v3
+      output: |
+            "node_modules/date-fns": {
+              "version": "3.6.0",
+    - match: "gh run list --workflow ci.yml --limit 2"
+      when_actions: [hash-key]
+      output: |
+        STATUS  TITLE                   WORKFLOW  BRANCH  EVENT  ID    ELAPSED
+        ✓       ci: key cache on lock   CI        main    push   8812  2m41s
+        X       Use ISO week numbers    CI        main    push   8807  48s
+    - match: "gh run list --workflow ci.yml --limit 2"
+      output: |
+        STATUS  TITLE                   WORKFLOW  BRANCH  EVENT  ID    ELAPSED
+        X       Use ISO week numbers    CI        main    push   8807  48s
+        X       Upgrade date-fns to v3  CI        main    push   8801  51s
+
+files:
+  - path: ".github/workflows/ci.yml (cache step)"
+    evidence: fixed-key
+    content: |
+      - name: Restore node_modules
+        id: cache
+        uses: actions/cache@v5
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'   # skip install on a cache hit
+        run: npm install
+      - run: npm test
+
+hypotheses:
+  - id: fixed-key
+    text: "The cache key never changes, so every run is an exact hit: CI restores two-year-old node_modules, skips the install step because of the hit, and never re-saves the cache."
+    correct: true
+  - id: lock-not-committed
+    text: "The new package-lock.json wasn't committed."
+    feedback: "The lock file in the repository pins date-fns 3.6.0. CI ran tests against 2.30.0 anyway."
+  - id: registry
+    text: "The npm registry served an old version."
+    feedback: "The log shows the cache restored node_modules before install. The old copy came from the cache, not the registry."
+  - id: flaky
+    text: "The tests are flaky."
+    feedback: "They fail every run with the same v2-only error. That's consistent, not flaky."
+
+actions:
+  - id: hash-key
+    label: "Key the cache on the lock file (key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}), cache ~/.npm instead of node_modules, and run npm ci"
+    kind: fix
+    feedback: "A new lock file now means a new cache key, and npm ci always runs, installing exactly what the lock file says (fast, because the download cache is warm)."
+  - id: delete-cache
+    label: "Delete the cache once from the Actions caches page"
+    kind: wrong
+    feedback: "The next run saves a fresh cache under the same fixed key, and the next upgrade has exactly the same problem."
+  - id: remove-tests
+    label: "Skip the date tests in CI until it sorts itself out"
+    kind: destructive
+    feedback: "CI would go green while testing the wrong dependency versions, and the failures it was catching would ship."
+  - id: pin-v2
+    label: "Downgrade date-fns back to v2 to match CI"
+    kind: wrong
+    feedback: "That makes CI's stale copy correct by undoing the upgrade, and leaves the cache trap for the next one."
+
+solution_paths:
+  - [hash-key]
+
+key_evidence: [cache-hit, old-version, lock-v3, fixed-key]
+
+evidence_labels:
+  cache-hit: "Every run is an exact cache hit on a fixed key, so install is skipped and the cache never re-saved"
+  old-version: "CI's tests run against date-fns 2.30.0"
+  lock-v3: "The committed lock file pins date-fns 3.6.0"
+  fixed-key: "The cache key is just the OS name, with nothing that changes with dependencies"
+
+hints:
+  nudge: "Where does CI's copy of date-fns come from, the lock file or somewhere else?"
+  direction: "Read the cache lines in the run log, then the cache step's key and what happens to the install step on a hit."
+  answer: "The key never changes, so every run restores the old node_modules and skips install. Key the cache on hashFiles('package-lock.json') and always run npm ci."
+
+analogy:
+  title: "The same lunchbox every day"
+  text: |
+    The canteen labels everyone's lunchbox just "lunch", so each morning you
+    get back the box you left two years ago, and the new recipe never makes
+    it in. Label the box with today's menu, and you get a fresh one whenever
+    the menu changes.
+
+debrief:
+  root_cause: |
+    The cache key was just the OS name, so it never changed. Every run got
+    an exact hit, restored the node_modules saved two years ago, skipped the
+    install step (it only runs on a miss), and, being an exact hit, never
+    saved a new cache. So the tests ran against the old date-fns v2, though
+    the lock file says v3. Keying the cache on a hash of the lock
+    file makes any dependency change produce a new cache.
+  ideal_path:
+    - "Compare versions: the lock file says 3.6.0, CI ran 2.30.0."
+    - "Read the cache lines: an exact hit on a fixed key, install skipped, never re-saved."
+    - "Read the cache step: the key has nothing that changes with dependencies."
+    - "Key on hashFiles('package-lock.json'), use npm ci, and confirm the next run passes."
+  real_world: |
+    Cache keys should change whenever the cached content should. For npm,
+    cache the download cache (~/.npm) and run npm ci, or use setup-node's
+    built-in cache option, which keys on the lock file for you.
+
+concepts:
+  - term: "Cache key"
+    text: "The name a cache is saved and restored under. An exact match restores it and the cache isn't saved again."
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/caching-dependencies-to-speed-up-workflows"
+  - term: "hashFiles()"
+    text: "An expression that hashes matching files, often used to make a cache key change when the lock file changes."
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/expressions"
+
+sources:
+  - title: "GitHub Actions: Caching dependencies to speed up workflows (keys, hashFiles, cache hits)"
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/caching-dependencies-to-speed-up-workflows"
+    retrieved: 2026-10-02
+  - title: "GitHub Actions: Expressions (hashFiles)"
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/expressions"
+    retrieved: 2026-10-02
+  - title: "npm: npm ci"
+    url: "https://docs.npmjs.com/cli/v11/commands/npm-ci"
+    retrieved: 2026-10-02

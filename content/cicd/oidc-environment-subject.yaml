@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: oidc-environment-subject
+track: cicd
+difficulty: 3
+title: "Adding an approval step broke the deploy's access to AWS"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  priority: P2
+  body: |
+    Deploys to AWS worked for months using OIDC (no stored keys). Yesterday
+    we added a "production" environment with required reviewers to the
+    deploy job. Now, after approval, the "Configure AWS credentials" step
+    fails with "Not authorized to perform sts:AssumeRoleWithWebIdentity".
+
+environment: |
+  The deploy workflow in example-shop/shop-api runs on pushes to main and
+  assumes the IAM role gha-deploy through GitHub's OIDC provider. The role's
+  trust policy was written when the workflow had no environment. The
+  repository was created in 2023.
+
+terminal:
+  prompt: "you@laptop:~/shop-api$"
+  commands:
+    - match: "aws iam get-role --role-name gha-deploy --query Role.AssumeRolePolicyDocument.Statement[0].Condition"
+      when_actions: [trust-environment]
+      output: |
+        {
+            "StringEquals": {
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                "token.actions.githubusercontent.com:sub": "repo:example-shop/shop-api:environment:production"
+            }
+        }
+    - match: "aws iam get-role --role-name gha-deploy --query Role.AssumeRolePolicyDocument.Statement[0].Condition"
+      evidence: trust-branch
+      output: |
+        {
+            "StringEquals": {
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                "token.actions.githubusercontent.com:sub": "repo:example-shop/shop-api:ref:refs/heads/main"
+            }
+        }
+    - match: "gh run view --log-failed"
+      when_actions: [trust-environment]
+      output: |
+        (no failed jobs in the latest run)
+    - match: "gh run view --log-failed"
+      evidence: sts-denied
+      output: |
+        deploy	Configure AWS credentials	Error: Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity
+    - match: "gh run list --workflow deploy.yml --limit 2"
+      when_actions: [trust-environment]
+      output: |
+        STATUS  TITLE                    WORKFLOW  BRANCH  EVENT  ID    ELAPSED
+        ✓       Add order export         deploy    main    push   4410  4m12s
+        X       Add order export         deploy    main    push   4402  2h11m
+    - match: "gh run list --workflow deploy.yml --limit 2"
+      output: |
+        STATUS  TITLE                    WORKFLOW  BRANCH  EVENT  ID    ELAPSED
+        X       Add order export         deploy    main    push   4402  2h11m
+        ✓       Tweak logging            deploy    main    push   4380  3m58s
+
+files:
+  - path: ".github/workflows/deploy.yml (deploy job)"
+    evidence: uses-environment
+    content: |
+      deploy:
+        runs-on: ubuntu-latest
+        environment: production        # added yesterday: required reviewers
+        permissions:
+          id-token: write
+          contents: read
+        steps:
+          - uses: aws-actions/configure-aws-credentials@v5
+            with:
+              role-to-assume: arn:aws:iam::111122223333:role/gha-deploy
+              aws-region: us-east-1
+
+hypotheses:
+  - id: sub-changed
+    text: "With an environment, the OIDC token's subject becomes repo:example-shop/shop-api:environment:production, but the role's trust policy only accepts the branch form, ref:refs/heads/main."
+    correct: true
+  - id: id-token
+    text: "The job lost the id-token: write permission."
+    feedback: "It still has id-token: write. Without it, the action couldn't request a token at all; here AWS received one and refused it."
+  - id: role-deleted
+    text: "The gha-deploy role was deleted or its permissions changed."
+    feedback: "The role exists, and the error is about assuming it (the trust policy), not about what it may do once assumed."
+  - id: approval-expired
+    text: "The approval took too long and the token expired."
+    feedback: "The token is requested after approval, when the step runs. AWS refused it because it didn't match, not because it was stale."
+
+actions:
+  - id: trust-environment
+    label: "Change the trust policy's sub condition to repo:example-shop/shop-api:environment:production, and re-run the deploy"
+    kind: fix
+    feedback: "Only jobs that use the production environment, which now needs a reviewer's approval, can assume the role: tighter than before."
+  - id: wildcard
+    label: "Change the condition to StringLike repo:example-shop/*"
+    kind: destructive
+    feedback: "Any workflow in any repository in the organization, on any branch or pull request, could deploy to production."
+  - id: access-keys
+    label: "Go back to long-lived access keys stored as secrets"
+    kind: wrong
+    feedback: "That reintroduces exactly the stored keys OIDC removed, to work around one condition in a trust policy."
+  - id: drop-environment
+    label: "Remove the environment from the deploy job"
+    kind: wrong
+    feedback: "Deploys work again, without the required approval the team just added."
+
+solution_paths:
+  - [trust-environment]
+
+key_evidence: [sts-denied, uses-environment, trust-branch]
+
+evidence_labels:
+  sts-denied: "AWS refuses the role: not authorized to perform sts:AssumeRoleWithWebIdentity"
+  uses-environment: "The deploy job now uses the production environment"
+  trust-branch: "The trust policy only accepts the subject for the main branch"
+
+hints:
+  nudge: "Nothing changed in AWS. What changed about the token GitHub sends when the job has an environment?"
+  direction: "Compare the role's trust condition with the subject GitHub uses when a job references an environment."
+  answer: "With an environment, the subject is repo:example-shop/shop-api:environment:production. Update the trust policy's sub condition to that."
+
+analogy:
+  title: "The badge now says the department"
+  text: |
+    The vault lets in anyone whose badge says "Main office". The company
+    added an approval desk, and approved staff now get badges saying
+    "Production team, approved". The vault's rule still looks for "Main
+    office", so nobody approved can get in. Update the vault's rule to the
+    new badge.
+
+debrief:
+  root_cause: |
+    AWS checks the GitHub OIDC token's claims against the role's trust policy.
+    The subject (sub) claim depends on the job: for a push to main it's
+    repo:example-shop/shop-api:ref:refs/heads/main, but when the job
+    references an environment it's
+    repo:example-shop/shop-api:environment:production. Adding the
+    environment changed the subject, the trust policy no longer matched, and
+    AWS refused AssumeRoleWithWebIdentity.
+  ideal_path:
+    - "Read the failure: AWS refused to let the job assume the role."
+    - "Note what changed: the job now uses the production environment."
+    - "Read the trust policy: it only matches the branch subject."
+    - "Match the environment subject instead, then re-run the deploy."
+  real_world: |
+    Trusting the environment is often better than trusting a branch: the
+    environment can carry required reviewers and branch rules. Check GitHub's
+    OIDC reference for the exact subject format your repository uses; it
+    has changed for newly created repositories.
+
+concepts:
+  - term: "OIDC for deployments"
+    text: "A workflow requests a short-lived token from GitHub; the cloud trusts tokens whose claims match its rules, so no long-lived keys are stored."
+    url: "https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect"
+  - term: "Subject (sub) claim"
+    text: "The part of the token that says which repository and context the job ran in: a branch, a pull request, or an environment."
+    url: "https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect"
+  - term: "Deployment environment"
+    text: "A named target such as production, with protection rules like required reviewers."
+    url: "https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment"
+
+sources:
+  - title: "GitHub Actions: About security hardening with OpenID Connect (subject claims)"
+    url: "https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect"
+    retrieved: 2026-10-02
+  - title: "GitHub Actions: Configuring OpenID Connect in Amazon Web Services"
+    url: "https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services"
+    retrieved: 2026-10-02
+  - title: "GitHub Actions: Managing environments for deployment"
+    url: "https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-deployments/managing-environments-for-deployment"
+    retrieved: 2026-10-02

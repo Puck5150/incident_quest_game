@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: deploy-race-concurrency
+track: cicd
+difficulty: 3
+title: "Production is running the older of two releases"
+par_minutes: 12
+
+ticket:
+  from: "Checkout team"
+  priority: P1
+  body: |
+    We merged two PRs to main a minute apart: #881 (a price display tweak)
+    then #882 (the fix for double-charging). Both deploy runs are green, but
+    production is running #881's build, and customers are being
+    double-charged again.
+
+environment: |
+  Every push to main runs the deploy workflow: build, push an image tagged
+  with the commit SHA, then point production at that image. Builds take 4 to
+  7 minutes depending on cache. The workflow has no concurrency settings.
+
+terminal:
+  prompt: "you@laptop:~/checkout$"
+  commands:
+    - match: "gh run list --workflow deploy.yml --limit 2 --json databaseId,headSha,displayTitle,createdAt,updatedAt --jq '.[] | \"\\(.databaseId) \\(.headSha[0:7]) \\(.displayTitle) started \\(.createdAt[11:19]) finished \\(.updatedAt[11:19])\"'"
+      evidence: finish-order
+      output: |
+        7712 c41e9a2 Fix double charge (#882) started 13:02:10 finished 13:06:41
+        7711 9b07d33 Price display tweak (#881) started 13:01:05 finished 13:08:22
+    - match: "kubectl get deploy checkout -n shop -o jsonpath='{.spec.template.spec.containers[0].image}'"
+      when_actions: [redeploy-latest]
+      output: |
+        registry.example.com/checkout:c41e9a2
+    - match: "kubectl get deploy checkout -n shop -o jsonpath='{.spec.template.spec.containers[0].image}'"
+      evidence: old-image
+      output: |
+        registry.example.com/checkout:9b07d33
+    - match: "git log --oneline -2 origin/main"
+      output: |
+        c41e9a2 Fix double charge (#882)
+        9b07d33 Price display tweak (#881)
+
+files:
+  - path: ".github/workflows/deploy.yml"
+    evidence: no-concurrency
+    content: |
+      on:
+        push:
+          branches: [main]
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v6
+            - run: ./build.sh "$GITHUB_SHA"              # 4 to 7 minutes
+            - run: ./push-image.sh "$GITHUB_SHA"
+            - run: kubectl set image deploy/checkout checkout=registry.example.com/checkout:$GITHUB_SHA -n shop
+
+hypotheses:
+  - id: race
+    text: "The two deploy runs ran at the same time. #881's slower build finished last, so its deploy step overwrote #882's, and the older build is live."
+    correct: true
+  - id: merge-order
+    text: "#882 was merged before #881."
+    feedback: "main's history has #881 then #882, and #882's run started second. The runs finished in the opposite order."
+  - id: rollback
+    text: "Someone rolled production back."
+    feedback: "No rollback ran. The last deploy step to finish was #881's, at 13:08, after #882's at 13:06."
+  - id: image-cache
+    text: "The cluster pulled a cached image."
+    feedback: "The Deployment's image tag is 9b07d33: it was told to run #881's build. Nothing was cached wrongly."
+
+actions:
+  - id: redeploy-latest
+    label: "Re-run the deploy for main's latest commit, c41e9a2, now"
+    kind: fix
+    feedback: "Production runs #882's build again and double-charging stops. Now make sure it can't happen again."
+  - id: concurrency
+    label: "Add concurrency (group: deploy-production, cancel-in-progress: false) to the deploy workflow"
+    kind: fix
+    feedback: "Only one deploy runs at a time; while one runs, newer pushes wait, and a newer one replaces an older pending one, so production always ends at main's latest commit."
+  - id: cancel-in-progress
+    label: "Add concurrency with cancel-in-progress: true"
+    kind: wrong
+    feedback: "It prevents the overlap, but can cancel a deploy halfway through its steps, leaving production in between. For deploys, let the running one finish and queue the next."
+  - id: revert-881
+    label: "Revert #881 so only one change is deployed"
+    kind: wrong
+    feedback: "The revert is a third push with its own deploy run, which can race with anything else merged, and #881 was a fine change."
+
+solution_paths:
+  - [redeploy-latest, concurrency]
+
+key_evidence: [finish-order, old-image, no-concurrency]
+
+evidence_labels:
+  finish-order: "#882's run started later but finished first; #881's finished last"
+  old-image: "Production runs #881's image, 9b07d33"
+  no-concurrency: "The deploy workflow has no concurrency limit"
+
+hints:
+  nudge: "Both runs succeeded. Which one finished last?"
+  direction: "Compare when each deploy run started and finished, then what limits how many deploys run at once."
+  answer: "The runs overlapped and #881 finished last. Redeploy main's latest commit, and add a concurrency group to the deploy workflow."
+
+analogy:
+  title: "Two couriers with the same notice"
+  text: |
+    Two couriers leave a minute apart to pin a notice on the same board:
+    the old version, then the corrected one. The first takes the long way
+    and arrives last, pinning the old notice over the new. Send one courier
+    at a time, and only the latest notice.
+
+debrief:
+  root_cause: |
+    Each push to main started its own deploy run, and nothing stopped them
+    running at the same time. #882's run started after #881's, but its build
+    was faster, so it deployed at 13:06; #881's slower run deployed at 13:08
+    and replaced it. Production ran the older code, double-charging included.
+    A concurrency group allows one deploy at a time and replaces older pending
+    runs with the newest, so the last deploy is always main's latest commit.
+  ideal_path:
+    - "Check what production runs: #881's image."
+    - "Compare the two runs: #882 started later, finished earlier."
+    - "Read the workflow: no concurrency limit."
+    - "Redeploy main's latest commit; add a concurrency group for deploys."
+  real_world: |
+    Any pipeline that deploys on every merge needs one deploy per environment
+    at a time. Some teams also make the deploy step check it's still the
+    newest commit before applying.
+
+concepts:
+  - term: "Concurrency group"
+    text: "Only one job or workflow in a group runs at a time; by default a new one replaces any pending one in the group."
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/control-the-concurrency-of-workflows-and-jobs"
+  - term: "cancel-in-progress"
+    text: "Also cancels the one currently running in the group when a new one starts."
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/control-the-concurrency-of-workflows-and-jobs"
+
+sources:
+  - title: "GitHub Actions: Control the concurrency of workflows and jobs"
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/control-the-concurrency-of-workflows-and-jobs"
+    retrieved: 2026-10-02
+  - title: "GitHub Actions: Workflow syntax (concurrency)"
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax"
+    retrieved: 2026-10-02

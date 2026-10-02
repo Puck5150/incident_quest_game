@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: required-check-path-filter
+track: cicd
+difficulty: 2
+title: "A docs-only pull request is stuck waiting for a check that never comes"
+par_minutes: 10
+
+ticket:
+  from: "Docs team"
+  priority: P3
+  body: |
+    Our pull request only edits files in docs/. It's been approved for a day,
+    but the merge button says "Expected — Waiting for status to be reported"
+    next to the "build" check. No build ever started.
+
+environment: |
+  Branch protection on main requires the "build" status check. Last week, to
+  save CI minutes, someone added a paths filter to the build workflow so it
+  only runs when src/ or package files change.
+
+terminal:
+  prompt: "you@laptop:~/shop-web$"
+  commands:
+    - match: "gh pr checks 590"
+      when_actions: [always-run-gate]
+      output: |
+        build   pass   12s   https://github.com/example-shop/shop-web/actions/runs/9120
+    - match: "gh pr checks 590"
+      evidence: no-check
+      output: |
+        no checks reported on the 'docs/install-guide' branch
+    - match: "gh pr diff 590 --name-only"
+      evidence: docs-only
+      output: |
+        docs/install.md
+        docs/images/install-step-3.png
+    - match: "gh api repos/example-shop/shop-web/branches/main/protection/required_status_checks --jq .contexts"
+      evidence: required-build
+      output: |
+        ["build"]
+
+files:
+  - path: ".github/workflows/build.yml (trigger)"
+    evidence: paths-filter
+    content: |
+      name: build
+      on:
+        pull_request:
+          paths:
+            - "src/**"
+            - "package.json"
+            - "package-lock.json"
+
+hypotheses:
+  - id: skipped-required
+    text: "The build workflow is skipped for docs-only changes because of its paths filter, so the required \"build\" check is never reported and the pull request waits for it forever."
+    correct: true
+  - id: actions-outage
+    text: "GitHub Actions is down."
+    feedback: "Other pull requests that touch src/ get builds today. This one never triggered a workflow at all."
+  - id: approval
+    text: "The pull request needs another approval."
+    feedback: "It's approved; the merge box names the missing \"build\" status as the blocker."
+  - id: queue
+    text: "The build is queued behind other runs."
+    feedback: "A queued run shows up as a pending check. Here no checks were reported on the branch: no workflow was started."
+
+actions:
+  - id: always-run-gate
+    label: "Remove the paths filter from the trigger, and skip the expensive steps inside the job when only docs changed (for example with a changed-files step), so the \"build\" check always reports"
+    kind: fix
+    feedback: "The workflow now runs on every pull request and reports \"build\"; for docs-only changes it finishes in seconds, so the CI minutes are still saved."
+  - id: admin-merge
+    label: "Have an admin bypass branch protection and merge"
+    kind: wrong
+    feedback: "This PR gets in, the next docs PR is stuck the same way, and bypassing protection becomes a habit."
+  - id: unrequire
+    label: "Remove \"build\" from the required checks"
+    kind: destructive
+    feedback: "Pull requests that do change src/ could now be merged with a failing build."
+  - id: touch-src
+    label: "Add a whitespace change under src/ to trigger the build"
+    kind: wrong
+    feedback: "It triggers the build by putting a meaningless change in the code, on every docs PR, forever."
+
+solution_paths:
+  - [always-run-gate]
+
+key_evidence: [no-check, docs-only, required-build, paths-filter]
+
+evidence_labels:
+  no-check: "No checks were reported on the pull request's branch"
+  docs-only: "The pull request only changes files in docs/"
+  required-build: "Branch protection requires the \"build\" check"
+  paths-filter: "The build workflow only runs for changes in src/ or package files"
+
+hints:
+  nudge: "Nothing failed: something never ran. Why wouldn't the build workflow start for this pull request?"
+  direction: "Compare the files the PR changes with the build workflow's trigger, and with what branch protection requires."
+  answer: "A paths filter skips the workflow, so the required check never reports and stays pending. Let the workflow always run, and skip the heavy steps inside it for docs-only changes."
+
+analogy:
+  title: "A sign-off from someone who's never sent the form"
+  text: |
+    The rule says every change needs the safety inspector's stamp. To save
+    the inspector's time, they were told to skip anything that isn't
+    building work, so a request to repaint a sign never reaches them, and
+    sits forever waiting for a stamp nobody will give. Have them stamp the
+    simple ones quickly instead of never seeing them.
+
+debrief:
+  root_cause: |
+    Branch protection requires the "build" check. The build workflow's
+    paths filter skips it unless src/ or package files change, and GitHub
+    leaves the checks of a skipped workflow pending, which blocks merging. A
+    docs-only pull request therefore waited forever for a check no workflow
+    would ever report.
+  ideal_path:
+    - "Check the PR's checks: none reported at all."
+    - "Compare its files (docs only) with the build workflow's paths filter."
+    - "Confirm \"build\" is required on main."
+    - "Make the workflow always run and report, skipping heavy steps for docs-only changes; confirm the check passes."
+  real_world: |
+    GitHub's advice is to avoid requiring workflows that can be skipped.
+    Path filters are fine on optional workflows; for required ones, do the
+    filtering inside the job.
+
+concepts:
+  - term: "Required status checks"
+    text: "Checks a pull request must report as successful before branch protection allows merging."
+    url: "https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks"
+  - term: "paths filter"
+    text: "Limits a push or pull_request workflow to run only when matching files change."
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows"
+
+sources:
+  - title: "GitHub: Troubleshooting required status checks (skipped workflows stay Pending)"
+    url: "https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks"
+    retrieved: 2026-10-02
+  - title: "GitHub Actions: Workflow syntax (on.pull_request.paths)"
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax"
+    retrieved: 2026-10-02

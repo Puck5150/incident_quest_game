@@ -373,3 +373,16 @@ from your own experience and tick them off.
 - [ ] Representative output: kubectl describe/get layouts, event messages
       (FailedScheduling, Multi-Attach, Unhealthy/Killing), EndpointSlice
       "<unset>" rendering, exit code 143 after SIGTERM.
+
+## CI/CD to 8 (2026-10-02): fork-pr-secrets, stale-dependency-cache, deploy-race-concurrency, required-check-path-filter, artifacts-between-jobs, oidc-environment-subject
+- [x] Checked against GitHub docs on 2026-10-02: no secrets (and a read-only
+      GITHUB_TOKEN) for pull_request runs from forks; cache keys with
+      hashFiles, exact hits restore without re-saving; concurrency groups
+      (one running, newest pending replaces older pending, cancel-in-progress);
+      skipped workflows leave required checks Pending ("avoid requiring
+      workflows that can be skipped"); artifacts for sharing data between
+      jobs; OIDC sub claim forms for branches and environments (and that new
+      repositories since July 2026 use a different default format).
+- [ ] Representative output: gh CLI tables and --log lines (including the
+      "Skipped:" step line), runner machine names, the actions/cache log
+      wording, the AWS credentials action error text.

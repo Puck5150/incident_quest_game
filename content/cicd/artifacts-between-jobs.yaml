@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: artifacts-between-jobs
+track: cicd
+difficulty: 1
+title: "The build job works, and the deploy job says there's nothing to deploy"
+par_minutes: 8
+
+ticket:
+  from: "Marketing site team"
+  priority: P3
+  body: |
+    We split our one-job pipeline into a build job and a deploy job, so we
+    can add tests in between later. Build passes and logs "dist/ created".
+    Deploy fails straight away: dist/ doesn't exist. It worked as one job.
+
+environment: |
+  The marketing site's workflow runs on GitHub-hosted runners. The build job
+  runs npm run build, which writes the site into dist/. The deploy job,
+  which needs: build, uploads dist/ to the hosting bucket.
+
+terminal:
+  prompt: "you@laptop:~/marketing-site$"
+  commands:
+    - match: "gh run list --workflow site.yml --limit 2"
+      when_actions: [use-artifacts]
+      output: |
+        STATUS  TITLE                       WORKFLOW  BRANCH  EVENT  ID    ELAPSED
+        ✓       ci: pass dist as artifact   site      main    push   6640  1m52s
+        X       ci: split build and deploy  site      main    push   6631  1m21s
+    - match: "gh run list --workflow site.yml --limit 2"
+      output: |
+        STATUS  TITLE                       WORKFLOW  BRANCH  EVENT  ID    ELAPSED
+        X       ci: split build and deploy  site      main    push   6631  1m21s
+        ✓       Update pricing page         site      main    push   6620  1m40s
+    - match: "gh run view 6631 --log | grep -E 'dist|Runner|Machine name'"
+      evidence: two-machines
+      output: |
+        build	Set up job	Machine name: 'fv-az1203-118'
+        build	Run npm run build	dist/ created (214 files)
+        deploy	Set up job	Machine name: 'fv-az884-022'
+        deploy	Upload site	upload: cannot access 'dist/': No such file or directory
+
+files:
+  - path: ".github/workflows/site.yml"
+    evidence: no-artifact
+    content: |
+      jobs:
+        build:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v6
+            - run: npm ci && npm run build
+        deploy:
+          needs: build
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v6
+            - name: Upload site
+              run: ./upload.sh dist/
+
+hypotheses:
+  - id: separate-runners
+    text: "Each job runs on its own fresh runner, so dist/ built in the build job doesn't exist on the deploy job's machine. It has to be passed as an artifact."
+    correct: true
+  - id: build-failed
+    text: "The build didn't really produce dist/."
+    feedback: "The build job logged \"dist/ created (214 files)\". It exists, on the build job's machine."
+  - id: needs-wrong
+    text: "deploy runs before build finishes."
+    feedback: "needs: build makes deploy wait for build to succeed. The order is right; the files just aren't there."
+  - id: path-typo
+    text: "The upload script has the wrong path."
+    feedback: "It looks for dist/, the same folder the build writes. The two jobs ran on different machines (fv-az1203-118 and fv-az884-022)."
+
+actions:
+  - id: use-artifacts
+    label: "In build, upload dist/ with actions/upload-artifact; in deploy, download it with actions/download-artifact before uploading the site"
+    kind: fix
+    feedback: "The build job stores dist/ as an artifact of the run, and the deploy job fetches it onto its own runner before uploading."
+  - id: build-twice
+    label: "Run npm run build again in the deploy job"
+    kind: wrong
+    feedback: "It works, but deploys something different from what the build job produced (and the tests you plan to add would test), and doubles the build time."
+  - id: use-cache
+    label: "Save dist/ with actions/cache in build and restore it in deploy"
+    kind: wrong
+    feedback: "Caches are for reusing dependencies between runs and can be evicted or restored from another branch's run. Passing this run's output between jobs is what artifacts are for."
+  - id: one-job
+    label: "Merge the two jobs back into one"
+    kind: wrong
+    feedback: "It works again, and gives up the split the team wanted, so tests can't sit between build and deploy as a separate gate."
+
+solution_paths:
+  - [use-artifacts]
+
+key_evidence: [two-machines, no-artifact]
+
+evidence_labels:
+  two-machines: "build and deploy ran on different machines; deploy can't find dist/"
+  no-artifact: "Nothing passes dist/ from the build job to the deploy job"
+
+hints:
+  nudge: "The build made dist/. On which machine?"
+  direction: "Look at which runner each job used, and how the workflow moves files from one job to the next."
+  answer: "Jobs run on separate runners. Upload dist/ as an artifact in build and download it in deploy."
+
+analogy:
+  title: "Two kitchens"
+  text: |
+    One cook bakes the cake in kitchen A; the person decorating it works
+    in kitchen B across town. They split the job to save time, then
+    wondered why kitchen B had no cake. Somebody has to carry it over.
+
+debrief:
+  root_cause: |
+    Every job in a workflow runs on its own runner; on GitHub-hosted runners
+    that's a fresh machine per job. As one job, build and upload shared a
+    filesystem. Split in two, the build job's dist/ stayed on its machine,
+    and the deploy job's machine had only a fresh checkout. Files move
+    between jobs as artifacts: upload in one job, download in the next.
+  ideal_path:
+    - "Read the deploy log: dist/ doesn't exist."
+    - "Notice the jobs ran on different machines."
+    - "Read the workflow: nothing carries dist/ across."
+    - "Upload dist/ as an artifact in build, download it in deploy, and confirm the run is green."
+  real_world: |
+    Build once, then test and deploy the same artifact: it's a core CI/CD
+    principle. Artifacts are for this run's outputs; caches are for
+    speeding up repeated work across runs.
+
+concepts:
+  - term: "Job"
+    text: "A set of steps that runs on one runner. Different jobs run on different runners, in parallel unless needs orders them."
+    url: "https://docs.github.com/en/actions/writing-workflows/about-workflows"
+  - term: "Artifact"
+    text: "Files saved from a workflow run, which later jobs in the run can download and people can download afterwards."
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/storing-and-sharing-data-from-a-workflow"
+
+sources:
+  - title: "GitHub Actions: Storing and sharing data from a workflow (artifacts between jobs)"
+    url: "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/storing-and-sharing-data-from-a-workflow"
+    retrieved: 2026-10-02
+  - title: "GitHub Actions: About GitHub-hosted runners (a fresh machine for each job)"
+    url: "https://docs.github.com/en/actions/using-github-hosted-runners/using-github-hosted-runners/about-github-hosted-runners"
+    retrieved: 2026-10-02
