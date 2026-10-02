@@ -2,12 +2,14 @@
 # Command library: networking and HTTP. First matching entry wins.
 
 - id: curl-head
-  match: "^curl (-s)?I "
+  match: "^curl -s?S?I "
   summary: "Requests a URL and prints only the response's status line and headers."
   parts:
     - { token: "curl", meaning: "Transfer a URL." }
     - { token: "-s", meaning: "Silent: no progress meter." }
+    - { token: "-S", meaning: "(With -s) still show an error message if the request fails." }
     - { token: "-I", meaning: "Send a HEAD request and show only the headers." }
+    - { token: "-H 'Name: value'", meaning: "(If given) add this request header, for example to act like a proxy that already terminated TLS." }
     - { token: "| grep -iE 'a|b'", meaning: "(If piped) keep only header lines matching any of the alternatives." }
     - { token: "-i", meaning: "grep: ignore case (header names are case-insensitive)." }
     - { token: "-E", meaning: "grep: extended regex, so | means \"or\"." }
@@ -26,6 +28,10 @@
     - { token: "-w '%{http_code}\\n'", meaning: "After the transfer, write out the response's status code and a newline (%{time_total} adds the seconds taken)." }
     - { token: "-H 'Host: NAME'", meaning: "(If given) send this header, here a different Host, to test how the server answers for another name." }
     - { token: "-X POST", meaning: "(If given) use this request method instead of GET." }
+    - { token: "-S", meaning: "(With -s) still show an error message if the request fails." }
+    - { token: "--max-time 20", meaning: "(If given) give up after 20 seconds." }
+    - { token: "--noproxy '*'", meaning: "(If given) bypass any proxy set in the environment and connect directly." }
+    - { token: "%{size_download}", meaning: "(In -w) the number of body bytes received; a short count means the response was cut off." }
   why: "One number answers \"what does this URL return?\", which is what a health check or a cache test compares against."
   alternatives:
     - { command: "curl -sI URL", note: "The status line plus headers." }
@@ -55,10 +61,11 @@
   docs: { title: "curl man page", url: "https://curl.se/docs/manpage.html" }
 
 - id: curl-get
-  match: "^curl (-s )?[^-]"
+  match: "^curl (-sS? )?[^-]"
   summary: "Requests a URL and prints the response body."
   parts:
     - { token: "-s", meaning: "Silent: no progress meter." }
+    - { token: "-S", meaning: "(With -s) still show an error message if the request fails." }
   why: "The body is what the app actually says, such as a health endpoint's JSON naming which dependency is down."
   alternatives:
     - { command: "curl -sv URL", note: "Also show the connection and headers." }
@@ -122,3 +129,169 @@
     - { command: "dig NAME", note: "More detail, including TTLs." }
     - { command: "Resolve-DnsName NAME", note: "PowerShell." }
   docs: { title: "nslookup", url: "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/nslookup" }
+
+- id: ip-brief-addr
+  match: "^ip -br addr"
+  summary: "Shows network interfaces with their state and addresses, one line each."
+  parts:
+    - { token: "ip", meaning: "iproute2: the Linux tool for interfaces, addresses and routes (replaces ifconfig and route)." }
+    - { token: "-br", meaning: "Brief: one line per interface." }
+    - { token: "addr show eth0", meaning: "Addresses of interface eth0." }
+  why: "Confirms the interface is UP and has the address and prefix length you expect, which decides what's \"on-link\"."
+  alternatives:
+    - { command: "ip addr show eth0", note: "Full detail, including MTU." }
+    - { command: "ifconfig eth0", note: "Older tool." }
+  docs: { title: "ip-address(8)", url: "https://man7.org/linux/man-pages/man8/ip-address.8.html" }
+
+- id: ip-neigh
+  match: "^ip neigh"
+  summary: "Shows the neighbour (ARP) table: which MAC address an IP on the local network resolved to, and the entry's state."
+  parts:
+    - { token: "neigh show 10.20.5.10", meaning: "Only the entry for this address." }
+  why: "FAILED or INCOMPLETE means nothing answered ARP for that address: the host is down or on another segment, so no IP traffic can reach it."
+  alternatives:
+    - { command: "arp -n", note: "Older tool." }
+    - { command: "arping 10.20.5.10", note: "Send ARP requests directly." }
+  docs: { title: "ip-neighbour(8)", url: "https://man7.org/linux/man-pages/man8/ip-neighbour.8.html" }
+
+- id: ip-route-get
+  match: "^ip route get "
+  summary: "Asks the kernel which route, interface and source address it would use for one destination."
+  parts:
+    - { token: "route get 10.20.5.10", meaning: "Resolve the route for this address, as a real packet would." }
+  why: "Instead of reading the whole table and working out longest-prefix match yourself, the kernel tells you the answer."
+  alternatives:
+    - { command: "ip route", note: "The whole table." }
+    - { command: "traceroute 10.20.5.10", note: "The hops beyond this host." }
+  docs: { title: "ip-route(8)", url: "https://man7.org/linux/man-pages/man8/ip-route.8.html" }
+
+- id: ip-route
+  match: "^ip route$"
+  summary: "Prints the main routing table."
+  parts:
+    - { token: "route", meaning: "Show routes (same as ip route show)." }
+  why: "Shows the default gateway and every directly connected network, which explains where traffic goes."
+  alternatives:
+    - { command: "ip route get ADDRESS", note: "The route chosen for one destination." }
+    - { command: "netstat -rn", note: "Older tool." }
+  docs: { title: "ip-route(8)", url: "https://man7.org/linux/man-pages/man8/ip-route.8.html" }
+
+- id: ping-mtu
+  match: "^ping .*-M do"
+  summary: "Sends pings of a chosen size that may not be fragmented, to find the largest packet a path carries."
+  parts:
+    - { token: "-c 3", meaning: "Send 3 pings, then stop." }
+    - { token: "-M do", meaning: "Set Don't Fragment: a packet too big for a link is dropped (or reported), never split." }
+    - { token: "-s 1472", meaning: "Payload bytes; plus 8 (ICMP) and 20 (IPv4) headers, 1472 makes a 1500-byte packet." }
+  why: "If 1372 gets through and 1472 doesn't, something on the path has a smaller MTU, which is what stalls large responses while small ones work."
+  alternatives:
+    - { command: "tracepath HOST", note: "Discovers the path MTU hop by hop." }
+  docs: { title: "ping(8)", url: "https://man7.org/linux/man-pages/man8/ping.8.html" }
+
+- id: ping
+  match: "^ping "
+  summary: "Sends ICMP echo requests and reports replies and round-trip times."
+  parts:
+    - { token: "-c 2", meaning: "Send 2 pings, then stop (Linux ping otherwise runs forever)." }
+  why: "The quickest reachability check; but many firewalls drop ICMP, so no reply alone doesn't prove the host is down."
+  alternatives:
+    - { command: "nc -zv HOST PORT", note: "Test the actual service port." }
+  docs: { title: "ping(8)", url: "https://man7.org/linux/man-pages/man8/ping.8.html" }
+
+- id: named-checkzone
+  match: "^named-checkzone "
+  summary: "Checks a BIND zone file for syntax errors and loads it as the server would."
+  parts:
+    - { token: "example.com", meaning: "The zone's name (its origin)." }
+    - { token: "db.example.com", meaning: "The zone file." }
+  why: "A zone that fails to load means the server keeps serving the old data (or none); this shows the error and the serial it would load."
+  alternatives:
+    - { command: "named-checkconf -z", note: "Check the config and every zone it lists." }
+  docs: { title: "BIND 9: named-checkzone", url: "https://bind9.readthedocs.io/en/latest/manpages.html#named-checkzone-zone-file-validation-tool" }
+
+- id: openssl-s-client-chain
+  match: "^openssl s_client .*\\| grep "
+  summary: "Connects with TLS and shows the certificate chain the server sends and whether it verifies."
+  parts:
+    - { token: "s_client -connect host:443", meaning: "Open a TLS connection to this host and port." }
+    - { token: "-servername host", meaning: "Send this name in SNI, so the server picks the right certificate." }
+    - { token: "</dev/null", meaning: "Send nothing, so the connection closes right after the handshake." }
+    - { token: "2>/dev/null", meaning: "Hide diagnostic noise on stderr." }
+    - { token: "grep -E '^ [0-9] s:|Verify return'", meaning: "Keep the chain lines (\" 0 s:\" is the subject of certificate 0, the server's own) and the verification result." }
+  why: "Shows exactly what clients get: a chain missing its intermediate verifies in browsers that cache it but fails for API clients."
+  alternatives:
+    - { command: "openssl s_client -connect host:443 -servername host -showcerts </dev/null", note: "Print every certificate in full." }
+    - { command: "curl -v https://host/", note: "Shows the handshake and verification error." }
+  docs: { title: "openssl-s_client", url: "https://docs.openssl.org/3.0/man1/openssl-s_client/" }
+
+- id: openssl-s-client-enddate
+  match: "^openssl s_client .*\\| openssl x509"
+  summary: "Fetches the certificate a server presents and prints when it expires."
+  parts:
+    - { token: "s_client -connect host:443", meaning: "Open a TLS connection to this host and port." }
+    - { token: "-servername host", meaning: "Send this name in SNI, so the server picks the right certificate." }
+    - { token: "</dev/null", meaning: "Send nothing, so the connection closes after the handshake." }
+    - { token: "2>/dev/null", meaning: "Hide diagnostic noise on stderr." }
+    - { token: "| openssl x509", meaning: "Parse the certificate s_client printed." }
+    - { token: "-noout", meaning: "Don't print the encoded certificate itself." }
+    - { token: "-enddate", meaning: "Print its notAfter date." }
+  why: "Checks the certificate actually being served, which is what matters after renewing: a server that wasn't reloaded still serves the old one."
+  alternatives:
+    - { command: "openssl x509 -enddate -noout -in cert.pem", note: "The certificate on disk." }
+  docs: { title: "openssl-x509", url: "https://docs.openssl.org/3.0/man1/openssl-x509/" }
+
+- id: openssl-x509-file
+  match: "^openssl x509 "
+  summary: "Prints fields of a certificate file."
+  parts:
+    - { token: "-enddate", meaning: "Print its notAfter (expiry) date." }
+    - { token: "-noout", meaning: "Don't print the encoded certificate itself." }
+    - { token: "-in FILE", meaning: "The certificate file." }
+  why: "Shows whether the certificate on disk is the renewed one; compare with what the server presents."
+  alternatives:
+    - { command: "openssl x509 -text -noout -in FILE", note: "Every field." }
+    - { command: "sudo certbot certificates", note: "Every certbot-managed certificate and its expiry." }
+  docs: { title: "openssl-x509", url: "https://docs.openssl.org/3.0/man1/openssl-x509/" }
+
+- id: ssh-remote-command
+  match: "^ssh \\S+ (?!sudo )"
+  summary: "Runs one command on a remote host and prints its output."
+  parts:
+    - { token: "ssh HOST", meaning: "Connect to HOST and run the rest of the line there instead of opening a shell." }
+  why: "Checks a fact on another machine (such as which certificate file a server is configured with) without a full login."
+  alternatives:
+    - { command: "ssh HOST", note: "An interactive shell." }
+  docs: { title: "ssh(1)", url: "https://man.openbsd.org/ssh.1" }
+
+- id: certbot-certificates
+  match: "^(sudo )?certbot certificates"
+  summary: "Lists the certificates certbot manages, their domains, paths and expiry."
+  parts:
+    - { token: "certificates", meaning: "Show each managed certificate." }
+  why: "Shows which certificates certbot will renew and when they expire, and the file paths a server should point at."
+  alternatives:
+    - { command: "openssl x509 -enddate -noout -in /etc/letsencrypt/live/NAME/cert.pem", note: "One certificate's expiry." }
+  docs: { title: "Certbot user guide", url: "https://eff-certbot.readthedocs.io/en/stable/using.html" }
+
+- id: certbot-renew-dry-run
+  match: "^(sudo )?certbot renew"
+  summary: "Runs certbot's renewal against the staging server without saving anything."
+  parts:
+    - { token: "renew", meaning: "Renew every certificate that's close to expiry." }
+    - { token: "--dry-run", meaning: "Test the whole renewal (including the challenge) without saving certificates or running deploy hooks." }
+  why: "Proves automatic renewal will work, which is what stops the outage recurring."
+  alternatives:
+    - { command: "systemctl list-timers | grep certbot", note: "Whether the renewal timer is scheduled." }
+  docs: { title: "Certbot user guide: renewing certificates", url: "https://eff-certbot.readthedocs.io/en/stable/using.html" }
+
+- id: ufw-status
+  match: "^(sudo )?ufw status"
+  summary: "Shows Uncomplicated Firewall's state, default policies and rules."
+  parts:
+    - { token: "status", meaning: "Whether ufw is active, and its rules." }
+    - { token: "verbose", meaning: "Also show the default incoming and outgoing policies and logging." }
+  why: "With default deny incoming, any port without an allow rule is blocked; the rules show which ports are open."
+  alternatives:
+    - { command: "sudo iptables -S", note: "The underlying rules." }
+    - { command: "sudo nft list ruleset", note: "On nftables systems." }
+  docs: { title: "ufw(8)", url: "https://manpages.ubuntu.com/manpages/noble/en/man8/ufw.8.html" }
