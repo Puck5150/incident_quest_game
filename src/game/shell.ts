@@ -38,18 +38,28 @@ export class IncidentShell {
 
   constructor(scenario: Scenario) {
     this.context = { scenario, taken: new Set() }
+    // The incident's tools: anything its scripted commands start with, plus the
+    // real tools above, but never one the shell already implements (cat, grep,
+    // ls...): those stay real, and work on the files below.
+    const builtins = new Set<string>(getCommandNames())
     const programs = new Set(TOOLS)
+    const files: Record<string, string> = {}
     for (const part of [scenario, ...(scenario.stages ?? [])])
       for (const c of part.terminal?.commands ?? []) {
-        const first = normalize(c.match ?? c.example ?? '').split(' ')[0]
+        const line = normalize(c.match ?? c.example ?? '')
+        const first = line.split(' ')[0]
         if (first && /^[\w.-]+$/.test(first)) programs.add(first)
+        // `cat /etc/x` scripted (before any fix) means the file exists: create it.
+        const file = line.match(/^(?:sudo )?cat (\/\S+)$/)?.[1]
+        if (part === scenario && file && !c.when_actions && !(file in files)) files[file] = c.output.endsWith('\n') ? c.output : c.output + '\n'
       }
+    for (const b of builtins) programs.delete(b)
     const user = scenario.terminal?.prompt.match(/^([\w.-]+)@([\w.-]+)/)
     this.homeDir = '/home/' + (user?.[1] ?? 'ops')
     this.bash = new Bash({
       cwd: '/home/' + (user?.[1] ?? 'ops'),
       env: { USER: user?.[1] ?? 'ops', HOSTNAME: user?.[2] ?? 'host', HOME: '/home/' + (user?.[1] ?? 'ops'), TERM: 'xterm-256color' },
-      files: { [`/home/${user?.[1] ?? 'ops'}/.bash_history`]: '' },
+      files: { ...files, [`/home/${user?.[1] ?? 'ops'}/.bash_history`]: '' },
       // Not in the browser build: archive tools need Node's zlib, sqlite3 a WASM module.
       commands: getCommandNames().filter((c) => !['gzip', 'gunzip', 'zcat', 'tar', 'sqlite3', 'html-to-markdown', 'xan'].includes(c)) as CommandName[],
       customCommands: [...programs].map((name) => defineCommand(name, (args) => Promise.resolve(this.program(name, args)))),

@@ -23,7 +23,7 @@ export type Progress = {
   // Consecutive incidents resolved "clean": no hints, no destructive actions.
   streak: { current: number; best: number }
   // Everything after `theme` was added after v1 shipped, so it's optional: old saves stay valid.
-  settings: { theme: 'dark' | 'light'; motion?: 'system' | 'reduce'; relaxed?: boolean; callsign?: string; sound?: boolean }
+  settings: { theme: 'dark' | 'light'; motion?: 'system' | 'reduce'; relaxed?: boolean; callsign?: string; sound?: boolean; simpleTerminal?: boolean }
 }
 
 // Saved data is untrusted: a player can edit it, and an old app version may
@@ -60,6 +60,7 @@ export const isProgress = (p: unknown): p is Progress =>
   optional(p.settings.motion, oneOf('system', 'reduce')) &&
   optional(p.settings.relaxed, (r) => typeof r === 'boolean') &&
   optional(p.settings.sound, (x) => typeof x === 'boolean') &&
+  optional(p.settings.simpleTerminal, (x) => typeof x === 'boolean') &&
   optional(p.settings.callsign, (c) => typeof c === 'string' && c === toCallsign(c) && c !== '')
 
 // Callsigns are short, upper-case radio names: letters, digits and dashes.

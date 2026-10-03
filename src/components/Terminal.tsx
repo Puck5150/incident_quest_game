@@ -1,112 +1,64 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
-import { atStage, stageAt } from '../schema/stages.ts'
-import { actionsTaken, commandsRun, complete, engineHandles, normalize, terminalOutput, transcript, type GameEvent } from '../game/engine.ts'
-import type { IncidentShell } from '../game/shell.ts'
+import type { GameEvent } from '../game/engine.ts'
+import { hint, useTerminalSession, type Line } from './terminal/session.ts'
 
-type Line = { id: number; prompt: string; input: string; output: string; completions?: boolean; pending?: boolean }
+const XtermTerminal = lazy(() => import('./terminal/XtermTerminal.tsx'))
 
-// The prompt as it would read in `cwd`: "ops@media-01:~$" becomes
-// "ops@media-01:/var/log$" after cd /var/log. Prompts without a path stay as written.
-function promptIn(prompt: string, cwd: string | undefined, home: string | undefined): string {
-  const m = prompt.match(/^(.*:)(\S*)([$#])\s*$/)
-  if (!m || !cwd) return prompt
-  const shown = home && (cwd === home || cwd.startsWith(home + '/')) ? '~' + cwd.slice(home.length) : cwd
-  return `${m[1]}${shown}${m[3]}`
-}
-
-// The terminal: a scrolling transcript and a prompt. Lines the game scripts
-// (help, scripted commands, typed fixes) are answered by the engine as before;
-// everything else runs in a real shell (src/game/shell.ts), so pipes, files,
-// cd and variables work. Real text (not a canvas), so screen readers and
-// copy/paste just work.
-export default function Terminal({
-  scenario,
-  log,
-  onRun,
-}: {
+type Props = {
   scenario: Scenario
   log: GameEvent[] // the session so far: the transcript and history start from it
   onRun: (input: string) => void
-}) {
-  const basePrompt = scenario.terminal!.prompt
-  const nextId = useRef(0)
-  const id = () => nextId.current++
-  const [lines, setLines] = useState<Line[]>(() => transcript(scenario, log).map((l) => ({ ...l, id: id(), prompt: basePrompt })))
-  const [history, setHistory] = useState<string[]>(() => commandsRun(log))
+}
+
+// The full terminal (xterm.js) where it works well: a real browser with a
+// mouse or trackpad, unless the player chose the simple terminal. Otherwise
+// (screen readers, phones, tests) the plain-text transcript below.
+function wantsFull(): boolean {
+  if (document.documentElement.dataset.terminal === 'simple') return false
+  if (typeof window.matchMedia !== 'function') return false
+  return !window.matchMedia('(pointer: coarse)').matches
+}
+
+export default function Terminal(props: Props) {
+  const [full] = useState(wantsFull)
+  if (!full) return <SimpleTerminal {...props} />
+  return (
+    <Suspense fallback={<div className="h-[28rem] rounded-lg border border-line bg-bg" />}>
+      <XtermTerminal {...props} />
+    </Suspense>
+  )
+}
+
+// A text input plus a scrolling transcript. Real text (not a canvas), so
+// screen readers and copy/paste just work.
+function SimpleTerminal({ scenario, log, onRun }: Props) {
+  const session = useTerminalSession(scenario, log, onRun)
+  const [lines, setLines] = useState<Line[]>(session.initial)
   const [cursor, setCursor] = useState<number>() // position while browsing history with ↑/↓
   const [input, setInput] = useState('')
-  const [cwd, setCwd] = useState<string>()
-  const home = useRef<string>(undefined)
   const out = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
+  const { history, prompt } = session
 
-  // The shell loads on first use, and commands run one at a time, in order.
-  const shell = useRef<Promise<IncidentShell>>(undefined)
-  const queue = useRef<Promise<unknown>>(Promise.resolve())
-  const getShell = () =>
-    (shell.current ??= import('../game/shell.ts').then((m) => {
-      const sh = new m.IncidentShell(scenario)
-      home.current = sh.home
-      return sh
-    }))
-
-  // On mount, replay the session's shell commands so the transcript and the
-  // shell's state (directory, files, variables) match what the player did.
-  const replayed = useRef(false)
-  useEffect(() => {
-    if (replayed.current) return
-    replayed.current = true
-    const needsShell = log.some((e, i) => e.type === 'RUN_COMMAND' && !engineHandles(scenario, e.input, log.slice(0, i)))
-    if (!needsShell) return
-    const snapshot = log
-    queue.current = queue.current.then(async () => {
-      const sh = await getShell()
-      let rebuilt: Line[] = []
-      for (const [i, e] of snapshot.entries()) {
-        if (e.type !== 'RUN_COMMAND') continue
-        const before = snapshot.slice(0, i)
-        const cmd = normalize(e.input)
-        if (cmd === 'clear') {
-          rebuilt = []
-          continue
-        }
-        const prompt = promptIn(basePrompt, sh.cwd, sh.home)
-        const output = engineHandles(scenario, cmd, before)
-          ? terminalOutput(scenario, cmd, before)
-          : (await sh.run(cmd, atStage(scenario, stageAt(before)), actionsTaken(before))).output
-        rebuilt.push({ id: id(), prompt, input: cmd, output })
-      }
-      setLines(rebuilt)
-      setCwd(sh.cwd)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount, from the log as it was then
-  }, [])
+  // When the shell has replayed the session, show its transcript instead.
+  const [shownReplay, setShownReplay] = useState(session.replayed)
+  if (session.replayed !== shownReplay) {
+    setShownReplay(session.replayed)
+    if (session.replayed) setLines(session.replayed)
+  }
 
   useEffect(() => {
     if (out.current) out.current.scrollTop = out.current.scrollHeight
   }, [lines])
 
-  const prompt = promptIn(basePrompt, cwd, home.current)
-
   function submit() {
-    const cmd = normalize(input)
+    const r = session.run(input)
     setInput('')
     setCursor(undefined)
-    if (!cmd) return setLines((l) => [...l, { id: id(), prompt, input: '', output: '' }])
-    const before = log // the session before this command
-    onRun(cmd)
-    setHistory((h) => [...h, cmd])
-    if (cmd === 'clear') return setLines([])
-    if (engineHandles(scenario, cmd, before)) return setLines((l) => [...l, { id: id(), prompt, input: cmd, output: terminalOutput(scenario, cmd, before) }])
-    const lineId = id()
-    setLines((l) => [...l, { id: lineId, prompt, input: cmd, output: '', pending: true }])
-    queue.current = queue.current.then(async () => {
-      const sh = await getShell()
-      const r = await sh.run(cmd, atStage(scenario, stageAt(before)), actionsTaken(before))
-      setLines((l) => l.map((x) => (x.id === lineId ? { ...x, output: r.output, pending: false } : x)))
-      setCwd(sh.cwd)
-    })
+    if (r.clear) return setLines([])
+    setLines((l) => [...l, r.line])
+    if (r.line.pending) r.done.then((done) => setLines((l) => l.map((x) => (x.id === done.id ? done : x))))
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -115,16 +67,16 @@ export default function Terminal({
     // traps keyboard users.
     if (e.key === 'Tab' && !e.shiftKey && input.trim()) {
       e.preventDefault()
-      const c = complete(atStage(scenario, stageAt(log)), input)
+      const c = session.completeLine(input)
       setInput(c.input)
-      if (c.options) setLines((l) => [...l, { id: id(), prompt, input, output: c.options!.join('  '), completions: true }])
+      if (c.options) setLines((l) => [...l, { id: session.id(), prompt, input, output: c.options!.join('  '), completions: true }])
     } else if (e.key === 'Enter') {
       e.preventDefault()
       submit()
     } else if (e.ctrlKey && e.key === 'c') {
       // Ctrl-C abandons the line, as in a real shell.
       e.preventDefault()
-      setLines((l) => [...l, { id: id(), prompt, input: input + '^C', output: '' }])
+      setLines((l) => [...l, { id: session.id(), prompt, input: input + '^C', output: '' }])
       setInput('')
       setCursor(undefined)
     } else if (e.ctrlKey && e.key === 'l') {
@@ -153,10 +105,7 @@ export default function Terminal({
       onClick={() => window.getSelection()?.isCollapsed && field.current?.focus()}
     >
       <div ref={out} role="log" aria-label="Terminal output" className="flex-1 overflow-auto p-3">
-        <p className="text-muted">
-          Type <span className="text-fg">help</span> to see some commands. It's a real shell: pipes, files, cd and variables work. Tab completes, ↑/↓ for history.
-          {[scenario, ...(scenario.stages ?? [])].some((x) => x.actions.some((a) => a.match_regex)) && ' Once you have named the root cause, you can type fixes here too.'}
-        </p>
+        <p className="text-muted">{hint(scenario)}</p>
         {lines.map((l) =>
           l.completions ? (
             <pre key={l.id} className="whitespace-pre-wrap text-muted">

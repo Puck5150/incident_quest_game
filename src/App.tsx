@@ -69,14 +69,15 @@ export default function App() {
   const canvas =
     multi?.kind === 'canvas' && provider ? multi.variants[provider] : item?.kind === 'canvas' ? item.canvas : undefined
   const { rank, next } = rankFor(progress.xp)
-  const { theme, motion = 'system', relaxed = false, callsign, sound = false } = progress.settings
+  const { theme, motion = 'system', relaxed = false, callsign, sound = false, simpleTerminal = false } = progress.settings
 
   useEffect(() => saveProgress(progress), [progress])
   useEffect(() => setSound(sound), [sound])
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
     document.documentElement.classList.toggle('reduce-motion', motion === 'reduce')
-  }, [theme, motion])
+    document.documentElement.dataset.terminal = simpleTerminal ? 'simple' : 'full'
+  }, [theme, motion, simpleTerminal])
 
   // Keyboard and screen-reader users land on the new screen's heading, not
   // wherever focus happened to be on the old one.
@@ -266,6 +267,14 @@ export default function App() {
             </button>
             <button className={toggle} aria-pressed={sound} title="Alert tones on accept and clear" onClick={() => setting({ sound: !sound })}>
               Sound
+            </button>
+            <button
+              className={toggle}
+              aria-pressed={simpleTerminal}
+              title="A plain-text terminal, for screen readers and small screens"
+              onClick={() => setting({ simpleTerminal: !simpleTerminal })}
+            >
+              Simple terminal
             </button>
             <button className={toggle} aria-pressed={motion === 'reduce'} onClick={() => setting({ motion: motion === 'reduce' ? 'system' : 'reduce' })}>
               Reduce motion
