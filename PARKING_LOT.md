@@ -9,7 +9,7 @@ Out of scope for the MVP. Add items here instead of adding them to the code.
 - AI-generated scenarios
 
 ## Gameplay
-- Stateful terminal simulation: now a priority, see PLAN_TERMINAL.md (draft)
+- Terminal follow-ups (PLAN_TERMINAL.md done): real owners and modes on the simulated disk (so ls -l, stat, chmod tell the truth), more incidents with fixes made by editing files, disk files for package-lock.json excerpts
 - Daily-play streak (MVP uses a clean-resolution streak; see PLAN.md open question 3)
 - More multi-stage incidents (4 two-stage shipped: PLAN_MULTI_STAGE.md; 10 three-stage difficulty-5 shipped: PLAN_DIFFICULTY_5.md)
 - Shifts v2: save a shift across reloads; design challenges as "planned work" between pages
