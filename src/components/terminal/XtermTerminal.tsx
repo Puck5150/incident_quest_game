@@ -31,8 +31,18 @@ function theme() {
 // A real terminal emulator (xterm.js) with a small line editor in front of the
 // shared session: cursor keys, history, Ctrl-R search, Tab completion, the
 // usual Ctrl shortcuts, and paste.
-export default function XtermTerminal({ scenario, log, onRun }: { scenario: Scenario; log: GameEvent[]; onRun: (input: string) => void }) {
-  const session = useTerminalSession(scenario, log, onRun)
+export default function XtermTerminal({
+  scenario,
+  log,
+  onRun,
+  onShellRan,
+}: {
+  scenario: Scenario
+  log: GameEvent[]
+  onRun: (input: string) => void
+  onShellRan?: (commands: string[]) => void
+}) {
+  const session = useTerminalSession(scenario, log, onRun, onShellRan)
   const host = useRef<HTMLDivElement>(null)
   const term = useRef<Xterm>(undefined)
   // The session changes every render; the terminal's handlers read the latest.
@@ -230,14 +240,23 @@ export default function XtermTerminal({ scenario, log, onRun }: { scenario: Scen
           return draw()
         case '\t': {
           if (!e.buf.trim() || e.pos !== e.buf.length) return
-          const c = s.current.completeLine(e.buf)
-          if (c.options) {
-            newline()
-            print(DIM(c.options.join('  ')))
+          const show = (c: { input: string; options?: string[] }) => {
+            if (c.options) {
+              newline()
+              print(DIM(c.options.join('  ')))
+            }
+            e.buf = c.input
+            e.pos = e.buf.length
+            draw()
           }
-          e.buf = c.input
-          e.pos = e.buf.length
-          return draw()
+          const c = s.current.completeLine(e.buf)
+          // Nothing from the scripted commands: try the real filesystem.
+          if (c.input === e.buf && !c.options) {
+            const typed = e.buf
+            s.current.completePath(typed).then((p) => e.buf === typed && show(p))
+            return
+          }
+          return show(c)
         }
       }
       if (data.startsWith('\x1b')) return // other escape sequences: ignore

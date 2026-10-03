@@ -98,7 +98,14 @@ export default function IncidentScreen({
     scenario.terminal && {
       id: 'terminal',
       label: 'Terminal',
-      panel: <Terminal scenario={scenario} log={session.log} onRun={(input) => send({ type: 'RUN_COMMAND', input })} />,
+      panel: (
+        <Terminal
+          scenario={scenario}
+          log={session.log}
+          onRun={(input) => send({ type: 'RUN_COMMAND', input })}
+          onShellRan={(commands) => send({ type: 'SHELL_RAN', commands })}
+        />
+      ),
     },
     view.logs && {
       id: 'logs',

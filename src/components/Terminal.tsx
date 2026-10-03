@@ -9,6 +9,7 @@ type Props = {
   scenario: Scenario
   log: GameEvent[] // the session so far: the transcript and history start from it
   onRun: (input: string) => void
+  onShellRan?: (commands: string[]) => void // scripted commands the shell ran inside a pipeline
 }
 
 // The full terminal (xterm.js) where it works well: a real browser with a
@@ -32,8 +33,8 @@ export default function Terminal(props: Props) {
 
 // A text input plus a scrolling transcript. Real text (not a canvas), so
 // screen readers and copy/paste just work.
-function SimpleTerminal({ scenario, log, onRun }: Props) {
-  const session = useTerminalSession(scenario, log, onRun)
+function SimpleTerminal({ scenario, log, onRun, onShellRan }: Props) {
+  const session = useTerminalSession(scenario, log, onRun, onShellRan)
   const [lines, setLines] = useState<Line[]>(session.initial)
   const [cursor, setCursor] = useState<number>() // position while browsing history with ↑/↓
   const [input, setInput] = useState('')
@@ -67,9 +68,14 @@ function SimpleTerminal({ scenario, log, onRun }: Props) {
     // traps keyboard users.
     if (e.key === 'Tab' && !e.shiftKey && input.trim()) {
       e.preventDefault()
+      const show = (c: { input: string; options?: string[] }) => {
+        setInput(c.input)
+        if (c.options) setLines((l) => [...l, { id: session.id(), prompt, input, output: c.options!.join('  '), completions: true }])
+      }
       const c = session.completeLine(input)
-      setInput(c.input)
-      if (c.options) setLines((l) => [...l, { id: session.id(), prompt, input, output: c.options!.join('  '), completions: true }])
+      // Nothing from the scripted commands: try the real filesystem.
+      if (c.input === input && !c.options) session.completePath(input).then(show)
+      else show(c)
     } else if (e.key === 'Enter') {
       e.preventDefault()
       submit()

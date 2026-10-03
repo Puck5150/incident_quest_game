@@ -77,7 +77,10 @@ export function score(scenario: Scenario, log: GameEvent[], relaxed = false, inS
       fixedAt >= 0 &&
       log.some(
         (e, i) =>
-          i > fixedAt && inStage(i) && e.type === 'RUN_COMMAND' && runCommand(view, e.input, actionsTaken(log.slice(0, i))).scripted,
+          i > fixedAt &&
+          inStage(i) &&
+          ((e.type === 'RUN_COMMAND' && !!runCommand(view, e.input, actionsTaken(log.slice(0, i))).scripted) ||
+            (e.type === 'SHELL_RAN' && e.commands.length > 0)),
       )
     return { methodical, verified, hints: hintsUsed(log.slice(from, to)) }
   })

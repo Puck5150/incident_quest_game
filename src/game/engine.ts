@@ -15,6 +15,9 @@ export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 export type GameEvent =
   | { type: 'START'; at: number }
   | { type: 'RUN_COMMAND'; input: string; at: number }
+  // The real shell ran these scripted commands inside a pipeline or script
+  // (each as written in the scenario). They count like typing them alone.
+  | { type: 'SHELL_RAN'; commands: string[]; at: number }
   | { type: 'OPEN_ARTIFACT'; kind: ArtifactKind; name: string; at: number }
   | { type: 'REQUEST_HINT'; at: number }
   | { type: 'DECLARE_HYPOTHESIS'; id: string; at: number }
@@ -64,6 +67,7 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       return step(scenario, ran, { type: 'TAKE_ACTION', id: a.id, at: e.at })
     }
     case 'OPEN_ARTIFACT':
+    case 'SHELL_RAN':
       return working ? { ...s, log: [...s.log, e] } : s
 
     case 'REQUEST_HINT':
@@ -203,6 +207,10 @@ export function evidenceSeen(scenario: Scenario, log: GameEvent[]): Set<string> 
     if (e.type === 'TAKE_ACTION') taken.add(e.id)
     if (e.type === 'CLOSE_INCIDENT') cur = atStage(scenario, ++stage)
     if (e.type === 'RUN_COMMAND') tag = runCommand(cur, e.input, taken).evidence
+    if (e.type === 'SHELL_RAN') e.commands.forEach((c) => {
+      const t = runCommand(cur, c, taken).evidence
+      if (t) seen.add(t)
+    })
     if (e.type === 'OPEN_ARTIFACT') tag = artifacts(cur).find((a) => a.kind === e.kind && a.name === e.name)?.evidence
     if (tag) seen.add(tag)
   }
@@ -257,6 +265,7 @@ export function transcript(scenario: Scenario, log: GameEvent[]): { input: strin
 export function commandsHit(scenario: Scenario, log: GameEvent[]): Set<string> {
   const hit = new Set<string>()
   log.forEach((e, i) => {
+    if (e.type === 'SHELL_RAN') return e.commands.forEach((c) => hit.add(c))
     if (e.type !== 'RUN_COMMAND') return
     const before = log.slice(0, i)
     const cmd = runCommand(atStage(scenario, stageAt(before)), e.input, actionsTaken(before)).command

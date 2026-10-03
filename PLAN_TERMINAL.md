@@ -1,6 +1,6 @@
 # Plan: A terminal that feels real
 
-Status: **approved 2026-10-03 with the defaults; T1 done (shell behind the terminal, xterm.js view, simple-terminal setting; verified in headless Chrome). T2 next.** Requested: "I want this to feel
+Status: **approved 2026-10-03 with the defaults; T1-T3 done (shell, xterm.js view, simple setting; incident tools in pipelines with lenient matching, evidence via SHELL_RAN, --help; files and logs at their paths per stage, host skeletons, ssh, sudo, path completion). T4 next.** Requested: "I want this to feel
 much more real than it does currently ... as close to fully functional as
 practical as possible."
 
