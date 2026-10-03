@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Scenario } from '../../schema/scenario.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
-import { actionsTaken, commandsRun, complete, engineHandles, normalize, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
+import { actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
 
 export type Line = { id: number; prompt: string; input: string; output: string; completions?: boolean; pending?: boolean }
@@ -28,7 +28,15 @@ export function promptIn(prompt: string, cwd: string | undefined, home: string |
 // everything else runs in the real shell (src/game/shell.ts), loaded on first
 // use, one command at a time, in order. On mount the session's shell commands
 // are replayed so the shell's state (directory, files, variables) matches.
-export function useTerminalSession(scenario: Scenario, log: GameEvent[], onRun: (input: string) => void, onShellRan?: (commands: string[]) => void) {
+export type Editing = { path: string; content: string; done: (content: string | null) => void }
+
+export function useTerminalSession(
+  scenario: Scenario,
+  log: GameEvent[],
+  onRun: (input: string) => void,
+  onShellRan?: (commands: string[]) => void,
+  onTakeAction?: (id: string) => void,
+) {
   const basePrompt = scenario.terminal!.prompt
   const nextId = useRef(0)
   const id = () => nextId.current++
@@ -43,12 +51,47 @@ export function useTerminalSession(scenario: Scenario, log: GameEvent[], onRun: 
   const shell = useRef<Promise<IncidentShell>>(undefined)
   const queue = useRef<Promise<unknown>>(Promise.resolve())
 
+  const [editing, setEditing] = useState<Editing>()
   const getShell = () =>
     (shell.current ??= import('../../game/shell.ts').then((m) => {
       const sh = new m.IncidentShell(scenario)
+      sh.onEdit = (path, content) => new Promise((done) => setEditing({ path, content, done: (c) => (setEditing(undefined), done(c)) }))
       setHome(sh.home)
       return sh
     }))
+
+  // Fixes made by editing a file: once the file on disk matches, take the
+  // action, through the same gate as the buttons (the root cause must be
+  // named). Returns a note for the terminal if the edit doesn't count yet.
+  const warned = useRef(new Set<string>())
+  const checkFileFixes = async (sh: IncidentShell, now: GameEvent[]): Promise<string> => {
+    const cur = atStage(scenario, stageAt(now))
+    const taken = actionsTaken(now)
+    const notes: string[] = []
+    for (const a of cur.actions) {
+      if (!a.file || taken.has(a.id)) continue
+      const text = await sh.read(a.file.path)
+      if (text === undefined || !new RegExp(a.file.matches, 'm').test(text)) continue
+      if (namedRootCause(scenario, now)) onTakeAction?.(a.id)
+      else if (!warned.current.has(a.id)) {
+        warned.current.add(a.id)
+        notes.push(`(Saved. The game counts this as a fix once you've named the root cause.)`)
+      }
+    }
+    return notes.join('\n')
+  }
+
+  // When the log changes (an action taken with a button, a hypothesis named),
+  // bring the disk up to date and re-check edits made earlier.
+  useEffect(() => {
+    if (!shell.current) return
+    const now = log
+    queue.current = queue.current.then(async () => {
+      const sh = await getShell()
+      await sh.update(atStage(scenario, stageAt(now)), actionsTaken(now))
+      await checkFileFixes(sh, now)
+    })
+  }, [log]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The transcript as the engine alone can rebuild it (immediately), then
   // with shell commands replayed (once the shell has loaded), if there are any.
@@ -106,11 +149,12 @@ export function useTerminalSession(scenario: Scenario, log: GameEvent[], onRun: 
         setCwd(sh.cwd)
         setHost(sh.currentHost)
         if (r.hits.length) onShellRan?.(r.hits)
-        return { ...line, output: r.output }
+        const note = await checkFileFixes(sh, latest.current)
+        return { ...line, output: [r.output, note].filter(Boolean).join('\n') }
       })) as Promise<Line>
       return { line: { ...line, pending: true }, done }
     },
-    [prompt, scenario, onRun, onShellRan], // eslint-disable-line react-hooks/exhaustive-deps
+    [prompt, scenario, onRun, onShellRan, onTakeAction], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   const completeLine = (input: string) => complete(atStage(scenario, stageAt(latest.current)), input)
@@ -138,5 +182,5 @@ export function useTerminalSession(scenario: Scenario, log: GameEvent[], onRun: 
     return common.length > stem.length ? { input: head + common } : { input, options: names }
   }
 
-  return { initial, replayed, prompt, history, run, completeLine, completePath, id }
+  return { initial, replayed, prompt, history, run, completeLine, completePath, id, editing }
 }

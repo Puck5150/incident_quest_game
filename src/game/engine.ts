@@ -9,6 +9,7 @@
 import { artifacts } from '../schema/constants.ts'
 import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
+import { readsFileOnDisk } from './paths.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
@@ -229,10 +230,13 @@ export function terminalOutput(scenario: Scenario, input: string, before: GameEv
   // it's visible without looking away.
   const action = ran.scripted ? undefined : actionFor(cur, cmd)
   if (!action) return ran.output
-  const named = sinceStageStart(before).some(
-    (e) => e.type === 'DECLARE_HYPOTHESIS' && cur.hypotheses.find((h) => h.id === e.id)?.correct,
-  )
-  return named ? action.feedback : NOT_YET
+  return namedRootCause(scenario, before) ? action.feedback : NOT_YET
+}
+
+// Whether the player has named this stage's root cause (so fixes count).
+export function namedRootCause(scenario: Scenario, log: GameEvent[]): boolean {
+  const cur = atStage(scenario, stageAt(log))
+  return sinceStageStart(log).some((e) => e.type === 'DECLARE_HYPOTHESIS' && cur.hypotheses.find((h) => h.id === e.id)?.correct)
 }
 
 // Whether the engine answers this line itself (help, history, clear, a
@@ -243,7 +247,11 @@ export function engineHandles(scenario: Scenario, input: string, before: GameEve
   const cmd = normalize(input)
   if (cmd === 'help' || cmd === 'history' || cmd === 'clear') return true
   const cur = atStage(scenario, stageAt(before))
-  return !!runCommand(cur, cmd, actionsTaken(before)).scripted || !!actionFor(cur, cmd)
+  if (actionFor(cur, cmd)) return true
+  // Reading a file that's on disk: the real shell shows what's really there,
+  // edits included. (It still counts as evidence: see evidenceSeen.)
+  if (readsFileOnDisk(cur, cmd)) return false
+  return !!runCommand(cur, cmd, actionsTaken(before)).scripted
 }
 
 export const commandsRun = (log: GameEvent[]) => log.flatMap((e) => (e.type === 'RUN_COMMAND' ? [normalize(e.input)] : []))

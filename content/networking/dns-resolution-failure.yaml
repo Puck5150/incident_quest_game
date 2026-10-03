@@ -128,6 +128,14 @@ actions:
     label: "Point /etc/resolv.conf at 10.0.0.2 and 10.0.0.3"
     kind: fix
     feedback: "reports-01 now asks the live DNS servers. The report job can resolve the API again."
+    # Editing the file (nano, vi or sed -i) is the fix too.
+    file:
+      path: /etc/resolv.conf
+      matches: '^nameserver 10\.0\.0\.2\s*$'
+      after: |
+        search example.com
+        nameserver 10.0.0.2
+        nameserver 10.0.0.3
   - id: add-to-inventory
     label: "Add reports-01 to the Ansible inventory so the resolv role manages it"
     kind: fix

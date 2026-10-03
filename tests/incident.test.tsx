@@ -270,3 +270,25 @@ it('an incident resumes where it left off: transcript, order, phase', async () =
   render(<IncidentScreen {...props} initial={saved} />)
   expect(screen.getByRole('heading', { name: 'Take action' })).toBeTruthy() // still past the hypothesis
 })
+
+it('editing a config file is the fix: sed -i before naming the cause counts once it is named; nano edits files', async () => {
+  const { default: IncidentScreen } = await import('../src/screens/IncidentScreen.tsx')
+  const item = await (await import('virtual:content')).loadItem('full-disk')
+  if (item.kind !== 'incident') throw new Error('expected an incident')
+  render(<IncidentScreen scenario={item.scenario} onResolved={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
+
+  type(`sed -i 's#/var/log/ap/#/var/log/app/#' /etc/logrotate.d/app`)
+  await waitFor(() => expect(output()).toMatch(/counts this as a fix once you've named the root cause/))
+
+  fireEvent.click(screen.getByLabelText(/filesystem is full/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/logrotate will now find and rotate app\.log/))
+
+  type('nano /tmp/notes')
+  const editor = await screen.findByRole('dialog', { name: 'Editing /tmp/notes' })
+  fireEvent.change(within(editor).getByLabelText('Contents of /tmp/notes'), { target: { value: 'checked logrotate\n' } })
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save and exit' }))
+  type('cat /tmp/notes /etc/logrotate.d/app')
+  await waitFor(() => expect(output()).toMatch(/checked logrotate\s*\/var\/log\/app\/\*\.log/))
+})

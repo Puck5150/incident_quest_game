@@ -9,6 +9,7 @@
 import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
+import { filesOnDisk } from '../game/paths.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
 
@@ -134,6 +135,11 @@ const ActionsSchema = z
       feedback: z.string().min(1),
       // Typing a matching command in the terminal takes this action too.
       match_regex: z.string().min(1).optional(),
+      // A fix made by editing a file (PLAN_TERMINAL.md T4): the action is taken
+      // once the file on disk matches `matches`; the button writes `after`.
+      file: z
+        .strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: z.string().min(1), after: z.string() })
+        .optional(),
     }),
   )
   .min(2)
@@ -399,6 +405,24 @@ export const ScenarioSchema = z
     s.red_herrings?.forEach((r, i) => {
       if (!tagged.has(r.evidence)) issue(`no artifact or command is tagged with evidence "${r.evidence}"`, ['red_herrings', i, 'evidence'])
       if (key.has(r.evidence)) issue(`"${r.evidence}" is key evidence, so it can't be a red herring`, ['red_herrings', i, 'evidence'])
+    })
+
+    // File fixes: the file must be on disk, start out unfixed, and `after` must count as fixed.
+    ;[s, ...stages].forEach((part, k) => {
+      part.actions.forEach((act, i) => {
+        if (!act.file) return
+        const at = (...p: (string | number)[]) => (k === 0 ? ['actions', i, 'file', ...p] : ['stages', k - 1, 'actions', i, 'file', ...p])
+        let rx: RegExp
+        try {
+          rx = new RegExp(act.file.matches, 'm')
+        } catch (e) {
+          return issue(`invalid regex: ${(e as Error).message}`, at('matches'))
+        }
+        const initial = filesOnDisk(atStage(s, k)).get(act.file.path)
+        if (initial === undefined) issue(`${act.file.path} isn't on disk at this stage (add it as a file, a log with that name, or a scripted cat)`, at('path'))
+        else if (rx.test(initial)) issue('the file already matches before any fix', at('matches'))
+        if (!rx.test(act.file.after)) issue("`after` doesn't match `matches`", at('after'))
+      })
     })
 
     // Difficulty 5 is a major incident (PLAN_DIFFICULTY_5.md section 2).

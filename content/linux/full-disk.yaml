@@ -139,6 +139,17 @@ actions:
     label: "Fix the path typo in /etc/logrotate.d/app (/var/log/ap → /var/log/app)"
     kind: fix
     feedback: "logrotate will now find and rotate app.log daily, so this won't recur."
+    # Editing the file (nano, vi or sed -i) is the fix too.
+    file:
+      path: /etc/logrotate.d/app
+      matches: '^/var/log/app/\*\.log'
+      after: |
+        /var/log/app/*.log {
+            daily
+            rotate 7
+            compress
+            missingok
+        }
   - id: rm-log
     label: "rm /var/log/app/app.log"
     kind: wrong

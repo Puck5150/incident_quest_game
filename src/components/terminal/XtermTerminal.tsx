@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import type { Scenario } from '../../schema/scenario.ts'
 import type { GameEvent } from '../../game/engine.ts'
 import { hint, useTerminalSession, type Line } from './session.ts'
+import FileEditor from './FileEditor.tsx'
 
 const GREEN = (s: string) => `\x1b[32m${s}\x1b[0m`
 const DIM = (s: string) => `\x1b[2m${s}\x1b[0m`
@@ -36,13 +37,15 @@ export default function XtermTerminal({
   log,
   onRun,
   onShellRan,
+  onTakeAction,
 }: {
   scenario: Scenario
   log: GameEvent[]
   onRun: (input: string) => void
   onShellRan?: (commands: string[]) => void
+  onTakeAction?: (id: string) => void
 }) {
-  const session = useTerminalSession(scenario, log, onRun, onShellRan)
+  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction)
   const host = useRef<HTMLDivElement>(null)
   const term = useRef<Xterm>(undefined)
   // The session changes every render; the terminal's handlers read the latest.
@@ -288,6 +291,11 @@ export default function XtermTerminal({
     // the terminal is created once; handlers read the latest session through refs
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Back to the prompt when the editor closes.
+  useEffect(() => {
+    if (!session.editing) term.current?.focus()
+  }, [session.editing])
+
   // When the shell has replayed the session, redraw the transcript with its output.
   useEffect(() => {
     const t = term.current
@@ -302,7 +310,8 @@ export default function XtermTerminal({
   }, [session.replayed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="h-[28rem] rounded-lg border border-line bg-bg p-2">
+    <div className="relative h-[28rem] rounded-lg border border-line bg-bg p-2">
+      {session.editing && <FileEditor key={session.editing.path} editing={session.editing} />}
       <div ref={host} className="h-full w-full" role="application" aria-label="Terminal (switch to the simple terminal in the header for screen readers)" />
     </div>
   )

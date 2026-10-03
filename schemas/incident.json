@@ -510,6 +510,28 @@
           "match_regex": {
             "type": "string",
             "minLength": 1
+          },
+          "file": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^\\/"
+              },
+              "matches": {
+                "type": "string",
+                "minLength": 1
+              },
+              "after": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "matches",
+              "after"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -1015,6 +1037,28 @@
                 "match_regex": {
                   "type": "string",
                   "minLength": 1
+                },
+                "file": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "pattern": "^\\/"
+                    },
+                    "matches": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "after": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "matches",
+                    "after"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [

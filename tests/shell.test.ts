@@ -104,3 +104,35 @@ describe('the engine and SHELL_RAN', () => {
     expect(score(s, log).verified).toBe(false) // nothing fixed yet
   })
 })
+
+describe('fixes made by editing files', () => {
+  it('a fix taken with its button writes the fixed file, so the disk agrees with the game', async () => {
+    const s = incident('full-disk')
+    const sh = new IncidentShell(s)
+    expect((await sh.run('head -1 /etc/logrotate.d/app', s, new Set())).output).toBe('/var/log/ap/*.log {')
+    await sh.update(s, new Set(['fix-logrotate']))
+    expect((await sh.read('/etc/logrotate.d/app'))?.split('\n')[0]).toBe('/var/log/app/*.log {')
+  })
+
+  it('the incident file wins over the skeleton (resolv.conf)', async () => {
+    const s = incident('dns-resolution-failure')
+    const sh = new IncidentShell(s)
+    expect((await sh.run('grep nameserver /etc/resolv.conf', s, new Set())).output).toBe('nameserver 10.0.0.53')
+  })
+
+  it('validates file fixes: on disk, not already fixed, and `after` counts as fixed', async () => {
+    const { ScenarioSchema } = await import('../src/schema/scenario.ts')
+    const s = structuredClone(incident('full-disk'))
+    const fix = s.actions.find((a) => a.id === 'fix-logrotate')!
+    expect(ScenarioSchema.safeParse(s).success).toBe(true)
+    expect(ScenarioSchema.safeParse({ ...s, actions: s.actions.map((a) => (a.id === 'fix-logrotate' ? { ...a, file: { ...fix.file!, path: '/etc/nope' } } : a)) }).error?.issues.map((i) => i.message)).toContain(
+      "/etc/nope isn't on disk at this stage (add it as a file, a log with that name, or a scripted cat)",
+    )
+    expect(ScenarioSchema.safeParse({ ...s, actions: s.actions.map((a) => (a.id === 'fix-logrotate' ? { ...a, file: { ...fix.file!, matches: 'daily' } } : a)) }).error?.issues.map((i) => i.message)).toContain(
+      'the file already matches before any fix',
+    )
+    expect(ScenarioSchema.safeParse({ ...s, actions: s.actions.map((a) => (a.id === 'fix-logrotate' ? { ...a, file: { ...fix.file!, after: 'nothing' } } : a)) }).error?.issues.map((i) => i.message)).toContain(
+      "`after` doesn't match `matches`",
+    )
+  })
+})

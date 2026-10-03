@@ -9,6 +9,9 @@
 import { Bash, defineCommand, getCommandNames, type CommandName } from 'just-bash'
 import type { Scenario } from '../schema/scenario.ts'
 import { normalize } from './engine.ts'
+import { diskPath, filesOnDisk } from './paths.ts'
+
+export { diskPath }
 
 // Real tools that just-bash doesn't implement. Each answers from the incident's
 // scripted commands, or says honestly that this incident doesn't cover it.
@@ -94,17 +97,6 @@ export function sameInvocation(a: string[], b: string[]): boolean {
 const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)
 const withNewline = (s: string) => (s && !s.endsWith('\n') ? s + '\n' : s)
 
-// An artifact's path on disk, if its name is one: "/etc/fstab",
-// "~/notes.txt", or "deploy/main.tf (excerpt)" relative to the home directory.
-export function diskPath(name: string, home: string): string | undefined {
-  const bare = name.replace(/ \([^)]*\)$/, '')
-  if (/\s/.test(bare)) return undefined
-  if (bare.startsWith('/')) return bare
-  if (bare.startsWith('~/')) return home + bare.slice(1)
-  if (/^\.?[\w.-]+(\/[\w.@-]+)+$/.test(bare)) return `${home}/${bare}`
-  return undefined
-}
-
 type Ctx = { cwd: string; exec?: (command: string, options: { cwd: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }> }
 type Out = { stdout: string; stderr: string; exitCode: number }
 export type ShellResult = { output: string; exitCode: number; hits: string[] }
@@ -184,6 +176,7 @@ export class IncidentShell {
         ...[...programs].map((p) => defineCommand(p, (args) => Promise.resolve(this.program(name, p, args)))),
         defineCommand('ssh', (args) => this.ssh(name, args)),
         defineCommand('sudo', (args, ctx) => this.sudo(name, args, ctx as unknown as Ctx)),
+        ...['nano', 'vi', 'vim', 'editor'].map((ed) => defineCommand(ed, (args, ctx) => this.edit(args, ctx as never, ed))),
       ],
       executionLimits: { maxExecutionTimeMs: 5_000 },
     })
@@ -193,30 +186,50 @@ export class IncidentShell {
     return bash
   }
 
-  // Put the files and logs of the current stage on disk (on the starting
-  // host), the first time they're available. Scripted `cat /path` outputs
-  // count as files too, so grep and wc work on them.
-  private async mount(scenario: Scenario) {
-    const bash = this.hosts.get(this.mainHost)!
-    const add = async (path: string, content: string) => {
-      if (this.mounted.has(path)) return
+  // Keep the starting host's disk in step with the game: the current stage's
+  // files and logs appear the first time they're available, and once an
+  // action is taken its effect on files is applied (a fix's `after`, or the
+  // post-fix output of a scripted `cat`), so the disk shows what the game says.
+  private async sync(scenario: Scenario, taken: Set<string>) {
+    const fs = this.hosts.get(this.mainHost)!.fs
+    const put = async (path: string, content: string) => {
+      await fs.mkdir(path.replace(/\/[^/]*$/, '') || '/', { recursive: true })
+      await fs.writeFile(path, withNewline(content))
+    }
+    for (const [path, content] of filesOnDisk(scenario)) {
+      if (this.mounted.has(path)) continue
       this.mounted.add(path)
-      if (await bash.fs.exists(path)) return
-      await bash.fs.mkdir(path.replace(/\/[^/]*$/, '') || '/', { recursive: true })
-      await bash.fs.writeFile(path, withNewline(content))
+      await put(path, content) // the incident's version wins over the skeleton's
     }
-    for (const f of scenario.files ?? []) {
-      const p = diskPath(f.path, this.home)
-      if (p) await add(p, f.content)
+    for (const a of scenario.actions) {
+      const key = 'action:' + a.id
+      if (!a.file || !taken.has(a.id) || this.mounted.has(key)) continue
+      this.mounted.add(key)
+      const now = (await fs.exists(a.file.path)) ? await fs.readFile(a.file.path) : ''
+      if (!new RegExp(a.file.matches, 'm').test(now)) await put(a.file.path, a.file.after)
     }
-    for (const l of scenario.logs ?? []) {
-      const p = diskPath(l.name, this.home)
-      if (p) await add(p, l.lines)
-    }
-    for (const c of scenario.terminal?.commands ?? []) {
+    for (const [i, c] of (scenario.terminal?.commands ?? []).entries()) {
       const file = normalize(c.match ?? c.example ?? '').match(/^(?:sudo )?cat (\/\S+)$/)?.[1]
-      if (file && !c.when_actions?.length) await add(file, c.output)
+      const key = `cat:${i}:${file}`
+      if (!file || !c.when_actions?.length || this.mounted.has(key) || !c.when_actions.every((a) => taken.has(a))) continue
+      this.mounted.add(key)
+      await put(file, c.output)
     }
+  }
+
+  // Set by the terminal: open an editor on a file and resolve with the new
+  // content (or null if the player quit without saving).
+  onEdit?: (path: string, content: string) => Promise<string | null>
+
+  private async edit(args: string[], ctx: { cwd: string; fs: { resolvePath(b: string, p: string): string; exists(p: string): Promise<boolean>; readFile(p: string): Promise<string>; writeFile(p: string, c: string): Promise<void> } }, name: string): Promise<Out> {
+    const target = args.find((a) => !a.startsWith('-') && !a.startsWith('+'))
+    if (!target) return { stdout: '', stderr: `${name}: give a file to edit, e.g. ${name} /etc/fstab\n`, exitCode: 1 }
+    if (!this.onEdit) return { stdout: '', stderr: `${name}: no editor here; change files with sed -i or > instead\n`, exitCode: 1 }
+    const path = ctx.fs.resolvePath(ctx.cwd, target)
+    const before = (await ctx.fs.exists(path)) ? await ctx.fs.readFile(path) : ''
+    const after = await this.onEdit(path, before)
+    if (after !== null && after !== before) await ctx.fs.writeFile(path, after)
+    return { stdout: '', stderr: '', exitCode: 0 }
   }
 
   // A tool invocation inside the shell: the scripted output whose command
@@ -287,7 +300,7 @@ export class IncidentShell {
     await this.ready
     this.context = { scenario, taken }
     this.hits = []
-    await this.mount(scenario)
+    await this.sync(scenario, taken)
     if (/^\s*(exit|logout)\s*$/.test(input) && this.host !== this.mainHost) {
       const was = this.host
       this.host = this.mainHost
@@ -311,6 +324,13 @@ export class IncidentShell {
     } catch {
       return []
     }
+  }
+
+  // Bring the disk up to date with the game without running anything (after
+  // an action is taken with a button, for example).
+  async update(scenario: Scenario, taken: Set<string>) {
+    await this.ready
+    await this.sync(scenario, taken)
   }
 
   // A file's contents on the starting host (for fixes made by editing files).
