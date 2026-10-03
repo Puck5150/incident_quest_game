@@ -7,7 +7,7 @@ par_minutes: 16
 
 ticket:
   from: "Customer support"
-  priority: P1
+  severity: SEV2
   body: |
     Since about 09:40, customers who place orders don't get a confirmation
     email. Orders themselves are fine: they show up in the admin panel and

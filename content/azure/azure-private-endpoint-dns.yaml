@@ -7,7 +7,7 @@ par_minutes: 13
 
 ticket:
   from: "App team"
-  priority: P1
+  severity: SEV2
   body: |
     Since 11:00 the document service can't read or write blobs in the storage
     account stshopdocs: every request is refused. Security says they only

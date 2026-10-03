@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Product team"
-  priority: P2
+  severity: SEV3
   body: |
     Image uploads on the catalogue site fail with "could not save
     thumbnail". The app log says "No space left on device", but the disk

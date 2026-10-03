@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "QA lead"
-  priority: P2
+  severity: SEV3
   body: |
     Staging hasn't picked up any changes since this morning, and the CI badge
     on main is red. Several people have hit "re-run" already. Can someone

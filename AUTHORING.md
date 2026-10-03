@@ -210,8 +210,15 @@ Rate by the shape of the problem, not by how obscure the tool is
 least two domains (say network, then identity, then data), has at least one red
 herring, and its last stage cleans up what the outage left behind (unreplicated
 objects, writes on the wrong disk, a backlog). The validator requires the three
-stages, a red herring, `par_minutes` of 25 or more and a P1 ticket; crossing
+stages, a red herring, `par_minutes` of 25 or more and a SEV1 ticket; crossing
 domains and the clean-up stage are on you. It shows as MAJOR INCIDENT on the board.
+
+**Severity** (`ticket.severity`) is how urgent the page is, separate from how hard
+the incident is to solve. SEV1 is reserved for major incidents (difficulty 5, and
+the validator enforces it both ways). For the rest: SEV2 for an outage of
+something customers use, SEV3 for a serious degradation or a part of it down,
+SEV4 for a contained problem, SEV5 for minor. In on-call shifts each severity has
+an acknowledge target (SEV1 1 minute, SEV2 2, SEV3 5, SEV4 and SEV5 10).
 
 **Red herrings** (optional below 5): a real anomaly in the evidence that isn't
 the cause, such as a noisy alarm, an old error or a high but harmless metric.

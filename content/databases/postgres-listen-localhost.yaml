@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "App team"
-  priority: P2
+  severity: SEV3
   body: |
     We built the new PostgreSQL server db-01 yesterday. psql works fine on
     db-01 itself, but the app on app-01 gets "Connection refused". There's

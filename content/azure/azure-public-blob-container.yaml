@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "security@ inbox"
-  priority: P1
+  severity: SEV2
   body: |
     From an independent security researcher, 07:52 UTC:
 

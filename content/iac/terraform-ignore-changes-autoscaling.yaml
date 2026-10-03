@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Checkout team"
-  priority: P2
+  severity: SEV3
   body: |
     Twice this week checkout slowed down right after an unrelated infra
     change went out. The ECS service had scaled itself to 12 tasks for the

@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Payments team"
-  priority: P2
+  severity: SEV3
   body: |
     We added a third availability zone yesterday and launched 4 more payment
     workers there. The new ones can't reach the payment provider's API: every

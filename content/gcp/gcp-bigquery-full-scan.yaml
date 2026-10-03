@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Finance"
-  priority: P3
+  severity: SEV4
   body: |
     BigQuery is on track to cost 25 times what it did last month. The
     analytics team says the data is about the same size as always. The only

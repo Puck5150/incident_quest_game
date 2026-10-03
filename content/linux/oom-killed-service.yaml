@@ -7,7 +7,7 @@ par_minutes: 14
 
 ticket:
   from: "Billing team"
-  priority: P2
+  severity: SEV3
   body: |
     The month-end invoice run should have emailed every customer their
     September invoice overnight. Nobody got one. The invoice worker's

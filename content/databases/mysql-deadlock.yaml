@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Payments team"
-  priority: P2
+  severity: SEV3
   body: |
     A few times an hour, a transfer between two customer wallets fails with
     "Deadlock found when trying to get lock". The customer has to try

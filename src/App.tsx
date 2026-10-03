@@ -16,7 +16,7 @@ import type { CrossCloud } from './components/CrossCloud.tsx'
 import Icon from './components/Icon.tsx'
 import Callsign from './components/Callsign.tsx'
 import { setSound } from './game/sound.ts'
-import { SHIFT_UNLOCK, type Priority } from './game/shift.ts'
+import { SHIFT_UNLOCK, type Severity } from './game/shift.ts'
 
 // Home and skill tree load up front; play and debrief screens load on first use.
 const IncidentScreen = lazy(() => import('./screens/IncidentScreen.tsx'))
@@ -325,7 +325,7 @@ export default function App() {
               key={screen.run}
               candidates={items
                 .filter((x) => x.kind === 'incident' && unlocks(progress).has(x.track))
-                .map((x) => ({ id: x.id, track: x.track, title: x.title, priority: x.tag as Priority, difficulty: x.difficulty, resolved: !!progress.completed[x.id] }))}
+                .map((x) => ({ id: x.id, track: x.track, title: x.title, severity: x.tag as Severity, difficulty: x.difficulty, resolved: !!progress.completed[x.id] }))}
               relaxed={relaxed}
               streak={progress.streak.current}
               onRecord={(id, s) => record(id, s, undefined, true)}

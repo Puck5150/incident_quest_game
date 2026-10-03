@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Frontend team"
-  priority: P2
+  severity: SEV3
   body: |
     Since late morning every pull request on shop-web fails the "test" check,
     so nothing can merge (it's a required check). The tests themselves pass:

@@ -34,13 +34,14 @@
           "type": "string",
           "minLength": 1
         },
-        "priority": {
+        "severity": {
           "type": "string",
           "enum": [
-            "P1",
-            "P2",
-            "P3",
-            "P4"
+            "SEV1",
+            "SEV2",
+            "SEV3",
+            "SEV4",
+            "SEV5"
           ]
         },
         "body": {
@@ -50,7 +51,7 @@
       },
       "required": [
         "from",
-        "priority",
+        "severity",
         "body"
       ],
       "additionalProperties": false

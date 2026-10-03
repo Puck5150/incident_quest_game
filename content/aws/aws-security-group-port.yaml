@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Reports team"
-  priority: P3
+  severity: SEV4
   body: |
     We deployed reports-api to two new EC2 instances and registered them in a
     target group behind the shop's Application Load Balancer. Both targets have

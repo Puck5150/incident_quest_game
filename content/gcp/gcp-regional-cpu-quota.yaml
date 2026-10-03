@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "On-call alert + marketing"
-  priority: P1
+  severity: SEV2
   body: |
     ALERT 12:09: shop-web p95 latency > 4 s, 5xx rate 28%.
 

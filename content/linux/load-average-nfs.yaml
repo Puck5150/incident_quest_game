@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Monitoring"
-  priority: P2
+  severity: SEV3
   body: |
     ALERT web-04 load average 48 (8 CPUs). Customer uploads are hanging,
     but other pages are fine. Someone suggested adding CPUs, but the CPU

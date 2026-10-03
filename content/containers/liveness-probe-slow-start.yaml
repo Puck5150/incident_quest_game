@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Search team"
-  priority: P2
+  severity: SEV3
   body: |
     search-api v2 loads its whole product index into memory at startup,
     which takes about 90 seconds. Since we deployed it to production, the

@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "Payments team"
-  priority: P1
+  severity: SEV2
   body: |
     We swapped the new release from staging into production at 14:00 and
     checkout immediately started failing with "payment declined:

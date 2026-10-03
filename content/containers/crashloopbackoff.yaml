@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Release channel"
-  priority: P1
+  severity: SEV2
   body: |
     We shipped orders-api v2.0.0 at 10:05. Since then the orders page shows
     "Service Unavailable". v1.9 was fine yesterday.

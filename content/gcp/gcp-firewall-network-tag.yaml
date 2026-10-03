@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Platform team"
-  priority: P3
+  severity: SEV4
   body: |
     We added a third app server, app-3, last night to take load off app-1 and
     app-2. The frontends can reach app-1 and app-2 on port 8080, but

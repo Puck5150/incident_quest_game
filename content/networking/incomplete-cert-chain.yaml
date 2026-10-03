@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Partner integrations"
-  priority: P2
+  severity: SEV3
   body: |
     We renewed the certificate on api.example.com yesterday. Every browser
     shows the padlock, but Northwind's order integration has failed since

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Security team"
-  priority: P1
+  severity: SEV2
   body: |
     Our secret scanner flagged a PostgreSQL master password in the
     analytics-infra repository, in a file called terraform.tfstate. The

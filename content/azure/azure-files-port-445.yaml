@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Finance team"
-  priority: P2
+  severity: SEV3
   body: |
     The old office file server was switched off on Friday and the finance
     share moved to Azure Files. From Azure VMs it works perfectly. From our

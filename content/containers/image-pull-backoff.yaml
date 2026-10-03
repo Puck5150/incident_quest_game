@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Product manager"
-  priority: P3
+  severity: SEV4
   body: |
     Release notes for pricing-api 2.3.0 went out at 09:00 saying the autumn
     prices are live. The shop still shows the old prices. Nothing looks broken,

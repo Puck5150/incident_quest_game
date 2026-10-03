@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Head of e-commerce"
-  priority: P1
+  severity: SEV1
   body: |
     Our autumn sale started at 09:00. Since about 09:20 checkout fails in
     waves: a few minutes fine, then errors. The warehouse also says

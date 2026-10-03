@@ -7,7 +7,7 @@ par_minutes: 16
 
 ticket:
   from: "Incident commander"
-  priority: P1
+  severity: SEV2
   body: |
     The API in us-east-1 has been returning 503s since 13:05 (a bad
     dependency; that team is on it). We have a warm standby in us-west-2 and

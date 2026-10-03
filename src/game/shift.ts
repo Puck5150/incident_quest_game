@@ -6,21 +6,24 @@
 
 import type { Session } from './engine.ts'
 
-export type Priority = 'P1' | 'P2' | 'P3' | 'P4'
+export type Severity = 'SEV1' | 'SEV2' | 'SEV3' | 'SEV4' | 'SEV5'
 export const SHIFT_LENGTHS = [2, 3, 5] as const
 export const SHIFT_UNLOCK = 3 // resolved incidents before shifts open up
 
 const MIN = 60_000
-// Response targets per priority: acknowledge within (shift time), resolve
+// Response targets per severity: acknowledge within (shift time), resolve
 // within a multiple of par (active time on that incident only).
-export const ACK_TARGET: Record<Priority, number> = { P1: 2 * MIN, P2: 5 * MIN, P3: 10 * MIN, P4: 10 * MIN }
-export const RESOLVE_FACTOR: Record<Priority, number> = { P1: 1, P2: 1.5, P3: 2, P4: 2 }
+// SEV1-SEV3 need prompt attention; SEV1 and SEV2 are shown as critical.
+export const isUrgent = (s: Severity) => s === 'SEV1' || s === 'SEV2' || s === 'SEV3'
+export const isCritical = (s: Severity) => s === 'SEV1' || s === 'SEV2'
+export const ACK_TARGET: Record<Severity, number> = { SEV1: 1 * MIN, SEV2: 2 * MIN, SEV3: 5 * MIN, SEV4: 10 * MIN, SEV5: 10 * MIN }
+export const RESOLVE_FACTOR: Record<Severity, number> = { SEV1: 1, SEV2: 1, SEV3: 1.5, SEV4: 2, SEV5: 2 }
 const TARGET_BONUS = 5 // % of the incident's base XP, per target met
 const TRIAGE_BONUS = 10 // % of the shift's total base XP
 
 export type Page = {
   id: string // incident id
-  priority: Priority
+  severity: Severity
   difficulty: number
   arrivesAt: number // planned, in shift time (timed shifts)
   arrivedAt?: number // when it actually reached the queue
@@ -35,7 +38,7 @@ export type Shift = {
   clock: number // shift time in ms; the UI stops ticking while the tab is hidden
   pages: Page[]
   focus?: string
-  triageMissed: string[] // pages acknowledged while a higher-priority page waited
+  triageMissed: string[] // pages acknowledged while a more severe page waited
   ended: boolean
 }
 
@@ -49,7 +52,7 @@ export type ShiftEvent =
 
 // Pick and schedule the shift's pages. `random` is injected so tests are exact.
 export function newShift(
-  candidates: { id: string; priority: Priority; difficulty: number; resolved: boolean }[],
+  candidates: { id: string; severity: Severity; difficulty: number; resolved: boolean }[],
   length: number,
   relaxed: boolean,
   random: () => number = Math.random,
@@ -59,16 +62,16 @@ export function newShift(
     const j = Math.floor(random() * (i + 1))
     ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
   }
-  // Unresolved incidents first, then replays; at least one P1 or P2 if possible.
+  // Unresolved incidents first, then replays; at least one SEV1-SEV3 if possible.
   const pool = [...shuffled.filter((c) => !c.resolved), ...shuffled.filter((c) => c.resolved)]
   const picked = pool.slice(0, length)
-  const urgent = pool.find((c) => c.priority === 'P1' || c.priority === 'P2')
-  if (urgent && !picked.some((c) => c.priority === 'P1' || c.priority === 'P2')) picked[picked.length - 1] = urgent
+  const urgent = pool.find((c) => isUrgent(c.severity))
+  if (urgent && !picked.some((c) => isUrgent(c.severity))) picked[picked.length - 1] = urgent
 
   let at = 0
   const pages = picked.map((c, i) => {
     if (i > 0) at += (4 + 2 * random()) * MIN // the next page 4 to 6 minutes later
-    return { id: c.id, priority: c.priority, difficulty: c.difficulty, arrivesAt: Math.round(at), activeMs: 0 }
+    return { id: c.id, severity: c.severity, difficulty: c.difficulty, arrivesAt: Math.round(at), activeMs: 0 }
   })
   return arrive({ relaxed, clock: 0, pages, triageMissed: [], ended: false })
 }
@@ -88,7 +91,7 @@ function arrive(s: Shift): Shift {
   return changed ? { ...s, pages } : s
 }
 
-const rank = (p: Priority) => Number(p.slice(1))
+const rank = (p: Severity) => Number(p.slice(3))
 const update = (s: Shift, id: string, f: (p: Page) => Page): Shift => ({
   ...s,
   pages: s.pages.map((p) => (p.id === id ? f(p) : p)),
@@ -107,7 +110,7 @@ export function shiftStep(s: Shift, e: ShiftEvent): Shift {
       if (page.ackAt !== undefined) return { ...s, focus: e.id }
       // Triage: acknowledging this while a more urgent page waits unacknowledged.
       const skipped = s.pages.some(
-        (p) => p.arrivedAt !== undefined && p.ackAt === undefined && !p.result && rank(p.priority) < rank(page.priority),
+        (p) => p.arrivedAt !== undefined && p.ackAt === undefined && !p.result && rank(p.severity) < rank(page.severity),
       )
       return {
         ...update(s, e.id, (p) => ({ ...p, ackAt: s.clock })),
@@ -140,11 +143,11 @@ export function shiftReport(s: Shift) {
     const base = 100 * p.difficulty
     const acked = p.ackAt !== undefined && p.arrivedAt !== undefined
     const responseMs = acked ? p.ackAt! - p.arrivedAt! : undefined
-    const ackMet = !s.relaxed && responseMs !== undefined && responseMs <= ACK_TARGET[p.priority]
+    const ackMet = !s.relaxed && responseMs !== undefined && responseMs <= ACK_TARGET[p.severity]
     const resolveMet =
-      !s.relaxed && !!p.result && p.activeMs <= p.result.parMinutes * MIN * RESOLVE_FACTOR[p.priority]
+      !s.relaxed && !!p.result && p.activeMs <= p.result.parMinutes * MIN * RESOLVE_FACTOR[p.severity]
     const bonus = Math.round((base * TARGET_BONUS * (Number(ackMet) + Number(resolveMet))) / 100)
-    return { id: p.id, priority: p.priority, responseMs, activeMs: p.activeMs, resolved: !!p.result, ackMet, resolveMet, bonus }
+    return { id: p.id, severity: p.severity, responseMs, activeMs: p.activeMs, resolved: !!p.result, ackMet, resolveMet, bonus }
   })
   const triage = !s.relaxed && s.pages.length > 1 && s.triageMissed.length === 0 && pages.every((p) => p.responseMs !== undefined)
   const triageBonus = triage ? Math.round((s.pages.reduce((t, p) => t + 100 * p.difficulty, 0) * TRIAGE_BONUS) / 100) : 0

@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Platform team"
-  priority: P3
+  severity: SEV4
   body: |
     Security asked for encryption at rest on every database. Our PR sets
     storage_encrypted = true on the orders database, and the plan in CI fails

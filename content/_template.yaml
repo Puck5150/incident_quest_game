@@ -23,7 +23,7 @@ par_minutes: 10               # a methodical player's time; drives the time bonu
 # ---------------------------------------------------------------------------
 ticket:
   from: "Who filed it (user, monitoring bot, teammate)"
-  priority: P3                # P1 | P2 | P3 | P4
+  severity: SEV4                # SEV1 (difficulty 5 only) | SEV2 | SEV3 | SEV4 | SEV5
   body: |
     Describe SYMPTOMS, not causes. Real tickets are vague.
 

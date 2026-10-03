@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Backup monitor"
-  priority: P2
+  severity: SEV3
   body: |
     ALERT: nightly orders-db backup missing. Expected
     s3://acme-db-backups/orders/2026-10-01.sql.gz by 03:00 UTC; nothing

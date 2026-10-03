@@ -4,7 +4,7 @@ track: linux
 difficulty: 3
 title: "Targets unhealthy, twice"
 par_minutes: 20
-ticket: { from: "Support", priority: P1, body: "The site is down." }
+ticket: { from: "Support", severity: SEV2, body: "The site is down." }
 environment: "One web server behind a load balancer."
 diagram:
   nodes: [{ id: web, label: "web", col: 0, row: 0, status: down }]

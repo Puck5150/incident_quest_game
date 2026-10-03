@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Finance tools team"
-  priority: P2
+  severity: SEV3
   body: |
     The report viewer can open every report from before last Tuesday, but any
     report generated since then fails with AccessDenied. Same bucket, same

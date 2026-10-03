@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Checkout team"
-  priority: P2
+  severity: SEV3
   body: |
     Checkout got 2 seconds slower last week. Our traces show the gateway and
     checkout-service, then pricing-service taking 2.1 seconds, and nothing

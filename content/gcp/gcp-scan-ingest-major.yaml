@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Claims operations"
-  priority: P1
+  severity: SEV1
   body: |
     Since yesterday afternoon no scanned claim forms have shown up for our
     assessors. Customers' uploads succeed (they get a reference number),

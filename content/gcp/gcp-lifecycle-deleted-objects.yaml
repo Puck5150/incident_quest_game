@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Customer support"
-  priority: P1
+  severity: SEV2
   body: |
     Since this morning, customers opening documents they uploaded (ID scans,
     signed contracts) get "file not found". Anything uploaded today still

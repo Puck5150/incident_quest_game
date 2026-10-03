@@ -7,7 +7,7 @@ par_minutes: 14
 
 ticket:
   from: "Orders team"
-  priority: P2
+  severity: SEV3
   body: |
     We're trying to ship orders-api 4.2 (a fix for duplicate refund emails).
     The ECS deployment has been going for 40 minutes: every new task stops a

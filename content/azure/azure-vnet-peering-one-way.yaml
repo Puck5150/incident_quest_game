@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "App team"
-  priority: P2
+  severity: SEV3
   body: |
     Our new orders app (vnet-app) needs the PostgreSQL VM in the data team's
     network (vnet-data). We set up VNet peering yesterday, but connections to

@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Teammate (platform team)"
-  priority: P3
+  severity: SEV4
   body: |
     I need to add a subnet today but every `terraform plan` on the prod network
     stack fails with a state lock error. Is someone else running Terraform?

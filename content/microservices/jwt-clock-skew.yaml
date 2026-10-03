@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Customer support"
-  priority: P2
+  severity: SEV3
   body: |
     Customers who have just signed in get "Session invalid" on the
     wishlist page for the first few minutes, then it works. Every other page

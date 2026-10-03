@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Orders team lead"
-  priority: P1
+  severity: SEV1
   body: |
     Since about 16:40 yesterday every order page is slow and checkout times
     out at peak. The orders database is at 100% CPU. Nobody has deployed

@@ -7,7 +7,7 @@ par_minutes: 13
 
 ticket:
   from: "Web team"
-  priority: P1
+  severity: SEV2
   body: |
     We cut www.acme.example over to Azure Front Door at 09:00 (Bicep, reviewed,
     deployed by the pipeline). Every page now returns 404. The app itself is

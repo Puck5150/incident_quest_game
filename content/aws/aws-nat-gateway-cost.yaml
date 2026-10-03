@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Finance"
-  priority: P3
+  severity: SEV4
   body: |
     This month's AWS forecast is 40% higher than last month's. Cost
     Explorer puts almost all of the increase under "EC2-Other" in us-east-1,

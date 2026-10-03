@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Monitoring"
-  priority: P1
+  severity: SEV2
   body: |
     ALERT db-primary /var/lib/postgresql at 94%, up from 40% a month ago,
     growing steadily. The data itself hasn't grown much. At this rate the

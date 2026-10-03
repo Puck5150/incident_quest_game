@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Monitoring bot"
-  priority: P2
+  severity: SEV3
   body: |
     ALERT: checkout.example.internal HTTP 5xx rate > 20% since 02:14 UTC.
     No deploys in the last 24h. On-call, please investigate.

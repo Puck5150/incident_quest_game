@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Head of fulfilment"
-  priority: P1
+  severity: SEV1
   body: |
     The warehouse hasn't received a single order since about 22:00 last
     night, but the shop is taking orders: customers have confirmation

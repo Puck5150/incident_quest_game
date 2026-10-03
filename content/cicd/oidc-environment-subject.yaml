@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Platform team"
-  priority: P2
+  severity: SEV3
   body: |
     Deploys to AWS worked for months using OIDC (no stored keys). Yesterday
     we added a "production" environment with required reviewers to the

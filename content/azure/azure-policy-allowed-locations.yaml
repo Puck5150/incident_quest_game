@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Partner integrations team"
-  priority: P3
+  severity: SEV4
   body: |
     Our Bicep deployment for the new partner portal fails immediately with
     "RequestDisallowedByPolicy". We're Owner on the subscription, so it

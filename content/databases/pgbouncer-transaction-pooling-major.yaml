@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Finance operations"
-  priority: P1
+  severity: SEV1
   body: |
     Since last night half the billing pages error, and this morning several
     customers called to say they got two September invoices, and some were

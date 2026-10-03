@@ -7,7 +7,7 @@ par_minutes: 9
 
 ticket:
   from: "Head of engineering"
-  priority: P2
+  severity: SEV3
   body: |
     Yesterday 14:10 to 14:50 checkout was crawling: the servers were maxed
     out and customers told us on social media before we noticed. We have a

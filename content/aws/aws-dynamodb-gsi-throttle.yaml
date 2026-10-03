@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "On-call alert"
-  priority: P1
+  severity: SEV2
   body: |
     ALERT 18:04: orders-api error rate 22% during the autumn promotion.
     Errors are ProvisionedThroughputExceededException from DynamoDB. But the

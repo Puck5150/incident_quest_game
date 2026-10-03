@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "E-commerce team"
-  priority: P1
+  severity: SEV2
   body: |
     For tonight's sale we scaled the shop API from 4 to 20 instances. Since
     then about half of all requests fail with a database error. The

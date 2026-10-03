@@ -15,7 +15,7 @@ manual** on every screen explains the concepts in play and how to approach the
 problem without giving the answer; hints are there too, at an XP cost.
 
 **On-call shifts** put several incidents in play at once: pages arrive while you
-work, each priority has a response target, and handling urgent pages first earns
+work, each severity (SEV1 for major incidents to SEV5) has a response target, and handling urgent pages first earns
 a triage bonus. Relaxed mode turns every clock off.
 
 **Design challenges** flip it around: you build an architecture from a brief

@@ -114,7 +114,7 @@ function indexOf(c: Content) {
   return {
     tracks: c.tracks,
     items: [
-      ...c.scenarios.map((s) => ({ ...base(s), kind: 'incident' as const, tag: s.ticket.priority })),
+      ...c.scenarios.map((s) => ({ ...base(s), kind: 'incident' as const, tag: s.ticket.severity })),
       ...c.challenges.map((x) => ({ ...base(x), kind: 'challenge' as const, tag: 'Design' })),
       ...c.canvases.map((x) => ({ ...base(x), kind: 'challenge' as const, tag: 'Design · canvas' })),
       ...c.multis.map((m) => ({ ...base(m), kind: 'challenge' as const, tag: 'Design · pick your cloud', providers: m.providers })),

@@ -7,7 +7,7 @@ par_minutes: 9
 
 ticket:
   from: "Head of engineering"
-  priority: P2
+  severity: SEV3
   body: |
     Yesterday 14:00 to 14:40, about 30% of checkouts failed. We have an
     alerting policy for exactly this, "checkout 5xx > 5%", with on-call

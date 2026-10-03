@@ -7,7 +7,7 @@ par_minutes: 9
 
 ticket:
   from: "Integrations team"
-  priority: P3
+  severity: SEV4
   body: |
     Our new Azure Function, func-orders-sync, fails at startup with a 403
     from Key Vault when it reads the partner API key. We turned on its

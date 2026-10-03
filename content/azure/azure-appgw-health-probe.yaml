@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Service desk"
-  priority: P1
+  severity: SEV2
   body: |
     Customers get "502 Bad Gateway" on portal.example.com since about 16:20.
     The release team says v3.8 deployed cleanly at 16:15 and both VMs are

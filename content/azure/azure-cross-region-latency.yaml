@@ -7,7 +7,7 @@ par_minutes: 14
 
 ticket:
   from: "EU customer success"
-  priority: P2
+  severity: SEV3
   body: |
     Since Monday, European customers say checkout "hangs" for 2 to 3 seconds
     before confirming. US customers too. The whole point of last week's move

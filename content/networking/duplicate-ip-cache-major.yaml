@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Customer service lead"
-  priority: P1
+  severity: SEV1
   body: |
     Since the weekend, customers say items vanish from their basket and then
     reappear a few clicks later, and some checkouts charge for the wrong

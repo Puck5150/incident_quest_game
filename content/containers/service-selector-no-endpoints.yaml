@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Mobile team"
-  priority: P1
+  severity: SEV2
   body: |
     Since this morning's "label cleanup" release, the mobile app gets 503
     from api.example.com/catalog for every request. All catalog pods are

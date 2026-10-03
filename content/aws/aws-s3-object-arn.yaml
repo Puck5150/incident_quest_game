@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Finance tools team"
-  priority: P3
+  severity: SEV4
   body: |
     The new report-exporter service fails on every run with "AccessDenied"
     when it loads its template from S3. The odd part: it can list the bucket

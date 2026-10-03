@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Platform team"
-  priority: P2
+  severity: SEV3
   body: |
     The plan for tonight's routine change (a new tag) also wants to "update
     in-place" the payments security group, removing a rule. Nobody changed

@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "PagerDuty"
-  priority: P1
+  severity: SEV2
   body: |
     CRITICAL: shop.example.com /api/* 5xx rate 94% since 09:41 UTC.
     AWS Health also shows an open event for us-east-1a.

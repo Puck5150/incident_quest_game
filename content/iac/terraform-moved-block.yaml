@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Platform reviewer"
-  priority: P1
+  severity: SEV2
   body: |
     PR #318 "refactor: move orders DB into a module" is described as a no-op,
     but the plan CI posted says "1 to destroy". Merging to main applies

@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Developer relations"
-  priority: P1
+  severity: SEV1
   body: |
     We announced acmectl v2.4.0 at 09:00 (blog, newsletter, conference
     keynote at 14:00). The GitHub release page exists, but the install

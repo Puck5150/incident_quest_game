@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Finance"
-  priority: P4
+  severity: SEV5
   body: |
     The test environment's 12 VMs are supposed to be off from 19:00 to 07:00
     and all weekend, which should cut their compute cost by about two

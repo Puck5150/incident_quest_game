@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "Data team"
-  priority: P1
+  severity: SEV2
   body: |
     At 10:42 a cleanup script ran a DELETE on customers without its date
     condition and removed 48,213 rows. Customers whose records were deleted

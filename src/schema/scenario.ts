@@ -173,7 +173,8 @@ export const ScenarioSchema = z
 
     ticket: z.strictObject({
       from: z.string().min(1),
-      priority: z.enum(['P1', 'P2', 'P3', 'P4']),
+      // SEV1 is a major incident (difficulty 5); SEV2 (urgent) to SEV5 (minor) for the rest.
+      severity: z.enum(['SEV1', 'SEV2', 'SEV3', 'SEV4', 'SEV5']),
       body: z.string().min(1),
     }),
     environment: z.string().min(1),
@@ -401,11 +402,12 @@ export const ScenarioSchema = z
     })
 
     // Difficulty 5 is a major incident (PLAN_DIFFICULTY_5.md section 2).
+    if (s.ticket.severity === 'SEV1' && s.difficulty !== 5) issue('SEV1 is reserved for major incidents (difficulty 5)', ['ticket', 'severity'])
     if (s.difficulty === 5) {
       if (stages.length !== 2) issue('difficulty 5 needs three stages (two in `stages`)', ['difficulty'])
       if (!s.red_herrings) issue('difficulty 5 needs at least one red herring', ['difficulty'])
       if (s.par_minutes < 25) issue('difficulty 5 needs par_minutes of at least 25', ['par_minutes'])
-      if (s.ticket.priority !== 'P1') issue('difficulty 5 is a major incident: ticket priority must be P1', ['ticket', 'priority'])
+      if (s.ticket.severity !== 'SEV1') issue('difficulty 5 is a major incident: ticket severity must be SEV1', ['ticket', 'severity'])
     }
 
     if (s.diagram) {

@@ -158,7 +158,7 @@ export default function IncidentScreen({
           {scenario.title}
         </h1>
         <span className="rounded border border-crit px-2 py-0.5 font-mono text-sm text-crit">
-          {scenario.ticket.priority}
+          {scenario.ticket.severity}
         </span>
         <span className="rounded border border-line px-2 py-0.5 font-mono text-sm text-muted">
           {missionId(scenario.id, 'incident')}
@@ -222,7 +222,7 @@ export default function IncidentScreen({
           <div className="rounded-lg border border-crit bg-panel px-8 py-6 text-center font-mono shadow-2xl">
             <p className="tracking-[0.3em] text-crit uppercase">Mission accepted</p>
             <p className="mt-2 text-sm text-muted">
-              {missionId(scenario.id, 'incident')} · {scenario.ticket.priority}
+              {missionId(scenario.id, 'incident')} · {scenario.ticket.severity}
             </p>
           </div>
         </div>

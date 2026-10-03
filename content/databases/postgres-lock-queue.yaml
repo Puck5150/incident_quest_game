@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "On-call bot"
-  priority: P1
+  severity: SEV2
   body: |
     14:02 ALERT: checkout latency over 30 seconds; requests timing out.
     The 14:00 deploy included a migration that adds a nullable column to

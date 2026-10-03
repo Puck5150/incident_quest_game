@@ -7,7 +7,7 @@ par_minutes: 14
 
 ticket:
   from: "Branch office (Leeds)"
-  priority: P2
+  severity: SEV3
   body: |
     Since Tuesday, the intranet half-works from the Leeds branch: the home
     page loads, but the reports page and any file download just spin. SSH

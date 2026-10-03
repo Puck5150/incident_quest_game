@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Partner support"
-  priority: P1
+  severity: SEV2
   body: |
     Since about 00:10 UTC, three partners report their order sync to
     api.example.com failing. One sent this from their logs:

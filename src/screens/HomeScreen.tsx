@@ -12,7 +12,7 @@ export type QueueItem = {
   title: string
   difficulty: number
   kind: 'incident' | 'challenge'
-  tag: string // incident priority (P1..P4) or "Design"
+  tag: string // incident severity (SEV1..SEV5) or "Design"
   providers?: string[] // "pick your cloud": the clouds it can be played on
 }
 

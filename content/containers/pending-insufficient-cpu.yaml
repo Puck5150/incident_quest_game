@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Fulfilment team"
-  priority: P2
+  severity: SEV3
   body: |
     We scaled label-printer from 2 to 6 replicas ahead of the sale. Four new
     pods have been "Pending" for 20 minutes. The cluster's CPU graph says

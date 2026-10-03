@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Customer support"
-  priority: P2
+  severity: SEV3
   body: |
     Since yesterday's release, customers receive the same invoice email two
     or three times. A few have asked whether they were charged twice (they

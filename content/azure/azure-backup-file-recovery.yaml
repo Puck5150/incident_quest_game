@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Finance manager"
-  priority: P2
+  severity: SEV3
   body: |
     At 10:40 someone deleted D:\Finance\Contracts on the finance file
     server: about 1,800 files, 3.2 GB. We need it back as it was last night.

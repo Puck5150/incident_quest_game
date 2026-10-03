@@ -52,11 +52,11 @@ scores already earned.
   each one. Teaching why something is irrelevant is half the skill, and today
   the game never does it.
 - **Validation for difficulty 5:** three stages, at least one red herring,
-  `par_minutes` of 25 or more, and a P1 ticket; the build fails otherwise.
+  `par_minutes` of 25 or more, and a SEV1 ticket (SEV1 is reserved for them); the build fails otherwise.
   Crossing domains and the clean-up stage are checked by the author: concepts
   have no categories to validate against.
 - **Map and board:** a difficulty-5 incident gets a "Major incident" badge.
-  Under the ops-center theme it pages as P1 during a shift.
+  It pages as SEV1 during a shift.
 
 No change to scoring beyond the existing base of `100 × difficulty`.
 

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Payments team"
-  priority: P1
+  severity: SEV2
   body: |
     This morning we attached the order-webhook Lambda function to our VPC so it
     can write to the orders database directly. Database writes work, but

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Finance systems"
-  priority: P2
+  severity: SEV3
   body: |
     The nightly upload of our ledger backups to S3 hasn't run for three
     nights. When I run /home/ops/bin/backup.sh myself it works perfectly.

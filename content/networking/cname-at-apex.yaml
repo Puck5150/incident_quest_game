@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Web platform team"
-  priority: P2
+  severity: SEV3
   body: |
     Tonight's cutover to the CDN is stuck. The CDN told us to point our
     domain at shop-7f3a.cdn.example.net with a CNAME. We added it for both

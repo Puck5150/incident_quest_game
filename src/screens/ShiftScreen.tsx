@@ -3,7 +3,7 @@ import content, { loadItem } from 'virtual:content'
 import type { Scenario } from '../schema/scenario.ts'
 import type { GameEvent } from '../game/engine.ts'
 import { score, type Score } from '../game/scoring.ts'
-import { ACK_TARGET, newShift, SHIFT_LENGTHS, shiftReport, shiftStep, type Page, type Priority, type Shift } from '../game/shift.ts'
+import { ACK_TARGET, isCritical, newShift, SHIFT_LENGTHS, shiftReport, shiftStep, type Page, type Severity, type Shift } from '../game/shift.ts'
 import { missionId } from '../game/mission.ts'
 import { play } from '../game/sound.ts'
 import IncidentScreen from './IncidentScreen.tsx'
@@ -19,7 +19,7 @@ import WorldMap, { type Sector } from '../components/WorldMap.tsx'
 // (game/shift.ts); this screen feeds it time and clicks, keeps the loaded
 // scenarios, and records each resolved incident through App.
 
-export type Candidate = { id: string; track: string; title: string; priority: Priority; difficulty: number; resolved: boolean }
+export type Candidate = { id: string; track: string; title: string; severity: Severity; difficulty: number; resolved: boolean }
 type Outcome = { gained: number; rankUp?: string; cleared?: string; unlocked: string[] }
 type Finished = { log: GameEvent[]; score: Score; outcome: Outcome }
 
@@ -189,7 +189,7 @@ export default function ShiftScreen({
           <div className="anim-pager flex flex-wrap items-center justify-between gap-3 rounded-lg border-2 border-crit bg-panel p-3 font-mono">
             <span>
               <span className="tracking-widest text-crit uppercase">Page</span> · {missionId(paging.id, 'incident')} ·{' '}
-              <span className={paging.priority === 'P1' ? 'text-crit' : 'text-warn'}>{paging.priority}</span> ·{' '}
+              <span className={isCritical(paging.severity) ? 'text-crit' : 'text-warn'}>{paging.severity}</span> ·{' '}
               <span className="font-sans">{title(paging.id)}</span>
             </span>
             <button className={`${button} border border-crit text-crit`} onClick={() => dispatch({ type: 'OPEN', id: paging.id })}>
@@ -238,7 +238,7 @@ export default function ShiftScreen({
       </div>
 
       <p role="status" aria-live="polite" className="sr-only">
-        {newestPage && `New page: ${missionId(newestPage.id, 'incident')} ${newestPage.priority}, ${title(newestPage.id)}`}
+        {newestPage && `New page: ${missionId(newestPage.id, 'incident')} ${newestPage.severity}, ${title(newestPage.id)}`}
       </p>
     </div>
   )
@@ -251,7 +251,7 @@ function Setup({ relaxed, available, onBegin }: { relaxed: boolean; available: n
         Start an on-call shift
       </h1>
       <p className="max-w-prose">
-        Pages arrive while you work, and several can be open at once. Acknowledge the urgent ones first: each priority has a
+        Pages arrive while you work, and several can be open at once. Acknowledge the urgent ones first: each severity has a
         response target, and handling them in order earns a triage bonus.
         {relaxed && ' Relaxed mode is on: no clock, and each page arrives once the queue is clear.'}
       </p>
@@ -275,17 +275,17 @@ const STATUS = (p: Page) => {
 
 function QueueRow({ page: p, shift, title, current, onOpen }: { page: Page; shift: Shift; title: string; current: boolean; onOpen: () => void }) {
   const waiting = p.ackAt === undefined && !p.result ? shift.clock - p.arrivedAt! : undefined
-  const late = waiting !== undefined && !shift.relaxed && waiting > ACK_TARGET[p.priority]
+  const late = waiting !== undefined && !shift.relaxed && waiting > ACK_TARGET[p.severity]
   return (
     <button
       onClick={onOpen}
       disabled={!!p.result}
       aria-current={current ? 'true' : undefined}
-      className={`w-full rounded-md border border-l-4 p-2 text-left text-sm hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60 aria-[current=true]:border-accent ${p.result ? 'border-line border-l-ok' : p.priority === 'P1' ? 'border-line border-l-crit' : 'border-line border-l-warn'}`}
+      className={`w-full rounded-md border border-l-4 p-2 text-left text-sm hover:border-accent focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60 aria-[current=true]:border-accent ${p.result ? 'border-line border-l-ok' : isCritical(p.severity) ? 'border-line border-l-crit' : 'border-line border-l-warn'}`}
     >
       <span className="flex justify-between gap-2 font-mono text-xs text-muted">
         <span>{missionId(p.id, 'incident')}</span>
-        <span className={p.priority === 'P1' ? 'text-crit' : ''}>{p.priority}</span>
+        <span className={isCritical(p.severity) ? 'text-crit' : ''}>{p.severity}</span>
       </span>
       <span className="mt-1 block">{title}</span>
       <span className="mt-1 flex justify-between font-mono text-xs">
@@ -350,7 +350,7 @@ function ShiftReport({
                 <tr key={p.id} className="border-t border-line align-top">
                   <td className="py-2 pr-3">
                     <span className="font-mono text-xs text-muted">
-                      {missionId(p.id, 'incident')} · {p.priority}
+                      {missionId(p.id, 'incident')} · {p.severity}
                     </span>
                     <span className="block">{title(p.id)}</span>
                   </td>
@@ -382,7 +382,7 @@ function ShiftReport({
             {report.triage ? (
               <span className="text-ok">Triage: urgent pages first, every time (+{report.triageBonus} XP).</span>
             ) : (
-              <span className="text-muted">Triage: a lower-priority page was picked up while a more urgent one waited, or a page was never answered.</span>
+              <span className="text-muted">Triage: a less severe page was picked up while a more urgent one waited, or a page was never answered.</span>
             )}
           </p>
         )}

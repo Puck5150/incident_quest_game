@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Customer support"
-  priority: P1
+  severity: SEV2
   body: |
     Since this morning's frontend release, some customers see a completely
     blank page on shop.example.com. Others are fine. We can't reproduce it in

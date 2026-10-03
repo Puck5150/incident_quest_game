@@ -7,7 +7,7 @@ par_minutes: 11
 
 ticket:
   from: "Warehouse operations"
-  priority: P1
+  severity: SEV2
   body: |
     Customers are calling about orders placed since Tuesday that were never
     shipped. Our warehouse system has never heard of them. Most orders arrive

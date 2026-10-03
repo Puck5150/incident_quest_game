@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Data team"
-  priority: P3
+  severity: SEV4
   body: |
     Since this morning nobody can SSH into vm-batch-01 from the office VPN:
     the connection just hangs. The nightly jobs themselves still run fine.

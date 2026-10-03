@@ -4,26 +4,26 @@ import { newShift, shiftReport, shiftStep, type Shift, type ShiftEvent } from '.
 const MIN = 60_000
 // A fixed "random" so picks and arrival gaps are exact: 0.5 gives 5-minute gaps.
 const half = () => 0.5
-const inc = (id: string, priority: 'P1' | 'P2' | 'P3' | 'P4', resolved = false) => ({ id, priority, difficulty: 1, resolved })
+const inc = (id: string, severity: 'SEV1' | 'SEV2' | 'SEV3' | 'SEV4' | 'SEV5', resolved = false) => ({ id, severity, difficulty: 1, resolved })
 const run = (s: Shift, ...events: ShiftEvent[]) => events.reduce(shiftStep, s)
 const tick = (minutes: number): ShiftEvent => ({ type: 'TICK', ms: minutes * MIN })
 const resolve = (id: string, parMinutes = 10): ShiftEvent => ({ type: 'RESOLVE', id, total: 100, clean: true, parMinutes })
 
 describe('picking pages', () => {
   it('prefers unresolved incidents and takes the requested number', () => {
-    const s = newShift([inc('a', 'P3', true), inc('b', 'P2'), inc('c', 'P3'), inc('d', 'P1', true)], 2, false, half)
+    const s = newShift([inc('a', 'SEV4', true), inc('b', 'SEV3'), inc('c', 'SEV4'), inc('d', 'SEV2', true)], 2, false, half)
     expect(s.pages.map((p) => p.id).sort()).toEqual(['b', 'c'])
   })
 
-  it('always includes a P1 or P2 when one exists', () => {
-    const s = newShift([inc('a', 'P3'), inc('b', 'P4'), inc('c', 'P3'), inc('d', 'P1', true)], 3, false, half)
-    expect(s.pages.some((p) => p.priority === 'P1' || p.priority === 'P2')).toBe(true)
+  it('always includes a SEV1-SEV3 when one exists', () => {
+    const s = newShift([inc('a', 'SEV4'), inc('b', 'SEV5'), inc('c', 'SEV4'), inc('d', 'SEV2', true)], 3, false, half)
+    expect(s.pages.some((p) => p.severity === 'SEV2' || p.severity === 'SEV3')).toBe(true)
     expect(s.pages).toHaveLength(3)
   })
 })
 
 describe('timed shift', () => {
-  const start = () => newShift([inc('a', 'P3'), inc('b', 'P1'), inc('c', 'P2')], 3, false, half)
+  const start = () => newShift([inc('a', 'SEV4'), inc('b', 'SEV2'), inc('c', 'SEV3')], 3, false, half)
 
   it('pages arrive on schedule, the first at once', () => {
     let s = start()
@@ -47,17 +47,17 @@ describe('timed shift', () => {
   })
 
   it('response targets and triage', () => {
-    // Order the pages so a P3 comes first and a P1 arrives while it's open.
-    const s0: Shift = { ...start(), pages: start().pages.map((p, i) => ({ ...p, priority: (['P3', 'P1', 'P2'] as const)[i] })) }
+    // Order the pages so a SEV4 comes first and a SEV2 arrives while it's open.
+    const s0: Shift = { ...start(), pages: start().pages.map((p, i) => ({ ...p, severity: (['SEV4', 'SEV2', 'SEV3'] as const)[i] })) }
     const [p3, p1, p2] = s0.pages.map((p) => p.id)
     const s = run(
       s0,
-      { type: 'OPEN', id: p3 }, // P3 acknowledged at once
-      tick(5), // P1 arrives
+      { type: 'OPEN', id: p3 }, // SEV4 acknowledged at once
+      tick(5), // SEV2 arrives
       { type: 'OPEN', id: p1 }, // switched straight to it
       tick(8),
       resolve(p1, 10), // 8 active minutes, under par: met
-      tick(2), // P2 arrived at 10 min (during the P1); acknowledged at 15
+      tick(2), // SEV3 arrived at 10 min (during the SEV2); acknowledged at 15
       { type: 'OPEN', id: p2 },
       tick(16),
       resolve(p2, 10), // 16 active minutes, over 1.5 x par: missed
@@ -76,10 +76,10 @@ describe('timed shift', () => {
     expect(r.clean).toBe(true)
   })
 
-  it('acknowledging a lower priority while a higher one waits misses triage', () => {
-    let s = newShift([inc('a', 'P1'), inc('b', 'P3')], 2, false, half)
+  it('acknowledging a lower severity while a higher one waits misses triage', () => {
+    let s = newShift([inc('a', 'SEV2'), inc('b', 'SEV4')], 2, false, half)
     s = { ...s, pages: s.pages.map((p) => ({ ...p, arrivesAt: 0, arrivedAt: 0 })) } // both waiting
-    const low = s.pages.find((p) => p.priority === 'P3')!.id
+    const low = s.pages.find((p) => p.severity === 'SEV4')!.id
     s = run(s, { type: 'OPEN', id: low })
     expect(s.triageMissed).toEqual([low])
     expect(shiftReport(s).triage).toBe(false)
@@ -101,7 +101,7 @@ describe('timed shift', () => {
 
 describe('relaxed shift', () => {
   it('the next page arrives only once the queue is clear, with no targets or triage', () => {
-    let s = newShift([inc('a', 'P2'), inc('b', 'P3')], 2, true, half)
+    let s = newShift([inc('a', 'SEV3'), inc('b', 'SEV4')], 2, true, half)
     const [first, second] = s.pages.map((p) => p.id)
     s = run(s, tick(30))
     expect(s.pages[1].arrivedAt).toBeUndefined()

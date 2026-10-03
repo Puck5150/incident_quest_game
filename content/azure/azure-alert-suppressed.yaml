@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "On-call lead"
-  priority: P2
+  severity: SEV3
   body: |
     The shop API returned errors for 30 minutes yesterday afternoon. Azure
     Monitor shows our "api-5xx-high" alert fired at 14:03, but nobody got an

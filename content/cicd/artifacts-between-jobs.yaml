@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Marketing site team"
-  priority: P3
+  severity: SEV4
   body: |
     We split our one-job pipeline into a build job and a deploy job, so we
     can add tests in between later. Build passes and logs "dist/ created".

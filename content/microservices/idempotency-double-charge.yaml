@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Customer support"
-  priority: P1
+  severity: SEV2
   body: |
     Since about 13:00, 41 customers have contacted us about being charged
     twice for a single order. Each pair of charges is the same amount, a few

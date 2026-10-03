@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Marketing"
-  priority: P3
+  severity: SEV4
   body: |
     The promo site for Friday's launch is live at promo.example.com, but
     every page says "403 Forbidden". Alice copied the files onto the web

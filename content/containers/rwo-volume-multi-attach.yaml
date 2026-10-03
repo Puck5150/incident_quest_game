@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Internal tools team"
-  priority: P3
+  severity: SEV4
   body: |
     Our internal wiki runs as one pod with its data on a persistent volume.
     Since we moved it to the new cluster, every deploy gets stuck: the new

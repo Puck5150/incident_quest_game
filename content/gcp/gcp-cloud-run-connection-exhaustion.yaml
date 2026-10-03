@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "Growth team"
-  priority: P1
+  severity: SEV2
   body: |
     Launch email went out at 10:00. About half of sign-ups are failing with
     "Something went wrong". Cloud Run is supposed to scale automatically, so

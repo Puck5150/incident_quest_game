@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Checkout team"
-  priority: P1
+  severity: SEV2
   body: |
     We merged two PRs to main a minute apart: #881 (a price display tweak)
     then #882 (the fix for double-charging). Both deploy runs are green, but

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "E-commerce team"
-  priority: P1
+  severity: SEV2
   body: |
     We moved the shop behind the new load balancer an hour ago. Every
     browser now shows "This page isn't working: shop.example.com

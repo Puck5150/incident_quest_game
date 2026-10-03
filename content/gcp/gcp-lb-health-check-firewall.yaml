@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Web team"
-  priority: P2
+  severity: SEV3
   body: |
     We put the partner portal behind a new global external Application Load
     Balancer today. Every request gets "no healthy upstream". The VMs are

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Infrastructure team"
-  priority: P3
+  severity: SEV4
   body: |
     db-02 was racked yesterday. It talks to everything in its own subnet,
     and it can reach the internet, but monitoring at 10.20.5.10 can't be

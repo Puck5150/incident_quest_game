@@ -7,7 +7,7 @@ par_minutes: 8
 
 ticket:
   from: "Web team"
-  priority: P2
+  severity: SEV3
   body: |
     Our new pipeline has deployed to staging all week. Today's first
     production deploy failed with "AuthorizationFailed". Same pipeline, same

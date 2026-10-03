@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Recommendations team"
-  priority: P2
+  severity: SEV3
   body: |
     We deployed recs-api to the shop namespace this morning. Every call it
     makes to http://catalog:8080 times out. The storefront calls the same

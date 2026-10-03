@@ -1,5 +1,9 @@
 # Plan: On-call shift mode
 
+> **2026-10-03:** ticket priorities became severities. P1-P4 below now read SEV2-SEV5
+> (P1 = SEV2, ...), and SEV1 is the new top level for major incidents (difficulty 5),
+> with a 1-minute acknowledge target. See AUTHORING.md, Difficulty.
+
 Status: **approved 2026-10-01 with the defaults in section 9; S1–S4 done.** Active-time
 scoring moved from S1 to S2, where the shift first needs it. From PARKING_LOT.md: "Timed
 'on-call shift' mode: multiple incidents queued at once". Fits the Ops Center

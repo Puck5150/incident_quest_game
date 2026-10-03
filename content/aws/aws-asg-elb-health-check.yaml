@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "On-call alert"
-  priority: P2
+  severity: SEV3
   body: |
     ALERT: shop-web p95 latency 6.2 s, 5xx 9%. The load balancer shows only
     2 of 6 targets healthy, and has for about three hours. The Auto Scaling

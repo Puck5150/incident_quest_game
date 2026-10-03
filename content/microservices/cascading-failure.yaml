@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "Customer support"
-  priority: P1
+  severity: SEV2
   body: |
     Customers can't check out, and now even viewing the cart spins for 30
     seconds and fails with "Gateway Timeout". Started around 14:08 UTC.

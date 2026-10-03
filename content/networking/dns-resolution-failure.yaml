@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Finance team"
-  priority: P3
+  severity: SEV4
   body: |
     The nightly revenue report didn't arrive this morning. The job on
     reports-01 says it "could not resolve host". Everything else seems fine?

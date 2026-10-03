@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Customer support"
-  priority: P2
+  severity: SEV3
   body: |
     Customers keep reporting that they change their delivery address,
     press Save, get "Saved!", and the page that loads next shows the old

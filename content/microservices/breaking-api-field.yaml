@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Mobile team"
-  priority: P1
+  severity: SEV2
   body: |
     Since this morning's catalog-api release, customers on app version 4.x
     see "£0.00" on every product. Version 5 is fine. About 30% of customers

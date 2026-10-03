@@ -7,7 +7,7 @@ par_minutes: 16
 
 ticket:
   from: "On-call bot"
-  priority: P1
+  severity: SEV2
   body: |
     10:40 ALARM api.example.com: 100% of requests return 504 Gateway Timeout.
     Started at 10:31, right after the platform team switched the API from the

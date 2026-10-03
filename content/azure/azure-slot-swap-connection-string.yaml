@@ -7,7 +7,7 @@ par_minutes: 13
 
 ticket:
   from: "Warehouse operations"
-  priority: P1
+  severity: SEV2
   body: |
     The shop says checkout succeeds and customers get confirmation emails,
     but our back office hasn't received a single new order since 10:00.

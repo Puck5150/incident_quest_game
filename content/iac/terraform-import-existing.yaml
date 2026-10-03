@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Data team"
-  priority: P3
+  severity: SEV4
   body: |
     We're bringing our hand-made analytics bucket under Terraform. We wrote
     the resource block exactly like the real bucket, but apply fails saying

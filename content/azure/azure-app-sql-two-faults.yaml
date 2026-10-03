@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "Warehouse operations"
-  priority: P1
+  severity: SEV2
   body: |
     Since this morning's release the inventory app shows "Something went
     wrong" on every page. The release moved it to a new Azure SQL database

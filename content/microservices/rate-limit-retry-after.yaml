@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Supply chain"
-  priority: P2
+  severity: SEV3
   body: |
     The supplier's stock API started returning 429 at 09:00 during our
     hourly sync, and by 09:05 they'd blocked our key for an hour. Their

@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Messaging team"
-  priority: P2
+  severity: SEV3
   body: |
     We're retiring the "returns" queue. The PR just deletes "returns" from a
     list, but the plan replaces the "refunds" queue and destroys the

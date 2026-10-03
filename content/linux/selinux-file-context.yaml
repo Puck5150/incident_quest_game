@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Web team"
-  priority: P3
+  severity: SEV4
   body: |
     We moved the new docs site into /var/www/html on docs-01 and every page
     is "403 Forbidden". The files are owned by root and world-readable,

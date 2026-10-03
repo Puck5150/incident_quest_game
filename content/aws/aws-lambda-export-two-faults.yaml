@@ -7,7 +7,7 @@ par_minutes: 15
 
 ticket:
   from: "Finance team"
-  priority: P2
+  severity: SEV3
   body: |
     The new nightly orders export (a CSV in s3://acme-finance-exports) hasn't
     arrived once since it went live on Monday. We reconcile from it every

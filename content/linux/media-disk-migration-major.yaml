@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "E-commerce lead"
-  priority: P1
+  severity: SEV1
   body: |
     Since the weekend, every product image uploaded before Saturday shows a
     broken-image icon: that's most of the catalogue. Images uploaded since

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Supply chain"
-  priority: P2
+  severity: SEV3
   body: |
     Since the new outbound proxy went live on Monday, the stock sync on
     sync-01 fails every run. Oddly, the part that calls our supplier on

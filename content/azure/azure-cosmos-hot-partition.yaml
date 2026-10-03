@@ -7,7 +7,7 @@ par_minutes: 14
 
 ticket:
   from: "IoT platform team"
-  priority: P2
+  severity: SEV3
   body: |
     Our device ingestion is falling behind: Cosmos DB keeps answering 429
     "Request rate is too large". But the container has 20,000 RU/s

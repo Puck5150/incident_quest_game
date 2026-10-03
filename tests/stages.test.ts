@@ -69,19 +69,23 @@ describe('schema', () => {
     expect(errors((r) => r.red_herrings.push({ ...r.red_herrings[0] }))).toContain('red_herrings: duplicate red herring "deploy"')
   })
 
-  it('difficulty 5 is three stages, a red herring, par 25+ and P1', () => {
+  it('difficulty 5 is three stages, a red herring, par 25+ and SEV1', () => {
     expect(
       errors((r) => {
         r.difficulty = 5
         delete r.red_herrings
-        r.ticket.priority = 'P2'
+        r.ticket.severity = 'SEV2'
       }),
     ).toEqual([
       'difficulty: difficulty 5 needs three stages (two in `stages`)',
       'difficulty: difficulty 5 needs at least one red herring',
       'par_minutes: difficulty 5 needs par_minutes of at least 25',
-      'ticket.priority: difficulty 5 is a major incident: ticket priority must be P1',
+      'ticket.severity: difficulty 5 is a major incident: ticket severity must be SEV1',
     ])
+  })
+
+  it('SEV1 is reserved for major incidents', () => {
+    expect(errors((r) => (r.ticket.severity = 'SEV1'))).toContain('ticket.severity: SEV1 is reserved for major incidents (difficulty 5)')
   })
 
   it('ids are unique across stages; references must exist', () => {

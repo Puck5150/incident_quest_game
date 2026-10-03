@@ -7,7 +7,7 @@ par_minutes: 30
 
 ticket:
   from: "Compliance and DR lead"
-  priority: P1
+  severity: SEV1
   body: |
     On Monday (09-29) the platform team turned on replication of our customer
     documents bucket to the DR account in us-west-2. The DR account's nightly

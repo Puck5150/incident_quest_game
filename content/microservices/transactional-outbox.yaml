@@ -7,7 +7,7 @@ par_minutes: 12
 
 ticket:
   from: "Warehouse operations"
-  priority: P1
+  severity: SEV2
   body: |
     Customers are asking where their parcels are. 37 orders from yesterday
     are paid and show "confirmed" in the order system, but the warehouse

@@ -7,7 +7,7 @@ par_minutes: 10
 
 ticket:
   from: "Release engineering"
-  priority: P2
+  severity: SEV3
   body: |
     Since lunchtime every deploy to app-03 fails at the SSH step with
     "Permission denied (publickey)". Same key, same user (deploy) as
