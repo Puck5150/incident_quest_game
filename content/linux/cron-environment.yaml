@@ -21,6 +21,24 @@ environment: |
 
 terminal:
   prompt: "ops@ledger-01:~$"
+  files:
+    - path: /home/ops/bin/backup.sh
+      content: |
+        #!/bin/bash
+        # Nightly ledger backup. Run by cron at 01:30 (crontab -l).
+        set -euo pipefail
+
+        echo "$(date -Is) starting backup"
+        if ! command -v aws >/dev/null; then
+          echo "$(date -Is) aws: command not found" >&2
+          exit 127
+        fi
+        tar czf /tmp/ledger-$(date +%F).tgz /srv/ledger
+        aws s3 cp /tmp/ledger-$(date +%F).tgz s3://acme-ledger-backups/
+        rm -f /tmp/ledger-$(date +%F).tgz
+
+
+        echo "$(date -Is) backup done"
   commands:
     - match: "crontab -l"
       when_actions: [crontab-path]

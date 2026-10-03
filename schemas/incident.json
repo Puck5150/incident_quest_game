@@ -108,6 +108,50 @@
         },
         "unknown_output": {
           "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string"
+              },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "when_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                      }
+                    },
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "when_actions",
+                    "content"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [

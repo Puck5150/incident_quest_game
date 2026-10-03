@@ -190,6 +190,18 @@ export const ScenarioSchema = z
         prompt: z.string().min(1),
         commands: z.array(terminalCommand).min(1),
         unknown_output: z.string().optional(),
+        // Files on the simulated disk that aren't artifacts (PLAN_TERMINAL.md):
+        // config the player greps or edits. `changes` replace the content once
+        // their actions are taken, so the disk agrees with the scripted commands.
+        files: z
+          .array(
+            z.strictObject({
+              path: z.string().min(1),
+              content: z.string(),
+              changes: z.array(z.strictObject({ when_actions: z.array(id).min(1), content: z.string() })).optional(),
+            }),
+          )
+          .optional(),
       })
       .optional(),
     logs: LogsSchema.optional(),

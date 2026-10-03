@@ -40,7 +40,7 @@ metrics:
 terminal:
   prompt: "you@cloudshell:~ (shop-prod)$"
   commands:
-    - match: "gcloud monitoring policies list --filter=displayName:checkout --format=yaml(displayName,conditions[].conditionThreshold.duration,conditions[].conditionThreshold.thresholdValue)"
+    - match: "gcloud monitoring policies list --filter=displayName:checkout --format='yaml(displayName,conditions[].conditionThreshold.duration,conditions[].conditionThreshold.thresholdValue)'"
       when_actions: [set-duration]
       output: |
         displayName: checkout 5xx > 5%
@@ -48,7 +48,7 @@ terminal:
         - conditionThreshold:
             duration: 300s
             thresholdValue: 0.05
-    - match: "gcloud monitoring policies list --filter=displayName:checkout --format=yaml(displayName,conditions[].conditionThreshold.duration,conditions[].conditionThreshold.thresholdValue)"
+    - match: "gcloud monitoring policies list --filter=displayName:checkout --format='yaml(displayName,conditions[].conditionThreshold.duration,conditions[].conditionThreshold.thresholdValue)'"
       evidence: duration-3600
       output: |
         displayName: checkout 5xx > 5%

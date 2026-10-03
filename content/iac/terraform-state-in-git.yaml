@@ -23,6 +23,33 @@ environment: |
 
 terminal:
   prompt: "you@laptop:~/analytics-infra$"
+  files:
+    - path: terraform.tfstate
+      content: |
+        {
+          "version": 4,
+          "terraform_version": "1.9.8",
+          "resources": [
+            {
+              "type": "random_password",
+              "name": "db",
+              "instances": [{ "attributes": { "length": 32, "result": "<redacted in this simulation>" } }]
+            },
+            {
+              "type": "aws_db_instance",
+              "name": "analytics",
+              "instances": [{ "attributes": { "identifier": "analytics-db", "username": "analytics",
+                "password": "<redacted in this simulation>" } }]
+            },
+            {
+              "type": "aws_db_parameter_group",
+              "name": "analytics",
+              "instances": [{ "attributes": { "family": "postgres16", "password_encryption": "scram-sha-256",
+                "parameter": [{ "name": "password_encryption", "value": "scram-sha-256" }],
+                "secrets": { "password": "<redacted in this simulation>" } } }]
+            }
+          ]
+        }
   commands:
     - match: "git ls-files | grep tfstate"
       when_actions: [remote-backend]

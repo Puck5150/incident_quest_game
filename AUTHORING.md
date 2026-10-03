@@ -78,8 +78,11 @@ stage reopens the incident into the next one (see below).
 - **Prose fields reflow.** `ticket.body`, `environment`, `analogy.text` and the
   debrief text are shown like Markdown paragraphs: single line breaks become
   spaces, and a blank line starts a new paragraph. Wrap lines wherever you like.
-- **Unscripted commands** print "no simulated output for that here" by default.
-  Set `terminal.unknown_output` if you want something else.
+- **Unscripted commands:** a real tool your incident doesn't script (say
+  `kubectl get nodes`) prints "no simulated output for that here" by default;
+  set `terminal.unknown_output` to change it. Unknown names get bash's own
+  "command not found", and shell commands just work (see "The terminal is a
+  real shell").
 - **Wrong hypotheses must be plausible.** Their `feedback` should say which evidence
   rules them out. That's where the learning happens.
 - **Every scenario needs a shotgun trap:** a `destructive` action a panicked
@@ -235,6 +238,64 @@ red_herrings:
 The debrief's "What wasn't the cause" lists each one, where it was, and whether
 the player checked it. Make the anomaly genuinely tempting, and make `why` point
 at the evidence that rules it out.
+
+## The terminal is a real shell
+
+Since PLAN_TERMINAL.md the terminal is bash (just-bash, in the browser) on a
+simulated Linux host. What that means for an incident:
+
+- **Scripted lines still come first.** `help`, every scripted `match`, typed
+  fixes and their gate are answered by the engine exactly as written, so
+  evidence and scoring don't depend on the shell. Everything else runs in the
+  shell: pipes, redirection, variables, `cd`, loops, and its text tools.
+- **Your tools work in pipelines.** `aws`, `kubectl`, `systemctl`... answer from
+  your scripted commands wherever they appear: `kubectl get pods -n shop | grep
+  -c Error` works with nothing extra. Flags can come in any order, `--a=b` or
+  `--a b`, long or short (`-n`/`--namespace`), quotes ignored. A tool run inside
+  a pipeline counts for evidence like typing it alone. A scripted
+  `TOOL ... | grep X` also answers `TOOL ...` alone with the same lines.
+- **Write commands as valid bash.** Quote arguments with `()`, `{}`, `[]`, `*`,
+  `|` or spaces: `--format='value(tags.items)'`, `--query '[].{name:name}'`.
+  Unquoted, a real shell would fail, and so does this one.
+- **Files are on disk.** Starting directory = the prompt's (`you@laptop:~/infra$`
+  starts in `~/infra`). On disk: files and logs whose name is a path
+  (`/etc/fstab`, `deploy/main.tf (excerpt)`, `backend.tf`), anything a scripted
+  `cat FILE` / `tail FILE` / `head -n N FILE` prints, and `terminal.files`
+  (disk-only files, with `changes` that apply once actions are taken):
+
+  ```yaml
+  terminal:
+    files:
+      - path: /etc/fstab
+        content: |
+          UUID=...4f71  /srv/media  ext4  defaults,nofail  0  2
+        changes:
+          - when_actions: [fix-fstab]
+            content: |
+              UUID=...4f17  /srv/media  ext4  defaults,nofail  0  2
+  ```
+
+  Reading a file that's on disk (`cat`, `grep`, `tail`...) runs in the shell, so
+  the file must say what your scripted output says; a test checks every one.
+- **Fixes can be edits.** Give the action a `file`; editing it until it matches
+  (sed -i, `>`, `nano`, `vi`) takes the action, behind the same gate as the
+  buttons, and the button writes `after`:
+
+  ```yaml
+  - id: fix-logrotate
+    kind: fix
+    file:
+      path: /etc/logrotate.d/app
+      matches: '^/var/log/app/\*\.log'   # multiline regex, true once fixed
+      after: |                            # what the button writes
+        /var/log/app/*.log { ... }
+  ```
+- **Hosts.** The prompt's host is where the player starts. Hosts in scripted
+  `ssh HOST ...` lines exist: `ssh HOST cmd` runs there, `ssh HOST` logs in
+  until `exit`. Local scripts (`./order-sync`) exist and answer from their
+  scripted lines.
+- **Database prompts** (`postgres=#`, `mysql>`) aren't a shell: they stay
+  scripted only.
 
 ## Command breakdown library
 

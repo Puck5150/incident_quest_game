@@ -42,6 +42,20 @@ pipeline:
 
 terminal:
   prompt: "you@cloudshell:~$"
+  files:
+    - path: main.bicep
+      content: |
+        // Shop API: App Service plan and web app
+        param location string = 'westus'
+        param appName string = 'shop-api'
+        param skuName string = 'P1v3'
+      changes:
+        - when_actions: [allowed-region]
+          content: |
+            // Shop API: App Service plan and web app
+            param location string = 'centralus'
+            param appName string = 'shop-api'
+            param skuName string = 'P1v3'
   commands:
     - match: "az policy assignment show --name allowed-locations --scope /providers/Microsoft.Management/managementGroups/mg-acme --query \"{name:displayName, params:parameters}\""
       evidence: allowed-list

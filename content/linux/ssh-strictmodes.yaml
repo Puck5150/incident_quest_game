@@ -21,6 +21,10 @@ environment: |
 
 terminal:
   prompt: "admin@app-03:~$"
+  files:
+    - path: /home/deploy/.ssh/authorized_keys
+      content: |
+        ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK3vY1pQe8m2R0aJxW9tL4nBcD7fH6sQ2uV5wZ8yX1rE deploy@pipeline
   commands:
     - match: "ls -ld /home/deploy /home/deploy/.ssh /home/deploy/.ssh/authorized_keys"
       when_actions: [fix-home]

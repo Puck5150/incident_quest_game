@@ -32,18 +32,18 @@ diagram:
 terminal:
   prompt: "you@cloudshell:~ (shop-prod)$"
   commands:
-    - match: "gcloud compute instances describe app-1 --zone us-central1-a --format=value(tags.items)"
+    - match: "gcloud compute instances describe app-1 --zone us-central1-a --format='value(tags.items)'"
       output: |
         app
-    - match: "gcloud compute instances describe app-3 --zone us-central1-a --format=value(tags.items)"
+    - match: "gcloud compute instances describe app-3 --zone us-central1-a --format='value(tags.items)'"
       when_actions: [add-tag]
       output: |
         app
-    - match: "gcloud compute instances describe app-3 --zone us-central1-a --format=value(tags.items)"
+    - match: "gcloud compute instances describe app-3 --zone us-central1-a --format='value(tags.items)'"
       evidence: no-tag
       output: |
 
-    - match: "gcloud compute firewall-rules describe allow-app-8080 --format=yaml(direction,priority,sourceRanges,allowed,targetTags)"
+    - match: "gcloud compute firewall-rules describe allow-app-8080 --format='yaml(direction,priority,sourceRanges,allowed,targetTags)'"
       evidence: rule-targets-tag
       output: |
         allowed:

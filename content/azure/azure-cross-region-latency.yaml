@@ -74,7 +74,7 @@ terminal:
     - match: "az postgres flexible-server show -n orders-pg -g rg-shop --query location"
       output: |
         "East US"
-    - match: "az postgres flexible-server replica list --name orders-pg -g rg-shop --query [].{name:name,location:location,role:replicationRole}"
+    - match: "az postgres flexible-server replica list --name orders-pg -g rg-shop --query '[].{name:name,location:location,role:replicationRole}'"
       output: |
         [
           { "name": "orders-pg-weu", "location": "West Europe", "role": "AsyncReplica" }

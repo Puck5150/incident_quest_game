@@ -9,7 +9,7 @@
 import { Bash, defineCommand, getCommandNames, type CommandName } from 'just-bash'
 import type { Scenario } from '../schema/scenario.ts'
 import { normalize } from './engine.ts'
-import { diskPath, filesOnDisk } from './paths.ts'
+import { diskPath, filesOnDisk, impliedFile, resolveFrom, startDir } from './paths.ts'
 
 export { diskPath }
 
@@ -159,8 +159,9 @@ export class IncidentShell {
     for (const b of BUILTINS) programs.delete(b)
     programs.delete('ssh')
     programs.delete('sudo')
+    const start = name === this.mainHost ? startDir(this.base) : home
     const bash = new Bash({
-      cwd: home,
+      cwd: start,
       env: { USER: this.user, LOGNAME: this.user, HOSTNAME: name, HOME: home, TERM: 'xterm-256color', SHELL: '/bin/bash', LANG: 'C.UTF-8' },
       files: {
         '/etc/hostname': name + '\n',
@@ -175,13 +176,22 @@ export class IncidentShell {
       customCommands: [
         ...[...programs].map((p) => defineCommand(p, (args) => Promise.resolve(this.program(name, p, args)))),
         defineCommand('ssh', (args) => this.ssh(name, args)),
+        // Local scripts the incident runs (./order-sync): files that call back here.
+        defineCommand('__scripted', (args) => Promise.resolve(this.program(name, args[0], args.slice(1)))),
         defineCommand('sudo', (args, ctx) => this.sudo(name, args, ctx as unknown as Ctx)),
         ...['nano', 'vi', 'vim', 'editor'].map((ed) => defineCommand(ed, (args, ctx) => this.edit(args, ctx as never, ed))),
       ],
       executionLimits: { maxExecutionTimeMs: 5_000 },
     })
     this.hosts.set(name, bash)
-    await bash.exec('mkdir -p /tmp /var/log /var/tmp /root /usr/local/bin /opt /srv')
+    await bash.exec(`mkdir -p /tmp /var/log /var/tmp /root /usr/local/bin /opt /srv ${quote(start)}`)
+    if (name === this.mainHost)
+      for (const script of new Set(this.allCommands().map((c) => words(normalize(c.match ?? c.example ?? ''))[0]).filter((w) => w?.startsWith('./')))) {
+        const at = resolveFrom(this.base, script)
+        await bash.fs.mkdir(at.replace(/\/[^/]*$/, ''), { recursive: true })
+        await bash.fs.writeFile(at, `#!/bin/bash\n# (simulated) answers from the incident's data\n__scripted ${quote(script)} "$@"\n`)
+        await bash.fs.chmod(at, 0o755)
+      }
     this.envs.set(name, (await bash.exec('true')).env)
     return bash
   }
@@ -208,12 +218,21 @@ export class IncidentShell {
       const now = (await fs.exists(a.file.path)) ? await fs.readFile(a.file.path) : ''
       if (!new RegExp(a.file.matches, 'm').test(now)) await put(a.file.path, a.file.after)
     }
+    // Post-fix versions: a scripted `cat FILE` that only shows once actions
+    // are taken, and terminal files' `changes`, latest first.
     for (const [i, c] of (scenario.terminal?.commands ?? []).entries()) {
-      const file = normalize(c.match ?? c.example ?? '').match(/^(?:sudo )?cat (\/\S+)$/)?.[1]
-      const key = `cat:${i}:${file}`
+      const file = impliedFile(c.match ?? c.example ?? '')
+      const key = `implied:${i}`
       if (!file || !c.when_actions?.length || this.mounted.has(key) || !c.when_actions.every((a) => taken.has(a))) continue
       this.mounted.add(key)
-      await put(file, c.output)
+      await put(resolveFrom(scenario, file), c.output)
+    }
+    for (const f of scenario.terminal?.files ?? []) {
+      const change = [...(f.changes ?? [])].reverse().find((ch) => ch.when_actions.every((a) => taken.has(a)))
+      const key = `change:${f.path}:${change?.content.length}:${change?.when_actions.join(',')}`
+      if (!change || this.mounted.has(key)) continue
+      this.mounted.add(key)
+      await put(resolveFrom(scenario, f.path), change.content)
     }
   }
 
@@ -252,6 +271,18 @@ export class IncidentShell {
     if (hit) {
       this.hits.push(hit.match ?? hit.example ?? want.join(' '))
       return { stdout: withNewline(hit.output), stderr: '', exitCode: 0 }
+    }
+    // A scripted "TOOL ... | grep X" (only filters after it): what it prints
+    // is what TOOL showed that's relevant here, so TOOL alone shows it, and
+    // the player's own filters then work on it.
+    const piped = (scenario.terminal?.commands ?? []).find((c) => {
+      if (c.match === undefined || !(c.when_actions ?? []).every((a) => taken.has(a))) return false
+      const [head, ...rest] = normalize(c.match).split(' | ')
+      return rest.length > 0 && rest.every((r) => /^(grep|egrep)( -[iEFw]+)* \S/.test(r) || /^(head|tail)( -n ?\d+| -\d+)?$/.test(r)) && forms.some((f) => sameInvocation(words(head), f))
+    })
+    if (piped) {
+      this.hits.push(piped.match!)
+      return { stdout: withNewline(piped.output), stderr: '', exitCode: 0 }
     }
     if (args.includes('--help') || args[0] === 'help' || (args.length === 1 && args[0] === '-h')) {
       const here = [...new Set(this.allCommands().map((c) => normalize(c.match ?? c.example ?? '')).filter((c) => c.startsWith(name + ' ')))]

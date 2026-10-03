@@ -9,7 +9,7 @@
 import { artifacts } from '../schema/constants.ts'
 import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
-import { readsFileOnDisk } from './paths.ts'
+import { isShellPrompt, readsFileOnDisk } from './paths.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
@@ -118,6 +118,18 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
 // Collapse runs of spaces so "df  -h " matches "df -h".
 export const normalize = (input: string) => input.trim().replace(/\s+/g, ' ')
 
+// Whether a line uses shell operators (pipes, lists, redirection) outside quotes.
+export function hasShellOperators(cmd: string): boolean {
+  let quote: string | undefined
+  for (const ch of cmd) {
+    if (quote) {
+      if (ch === quote) quote = undefined
+    } else if (ch === '"' || ch === "'") quote = ch
+    else if ('|;&<>'.includes(ch)) return true
+  }
+  return false
+}
+
 export const NOT_YET = 'Not run: that changes the system. Declare a root cause first, then fix it.'
 
 // The action a typed command takes, if any (first match wins).
@@ -143,9 +155,14 @@ export function runCommand(
     return { output: ['Commands you might try here:', ...known.map((k) => `  ${k}`), '  clear, history'].join('\n') }
   }
 
+  // A pattern command answers a single command; a pipeline or list that
+  // merely starts with one is the real shell's to run (the tool inside it
+  // still answers from the pattern there). Patterns written for a pipeline
+  // (their example has one) still answer it.
+  const compound = hasShellOperators(cmd)
   const hit = t.commands.find(
     (c) =>
-      (c.match !== undefined ? normalize(c.match) === cmd : new RegExp(c.match_regex!).test(cmd)) &&
+      (c.match !== undefined ? normalize(c.match) === cmd : (!compound || hasShellOperators(c.example ?? '')) && new RegExp(c.match_regex!).test(cmd)) &&
       (c.when_actions ?? []).every((a) => taken.has(a)),
   )
   // `command`: the scripted command as written (its match, or a pattern's example).
@@ -247,7 +264,7 @@ export function engineHandles(scenario: Scenario, input: string, before: GameEve
   const cmd = normalize(input)
   if (cmd === 'help' || cmd === 'history' || cmd === 'clear') return true
   const cur = atStage(scenario, stageAt(before))
-  if (actionFor(cur, cmd)) return true
+  if (!isShellPrompt(scenario) || actionFor(cur, cmd)) return true
   // Reading a file that's on disk: the real shell shows what's really there,
   // edits included. (It still counts as evidence: see evidenceSeen.)
   if (readsFileOnDisk(cur, cmd)) return false

@@ -33,20 +33,20 @@ diagram:
 terminal:
   prompt: "you@cloudshell:~ (acme-prod)$"
   commands:
-    - match: "gcloud storage buckets describe gs://acme-user-docs --format=json(lifecycle_config,soft_delete_policy)"
+    - match: "gcloud storage buckets describe gs://acme-user-docs --format='json(lifecycle_config,soft_delete_policy)'"
       when_actions: [stop-rule]
       output: |
         {
           "soft_delete_policy": { "retentionDurationSeconds": "604800" }
         }
-    - match: "gcloud storage buckets describe gs://acme-user-docs --format=json(lifecycle_config,soft_delete_policy)"
+    - match: "gcloud storage buckets describe gs://acme-user-docs --format='json(lifecycle_config,soft_delete_policy)'"
       evidence: wrong-bucket-rule
       output: |
         {
           "lifecycle_config": { "rule": [ { "action": { "type": "Delete" }, "condition": { "age": 1 } } ] },
           "soft_delete_policy": { "retentionDurationSeconds": "604800" }
         }
-    - match: "gcloud storage buckets describe gs://acme-exports --format=json(lifecycle_config,soft_delete_policy)"
+    - match: "gcloud storage buckets describe gs://acme-exports --format='json(lifecycle_config,soft_delete_policy)'"
       output: |
         {
           "soft_delete_policy": { "retentionDurationSeconds": "604800" }

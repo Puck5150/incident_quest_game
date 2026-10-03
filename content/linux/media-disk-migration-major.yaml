@@ -37,6 +37,20 @@ diagram:
 
 terminal:
   prompt: "ops@media-01:~$"
+  files:
+    - path: /etc/fstab
+      content: |
+        # /etc/fstab: static file system information.
+        # <file system>  <mount point>  <type>  <options>  <dump>  <pass>
+        UUID=0b2f6e1c-91d4-4a7b-8c3e-5f6a7b8c9d0e  /  ext4  errors=remount-ro  0  1
+        UUID=7d3c1e9a-52b1-4f8e-a0c6-3e9d1b2a4f71  /srv/media  ext4  defaults,nofail  0  2
+      changes:
+        - when_actions: [fix-fstab]
+          content: |
+            # /etc/fstab: static file system information.
+            # <file system>  <mount point>  <type>  <options>  <dump>  <pass>
+            UUID=0b2f6e1c-91d4-4a7b-8c3e-5f6a7b8c9d0e  /  ext4  errors=remount-ro  0  1
+            UUID=7d3c1e9a-52b1-4f8e-a0c6-3e9d1b2a4f17  /srv/media  ext4  defaults,nofail  0  2
   commands:
     - match: "curl -sI https://media.example.com/2026/09/14/p-1182.jpg"
       when_actions: [fix-fstab]

@@ -89,6 +89,14 @@ describe('the shell', () => {
 })
 
 describe('the engine and SHELL_RAN', () => {
+  it('a pipeline that starts with a pattern command is the shell\'s to run', async () => {
+    const { engineHandles } = await import('../src/game/engine.ts')
+    const s = incident('full-disk')
+    expect(engineHandles(s, 'journalctl -u checkout', [])).toBe(true)
+    expect(engineHandles(s, 'journalctl -u checkout | grep -c Errno', [])).toBe(false)
+    expect((await new IncidentShell(s).run('journalctl -u checkout | grep -c Errno', s, new Set())).output).toBe('1')
+  })
+
   it('counts tools run inside a pipeline for evidence, the breakdown and verification', () => {
     const s = content.scenarios.find((x) => x.terminal?.commands.some((c) => c.evidence && c.match && !c.when_actions))!
     let t = 0
