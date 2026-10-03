@@ -4,7 +4,7 @@
 // its scripted commands, so their output can be piped, redirected and saved.
 //
 // Loaded lazily: it's a large chunk, and only the terminal needs it.
-import { Bash, defineCommand, getCommandNames } from 'just-bash'
+import { Bash, defineCommand, getCommandNames, type CommandName } from 'just-bash'
 import type { Scenario } from '../schema/scenario.ts'
 import { normalize } from './engine.ts'
 
@@ -51,7 +51,7 @@ export class IncidentShell {
       env: { USER: user?.[1] ?? 'ops', HOSTNAME: user?.[2] ?? 'host', HOME: '/home/' + (user?.[1] ?? 'ops'), TERM: 'xterm-256color' },
       files: { [`/home/${user?.[1] ?? 'ops'}/.bash_history`]: '' },
       // Not in the browser build: archive tools need Node's zlib, sqlite3 a WASM module.
-      commands: getCommandNames().filter((c) => !['gzip', 'gunzip', 'zcat', 'tar', 'sqlite3', 'html-to-markdown', 'xan'].includes(c)),
+      commands: getCommandNames().filter((c) => !['gzip', 'gunzip', 'zcat', 'tar', 'sqlite3', 'html-to-markdown', 'xan'].includes(c)) as CommandName[],
       customCommands: [...programs].map((name) => defineCommand(name, (args) => Promise.resolve(this.program(name, args)))),
       executionLimits: { maxExecutionTimeMs: 5_000 },
     })
