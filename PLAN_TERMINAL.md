@@ -1,6 +1,6 @@
 # Plan: A terminal that feels real
 
-Status: **draft 2026-10-03, awaiting approval.** Requested: "I want this to feel
+Status: **approved 2026-10-03 with the defaults; T1 in progress (shell behind the DOM terminal done; xterm.js renderer next).** Requested: "I want this to feel
 much more real than it does currently ... as close to fully functional as
 practical as possible."
 

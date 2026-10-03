@@ -227,6 +227,17 @@ export function terminalOutput(scenario: Scenario, input: string, before: GameEv
   return named ? action.feedback : NOT_YET
 }
 
+// Whether the engine answers this line itself (help, history, clear, a
+// scripted command, a typed fix) rather than the real shell (PLAN_TERMINAL.md).
+// Everything the engine answers counts for evidence and scoring exactly as
+// before; the shell handles the rest: pipes, files, cd, variables, tools.
+export function engineHandles(scenario: Scenario, input: string, before: GameEvent[]): boolean {
+  const cmd = normalize(input)
+  if (cmd === 'help' || cmd === 'history' || cmd === 'clear') return true
+  const cur = atStage(scenario, stageAt(before))
+  return !!runCommand(cur, cmd, actionsTaken(before)).scripted || !!actionFor(cur, cmd)
+}
+
 export const commandsRun = (log: GameEvent[]) => log.flatMap((e) => (e.type === 'RUN_COMMAND' ? [normalize(e.input)] : []))
 
 // The terminal's transcript, rebuilt from the log (so it survives a remount,

@@ -32,7 +32,9 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   type('df -h')
   expect(output()).toMatch(/100%/)
   type('nope')
-  expect(output()).toMatch(/nope: no simulated output/)
+  await waitFor(() => expect(output()).toMatch(/bash: nope: command not found/))
+  type('df -h | grep -c dev')
+  await waitFor(() => expect(output()).toMatch(/df -h \| grep -c dev\s*\d/))
 
   fireEvent.click(screen.getByRole('tab', { name: 'Logs' }))
   fireEvent.click(screen.getByRole('button', { name: /journalctl/ }))
