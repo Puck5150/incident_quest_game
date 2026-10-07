@@ -409,6 +409,8 @@ describe('eval: functions', () => {
     expect(ev('lookup({ a = 1 }, "a")')).toBe(1)
     expect(ev('lookup({ a = 1 }, "z", 9)')).toBe(9)
     expect(fails('lookup({ a = 1 }, "z")').summary).toBe('Invalid function argument')
+    expect(fails('lookup({ a = 1 }, "constructor")').summary).toBe('Invalid function argument')
+    expect(Object.keys(ev('merge({ "__proto__" = 1 }, { b = 2 })') as object)).toEqual(['__proto__', 'b'])
   })
 
   it('builds sets as sorted unique lists', () => {
@@ -525,11 +527,11 @@ const FNS: Record<string, [number, number, (a: Value[]) => Value]> = {
   lookup: [2, 3, ([m, k, d]) => {
     const o = map('lookup', m)
     const key = str('lookup', k)
-    if (key in o) return o[key]
+    if (Object.hasOwn(o, key)) return o[key]
     if (d === undefined) return bad('lookup', `key "${key}" does not exist in the map.`)
     return d
   }],
-  merge: [0, Infinity, (a) => Object.assign({}, ...a.map((m) => map('merge', m))) as Obj],
+  merge: [0, Infinity, (a) => Object.fromEntries(a.flatMap((m) => Object.entries(map('merge', m)))) as Obj],
   format: [1, Infinity, ([f, ...rest]) => format(str('format', f), rest)],
   join: [2, 2, ([s, l]) => list('join', l).map(show).join(str('join', s))],
   concat: [0, Infinity, (a) => a.flatMap((l) => list('concat', l))],
