@@ -121,6 +121,7 @@ export function diffInstance(
   config: Record<string, Value>,
   prior: Record<string, Value> | undefined,
   ignore: string[] | 'all' = [],
+  force = false, // replace an existing instance even if nothing changed (tainted, -replace, replace_triggered_by)
 ): InstancePlan {
   const ignored = (n: string) => ignore === 'all' || ignore.includes(n)
   const specOf = (n: string): AttrSpec => (Object.hasOwn(schema.attrs, n) ? schema.attrs[n] : {})
@@ -176,8 +177,8 @@ export function diffInstance(
     next.set(n, d)
   }
 
-  if (!changes.length) return { action: 'noop', changes, planned: Object.fromEntries(next) }
-  if (changes.some((c) => c.forcesReplacement)) {
+  if (!changes.length && !force) return { action: 'noop', changes, planned: Object.fromEntries(next) }
+  if (force || changes.some((c) => c.forcesReplacement)) {
     // Ignored attributes are settled before planning, so the replacement keeps the prior values.
     const kept = names.filter((n) => ignored(n) && Object.hasOwn(prior, n)).map((n): [string, Value] => [n, prior[n]])
     const planned = Object.fromEntries([...Object.entries(fresh()), ...kept])

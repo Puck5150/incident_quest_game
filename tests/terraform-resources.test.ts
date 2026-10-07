@@ -158,3 +158,37 @@ describe('diffInstance', () => {
     expect(Object.keys(p.planned)).toContain('__proto__')
   })
 })
+
+describe('diffInstance: forced replacement', () => {
+  const inst = schemaFor('aws_instance')!
+  const prior = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', private_ip: '10.0.1.5', tags: { Name: 'web' } }
+  const cfg = { ami: 'ami-1', instance_type: 't3.micro', tags: { Name: 'web' } }
+
+  it('replaces an unchanged instance when forced, recomputing what the provider sets', () => {
+    const p = diffInstance(inst, cfg, prior, [], true)
+    expect(p.action).toBe('replace')
+    const byName = Object.fromEntries(p.changes.map((c) => [c.name, c]))
+    expect(byName.id).toMatchObject({ before: 'i-1', after: UNKNOWN, forcesReplacement: false })
+    expect(byName.private_ip).toMatchObject({ before: '10.0.1.5', after: UNKNOWN })
+    expect(byName.instance_type).toBeUndefined()
+    expect(p.planned).toMatchObject({ id: UNKNOWN, ami: 'ami-1', instance_type: 't3.micro', tags: { Name: 'web' } })
+  })
+
+  it('is not forced when force is false, and ignores force for something that does not exist yet', () => {
+    expect(diffInstance(inst, cfg, prior, [], false).action).toBe('noop')
+    expect(diffInstance(inst, cfg, undefined, [], true).action).toBe('create')
+  })
+
+  it('keeps the prior values of ignored attributes on a forced replacement', () => {
+    const p = diffInstance(inst, { ...cfg, tags: { Name: 'changed' } }, prior, ['tags'], true)
+    expect(p.action).toBe('replace')
+    expect(p.planned.tags).toEqual({ Name: 'web' })
+    expect(p.changes.some((c) => c.name === 'tags')).toBe(false)
+  })
+
+  it('still reports the changed attributes when a forced replacement also has real changes', () => {
+    const p = diffInstance(inst, { ...cfg, instance_type: 't3.small' }, prior, [], true)
+    expect(p.action).toBe('replace')
+    expect(p.changes.find((c) => c.name === 'instance_type')).toMatchObject({ before: 't3.micro', after: 't3.small' })
+  })
+})
