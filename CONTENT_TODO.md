@@ -504,3 +504,4 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] Nested blocks inside `moved`/`import`/`removed` (for example `lifecycle {}` in `moved`) are silently accepted.
 - [ ] The blocked-move warning has no source location (real Terraform's has none either).
 - [ ] State with duplicate instance addresses is not diagnosed by `applyMoves`.
+- [ ] An explicit instance move and a whole-resource move can land on the same instance address with equal chain length (`moved a -> c` plus `moved b[0] -> c[0]`); the ambiguity check compares statement destinations only, so the winner is decided by state order. Exotic; tighten the check if it ever matters.
