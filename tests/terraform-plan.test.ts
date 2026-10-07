@@ -42,6 +42,67 @@ resource "aws_subnet" "a" {
 `
 const BUCKET = (n: number) => ({ id: `logs-${n}`, arn: `arn:logs-${n}`, bucket: `logs-${n}`, force_destroy: false })
 
+// drift that a changing object may or may not refer to
+describe('planConfig: which drift is shown', () => {
+  const vpcState = { type: 'aws_vpc', name: 'main', attrs: { ...VPC, tags: { Name: 'main' }, tags_all: { Name: 'main' } } }
+  const drifted = (over: Record<string, Value>, ...extra: Seed[]) => {
+    const state = stateOf(vpcState, ...extra)
+    const reality = cloudOf(state)
+    reality[realityKey('aws_vpc', 'vpc-1')] = { ...vpcState.attrs, ...over }
+    return { state, reality }
+  }
+  const SUBNET_TF = (tags: string, cidr = '10.0.1.0/24') => `
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+  tags       = { Name = "main" }
+}
+resource "aws_subnet" "a" {
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "${cidr}"
+  ${tags}
+}
+`
+  const subnet = { type: 'aws_subnet', name: 'a', attrs: SUBNET }
+
+  it('keeps the full list in drift, and shows none when the plan only reverts the change', () => {
+    const r = plan(SUBNET_TF('', '10.0.1.0/24'), drifted({ tags: { Name: 'main', Owner: 'ops' } }, subnet))
+    expect(r.drift).toHaveLength(1)
+    expect(r.driftShown).toEqual([])
+  })
+
+  it('shows nothing when a changing dependent refers to another attribute than the one that drifted', () => {
+    const r = plan(SUBNET_TF('', '10.0.2.0/24'), drifted({ tags: { Name: 'main', Owner: 'ops' } }, subnet))
+    expect(actions(r)).toContain('replace aws_subnet.a')
+    expect(r.driftShown).toEqual([])
+  })
+
+  it('shows only the referenced attributes that drifted', () => {
+    const r = plan(SUBNET_TF('tags = { Vpc = aws_vpc.main.cidr_block }'), drifted({ cidr_block: '10.9.0.0/16', tags: { Name: 'main', Owner: 'ops' } }, subnet))
+    expect(r.driftShown).toEqual([{ address: 'aws_vpc.main', kind: 'changed', changes: [{ name: 'cidr_block', before: '10.0.0.0/16', after: '10.9.0.0/16' }] }])
+  })
+
+  it('follows references through a local', () => {
+    const r = plan(`locals {\n  v = aws_vpc.main.cidr_block\n}\n${SUBNET_TF('tags = { Vpc = local.v }')}`, drifted({ cidr_block: '10.9.0.0/16' }, subnet))
+    expect(r.driftShown.map((d) => [d.address, d.changes.map((c) => c.name)])).toEqual([['aws_vpc.main', ['cidr_block']]])
+  })
+
+  it('treats a reference to the whole resource as a reference to every attribute', () => {
+    const r = plan(`${SUBNET_TF('')}\noutput "v" {\n  value = aws_vpc.main\n}`, drifted({ enable_dns_hostnames: true, tags: { Name: 'main', Owner: 'ops' } }))
+    expect(r.driftShown.map((d) => d.changes.map((c) => c.name))).toEqual([['enable_dns_hostnames', 'tags']])
+  })
+
+  it('shows a deleted object when the plan creates it again, and not when nothing refers to it', () => {
+    const state = stateOf(vpcState, { type: 'aws_s3_bucket', name: 'old', attrs: BUCKET(1) })
+    const reality = cloudOf(state)
+    delete reality[realityKey('aws_vpc', 'vpc-1')]
+    delete reality[realityKey('aws_s3_bucket', 'logs-1')]
+    const r = plan('resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n  tags       = { Name = "main" }\n}', { state, reality })
+    expect(r.drift.map((d) => d.address)).toEqual(['aws_vpc.main', 'aws_s3_bucket.old'])
+    expect(actions(r)).toContain('create aws_vpc.main')
+    expect(r.driftShown.map((d) => d.address)).toEqual(['aws_vpc.main'])
+  })
+})
+
 describe('planConfig: single resources and dependencies', () => {
   it('creates everything from an empty state, with dependents seeing unknown ids', () => {
     const r = plan(NETWORK('10.0.0.0/16'))
@@ -72,12 +133,14 @@ describe('planConfig: single resources and dependencies', () => {
   })
 
   it('shows drift and plans to put the resource back as configured', () => {
-    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: { ...VPC, tags: { Name: 'main' } } })
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: { ...VPC, tags: { Name: 'main' }, tags_all: { Name: 'main' } } })
     const reality = cloudOf(state)
-    reality[realityKey('aws_vpc', 'vpc-1')] = { ...VPC, tags: { Name: 'main', Owner: 'ops' } }
+    reality[realityKey('aws_vpc', 'vpc-1')] = { ...VPC, tags: { Name: 'main', Owner: 'ops' }, tags_all: { Name: 'main' } }
     const r = plan('resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n  tags = { Name = "main" }\n}', { state, reality })
     expect(r.drift).toEqual([{ address: 'aws_vpc.main', kind: 'changed', changes: [{ name: 'tags', before: { Name: 'main' }, after: { Name: 'main', Owner: 'ops' } }] }])
     expect(r.items[0]).toMatchObject({ action: 'update', changes: [{ name: 'tags', before: { Name: 'main', Owner: 'ops' }, after: { Name: 'main' } }] })
+    // nothing else in the plan refers to the VPC, so the drift is not worth a note
+    expect(r.driftShown).toEqual([])
   })
 
   it('plans a create for something deleted outside Terraform', () => {

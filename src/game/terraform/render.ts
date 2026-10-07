@@ -4,9 +4,13 @@ import { formatDiagnostic } from './diag.ts'
 import { equal, type Value } from './eval.ts'
 import type { PlanItem, PlanResult } from './plan.ts'
 import { body, diffLines, lines, masked, row, type Field } from './render-value.ts'
-import { schemaFor } from './resources.ts'
+import { schemaFor, type AttrSpec } from './resources.ts'
 import { findInstance } from './state.ts'
 
+const specOf = (type: string, n: string): AttrSpec | undefined => {
+  const attrs = schemaFor(type)?.attrs
+  return attrs && Object.hasOwn(attrs, n) ? attrs[n] : undefined
+}
 const hasVal = (v: Value | undefined) => v !== null && v !== undefined
 
 function headerLines(item: PlanItem): string[] {
@@ -64,10 +68,10 @@ function bodyLines(item: PlanItem): string[] {
   if (item.action === 'destroy') return body(6, changes.filter((c) => hasVal(c.before)).map((c) => ({ name: c.name, op: '-', before: c.before, sensitive: c.sensitive })))
   const changed = new Set(changes.map((c) => c.name))
   const fields: Field[] = [
-    ...changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: c.sensitive, forces: c.forcesReplacement })),
+    ...changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: c.sensitive, forces: c.forcesReplacement, set: specOf(item.type, c.name)?.set === true })),
     ...Object.entries(item.unchanged ?? {})
       .filter(([n, v]) => !changed.has(n) && hasVal(v))
-      .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v, show: item.importing !== undefined })),
+      .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v, show: item.importing !== undefined, sensitive: specOf(item.type, n)?.sensitive === true })),
   ]
   return body(6, fields)
 }
@@ -98,8 +102,7 @@ const symbolOf = (a: string) => (a === 'create' ? '+' : a === 'update' ? '~' : a
 function driftBlock(r: PlanResult, d: PlanResult['drift'][number]): string {
   const [type, name] = d.address.replace(/\[.*$/, '').split('.')
   const open = `resource "${type}" "${name}" {`
-  const attrSpecs = schemaFor(type)?.attrs ?? {}
-  const secret = (n: string) => Object.hasOwn(attrSpecs, n) && attrSpecs[n].sensitive === true
+  const secret = (n: string) => specOf(type, n)?.sensitive === true
   if (d.kind === 'deleted') {
     const fields = Object.entries(d.before ?? {})
       .filter(([, v]) => v !== null)
@@ -149,8 +152,9 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
   const out: string[] = []
   const visible = r.items.filter((i) => i.action !== 'noop' || i.movedFrom || i.importing)
   const outputs = outputChanges(r)
-  // Drift is only worth a note when something else is going to happen.
-  if (r.drift.length && (visible.length || outputs.length)) {
+  // Drift is only worth a note when something else is going to happen (imports and forgets don't count).
+  const acting = visible.filter((i) => i.action !== 'forget' && !(i.action === 'noop' && i.importing !== undefined))
+  if (r.driftShown.length && (acting.length || outputs.length)) {
     out.push(
       [
         'Note: Objects have changed outside of Terraform',
@@ -158,7 +162,7 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
         'Terraform detected the following changes made outside of Terraform since the',
         'last "terraform apply" which may have affected this plan:',
         '',
-        r.drift.map((d) => driftBlock(r, d)).join('\n\n'),
+        r.driftShown.map((d) => driftBlock(r, d)).join('\n\n'),
         '',
         '',
         'Unless you have made equivalent changes to your configuration, or ignored the',

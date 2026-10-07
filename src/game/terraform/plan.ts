@@ -5,7 +5,7 @@
 // plan: nothing is half-planned.
 import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
-import { evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
+import { equal, evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
 import { expandInstances, type Key } from './expand.ts'
 import { buildGraph, type GNode } from './graph.ts'
 import { applyMoves, movesOf } from './moves.ts'
@@ -52,7 +52,8 @@ export interface PlanOutput {
 export interface PlanResult {
   diagnostics: Diagnostic[]
   warnings: Diagnostic[]
-  drift: Drift[]
+  drift: Drift[] // every difference refresh found
+  driftShown: Drift[] // the part of it that plan output reports: only what a changing object refers to
   items: PlanItem[]
   outputs: PlanOutput[]
   refreshed: State
@@ -86,7 +87,7 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
 export function planConfig(input: PlanInput): PlanResult {
   const g = buildGraph(input.files)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
-  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
+  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
   if (g.diagnostics.length) return result
 
   const errors = result.diagnostics
@@ -423,5 +424,41 @@ export function planConfig(input: PlanInput): PlanResult {
     if (i.action === 'update') result.summary.change++
     if (i.action === 'destroy' || i.action === 'replace') result.summary.destroy++
   }
+  result.driftShown = relevantDrift(g.nodes, result, drift)
   return result
+}
+
+// Terraform reports drift only for objects that something changing in this plan
+// refers to (directly or through other values), and only the attributes it
+// refers to. What a changing resource's own configuration points at counts; the
+// resource itself does not.
+function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Drift[]): Drift[] {
+  const before = result.refreshed.outputs
+  const start = [
+    ...result.items.filter((i) => i.action !== 'noop').map((i) => `${i.type}.${i.name}`),
+    ...result.outputs.filter((o) => !(Object.hasOwn(before, o.name) && equal(before[o.name].value, o.value))).map((o) => `output.${o.name}`),
+  ]
+  const seen = new Set<string>()
+  const refd = new Map<string, Set<string> | 'all'>()
+  for (const todo = [...start]; todo.length; ) {
+    const node = nodes.get(todo.pop()!)
+    if (!node || seen.has(node.address)) continue
+    seen.add(node.address)
+    todo.push(...node.deps)
+    for (const { path } of node.refs) {
+      const key = `${path[0]}.${path[1]}`
+      if (nodes.get(key)?.kind !== 'resource') continue
+      const have = refd.get(key)
+      if (path.length < 3) refd.set(key, 'all')
+      else if (have !== 'all') refd.set(key, (have ?? new Set<string>()).add(path[2]))
+    }
+  }
+  const recreated = new Set(result.items.filter((i) => i.action === 'create').map((i) => i.address))
+  return drift.flatMap((d): Drift[] => {
+    const want = refd.get(d.address.replace(/\[.*$/, ''))
+    if (d.kind === 'deleted') return want !== undefined || recreated.has(d.address) ? [d] : []
+    if (want === undefined) return []
+    const changes = want === 'all' ? d.changes : d.changes.filter((c) => want.has(c.name))
+    return changes.length ? [{ ...d, changes }] : []
+  })
 }

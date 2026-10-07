@@ -5,7 +5,6 @@ import { equal, isUnknown, type Value } from './eval.ts'
 
 type Obj = { [key: string]: Value }
 const isObj = (v: Value | undefined): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v) && !isUnknown(v as Value)
-const isBlockList = (v: Value | undefined): v is Obj[] => Array.isArray(v) && v.length > 0 && v.every((x) => isObj(x) && Object.keys(x).length > 0)
 // A non-empty list or map: rendered over several rows rather than inline.
 const coll = (v: Value | undefined) => (Array.isArray(v) ? v.length > 0 : isObj(v) && Object.keys(v).length > 0)
 const unchangedText = (n: number, what: string) => `# (${n} unchanged ${what}${n === 1 ? '' : 's'} hidden)`
@@ -38,17 +37,16 @@ export interface Field {
   sensitive?: boolean
   forces?: boolean
   show?: boolean // print an unchanged (' ') field in full instead of counting it as hidden
+  set?: boolean // a set: elements match by value, unchanged ones are only counted
 }
 
-// An object body: attributes (aligned over every one, hidden or not, but not
-// over block lists), a hidden count, a blank line, then the nested blocks.
+// An object body: attributes aligned over every one (hidden or not), then a
+// hidden count.
 export function body(col: number, fields: Field[]): string[] {
   const fs = [...fields].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
-  const isBlk = (f: Field) => isBlockList(f.after) || isBlockList(f.before)
-  const attrs = fs.filter((f) => !isBlk(f))
-  const w = maxLen(attrs.map((f) => f.name))
+  const w = maxLen(fs.map((f) => f.name))
   let hidden = 0
-  const out = attrs.flatMap((f) => {
+  const out = fs.flatMap((f) => {
     if (f.op === ' ' && !f.show && !IMPORTANT.has(f.name)) {
       hidden++
       return []
@@ -57,57 +55,47 @@ export function body(col: number, fields: Field[]): string[] {
     if (f.op === '+') return emit(col, '+', f.name, w, f.after as Value)
     if (f.op === '-') return emit(col, '-', f.name, w, f.before as Value, '', true)
     if (f.op === ' ') return emit(col, ' ', f.name, w, f.after as Value)
-    return diffLines(col, f.name, w, f.before as Value, f.after as Value, f.forces, IMPORTANT.has(f.name))
+    return diffLines(col, f.name, w, f.before as Value, f.after as Value, f.forces, IMPORTANT.has(f.name), f.set)
   })
   if (hidden) out.push(row(col, ' ', unchangedText(hidden, 'attribute')))
-  const blocks = fs.filter(isBlk).flatMap((f): string[] => {
-    if (f.op === ' ' && f.show) return emit(col, ' ', f.name, 0, f.after as Value)
-    if (f.op === ' ') return ['', row(col, ' ', unchangedText((f.after as Obj[]).length, 'block'))]
-    if (f.op === '+') return emit(col, '+', f.name, 0, f.after as Value)
-    if (f.op === '-') return emit(col, '-', f.name, 0, f.before as Value, '', true)
-    return diffLines(col, f.name, 0, f.before, f.after as Value, f.forces)
-  })
-  if (blocks.length && out.length && blocks[0] !== '') blocks.unshift('')
-  if (!out.length && blocks[0] === '') blocks.shift()
-  return [...out, ...blocks]
+  return out
 }
 
-function blockLines(col: number, sym: string, name: string, o: Obj): string[] {
-  const fields: Field[] = Object.keys(o)
-    .filter((k) => o[k] !== null)
-    .map((k) => ({ name: k, op: sym as Field['op'], before: o[k], after: o[k] }))
-  return [row(col, sym, `${name} {`), ...body(col + 4, fields), row(col, ' ', '}')]
-}
+// A list element: `gone` and `child` never apply, and an object's attribute names are unquoted.
+const elem = (col: number, sym: string, v: Value) => emit(col, sym, null, 0, v, ',', false, undefined, true)
 
 // `name = value` (or a bare list element when name is null). `gone` puts
 // `-> null` after the value (or its closing bracket); `child` is the symbol for
 // nested rows when it differs from the opening row's.
-function emit(col: number, sym: string, name: string | null, width: number, v: Value, tail = '', gone = false, child?: string): string[] {
+function emit(col: number, sym: string, name: string | null, width: number, v: Value, tail = '', gone = false, child?: string, bare = false): string[] {
   const head = name === null ? '' : `${name.padEnd(width)} = `
   const nt = gone && name !== null ? ' -> null' : ''
   const kid = child ?? sym
-  if (child === undefined && name !== null && isBlockList(v)) return v.flatMap((o) => blockLines(col, sym, name, o))
   if (Array.isArray(v) && v.length) {
-    return [row(col, sym, `${head}[`), ...v.flatMap((x) => emit(col + 4, kid, null, 0, x, ',')), row(col, ' ', `]${tail}${nt}`)]
+    return [row(col, sym, `${head}[`), ...v.flatMap((x) => elem(col + 4, kid, x)), row(col, ' ', `]${tail}${nt}`)]
   }
   if (isObj(v) && Object.keys(v).length) {
+    // `bare`: a list element, an object whose attribute names are unquoted. Anywhere else it is a map: keys are quoted.
     const keys = sorted(Object.keys(v))
-    const w = maxLen(keys.map((k) => JSON.stringify(k)))
-    return [row(col, sym, `${head}{`), ...keys.flatMap((k) => emit(col + 4, kid, JSON.stringify(k), w, (v as Obj)[k])), row(col, ' ', `}${tail}${nt}`)]
+    const label = (k: string) => (bare ? k : JSON.stringify(k))
+    const w = maxLen(keys.map(label))
+    return [row(col, sym, `${head}{`), ...keys.flatMap((k) => emit(col + 4, kid, label(k), w, (v as Obj)[k])), row(col, ' ', `}${tail}${nt}`)]
   }
   return [row(col, sym, `${head}${scalar(v)}${tail}${nt}`)]
 }
 
 export const lines = (col: number, sym: string, name: string | null, width: number, v: Value, tail = '', gone = false): string[] => emit(col, sym, name, width, v, tail, gone)
 
-function mapDiff(col: number, head: string, b: Obj, a: Obj, ctx: boolean, tail: string): string[] {
+// `bare`: an object (a list element), whose attribute names are unquoted; otherwise a map.
+function mapDiff(col: number, head: string, b: Obj, a: Obj, ctx: boolean, tail: string, bare: boolean): string[] {
   const keys = sorted(new Set([...Object.keys(b), ...Object.keys(a)]))
-  const w = maxLen(keys.map((k) => JSON.stringify(k)))
+  const label = (k: string) => (bare ? k : JSON.stringify(k))
+  const w = maxLen(keys.map(label))
   let hidden = 0
   const out = keys.flatMap((k) => {
-    const kt = JSON.stringify(k)
+    const kt = label(k)
     if (!has(b, k)) return emit(col + 4, '+', kt, w, a[k])
-    if (!has(a, k)) return emit(col + 4, '-', kt, w, b[k])
+    if (!has(a, k)) return emit(col + 4, '-', kt, w, b[k], '', true)
     if (equal(b[k], a[k])) {
       if (ctx) return emit(col + 4, ' ', kt, w, b[k])
       hidden++
@@ -115,15 +103,14 @@ function mapDiff(col: number, head: string, b: Obj, a: Obj, ctx: boolean, tail: 
     }
     return diffCore(col + 4, kt, w, b[k], a[k], ctx)
   })
-  return [row(col, '~', `${head}{`), ...out, ...(hidden ? [row(col + 4, ' ', unchangedText(hidden, 'element'))] : []), row(col, ' ', `}${tail}`)]
+  return [row(col, '~', `${head}{`), ...out, ...(hidden ? [row(col + 4, ' ', unchangedText(hidden, bare ? 'attribute' : 'element'))] : []), row(col, ' ', `}${tail}`)]
 }
 
 type Op = { k: 'same' | 'chg' | 'del' | 'add'; b?: Value; a?: Value }
 
 function listOps(b: Value[], a: Value[]): Op[] {
-  const key = (l: Value[]) => l.map((x) => JSON.stringify(x)).sort().join('\u0000')
-  // Same length and not just a reordering: compare position by position.
-  if (b.length === a.length && key(b) !== key(a)) return b.map((x, i) => ({ k: equal(x, a[i]) ? 'same' : 'chg', b: x, a: a[i] }))
+  // Same length and not just a reordering (some element of `b` is missing from `a`): compare position by position.
+  if (b.length === a.length && !b.every((x) => a.some((y) => equal(x, y)))) return b.map((x, i) => ({ k: equal(x, a[i]) ? 'same' : 'chg', b: x, a: a[i] }))
   const m = b.length
   const n = a.length
   const dp = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
@@ -136,12 +123,22 @@ function listOps(b: Value[], a: Value[]): Op[] {
     else if (j >= n || (i < m && dp[i + 1][j] >= dp[i][j + 1])) ops.push({ k: 'del', b: b[i++] })
     else ops.push({ k: 'add', a: a[j++] })
   }
-  return ops
+  // An object deleted and another created in the same place read as one updated object.
+  const out: Op[] = []
+  for (let x = 0; x < ops.length; x++) {
+    const o = ops[x]
+    const next = ops[x + 1]
+    if (o.k === 'del' && next?.k === 'add' && isObj(o.b) && isObj(next.a)) {
+      out.push({ k: 'chg', b: o.b, a: next.a })
+      x++
+    } else out.push(o)
+  }
+  return out
 }
 
 function elemChange(col: number, b: Value, a: Value, ctx: boolean): string[] {
   if ((isObj(b) && isObj(a)) || (Array.isArray(b) && Array.isArray(a))) return diffCore(col, null, 0, b, a, ctx, ',')
-  if (coll(b) || coll(a)) return [...emit(col, '-', null, 0, b, ','), ...emit(col, '+', null, 0, a, ',')]
+  if (coll(b) || coll(a)) return [...elem(col, '-', b), ...elem(col, '+', a)]
   return [row(col, '~', `${scalar(b)} -> ${scalar(a)},`)]
 }
 
@@ -162,43 +159,30 @@ function listDiff(col: number, head: string, b: Value[], a: Value[], ctx: boolea
       return
     }
     flush()
-    if (o.k === 'same') out.push(...emit(col + 4, ' ', null, 0, o.b as Value, ','))
-    else if (o.k === 'del') out.push(...emit(col + 4, '-', null, 0, o.b as Value, ','))
-    else if (o.k === 'add') out.push(...emit(col + 4, '+', null, 0, o.a as Value, ','))
+    if (o.k === 'same') out.push(...elem(col + 4, ' ', o.b as Value))
+    else if (o.k === 'del') out.push(...elem(col + 4, '-', o.b as Value))
+    else if (o.k === 'add') out.push(...elem(col + 4, '+', o.a as Value))
     else out.push(...elemChange(col + 4, o.b as Value, o.a as Value, ctx))
   })
   flush()
   return [row(col, '~', `${head}[`), ...out, row(col, ' ', `]${tail}`)]
 }
 
-function blockChange(col: number, name: string, b: Obj, a: Obj): string[] {
-  const keys = sorted(new Set([...Object.keys(b), ...Object.keys(a)])).filter((k) => b[k] != null || a[k] != null)
-  const fields: Field[] = keys.map((k) => (equal(b[k] ?? null, a[k] ?? null) ? { name: k, op: ' ', before: b[k], after: b[k] } : { name: k, op: '~', before: b[k] ?? null, after: a[k] ?? null }))
-  return [row(col, '~', `${name} {`), ...body(col + 4, fields), row(col, ' ', '}')]
-}
-
-function blockDiff(col: number, name: string, b: Obj[], a: Obj[]): string[] {
-  const out: string[] = []
-  let hidden = 0
-  for (let i = 0; i < Math.max(b.length, a.length); i++) {
-    if (i >= b.length) out.push(...blockLines(col, '+', name, a[i]))
-    else if (i >= a.length) out.push(...blockLines(col, '-', name, b[i]))
-    else if (equal(b[i], a[i])) hidden++
-    else out.push(...blockChange(col, name, b[i], a[i]))
-  }
-  if (hidden) out.push('', row(col, ' ', unchangedText(hidden, 'block')))
-  return out
+// A set: elements match by value. What differs is a removal plus an addition;
+// what matches is only counted.
+function setDiff(col: number, head: string, b: Value[], a: Value[]): string[] {
+  const has2 = (xs: Value[], v: Value) => xs.some((x) => equal(x, v))
+  const out = [...b.filter((x) => !has2(a, x)).flatMap((x) => elem(col + 4, '-', x)), ...a.filter((x) => !has2(b, x)).flatMap((x) => elem(col + 4, '+', x))]
+  const same = a.filter((x) => has2(b, x)).length
+  return [row(col, '~', `${head}[`), ...out, ...(same ? [row(col + 4, ' ', unchangedText(same, 'element'))] : []), row(col, ' ', ']')]
 }
 
 function diffCore(col: number, name: string | null, width: number, b: Value | undefined, a: Value, ctx: boolean, tail = ''): string[] {
   const head = name === null ? '' : `${name.padEnd(width)} = `
   if (b === undefined || b === null) return emit(col, '+', name, width, a, tail)
   if (a === null) return emit(col, '-', name, width, b, tail, true)
-  if (isObj(b) && isObj(a)) return mapDiff(col, head, b, a, ctx, tail)
-  if (Array.isArray(b) && Array.isArray(a)) {
-    if (name !== null && (isBlockList(b) || isBlockList(a))) return blockDiff(col, name, b as Obj[], a as Obj[])
-    return listDiff(col, head, b, a, ctx, tail)
-  }
+  if (isObj(b) && isObj(a)) return mapDiff(col, head, b, a, ctx, tail, name === null)
+  if (Array.isArray(b) && Array.isArray(a)) return listDiff(col, head, b, a, ctx, tail)
   // A scalar change, a collection becoming unknown, or a change of type: the
   // old value as removals, then ` -> ` and the new value as additions.
   const old = coll(b) ? emit(col, '~', name, width, b, '', false, '-') : [row(col, '~', `${head}${scalar(b)}`)]
@@ -207,8 +191,10 @@ function diffCore(col: number, name: string | null, width: number, b: Value | un
   return [...old, ...next.slice(1)]
 }
 
-export function diffLines(col: number, name: string, width: number, before: Value | undefined, after: Value, forces = false, ctx = false): string[] {
-  const out = diffCore(col, name, width, before, after, ctx)
-  if (forces && out.length) out[0] += ' # forces replacement'
+export function diffLines(col: number, name: string, width: number, before: Value | undefined, after: Value, forces = false, ctx = false, set = false): string[] {
+  const out = Array.isArray(before) && Array.isArray(after) && set ? setDiff(col, `${name.padEnd(width)} = `, before, after) : diffCore(col, name, width, before, after, ctx)
+  // A collection that becomes unknown is closed by `-> (known after apply)`; the marker goes after that.
+  const atEnd = isUnknown(after) && coll(before)
+  if (forces && out.length) out[atEnd ? out.length - 1 : 0] += ' # forces replacement'
   return out
 }

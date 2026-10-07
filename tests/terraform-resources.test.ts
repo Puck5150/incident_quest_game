@@ -73,7 +73,7 @@ describe('diffInstance', () => {
     const p = diffInstance(vpc, { cidr_block: '10.0.0.0/16', tags: { Name: 'main' } }, undefined)
     expect(p.action).toBe('create')
     expect(p.changes.map((c) => c.name)).toEqual(['arn', 'cidr_block', 'default_security_group_id', 'enable_dns_hostnames', 'enable_dns_support', 'id', 'tags', 'tags_all'])
-    expect(p.planned).toMatchObject({ id: UNKNOWN, arn: UNKNOWN, cidr_block: '10.0.0.0/16', enable_dns_support: true, enable_dns_hostnames: false, tags: { Name: 'main' } })
+    expect(p.planned).toMatchObject({ id: UNKNOWN, arn: UNKNOWN, cidr_block: '10.0.0.0/16', enable_dns_support: true, enable_dns_hostnames: false, tags: { Name: 'main' }, tags_all: { Name: 'main' } })
     expect(p.changes.every((c) => c.before === undefined && !c.forcesReplacement)).toBe(true)
   })
 
@@ -161,6 +161,23 @@ describe('diffInstance', () => {
     expect(p.changes.find((c) => c.name === 'future_flag')).toMatchObject({ before: undefined, after: true, forcesReplacement: false })
   })
 
+  it('makes tags_all follow tags: known on create, changed with tags on update, unknown when tags are not configured', () => {
+    expect(diffInstance(vpc, { cidr_block: '10.0.0.0/16' }, undefined).planned.tags_all).toBe(UNKNOWN)
+    const p = diffInstance(vpc, { cidr_block: '10.0.0.0/16', tags: { Name: 'new' } }, VPC_PRIOR)
+    expect(p.action).toBe('update')
+    expect(p.changes.map((c) => [c.name, c.after])).toEqual([['tags', { Name: 'new' }], ['tags_all', { Name: 'new' }]])
+    expect(p.planned.tags_all).toEqual({ Name: 'new' })
+    // tags not configured: tags_all is an ordinary computed attribute, left as it is
+    expect(diffInstance(vpc, { cidr_block: '10.0.0.0/16' }, { ...VPC_PRIOR, tags: null, tags_all: {} }).action).toBe('noop')
+  })
+
+  it('plans the known tags_all value on a replace', () => {
+    const p = diffInstance(vpc, { cidr_block: '10.1.0.0/16', tags: { Name: 'main' } }, VPC_PRIOR)
+    expect(p.action).toBe('replace')
+    expect(p.planned.tags_all).toEqual({ Name: 'main' })
+    expect(p.changes.find((c) => c.name === 'tags_all')).toBeUndefined()
+  })
+
   it('survives an attribute named __proto__ without touching prototypes', () => {
     const cfg = Object.defineProperty({ cidr_block: '10.0.0.0/16' }, '__proto__', { value: 1, enumerable: true, configurable: true, writable: true })
     const p = diffInstance(vpc, cfg, undefined)
@@ -171,7 +188,7 @@ describe('diffInstance', () => {
 
 describe('diffInstance: forced replacement', () => {
   const inst = schemaFor('aws_instance')!
-  const prior = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', private_ip: '10.0.1.5', tags: { Name: 'web' } }
+  const prior = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', private_ip: '10.0.1.5', tags: { Name: 'web' }, tags_all: { Name: 'web' } }
   const cfg = { ami: 'ami-1', instance_type: 't3.micro', tags: { Name: 'web' } }
 
   it('replaces an unchanged instance when forced, recomputing what the provider sets', () => {

@@ -10,6 +10,8 @@ export interface AttrSpec {
   sensitive?: boolean // printed as (sensitive value)
   readOnly?: boolean // set by the provider only (id, arn); never configurable
   default?: Value // the provider's default when the configuration omits it
+  copyOf?: string // its configured value is the configured value of this other attribute (tags_all follows tags)
+  set?: boolean // a set: elements match by value, not by position
 }
 export interface ResourceSchema {
   provider: string
@@ -18,6 +20,7 @@ export interface ResourceSchema {
 
 const AWS = 'registry.terraform.io/hashicorp/aws'
 const RO: AttrSpec = { readOnly: true }
+const TAGS_ALL: AttrSpec = { computed: true, copyOf: 'tags' }
 const NEW: AttrSpec = { forceNew: true }
 const NEWC: AttrSpec = { forceNew: true, computed: true }
 const aws = (attrs: Record<string, AttrSpec>): ResourceSchema => ({ provider: AWS, attrs: { id: RO, arn: RO, ...attrs } })
@@ -28,19 +31,19 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
     enable_dns_support: { default: true },
     enable_dns_hostnames: { default: false },
     tags: {},
-    tags_all: RO,
+    tags_all: TAGS_ALL,
     default_security_group_id: RO,
   }),
-  aws_subnet: aws({ vpc_id: NEW, cidr_block: NEWC, availability_zone: NEWC, map_public_ip_on_launch: { default: false }, tags: {}, tags_all: RO }),
+  aws_subnet: aws({ vpc_id: NEW, cidr_block: NEWC, availability_zone: NEWC, map_public_ip_on_launch: { default: false }, tags: {}, tags_all: TAGS_ALL }),
   aws_security_group: aws({
     name: NEWC,
     name_prefix: NEWC,
     description: { forceNew: true, default: 'Managed by Terraform' },
     vpc_id: NEWC,
-    ingress: { computed: true },
-    egress: { computed: true },
+    ingress: { computed: true, set: true },
+    egress: { computed: true, set: true },
     tags: {},
-    tags_all: RO,
+    tags_all: TAGS_ALL,
   }),
   aws_instance: aws({
     ami: NEW,
@@ -50,7 +53,7 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
     key_name: NEWC,
     user_data: {},
     tags: {},
-    tags_all: RO,
+    tags_all: TAGS_ALL,
     private_ip: RO,
     public_ip: RO,
   }),
@@ -69,19 +72,19 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
     skip_final_snapshot: { default: false },
     endpoint: RO,
   }),
-  aws_s3_bucket: aws({ bucket: NEWC, force_destroy: { default: false }, tags: {}, tags_all: RO, bucket_domain_name: RO }),
+  aws_s3_bucket: aws({ bucket: NEWC, force_destroy: { default: false }, tags: {}, tags_all: TAGS_ALL, bucket_domain_name: RO }),
   aws_sqs_queue: aws({
     name: NEWC,
     fifo_queue: { forceNew: true, default: false },
     visibility_timeout_seconds: { default: 30 },
     message_retention_seconds: { default: 345600 },
     tags: {},
-    tags_all: RO,
+    tags_all: TAGS_ALL,
     url: RO,
   }),
-  aws_iam_role: aws({ name: NEWC, path: { forceNew: true, default: '/' }, assume_role_policy: {}, tags: {}, tags_all: RO }),
-  aws_ecs_service: aws({ name: NEW, cluster: NEWC, task_definition: {}, desired_count: { default: 0 }, tags: {}, tags_all: RO }),
-  aws_cloudwatch_log_group: aws({ name: NEWC, retention_in_days: { default: 0 }, tags: {}, tags_all: RO }),
+  aws_iam_role: aws({ name: NEWC, path: { forceNew: true, default: '/' }, assume_role_policy: {}, tags: {}, tags_all: TAGS_ALL }),
+  aws_ecs_service: aws({ name: NEW, cluster: NEWC, task_definition: {}, desired_count: { default: 0 }, tags: {}, tags_all: TAGS_ALL }),
+  aws_cloudwatch_log_group: aws({ name: NEWC, retention_in_days: { default: 0 }, tags: {}, tags_all: TAGS_ALL }),
 }
 
 export function schemaFor(type: string): ResourceSchema | undefined {
@@ -129,6 +132,10 @@ export function diffInstance(
   const desired = (n: string): Value | undefined => {
     const spec = specOf(n)
     if (spec.readOnly) return undefined
+    if (spec.copyOf !== undefined) {
+      const source = desired(spec.copyOf)
+      if (source !== undefined) return source
+    }
     if (Object.hasOwn(config, n) && config[n] !== null) return config[n]
     return spec.default
   }

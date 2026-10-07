@@ -512,20 +512,21 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Comment headers: `will be created`, `will be updated in-place`, `must be replaced`, `is tainted, so must be replaced`, `will be replaced, as requested`, `will be replaced due to changes in replace_triggered_by`, `will be destroyed` with `(because … is not in configuration | index […] is out of range for count | key […] is not in for_each map)`, `has moved to`, `will be imported`, and the forget wording.
 - [x] Which unchanged attributes are shown as context (`id`, `name`, `tags`, in full, at every block level) and how hidden attributes are counted (non-null attributes) — source-checked by review.
 - [x] The forget block (` .` row, one-space comments, id/name/tags context and hidden count; legend header with no symbol lines) — source-checked by review.
-- [ ] Block-list attributes (`ingress`, …) are rendered as nested blocks by position; real Terraform matches blocks by schema (set-typed blocks have no order) and prints them with its own diff algorithm.
+- [x] Lists of objects (`ingress`, `egress`) are attributes, not nested blocks: rendered as lists of objects, security group rules as sets matched by value — fixed in wave C.
 - [x] Alignment over hidden attributes and all map keys, collection-becomes-unknown, nested block layout (attributes, blank line, blocks), list diffs (position-wise for equal length, one context element), `# forces replacement` on the opening line, and sensitive masking in drift and output changes — source-checked by review.
 - [ ] Map and list diff layout (`# (N unchanged elements hidden)`, `-> null` after a removed map) and the `Plan: N to import, …` summary format.
 - [x] Drift note hidden when the plan is otherwise empty, two blank lines before "Unless you have made…", imported objects shown in full, destroy reasons for wrong repetition — source-checked by review. Still unchecked: the 77-character rule.
 - [x] Output-change block alignment over all outputs, and the 78-column apply hint for output-only plans (no actions header) — source-checked by review.
 - [ ] Not rendered: multi-line string values, `<=` data reads, `-target` and `-refresh-only` banners, colour.
 - [ ] Deferred from review: multi-line strings as `<<-EOT` heredocs with per-line diffs.
-- [ ] Deferred from review: JSON strings as `jsonencode(...)` (matters for `aws_iam_role.assume_role_policy`).
+- [ ] Deferred from review: JSON policy strings as `jsonencode(...)` (matters for `aws_iam_role.assume_role_policy`).
+- [ ] Deferred from review: multi-line strings as heredocs. The AWS provider stores `user_data` as a SHA1 hash in state, so real plans show a hash; our schema stores the raw `user_data`.
+- [ ] Deferred from review: show unchanged children inside changed non-important maps and lists for imports.
 - [ ] Deferred from review: Go `%q` string escapes (`\x01` vs JSON `\u0001`).
 - [ ] Deferred from review: `# Warning: this will destroy the imported resource` on import plus replace.
 - [ ] Deferred from review: destroy reason when a moved target is not in the configuration.
 - [ ] Deferred from review: non-identifier attribute names quoted with `%q`.
-- [ ] Deferred from review: set-vs-list block matching (set blocks have no order).
-- [ ] Deferred from review: drift limited to RelevantAttributes.
-- [ ] Deferred from review: `[{a:1},{}]` (an empty object inside a list of objects) is not a block list.
+- [x] Drift limited to what changing objects refer to (`driftShown`) — fixed in wave C.
+- [ ] Unverified: a drift entry for a deleted object is shown when the plan creates that address again (wave C rule; the review did not cover it).
 - [ ] Deferred from review: driftBlock address parsing for `data.` and `module.` addresses.
 - [ ] Deferred from review: deep nesting recursion (stack depth on deeply nested values).

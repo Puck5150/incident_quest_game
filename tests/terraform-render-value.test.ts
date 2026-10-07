@@ -41,33 +41,39 @@ describe('lines', () => {
     ])
   })
 
-  it('renders a list of objects as repeated nested blocks with unquoted aligned attributes, omitting nulls', () => {
+  it('renders a list of objects as a list: bare attribute names aligned per element, nulls shown, the element closed with a comma', () => {
     expect(lines(6, '+', 'ingress', 0, [{ from_port: 22, to_port: 22, note: null }, { from_port: 80, to_port: 80 }])).toEqual([
-      '      + ingress {',
-      '          + from_port = 22',
-      '          + to_port   = 22',
-      '        }',
-      '      + ingress {',
-      '          + from_port = 80',
-      '          + to_port   = 80',
-      '        }',
+      '      + ingress = [',
+      '          + {',
+      '              + from_port = 22',
+      '              + note      = null',
+      '              + to_port   = 22',
+      '            },',
+      '          + {',
+      '              + from_port = 80',
+      '              + to_port   = 80',
+      '            },',
+      '        ]',
     ])
   })
 
-  it('nests maps inside blocks', () => {
-    expect(lines(6, '+', 'rule', 0, [{ tags: { a: '1' } }])).toEqual(['      + rule {', '          + tags = {', '              + "a" = "1"', '            }', '        }'])
+  it('quotes the keys of a map inside an element', () => {
+    expect(lines(6, '+', 'rule', 0, [{ tags: { a: '1' } }])).toEqual(['      + rule = [', '          + {', '              + tags = {', '                  + "a" = "1"', '                }', '            },', '        ]'])
   })
 
-  it('puts a block\'s attributes first, aligned without the nested blocks, then a blank line and the blocks', () => {
+  it('nests lists of objects inside an element, aligned over all of its attributes', () => {
     expect(lines(6, '+', 'rule', 0, [{ port: 22, inner: [{ x: 1 }], zz: 'a' }])).toEqual([
-      '      + rule {',
-      '          + port = 22',
-      '          + zz   = "a"',
-      '',
-      '          + inner {',
-      '              + x = 1',
-      '            }',
-      '        }',
+      '      + rule = [',
+      '          + {',
+      '              + inner = [',
+      '                  + {',
+      '                      + x = 1',
+      '                    },',
+      '                ]',
+      '              + port  = 22',
+      '              + zz    = "a"',
+      '            },',
+      '        ]',
     ])
   })
 
@@ -87,10 +93,16 @@ describe('diffLines: scalars and additions/removals', () => {
 
   it('marks forced replacement on the opening line', () => {
     expect(diffLines(6, 'ami', 0, 'a', 'b', true)).toEqual(['      ~ ami = "a" -> "b" # forces replacement'])
-    // on the opening line for a map, a list and a block
+    // on the opening line for a map, a list and a list of objects
     expect(diffLines(6, 'tags', 0, undefined, { A: '1' }, true)[0]).toBe('      + tags = { # forces replacement')
     expect(diffLines(6, 'xs', 0, ['a'], ['b'], true)[0]).toBe('      ~ xs = [ # forces replacement')
-    expect(diffLines(6, 'ingress', 0, [{ p: 1 }], [{ p: 2 }], true)[0]).toBe('      ~ ingress { # forces replacement')
+    expect(diffLines(6, 'ingress', 0, [{ p: 1 }], [{ p: 2 }], true)[0]).toBe('      ~ ingress = [ # forces replacement')
+  })
+
+  it('puts the marker after the closing bracket when a collection becomes unknown', () => {
+    expect(diffLines(6, 'xs', 0, ['a'], UNKNOWN, true)).toEqual(['      ~ xs = [', '          - "a",', '        ] -> (known after apply) # forces replacement'])
+    expect(diffLines(6, 'tags', 0, { A: '1' }, UNKNOWN, true)).toEqual(['      ~ tags = {', '          - "A" = "1"', '        } -> (known after apply) # forces replacement'])
+    expect(diffLines(6, 'id', 0, 'a', UNKNOWN, true)).toEqual(['      ~ id = "a" -> (known after apply) # forces replacement'])
   })
 
   it('shows null to value as an addition and value to null as a removal', () => {
@@ -121,8 +133,19 @@ describe('diffLines: maps', () => {
     ])
     expect(diffLines(6, 'tags', 0, { A: '1', B: '2', C: '3' }, { A: '1', C: 'x' })).toEqual([
       '      ~ tags = {',
-      '          - "B" = "2"',
+      '          - "B" = "2" -> null',
       '          ~ "C" = "3" -> "x"',
+      '            # (1 unchanged element hidden)',
+      '        }',
+    ])
+  })
+
+  it('closes a removed key holding a collection with -> null after the bracket', () => {
+    expect(diffLines(6, 'm', 0, { A: { x: '1' }, B: '2' }, { B: '2' })).toEqual([
+      '      ~ m = {',
+      '          - "A" = {',
+      '              - "x" = "1"',
+      '            } -> null',
       '            # (1 unchanged element hidden)',
       '        }',
     ])
@@ -177,26 +200,58 @@ describe('diffLines: lists', () => {
   })
 })
 
-describe('diffLines: nested blocks', () => {
-  const a = [{ from_port: 22, to_port: 22 }, { from_port: 80, to_port: 80 }]
-  it('aligns a changed block over its hidden attributes and puts a blank line before the unchanged-blocks count', () => {
-    const b = [{ from_port: 22, to_port: 22 }, { from_port: 80, to_port: 8080 }]
-    expect(diffLines(6, 'ingress', 0, a, b)).toEqual([
-      '      ~ ingress {',
-      '          ~ to_port   = 80 -> 8080',
-      '            # (1 unchanged attribute hidden)',
-      '        }',
-      '',
-      '        # (1 unchanged block hidden)',
+describe('diffLines: lists of objects and sets', () => {
+  it('compares same-length lists of objects position by position, an updated element showing only what changed', () => {
+    expect(diffLines(6, 'rules', 0, [{ a: 1, b: 2 }, { a: 3, b: 4 }], [{ a: 1, b: 2 }, { a: 3, b: 5 }])).toEqual([
+      '      ~ rules = [',
+      '            {',
+      '                a = 1',
+      '                b = 2',
+      '            },',
+      '          ~ {',
+      '              ~ b = 4 -> 5',
+      '                # (1 unchanged attribute hidden)',
+      '            },',
+      '        ]',
     ])
   })
 
-  it('adds whole blocks, and removes them with -> null on each attribute but not on the brace', () => {
-    expect(diffLines(6, 'ingress', 0, [a[0]], a)).toEqual(['      + ingress {', '          + from_port = 80', '          + to_port   = 80', '        }', '', '        # (1 unchanged block hidden)'])
-    expect(diffLines(6, 'ingress', 0, a, [a[0]])).toEqual(['      - ingress {', '          - from_port = 80 -> null', '          - to_port   = 80 -> null', '        }', '', '        # (1 unchanged block hidden)'])
+  it('on the LCS path shows an object deleted and another created in its place as one updated element', () => {
+    expect(diffLines(6, 'xs', 0, [{ n: 1 }, { n: 2 }], [{ n: 1 }, { n: 3 }, { n: 4 }])).toEqual([
+      '      ~ xs = [',
+      '            {',
+      '                n = 1',
+      '            },',
+      '          ~ {',
+      '              ~ n = 2 -> 3',
+      '            },',
+      '          + {',
+      '              + n = 4',
+      '            },',
+      '        ]',
+    ])
   })
 
-  it('shows the attributes of a block that is removed outright with -> null, and a nested map closing with -> null', () => {
-    expect(diffLines(6, 'rule', 0, [{ tags: { a: '1' } }], null)).toEqual(['      - rule {', '          - tags = {', '              - "a" = "1"', '            } -> null', '        }'])
+  it('treats a list as a reordering, and uses the LCS, whenever every old element is still present', () => {
+    expect(diffLines(6, 'xs', 0, ['a', 'a', 'b'], ['a', 'b', 'b'])).toEqual(['      ~ xs = [', '            "a",', '          - "a",', '            "b",', '          + "b",', '        ]'])
+  })
+
+  it('shows a set as removals and additions by value, counting the unchanged elements at the end', () => {
+    const r1 = { from_port: 80 }
+    expect(diffLines(6, 'ingress', 0, [r1, { from_port: 22 }], [r1, { from_port: 2222 }], false, false, true)).toEqual([
+      '      ~ ingress = [',
+      '          - {',
+      '              - from_port = 22',
+      '            },',
+      '          + {',
+      '              + from_port = 2222',
+      '            },',
+      '            # (1 unchanged element hidden)',
+      '        ]',
+    ])
+  })
+
+  it('removes a whole list of objects with -> null after the bracket and none inside', () => {
+    expect(diffLines(6, 'rule', 0, [{ tags: { a: '1' } }], null)).toEqual(['      - rule = [', '          - {', '              - tags = {', '                  - "a" = "1"', '                }', '            },', '        ] -> null'])
   })
 })

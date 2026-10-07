@@ -114,20 +114,63 @@ describe('resourceBlock: update and replace', () => {
     expect(out).not.toContain('unchanged')
   })
 
-  it('renders a changed nested block list', () => {
+  it('renders a changed set of objects (ingress) as an attribute: the old rule deleted, the new one created, the rest counted', () => {
+    const rule = (cidr: string, port: number) => ({ cidr_blocks: [cidr], from_port: port, protocol: 'tcp', to_port: port })
     const out = resourceBlock(
-      item({ action: 'update', address: 'aws_security_group.web', type: 'aws_security_group', name: 'web', changes: [ch('ingress', [{ from_port: 22, to_port: 22 }], [{ from_port: 22, to_port: 2222 }])], unchanged: { id: 'sg-1' } }),
+      item({
+        action: 'update',
+        address: 'aws_security_group.web',
+        type: 'aws_security_group',
+        name: 'web',
+        changes: [ch('ingress', [rule('10.0.0.0/8', 22), rule('10.1.0.0/16', 80)], [rule('0.0.0.0/0', 22), rule('10.1.0.0/16', 80)])],
+        unchanged: { id: 'sg-1', name: 'web', arn: 'a', description: 'd', egress: [], owner_id: 'o', vpc_id: 'v', region: 'r' },
+      }),
     )
     expect(out).toBe(
       text(
         '  # aws_security_group.web will be updated in-place',
         '  ~ resource "aws_security_group" "web" {',
-        '        id = "sg-1"',
-        '',
-        '      ~ ingress {',
-        '          ~ to_port   = 22 -> 2222',
-        '            # (1 unchanged attribute hidden)',
-        '        }',
+        '        id          = "sg-1"',
+        '      ~ ingress     = [',
+        '          - {',
+        '              - cidr_blocks = [',
+        '                  - "10.0.0.0/8",',
+        '                ]',
+        '              - from_port   = 22',
+        '              - protocol    = "tcp"',
+        '              - to_port     = 22',
+        '            },',
+        '          + {',
+        '              + cidr_blocks = [',
+        '                  + "0.0.0.0/0",',
+        '                ]',
+        '              + from_port   = 22',
+        '              + protocol    = "tcp"',
+        '              + to_port     = 22',
+        '            },',
+        '            # (1 unchanged element hidden)',
+        '        ]',
+        '        name        = "web"',
+        '        # (6 unchanged attributes hidden)',
+        '    }',
+      ),
+    )
+  })
+
+  it('renders a created ingress as a list of objects', () => {
+    const out = resourceBlock(item({ action: 'create', address: 'aws_security_group.web', type: 'aws_security_group', name: 'web', changes: [ch('ingress', undefined, [{ cidr_blocks: ['0.0.0.0/0'], from_port: 22 }])] }))
+    expect(out).toBe(
+      text(
+        '  # aws_security_group.web will be created',
+        '  + resource "aws_security_group" "web" {',
+        '      + ingress = [',
+        '          + {',
+        '              + cidr_blocks = [',
+        '                  + "0.0.0.0/0",',
+        '                ]',
+        '              + from_port   = 22',
+        '            },',
+        '        ]',
         '    }',
       ),
     )
@@ -196,6 +239,22 @@ describe('resourceBlock: destroy, move, import, forget', () => {
     )
   })
 
+  it('masks sensitive attributes of an imported object', () => {
+    const imp = item({ action: 'noop', address: 'aws_db_instance.db', type: 'aws_db_instance', name: 'db', importing: 'db-1', unchanged: { id: 'db-1', engine: 'mysql', password: 'hunter2' } })
+    const out = resourceBlock(imp)
+    expect(out).toBe(
+      text(
+        '  # aws_db_instance.db will be imported',
+        '    resource "aws_db_instance" "db" {',
+        '        engine   = "mysql"',
+        '        id       = "db-1"',
+        '        password = (sensitive value)',
+        '    }',
+      ),
+    )
+    expect(out).not.toContain('hunter2')
+  })
+
   it('renders forget with a . row, one-space comments and an unchanged body', () => {
     const f = item({ action: 'forget', address: 'aws_vpc.old', type: 'aws_vpc', name: 'old', unchanged: { id: 'vpc-1', tags: { Name: 'old' }, cidr_block: '10.0.0.0/16', arn: 'a', extra: null } })
     expect(resourceBlock(f)).toBe(
@@ -214,6 +273,7 @@ describe('resourceBlock: destroy, move, import, forget', () => {
   })
 })
 
+// driftShown defaults to all the drift given: these tests are about layout, not relevance.
 const result = (o: Partial<PlanResult> = {}): PlanResult => ({
   diagnostics: [],
   warnings: [],
@@ -224,6 +284,7 @@ const result = (o: Partial<PlanResult> = {}): PlanResult => ({
   refreshed: emptyState(),
   summary: { add: 0, change: 0, destroy: 0 },
   ...o,
+  driftShown: o.driftShown ?? o.drift ?? [],
 })
 
 describe('renderPlan', () => {
@@ -282,6 +343,18 @@ describe('renderPlan', () => {
     expect(renderPlan(result({ items: [item({ action: 'noop', unchanged: { id: 'i-1' } })] }))).toBe(plain)
     const drifted = renderPlan(result({ drift: [{ address: 'aws_vpc.main', kind: 'changed', changes: [{ name: 'tags', before: { A: '1' }, after: { A: '2' } }] }], refreshed: stateWith('aws_vpc', 'main', { id: 'vpc-1', tags: { A: '2' }, cidr_block: 'x' }) }))
     expect(drifted).toBe(plain)
+  })
+
+  it('prints no drift note when no drift is relevant to the plan, or when the plan only imports or forgets', () => {
+    const drift = [{ address: 'aws_vpc.main', kind: 'changed' as const, changes: [{ name: 'tags', before: { A: '1' }, after: { A: '2' } }] }]
+    const refreshed = stateWith('aws_vpc', 'main', { id: 'vpc-1', tags: { A: '2' }, cidr_block: 'x' })
+    const upd = item({ action: 'update', changes: [ch('instance_type', 'a', 'b')], unchanged: { id: 'i-1' } })
+    expect(renderPlan(result({ drift, driftShown: [], refreshed, items: [upd], summary: { add: 0, change: 1, destroy: 0 } }))).not.toContain('Note: Objects have changed')
+    expect(renderPlan(result({ drift, refreshed, items: [upd], summary: { add: 0, change: 1, destroy: 0 } }))).toContain('Note: Objects have changed')
+    const imp = item({ action: 'noop', importing: 'legacy', unchanged: { id: 'legacy' } })
+    expect(renderPlan(result({ drift, refreshed, items: [imp], imported: 1 }))).not.toContain('Note: Objects have changed')
+    const forget = item({ action: 'forget', address: 'aws_vpc.old', type: 'aws_vpc', name: 'old', unchanged: { id: 'vpc-1' } })
+    expect(renderPlan(result({ drift, refreshed, items: [forget] }))).not.toContain('Note: Objects have changed')
   })
 
   it('prints only the output changes, an apply hint wrapped at 78 columns, and no actions header', () => {
