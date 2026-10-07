@@ -104,3 +104,60 @@ describe('parse: errors', () => {
     expect(parse('a = "oops\n').diagnostics[0].summary).toBe('Unterminated template string')
   })
 })
+
+describe('parse: operators and collections', () => {
+  it('respects precedence and left associativity', () => {
+    expect(ex('1 + 2 * 3')).toMatchObject({ kind: 'bin', op: '+', left: { value: 1 }, right: { kind: 'bin', op: '*', left: { value: 2 }, right: { value: 3 } } })
+    expect(ex('1 - 2 - 3')).toMatchObject({ op: '-', left: { kind: 'bin', op: '-' }, right: { value: 3 } })
+  })
+
+  it('parses logic, comparison and negation', () => {
+    expect(ex('a == b && !c')).toMatchObject({ kind: 'bin', op: '&&', left: { kind: 'bin', op: '==' }, right: { kind: 'un', op: '!' } })
+  })
+
+  it('parses conditionals', () => {
+    expect(ex('x ? 1 : 2')).toMatchObject({ kind: 'cond', test: { kind: 'ref', path: ['x'] }, yes: { value: 1 }, no: { value: 2 } })
+  })
+
+  it('parses function calls, including across lines', () => {
+    expect(ex('lookup(m, "k", 0)')).toMatchObject({ kind: 'call', name: 'lookup', args: [{ kind: 'ref' }, { value: 'k' }, { value: 0 }] })
+    expect(ex('merge(\n  a,\n  b,\n)')).toMatchObject({ kind: 'call', name: 'merge', args: [{ kind: 'ref' }, { kind: 'ref' }] })
+  })
+
+  it('parses lists with a trailing comma over several lines', () => {
+    expect(ex('[1, 2,\n  3,\n]')).toMatchObject({ kind: 'list', items: [{ value: 1 }, { value: 2 }, { value: 3 }] })
+  })
+
+  it('parses objects separated by newlines or commas, with bare, quoted and (computed) keys', () => {
+    expect(ex('{\n  a = 1\n  "b-c" : 2, d = 3\n  (var.k) = 4\n}')).toMatchObject({
+      kind: 'obj',
+      entries: [
+        { key: { value: 'a' }, value: { value: 1 } },
+        { key: { value: 'b-c' }, value: { value: 2 } },
+        { key: { value: 'd' }, value: { value: 3 } },
+        { key: { kind: 'ref', path: ['var', 'k'] }, value: { value: 4 } },
+      ],
+    })
+  })
+
+  it('lets parentheses span lines', () => {
+    expect(ex('(1 +\n 2)')).toMatchObject({ kind: 'bin', op: '+' })
+  })
+
+  it('parses a call result that is indexed or accessed', () => {
+    expect(ex('toset(var.a)[0]')).toMatchObject({ kind: 'idx', base: { kind: 'call', name: 'toset' } })
+  })
+
+  it('says for expressions and splats are unsupported', () => {
+    const d = (src: string) => parse(`locals {\n  v = ${src}\n}`).diagnostics[0]
+    expect(d('[for x in y : x]').summary).toBe('Unsupported for expression')
+    expect(d('{ for k, v in m : k => v }').summary).toBe('Unsupported for expression')
+    expect(d('a.b[*].c').summary).toBe('Unsupported splat expression')
+    expect(d('a.b.*.c').summary).toBe('Unsupported splat expression')
+  })
+
+  it('reports an unfinished expression', () => {
+    expect(parse('locals {\n  v = 1 +\n}').diagnostics[0].summary).toBe('Invalid expression')
+    expect(parse('locals {\n  v = [1 2]\n}').diagnostics[0].summary).toBe('Missing item separator')
+  })
+})

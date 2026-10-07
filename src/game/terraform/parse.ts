@@ -1,5 +1,4 @@
 // Recursive-descent parser for the HCL subset (blocks, arguments, expressions).
-// Expressions beyond references and strings arrive in the next task.
 import { lex } from './lex.ts'
 import { fail, HclError, type Attr, type Block, type Diagnostic, type Expr, type Pos, type Tok } from './types.ts'
 
@@ -22,6 +21,10 @@ const show = (t: Tok): string =>
 
 type StrTok = Extract<Tok, { k: 'str' }>
 type IdTok = Extract<Tok, { k: 'id' }>
+
+const PREC: Record<string, number> = { '||': 1, '&&': 2, '==': 3, '!=': 3, '<': 4, '>': 4, '<=': 4, '>=': 4, '+': 5, '-': 5, '*': 6, '/': 6, '%': 6 }
+const NO_FOR = 'for expressions ([for ...] and {for ...}) are not supported by this lab.'
+const NO_SPLAT = 'Splat expressions (.* and [*]) are not supported by this lab.'
 
 class Parser {
   file: string
@@ -138,6 +141,31 @@ class Parser {
   // --- expressions ---
 
   expr(): Expr {
+    const test = this.bin(1)
+    if (!this.isP('?')) return test
+    this.i++
+    const yes = this.expr()
+    this.expectP(':', 'Missing false expression in conditional', 'The conditional operator (...?...:...) requires a false expression, delimited by a colon.')
+    return { kind: 'cond', test, yes, no: this.expr() }
+  }
+
+  bin(min: number): Expr {
+    let left = this.unary()
+    for (;;) {
+      const t = this.peek()
+      if (t.k !== 'p') return left
+      const prec = PREC[t.v]
+      if (!prec || prec < min) return left
+      this.i++
+      left = { kind: 'bin', op: t.v, left, right: this.bin(prec + 1) }
+    }
+  }
+
+  unary(): Expr {
+    if (this.isP('!') || this.isP('-')) {
+      const op = (this.next() as Extract<Tok, { k: 'p' }>).v as '!' | '-'
+      return { kind: 'un', op, expr: this.unary() }
+    }
     return this.postfix()
   }
 
@@ -149,9 +177,11 @@ class Parser {
         const t = this.next()
         if (t.k === 'id') e = { kind: 'attr', base: e, name: t.v }
         else if (t.k === 'num') e = { kind: 'idx', base: e, index: { kind: 'lit', value: t.v } }
+        else if (t.k === 'p' && t.v === '*') this.err(t.pos, 'Unsupported splat expression', NO_SPLAT)
         else this.err(t.pos, 'Invalid attribute name', 'An attribute name is required after a dot.')
       } else if (this.isP('[')) {
-        this.i++
+        const open = this.next()
+        if (this.isP('*')) this.err(open.pos, 'Unsupported splat expression', NO_SPLAT)
         const base = e
         e = this.withSkip(true, () => {
           const index = this.expr()
@@ -170,9 +200,87 @@ class Parser {
       if (t.v === 'true') return { kind: 'lit', value: true }
       if (t.v === 'false') return { kind: 'lit', value: false }
       if (t.v === 'null') return { kind: 'lit', value: null }
+      if (this.isP('(')) return this.call(t)
       return this.ref(t)
     }
+    if (t.k === 'p' && t.v === '(') return this.group()
+    if (t.k === 'p' && t.v === '[') return this.list()
+    if (t.k === 'p' && t.v === '{') return this.obj()
     return this.err(t.pos, 'Invalid expression', `Expected the start of an expression, but found ${show(t)}.`)
+  }
+
+  group(): Expr {
+    return this.withSkip(true, () => {
+      const e = this.expr()
+      this.expectP(')', 'Missing closing parenthesis', 'Expected a closing parenthesis to end the parenthesized expression.')
+      return e
+    })
+  }
+
+  call(name: IdTok): Expr {
+    this.i++ // the (
+    const args = this.withSkip(true, () => {
+      const out: Expr[] = []
+      while (!this.isP(')')) {
+        out.push(this.expr())
+        if (this.isP(',')) this.i++
+        else if (!this.isP(')')) this.err(this.peek().pos, 'Missing argument separator', 'A comma is required to separate each function argument from the next.')
+      }
+      this.i++
+      return out
+    })
+    return { kind: 'call', name: name.v, args, pos: name.pos }
+  }
+
+  list(): Expr {
+    return this.withSkip(true, () => {
+      const first = this.peek()
+      if (first.k === 'id' && first.v === 'for') this.err(first.pos, 'Unsupported for expression', NO_FOR)
+      const items: Expr[] = []
+      while (!this.isP(']')) {
+        items.push(this.expr())
+        if (this.isP(',')) this.i++
+        else if (!this.isP(']')) this.err(this.peek().pos, 'Missing item separator', 'Expected a comma to mark the beginning of the next item.')
+      }
+      this.i++
+      return { kind: 'list', items } as Expr
+    })
+  }
+
+  obj(): Expr {
+    return this.withSkip(false, () => {
+      const entries: { key: Expr; value: Expr }[] = []
+      for (;;) {
+        let t = this.nlSkip()
+        while (t.k === 'p' && t.v === ',') {
+          this.i++
+          t = this.nlSkip()
+        }
+        if (t.k === 'p' && t.v === '}') {
+          this.i++
+          return { kind: 'obj', entries } as Expr
+        }
+        if (t.k === 'id' && t.v === 'for' && entries.length === 0) this.err(t.pos, 'Unsupported for expression', NO_FOR)
+        let key: Expr
+        if (t.k === 'id') {
+          this.i++
+          key = { kind: 'lit', value: t.v }
+        } else if (t.k === 'str') {
+          this.i++
+          key = this.template(t)
+        } else if (t.k === 'p' && t.v === '(') {
+          this.i++
+          key = this.group()
+        } else this.err(t.pos, 'Invalid object key', 'Expected an identifier or string as an object key.')
+        if (!(this.isP('=') || this.isP(':'))) this.err(this.peek().pos, 'Missing key/value separator', 'Expected an equals sign ("=") to mark the beginning of the attribute value.')
+        this.i++
+        entries.push({ key, value: this.expr() })
+        const e = this.toks[this.i]
+        if (!(e.k === 'nl' || e.k === 'eof' || (e.k === 'p' && (e.v === ',' || e.v === '}')))) {
+          this.err(e.pos, 'Missing attribute separator', 'Expected a newline or comma to mark the beginning of the next attribute.')
+        }
+      }
+    })
   }
 
   ref(t: IdTok): Expr {
