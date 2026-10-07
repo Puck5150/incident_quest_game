@@ -180,7 +180,7 @@ export function diffInstance(
   if (!changes.length && !force) return { action: 'noop', changes, planned: Object.fromEntries(next) }
   if (force || changes.some((c) => c.forcesReplacement)) {
     // Ignored attributes are settled before planning, so the replacement keeps the prior values.
-    const kept = names.filter((n) => ignored(n) && Object.hasOwn(prior, n)).map((n): [string, Value] => [n, prior[n]])
+    const kept = names.filter((n) => ignored(n) && !specOf(n).readOnly && Object.hasOwn(prior, n)).map((n): [string, Value] => [n, prior[n]])
     const planned = Object.fromEntries([...Object.entries(fresh()), ...kept])
     // What the new object will get from the provider instead of the old one.
     const recomputed = Object.entries(planned)

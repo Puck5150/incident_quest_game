@@ -74,8 +74,20 @@ describe('lifecycleOf', () => {
   })
 
   it('reads prevent_destroy, create_before_destroy and replace_triggered_by', () => {
-    const r = lc('    prevent_destroy = true\n    create_before_destroy = true\n    replace_triggered_by = [aws_vpc.main, aws_subnet.a.id]')
+    const r = lc('    prevent_destroy = true\n    create_before_destroy = true\n    replace_triggered_by = [aws_vpc.main, aws_subnet.a]')
     expect(r).toMatchObject({ ok: true, lifecycle: { preventDestroy: true, createBeforeDestroy: true, replaceTriggeredBy: ['aws_vpc.main', 'aws_subnet.a'] } })
+  })
+
+  it('rejects attribute- and instance-level replace_triggered_by references as unsupported', () => {
+    for (const v of ['aws_vpc.main.id', 'aws_vpc.main[0]', 'aws_vpc.main[0].id']) {
+      expect(lc(`    replace_triggered_by = [${v}]`)).toMatchObject({ ok: false, summary: 'Unsupported replace_triggered_by reference', detail: 'References to a specific instance or attribute (for example aws_vpc.main.id or aws_vpc.main[0]) are not supported by this lab yet; reference the whole resource.' })
+    }
+  })
+
+  it('rejects non-resource replace_triggered_by expressions', () => {
+    for (const v of ['var.x', 'local.x', 'data.aws_ami.d', 'module.m', '"aws_vpc.main"', 'upper("x")']) {
+      expect(lc(`    replace_triggered_by = [${v}]`)).toMatchObject({ ok: false, summary: 'Invalid replace_triggered_by expression', detail: 'replace_triggered_by expressions can only refer to managed resources.' })
+    }
   })
 
   it('rejects a variable in prevent_destroy, a bad ignore_changes, an unknown argument, or two lifecycle blocks', () => {

@@ -309,11 +309,33 @@ describe('planConfig: forced replacement', () => {
     expect(r.warnings).toEqual([])
   })
 
-  it('records no reason when the instance would be replaced anyway', () => {
-    const tf = 'resource "aws_instance" "web" {\n  ami           = "ami-2"\n  instance_type = "t3.micro"\n}\n'
-    const r = plan(tf, { state: webState(), replace: ['aws_instance.web'] })
+  const AMI2 = 'resource "aws_instance" "web" {\n  ami           = "ami-2"\n  instance_type = "t3.micro"\n}\n'
+
+  it('says requested when -replace is given for an instance that would be replaced anyway', () => {
+    const r = plan(AMI2, { state: webState(), replace: ['aws_instance.web'] })
+    expect(r.items[0]).toMatchObject({ action: 'replace', reason: 'requested' })
+  })
+
+  it('says tainted for a tainted instance whose arguments force replacement, and nothing for a plain forced-by-argument replacement', () => {
+    expect(plan(AMI2, { state: webState('tainted') }).items[0]).toMatchObject({ action: 'replace', reason: 'tainted' })
+    const r = plan(AMI2, { state: webState() })
     expect(r.items[0].action).toBe('replace')
     expect(r.items[0].reason).toBeUndefined()
+  })
+
+  it('lets a trigger override tainted, and records only the first triggering reference', () => {
+    const tf = `resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n  enable_dns_hostnames = true\n}\nresource "aws_vpc" "other" {\n  cidr_block = "10.1.0.0/16"\n  enable_dns_hostnames = true\n}\nresource "aws_instance" "web" {\n  ami           = "ami-1"\n  instance_type = "t3.micro"\n  lifecycle {\n    replace_triggered_by = [aws_vpc.main, aws_vpc.other]\n  }\n}\n`
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_vpc', name: 'other', attrs: { ...VPC, cidr_block: '10.1.0.0/16' } }, { type: 'aws_instance', name: 'web', attrs: INSTANCE, status: 'tainted' })
+    const r = plan(tf, { state })
+    expect(r.items.find((i) => i.address === 'aws_instance.web')).toMatchObject({ action: 'replace', reason: 'triggered', triggeredBy: ['aws_vpc.main'] })
+  })
+
+  it('builds a tainted replacement from the configuration, ignoring ignore_changes', () => {
+    const tf = 'resource "aws_instance" "web" {\n  ami           = "ami-2"\n  instance_type = "t3.micro"\n  lifecycle {\n    ignore_changes = [ami]\n  }\n}\n'
+    const r = plan(tf, { state: webState('tainted') })
+    expect(r.items[0]).toMatchObject({ action: 'replace', reason: 'tainted' })
+    expect(r.items[0].changes.find((c) => c.name === 'ami')).toMatchObject({ before: 'ami-1', after: 'ami-2' })
+    expect(plan(tf, { state: webState() }).items[0].action).toBe('noop')
   })
 
   it('keeps a forced replacement of something that does not exist a plain create', () => {
@@ -323,14 +345,30 @@ describe('planConfig: forced replacement', () => {
     expect(r.warnings).toEqual([])
   })
 
-  it('warns about a -replace address that matches nothing, without changing the plan', () => {
-    const r = plan(WEB, { state: webState(), replace: ['aws_instance.nope'] })
-    expect(r.diagnostics).toEqual([])
-    expect(r.warnings).toHaveLength(1)
-    expect(r.warnings[0]).toMatchObject({ severity: 'warning', summary: 'Incompletely-matched force-replace resource instance' })
-    expect(r.warnings[0].detail).toContain('aws_instance.nope')
-    expect(r.items).toMatchObject([{ action: 'noop' }])
+  it('gives no diagnostic for a nonexistent or mismatched -replace address', () => {
+    for (const a of ['aws_instance.nope', 'aws_instance.web[0]']) {
+      const r = plan(WEB, { state: webState(), replace: [a] })
+      expect(r.diagnostics).toEqual([])
+      expect(r.warnings).toEqual([])
+      expect(r.items).toMatchObject([{ action: 'noop' }])
+    }
   })
+
+  const S3 = (head: string) => `resource "aws_s3_bucket" "b" {\n  ${head}\n  bucket = "logs-\${${head.startsWith('count') ? 'count.index' : 'each.key'}}"\n}`
+  const P = "Your force-replace request for aws_s3_bucket.b doesn't match any resource instances"
+
+  it('warns when a keyless -replace names a count or for_each resource', () => {
+    const state = stateOf(...[0, 1].map((n) => ({ type: 'aws_s3_bucket', name: 'b', key: n, attrs: BUCKET(n) })))
+    const many = plan(S3('count = 2'), { state, replace: ['aws_s3_bucket.b', 'aws_s3_bucket.b'] })
+    expect(many.warnings).toHaveLength(1)
+    expect(many.warnings[0]).toMatchObject({ severity: 'warning', summary: 'Incompletely-matched force-replace resource instance' })
+    expect(many.warnings[0].detail).toBe(`${P} because it lacks an instance key.\n\nTo force replacement of particular instances, use one or more of the following options instead:\n  -replace="aws_s3_bucket.b[0]"\n  -replace="aws_s3_bucket.b[1]"`)
+    const one = plan(S3('count = 1'), { replace: ['aws_s3_bucket.b'] })
+    expect(one.warnings[0].detail).toBe(`${P} because it lacks an instance key.\n\nTo force replacement of the single declared instance, use the following option instead:\n  -replace="aws_s3_bucket.b[0]"`)
+    const none = plan(S3('count = 0'), { replace: ['aws_s3_bucket.b'] })
+    expect(none.warnings[0].detail).toBe(`${P} because this resource doesn't have any instances.`)
+  })
+
 })
 
 describe('planConfig: replace_triggered_by', () => {

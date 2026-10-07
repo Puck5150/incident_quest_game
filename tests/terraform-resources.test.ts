@@ -138,6 +138,16 @@ describe('diffInstance', () => {
     expect(diffInstance(inst, cfg, prior, 'all').action).toBe('noop')
   })
 
+  it('a forced replacement under ignore_changes = all still gets a new id', () => {
+    const inst = schemaFor('aws_instance')!
+    const prior = { id: 'i-1', arn: 'a', ami: 'ami-1', instance_type: 't3.micro' }
+    const p = diffInstance(inst, { ami: 'ami-2', instance_type: 't3.micro' }, prior, 'all', true)
+    expect(p.action).toBe('replace')
+    expect(p.planned.id).toBe(UNKNOWN)
+    expect(p.planned.ami).toBe('ami-1')
+    expect(p.changes.find((c) => c.name === 'id')).toMatchObject({ before: 'i-1', after: UNKNOWN })
+  })
+
   it('still creates a missing resource whatever is ignored', () => {
     expect(diffInstance(vpc, { cidr_block: '10.0.0.0/16' }, undefined, 'all').action).toBe('create')
   })

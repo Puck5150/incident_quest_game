@@ -62,6 +62,8 @@ function rootName(e: Expr): string | undefined {
   return undefined
 }
 
+const ROOTS = new Set(['var', 'local', 'data', 'module', 'each', 'count', 'path', 'terraform', 'self'])
+
 export function lifecycleOf(block: Block): LifecycleResult {
   const blocks = block.blocks.filter((b) => b.type === 'lifecycle')
   const lifecycle: Lifecycle = { ignoreChanges: [], preventDestroy: false, createBeforeDestroy: false, replaceTriggeredBy: [] }
@@ -90,11 +92,21 @@ export function lifecycleOf(block: Block): LifecycleResult {
       }
       case 'replace_triggered_by': {
         const items = a.value.kind === 'list' ? a.value.items : [a.value]
-        lifecycle.replaceTriggeredBy = items.flatMap((i) => {
+        const refs: string[] = []
+        for (const i of items) {
           let e = i
-          while (e.kind === 'attr' || e.kind === 'idx') e = e.base
-          return e.kind === 'ref' ? [e.path.slice(0, 2).join('.')] : []
-        })
+          let deep = false
+          while (e.kind === 'attr' || e.kind === 'idx') {
+            e = e.base
+            deep = true
+          }
+          if (e.kind !== 'ref' || ROOTS.has(e.path[0])) return fail('Invalid replace_triggered_by expression', 'replace_triggered_by expressions can only refer to managed resources.')
+          if (deep || e.path.length > 2) {
+            return fail('Unsupported replace_triggered_by reference', 'References to a specific instance or attribute (for example aws_vpc.main.id or aws_vpc.main[0]) are not supported by this lab yet; reference the whole resource.')
+          }
+          refs.push(e.path.join('.'))
+        }
+        lifecycle.replaceTriggeredBy = refs
         break
       }
       default:

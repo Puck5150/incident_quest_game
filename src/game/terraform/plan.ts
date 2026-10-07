@@ -185,13 +185,14 @@ export function planConfig(input: PlanInput): PlanResult {
       const prior = priorInst?.attributes
       // Why an existing instance might be replaced even though its arguments did not force it.
       const triggers = prior ? lc.lifecycle.replaceTriggeredBy.filter((a) => touched.get(a)?.has('update') || touched.get(a)?.has('replace')) : []
-      const forced = !prior ? undefined : priorInst?.status === 'tainted' ? 'tainted' : input.replace?.includes(address) ? 'requested' : triggers.length ? 'triggered' : undefined
-      let p = diffInstance(schema, ar.args, prior, lc.lifecycle.ignoreChanges)
-      let reason: PlanItem['reason'] = priorInst?.status === 'tainted' ? 'tainted' : undefined
-      if (forced && p.action !== 'replace') {
-        p = diffInstance(schema, ar.args, prior, lc.lifecycle.ignoreChanges, true)
-        reason = forced
-      }
+      const tainted = priorInst?.status === 'tainted'
+      const requested = !!prior && !!input.replace?.includes(address)
+      const forced = tainted || requested || triggers.length > 0
+      // A tainted object's prior value counts as null, so the replacement comes from the configuration.
+      const ignore = tainted ? [] : lc.lifecycle.ignoreChanges
+      let p = diffInstance(schema, ar.args, prior, ignore)
+      if (forced && p.action !== 'replace') p = diffInstance(schema, ar.args, prior, ignore, true)
+      const reason: PlanItem['reason'] = p.action === 'replace' ? (triggers.length ? 'triggered' : tainted ? 'tainted' : requested ? 'requested' : undefined) : undefined
       result.items.push({
         address,
         type,
@@ -201,7 +202,7 @@ export function planConfig(input: PlanInput): PlanResult {
         changes: p.changes,
         ...(movedFrom ? { movedFrom } : {}),
         ...(reason ? { reason } : {}),
-        ...(reason === 'triggered' ? { triggeredBy: triggers } : {}),
+        ...(reason === 'triggered' ? { triggeredBy: [triggers[0]] } : {}),
         ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
       })
       const seen = touched.get(`${type}.${name}`) ?? new Set<string>()
@@ -293,13 +294,20 @@ export function planConfig(input: PlanInput): PlanResult {
       })
     }
   }
-  const known = new Set(result.items.map((i) => i.address))
-  for (const a of input.replace ?? []) {
-    if (known.has(a)) continue
+  // Real Terraform only warns when a keyless address names a count/for_each resource.
+  for (const a of new Set(input.replace ?? [])) {
+    if (a.includes('[') || !shapes.has(a)) continue
+    const addrs = result.items.filter((i) => i.action !== 'destroy' && `${i.type}.${i.name}` === a).map((i) => i.address)
+    const P = `Your force-replace request for ${a} doesn't match any resource instances`
+    const detail = !addrs.length
+      ? `${P} because this resource doesn't have any instances.`
+      : addrs.length === 1
+        ? `${P} because it lacks an instance key.\n\nTo force replacement of the single declared instance, use the following option instead:\n  -replace="${addrs[0]}"`
+        : `${P} because it lacks an instance key.\n\nTo force replacement of particular instances, use one or more of the following options instead:${addrs.map((x) => `\n  -replace="${x}"`).join('')}`
     result.warnings.push({
       severity: 'warning',
       summary: 'Incompletely-matched force-replace resource instance',
-      detail: `Your force-replace request for ${a} doesn't match any resource instance in the plan, so it has no effect.`,
+      detail,
       file: '',
       line: 0,
       col: 0,
