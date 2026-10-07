@@ -3,11 +3,11 @@
 import { formatDiagnostic } from './diag.ts'
 import { equal, type Value } from './eval.ts'
 import type { PlanItem, PlanResult } from './plan.ts'
-import { diffLines, lines, row, scalar } from './render-value.ts'
+import { body, diffLines, lines, masked, row, type Field } from './render-value.ts'
+import { schemaFor } from './resources.ts'
 import { findInstance } from './state.ts'
 
-const SENSITIVE = '(sensitive value)'
-const plural = (n: number) => `${n} unchanged attribute${n === 1 ? '' : 's'} hidden`
+const hasVal = (v: Value | undefined) => v !== null && v !== undefined
 
 function headerLines(item: PlanItem): string[] {
   const a = item.address
@@ -49,39 +49,19 @@ function headerLines(item: PlanItem): string[] {
   return out.map((l) => `  # ${l}`)
 }
 
-// A sensitive change prints the same placeholder on both sides.
-function sensitiveRow(sym: string, name: string, width: number, suffix = ''): string {
-  return row(6, sym, `${name.padEnd(width)} = ${SENSITIVE}${suffix}`)
-}
-
 function bodyLines(item: PlanItem): string[] {
   const changes = item.changes
-  if (item.action === 'create') {
-    const w = Math.max(0, ...changes.map((c) => c.name.length))
-    return changes.flatMap((c) => (c.sensitive ? [sensitiveRow('+', c.name, w)] : lines(6, '+', c.name, w, c.after)))
-  }
-  if (item.action === 'destroy') {
-    const shown = changes.filter((c) => c.before !== null && c.before !== undefined)
-    const w = Math.max(0, ...shown.map((c) => c.name.length))
-    return shown.flatMap((c) => {
-      if (c.sensitive) return [sensitiveRow('-', c.name, w, ' -> null')]
-      const l = lines(6, '-', c.name, w, c.before as never)
-      l[l.length - 1] += ' -> null'
-      return l
-    })
-  }
   if (item.action === 'forget') return []
-  const unchanged = item.unchanged ?? {}
+  if (item.action === 'create') return body(6, changes.map((c) => ({ name: c.name, op: '+', after: c.after, sensitive: c.sensitive })))
+  if (item.action === 'destroy') return body(6, changes.filter((c) => hasVal(c.before)).map((c) => ({ name: c.name, op: '-', before: c.before, sensitive: c.sensitive })))
   const changed = new Set(changes.map((c) => c.name))
-  const showId = Object.hasOwn(unchanged, 'id') && !changed.has('id')
-  const names = [...changes.map((c) => c.name), ...(showId ? ['id'] : [])]
-  const w = Math.max(0, ...names.map((n) => n.length))
-  const rows = [
-    ...changes.map((c) => ({ name: c.name, out: c.sensitive ? [sensitiveRow('~', c.name, w)] : diffLines(6, c.name, w, c.before, c.after, c.forcesReplacement) })),
-    ...(showId ? [{ name: 'id', out: [row(6, ' ', `${'id'.padEnd(w)} = ${scalar(unchanged.id)}`)] }] : []),
-  ].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
-  const hidden = Object.keys(unchanged).filter((n) => !changed.has(n) && !(showId && n === 'id')).length
-  return [...rows.flatMap((r) => r.out), ...(hidden ? [row(6, ' ', `# (${plural(hidden)})`)] : [])]
+  const fields: Field[] = [
+    ...changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: c.sensitive, forces: c.forcesReplacement })),
+    ...Object.entries(item.unchanged ?? {})
+      .filter(([n, v]) => !changed.has(n) && hasVal(v))
+      .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v })),
+  ]
+  return body(6, fields)
 }
 
 export function resourceBlock(item: PlanItem): string {
@@ -99,48 +79,46 @@ const symbolOf = (a: string) => (a === 'create' ? '+' : a === 'update' ? '~' : a
 function driftBlock(r: PlanResult, d: PlanResult['drift'][number]): string {
   const [type, name] = d.address.replace(/\[.*$/, '').split('.')
   const open = `resource "${type}" "${name}" {`
+  const attrSpecs = schemaFor(type)?.attrs ?? {}
+  const secret = (n: string) => Object.hasOwn(attrSpecs, n) && attrSpecs[n].sensitive === true
   if (d.kind === 'deleted') {
-    const shown = Object.entries(d.before ?? {}).filter(([, v]) => v !== null)
-    const w = Math.max(0, ...shown.map(([n]) => n.length))
-    const body = shown.sort(([a], [b]) => (a < b ? -1 : 1)).flatMap(([n, v]) => {
-      const l = lines(6, '-', n, w, v)
-      l[l.length - 1] += ' -> null'
-      return l
-    })
-    return [`  # ${d.address} has been deleted`, row(2, '-', open), ...body, row(2, ' ', '}')].join('\n')
+    const fields = Object.entries(d.before ?? {})
+      .filter(([, v]) => v !== null)
+      .map(([n, v]): Field => ({ name: n, op: '-', before: v, sensitive: secret(n) }))
+    return [`  # ${d.address} has been deleted`, row(2, '-', open), ...body(6, fields), row(2, ' ', '}')].join('\n')
   }
   const attrs = findInstance(r.refreshed, d.address)?.instance.attributes ?? {}
   const changed = new Set(d.changes.map((c) => c.name))
-  const showId = Object.hasOwn(attrs, 'id') && !changed.has('id')
-  const names = [...d.changes.map((c) => c.name), ...(showId ? ['id'] : [])]
-  const w = Math.max(0, ...names.map((n) => n.length))
-  const rows = [
-    ...d.changes.map((c) => ({ name: c.name, out: diffLines(6, c.name, w, c.before, c.after) })),
-    ...(showId ? [{ name: 'id', out: [row(6, ' ', `${'id'.padEnd(w)} = ${scalar(attrs.id)}`)] }] : []),
-  ].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
-  const hidden = Object.entries(attrs).filter(([n, v]) => v !== null && !changed.has(n) && !(showId && n === 'id')).length
-  return [`  # ${d.address} has changed`, row(2, '~', open), ...rows.flatMap((x) => x.out), ...(hidden ? [row(6, ' ', `# (${plural(hidden)})`)] : []), row(2, ' ', '}')].join('\n')
+  const fields: Field[] = [
+    ...d.changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: secret(c.name) })),
+    ...Object.entries(attrs)
+      .filter(([n, v]) => v !== null && !changed.has(n))
+      .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v, sensitive: secret(n) })),
+  ]
+  return [`  # ${d.address} has changed`, row(2, '~', open), ...body(6, fields), row(2, ' ', '}')].join('\n')
 }
 
 function outputChanges(r: PlanResult): string[] {
   const before = r.refreshed.outputs
-  const rows: { name: string; sym: string; text: (w: number) => string[] }[] = []
+  const rows: { name: string; text: (w: number) => string[] }[] = []
   for (const o of r.outputs) {
     const had = Object.hasOwn(before, o.name)
     const old = had ? before[o.name].value : undefined
     if (had && equal(old as Value, o.value)) continue
+    const hide = o.sensitive || (had && before[o.name].sensitive === true)
+    const sym = had ? '~' : '+'
     rows.push({
       name: o.name,
-      sym: had ? '~' : '+',
-      text: (w) => (o.sensitive ? [row(2, had ? '~' : '+', `${o.name.padEnd(w)} = ${SENSITIVE}`)] : had ? diffLines(2, o.name, w, old, o.value) : lines(2, '+', o.name, w, o.value)),
+      text: (w) => (hide ? [masked(2, sym, o.name, w)] : had ? diffLines(2, o.name, w, old, o.value) : lines(2, '+', o.name, w, o.value)),
     })
   }
   for (const name of Object.keys(before)) {
     if (!r.outputs.some((o) => o.name === name)) {
-      rows.push({ name, sym: '-', text: (w) => { const l = lines(2, '-', name, w, before[name].value); l[l.length - 1] += ' -> null'; return l } })
+      const hide = before[name].sensitive === true
+      rows.push({ name, text: (w) => (hide ? [masked(2, '-', name, w, ' -> null')] : lines(2, '-', name, w, before[name].value, '', true)) })
     }
   }
-  const w = Math.max(0, ...rows.map((x) => x.name.length))
+  const w = rows.reduce((m, x) => Math.max(m, x.name.length), 0)
   return rows.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0)).flatMap((x) => x.text(w))
 }
 

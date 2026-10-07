@@ -510,10 +510,22 @@ Which attributes force replacement, which are computed, and the defaults are fro
 Layout reproduced from memory of Terraform 1.x CLI output; check each against a real `terraform plan`.
 - [ ] Legend wording and symbols (`+ create`, `~ update in-place`, `- destroy`, `-/+ destroy and then create replacement`, `+/- create replacement and then destroy`); omitted entirely for a moves-only plan.
 - [ ] Comment headers: `will be created`, `will be updated in-place`, `must be replaced`, `is tainted, so must be replaced`, `will be replaced, as requested`, `will be replaced due to changes in replace_triggered_by`, `will be destroyed` with `(because … is not in configuration | index […] is out of range for count | key […] is not in for_each map)`, `has moved to`, `will be imported`, and the forget wording.
-- [ ] Which unchanged attributes are shown as context in an update (this renders only `id`; real Terraform also shows some nested containers and names) and how hidden attributes are counted (here: non-null attributes of the prior object).
+- [x] Which unchanged attributes are shown as context (`id`, `name`, `tags`, in full, at every block level) and how hidden attributes are counted (non-null attributes) — source-checked by review.
 - [ ] The forget block (a single `resource "t" "n" {}` row with no symbol) is a guess.
 - [ ] Block-list attributes (`ingress`, …) are rendered as nested blocks by position; real Terraform matches blocks by schema (set-typed blocks have no order) and prints them with its own diff algorithm.
-- [ ] Map and list diff layout (`# (N unchanged elements hidden)`, `-> null` after a removed map, `# forces replacement` placement) and the `Plan: N to import, …` summary format.
+- [x] Alignment over hidden attributes and all map keys, collection-becomes-unknown, nested block layout (attributes, blank line, blocks), list diffs (position-wise for equal length, one context element), `# forces replacement` on the opening line, and sensitive masking in drift and output changes — source-checked by review.
+- [ ] Map and list diff layout (`# (N unchanged elements hidden)`, `-> null` after a removed map) and the `Plan: N to import, …` summary format.
 - [ ] Drift note text and the 77-character rule; the "No changes. Your infrastructure still matches the configuration." variant after drift.
 - [ ] Output-change block (`Changes to Outputs:`) and its alignment; real Terraform also prints an `apply` hint when only outputs change.
 - [ ] Not rendered: multi-line string values, `<=` data reads, `-target` and `-refresh-only` banners, colour.
+- [ ] Deferred from review: multi-line strings as `<<-EOT` heredocs with per-line diffs.
+- [ ] Deferred from review: JSON strings as `jsonencode(...)` (matters for `aws_iam_role.assume_role_policy`).
+- [ ] Deferred from review: Go `%q` string escapes (`\x01` vs JSON `\u0001`).
+- [ ] Deferred from review: `# Warning: this will destroy the imported resource` on import plus replace.
+- [ ] Deferred from review: destroy reason when a moved target is not in the configuration.
+- [ ] Deferred from review: non-identifier attribute names quoted with `%q`.
+- [ ] Deferred from review: set-vs-list block matching (set blocks have no order).
+- [ ] Deferred from review: drift limited to RelevantAttributes.
+- [ ] Deferred from review: `[{a:1},{}]` (an empty object inside a list of objects) is not a block list.
+- [ ] Deferred from review: driftBlock address parsing for `data.` and `module.` addresses.
+- [ ] Deferred from review: deep nesting recursion (stack depth on deeply nested values).

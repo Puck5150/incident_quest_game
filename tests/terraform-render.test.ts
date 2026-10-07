@@ -61,8 +61,8 @@ describe('resourceBlock: update and replace', () => {
       text(
         '  # aws_instance.web must be replaced',
         '-/+ resource "aws_instance" "web" {',
-        '      ~ ami = "ami-1" -> "ami-2" # forces replacement',
-        '      ~ id  = "i-1" -> (known after apply)',
+        '      ~ ami           = "ami-1" -> "ami-2" # forces replacement',
+        '      ~ id            = "i-1" -> (known after apply)',
         '        # (1 unchanged attribute hidden)',
         '    }',
       ),
@@ -83,6 +83,37 @@ describe('resourceBlock: update and replace', () => {
     expect(out).not.toContain('old')
   })
 
+  it('aligns over hidden attributes and always shows name and tags in full', () => {
+    const n = (s: string) => s.padEnd(26)
+    const out = resourceBlock(
+      item({
+        action: 'update',
+        changes: [ch('instance_type', 't3.micro', 't3.small')],
+        unchanged: { a_very_long_unchanged_name: 'x', ami: 'a', name: 'web', tags: { Name: 'web', Env: 'prod' } },
+      }),
+    )
+    expect(out).toBe(
+      text(
+        '  # aws_instance.web will be updated in-place',
+        '  ~ resource "aws_instance" "web" {',
+        `      ~ ${n('instance_type')} = "t3.micro" -> "t3.small"`,
+        `        ${n('name')} = "web"`,
+        `        ${n('tags')} = {`,
+        '            "Env"  = "prod"',
+        '            "Name" = "web"',
+        '        }',
+        '        # (2 unchanged attributes hidden)',
+        '    }',
+      ),
+    )
+  })
+
+  it('shows the unchanged keys of a changed tags map as context, with no hidden line', () => {
+    const out = resourceBlock(item({ action: 'update', changes: [ch('tags', { Name: 'web', Env: 'prod' }, { Name: 'web', Env: 'dev' })], unchanged: {} }))
+    expect(out).toContain(text('      ~ tags = {', '          ~ "Env"  = "prod" -> "dev"', '            "Name" = "web"', '        }'))
+    expect(out).not.toContain('unchanged')
+  })
+
   it('renders a changed nested block list', () => {
     const out = resourceBlock(
       item({ action: 'update', address: 'aws_security_group.web', type: 'aws_security_group', name: 'web', changes: [ch('ingress', [{ from_port: 22, to_port: 22 }], [{ from_port: 22, to_port: 2222 }])], unchanged: { id: 'sg-1' } }),
@@ -91,9 +122,10 @@ describe('resourceBlock: update and replace', () => {
       text(
         '  # aws_security_group.web will be updated in-place',
         '  ~ resource "aws_security_group" "web" {',
-        '        id      = "sg-1"',
+        '        id = "sg-1"',
+        '',
         '      ~ ingress {',
-        '          ~ to_port = 22 -> 2222',
+        '          ~ to_port   = 22 -> 2222',
         '            # (1 unchanged attribute hidden)',
         '        }',
         '    }',
@@ -129,7 +161,7 @@ describe('resourceBlock: destroy, move, import, forget', () => {
       text(
         '  # aws_db_instance.orders has moved to aws_db_instance.primary',
         '    resource "aws_db_instance" "primary" {',
-        '        id = "db-1"',
+        '        id     = "db-1"',
         '        # (1 unchanged attribute hidden)',
         '    }',
       ),
@@ -241,10 +273,10 @@ describe('renderPlan', () => {
         '',
         '  # aws_vpc.main has changed',
         '  ~ resource "aws_vpc" "main" {',
-        '        id   = "vpc-1"',
-        '      ~ tags = {',
+        '        id         = "vpc-1"',
+        '      ~ tags       = {',
+        '            "Name"  = "main"',
         '          + "Owner" = "ops"',
-        '            # (1 unchanged element hidden)',
         '        }',
         '        # (1 unchanged attribute hidden)',
         '    }',
@@ -263,6 +295,32 @@ describe('renderPlan', () => {
         '',
       ),
     )
+  })
+
+  it('masks sensitive attributes in drift, changed and deleted', () => {
+    const r = result({
+      drift: [
+        { address: 'aws_db_instance.db', kind: 'changed', changes: [{ name: 'password', before: 'oldpw', after: 'newpw' }] },
+        { address: 'aws_db_instance.gone', kind: 'deleted', changes: [], before: { id: 'db-2', password: 'gonepw' } },
+      ],
+      refreshed: stateWith('aws_db_instance', 'db', { id: 'db-1', password: 'newpw', engine: 'postgres' }),
+    })
+    const out = renderPlan(r)
+    expect(out).toContain('      ~ password = (sensitive value)')
+    expect(out).toContain('      - password = (sensitive value) -> null')
+    for (const leak of ['oldpw', 'newpw', 'gonepw']) expect(out).not.toContain(leak)
+  })
+
+  it('masks outputs that were or are sensitive, including removed ones', () => {
+    const refreshed = emptyState()
+    refreshed.outputs = { gone_s: { value: 'x', sensitive: true }, flip: { value: 'old', sensitive: true } }
+    const r = result({
+      items: [item({ action: 'create', changes: [ch('ami', undefined, 'a')] })],
+      outputs: [{ name: 'flip', value: 'new', sensitive: false }],
+      refreshed,
+      summary: { add: 1, change: 0, destroy: 0 },
+    })
+    expect(renderPlan(r).split('Changes to Outputs:\n')[1]).toBe(text('  ~ flip   = (sensitive value)', '  - gone_s = (sensitive value) -> null'))
   })
 
   it('shows output changes against the outputs already in state', () => {
