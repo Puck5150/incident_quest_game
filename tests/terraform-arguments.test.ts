@@ -67,6 +67,7 @@ describe('lifecycleOf', () => {
     expect(names('[tags, desired_count]')).toEqual(['tags', 'desired_count'])
     expect(names('["tags"]')).toEqual(['tags'])
     expect(names('[tags["Name"], user_data]')).toEqual(['tags', 'user_data'])
+    expect(names('["tags.Name", "ingress[0]"]')).toEqual(['tags', 'ingress'])
     expect(names('all')).toBe('all')
     expect(names('[all]')).toBe('all')
     expect(names('["all"]')).toBe('all')

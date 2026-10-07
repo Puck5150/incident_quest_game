@@ -58,7 +58,7 @@ export type LifecycleResult = { ok: true; lifecycle: Lifecycle } | Failure
 function rootName(e: Expr): string | undefined {
   if (e.kind === 'ref') return e.path[0]
   if (e.kind === 'attr' || e.kind === 'idx') return rootName(e.base)
-  if (e.kind === 'lit' && typeof e.value === 'string') return e.value
+  if (e.kind === 'lit' && typeof e.value === 'string') return e.value.split(/[.[]/)[0]
   return undefined
 }
 

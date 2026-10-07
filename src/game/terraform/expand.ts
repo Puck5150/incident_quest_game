@@ -1,6 +1,6 @@
 // Which instances a resource has: one, `count` of them, or one per
 // `for_each` key. Both meta-arguments must be known at plan time.
-import { evalExpr, EvalError, isUnknown, type Scope, type Value } from './eval.ts'
+import { evalExpr, EvalError, isUnknown, parseNumber, type Scope, type Value } from './eval.ts'
 import type { Block, Pos } from './types.ts'
 
 export type Key = string | number | undefined
@@ -38,6 +38,7 @@ export function expandInstances(block: Block, scope: Scope): Expansion {
   }
 
   if (count) {
+    if (typeof v === 'string') v = parseNumber(v) ?? v // a -var / TF_VAR value arrives as a string
     const unsuitable = (why: string) => bad(count.pos, 'Invalid count argument', `The given "count" argument value is unsuitable: ${why}.`)
     if (isUnknown(v)) return bad(count.pos, 'Invalid count argument', COUNT_UNKNOWN)
     if (typeof v !== 'number') return unsuitable(v === null ? 'the given value is null' : 'number required')

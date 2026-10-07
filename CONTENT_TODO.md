@@ -464,5 +464,16 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] The `count` / `for_each` unknown-value errors ("Invalid count argument", "Invalid for_each argument") and their long detail text, "Missing resource instance key", "No value for required variable", "Reference to undeclared ...": summaries follow the CLI; detail wording is from memory of the Terraform language docs.
 - [ ] A `for_each` over a list is accepted as a set of strings, because the lab represents sets as lists; real Terraform rejects a list ("must be a map, or set of strings, and you have provided a value of type tuple").
 - [ ] Data sources are read from the data entries in state (or unknown if absent); real Terraform reads them from the provider during plan.
-- [ ] Unsupported on purpose (reported as `Unsupported ...`): modules, `dynamic` blocks, `provisioner`/`connection` behavior, `variable` `validation` and `type` conversion.
+- [ ] Unsupported on purpose (reported as `Unsupported ...`): modules, `dynamic` blocks, `provisioner`/`connection` behavior, `variable` `validation` blocks (ignored) and `type` conversion.
 - [ ] Nested blocks compare as lists of objects with exactly the attributes written; a state authored with extra provider-set keys in a nested block (for example every field of a security group rule) will show a change.
+
+## terraform simulator (requirements found in TF2b-2 review)
+- [ ] Unknown argument names (`cidr_blok = ...`) are accepted: a TF2c `validate` must report 'Unsupported argument' once schemas list every configurable attribute (typo hunting is core gameplay).
+- [ ] A sensitive value (`aws_db_instance.password`, a `sensitive = true` variable) flows through an output with `sensitive: false`; real Terraform errors 'Output refers to sensitive values'.
+- [ ] `-var` values need conversion by the variable's declared `type`, which is currently ignored (only `count` converts a numeric string).
+- [ ] A variable `default = var.a` is evaluated; real Terraform says 'Variables not allowed'.
+- [ ] Data blocks are never evaluated and only their first state instance is used (so `1/0` in a data block is silent and `data.x.y[0]` with count on a data block fails).
+- [ ] A resource whose `count` references itself reports `Cycle: ...` with no file/line (real: 'Self-referential block').
+- [ ] `[all]` / `["all"]` are accepted for ignore_changes but real Terraform only takes the bare keyword `all`.
+- [ ] `replace_triggered_by` drops function-call items and must be fixed when TF2b-3 makes it act.
+- [ ] A state instance without `attributes` throws a raw TypeError (loader TODO).

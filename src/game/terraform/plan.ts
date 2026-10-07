@@ -27,6 +27,7 @@ export interface PlanItem {
   key?: string | number
   action: Action | 'destroy'
   changes: AttrChange[]
+  movedFrom?: string
 }
 export interface PlanOutput {
   name: string
@@ -42,7 +43,11 @@ export interface PlanResult {
   summary: { add: number; change: number; destroy: number }
 }
 
-const byAddress = (a: PlanItem, b: PlanItem) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0)
+const cmp = <T extends string | number>(a: T, b: T) => (a < b ? -1 : a > b ? 1 : 0)
+// Terraform's order: type, then name, then key (none first, numbers numerically, strings lexically).
+const keyRank = (k: Key) => (k === undefined ? 0 : typeof k === 'number' ? 1 : 2)
+const byInstance = (a: PlanItem, b: PlanItem) =>
+  cmp(a.type, b.type) || cmp(a.name, b.name) || cmp(keyRank(a.key), keyRank(b.key)) || (a.key === undefined || b.key === undefined ? 0 : cmp(a.key, b.key))
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 
 // Follow attribute names into a value, as `a.b.c` does.
@@ -63,7 +68,7 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
 
 export function planConfig(input: PlanInput): PlanResult {
   const g = buildGraph(input.files)
-  const { state: refreshed, drift } = input.refresh === false ? { state: input.state, drift: [] as Drift[] } : refreshState(input.state, input.reality)
+  const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
   const result: PlanResult = { diagnostics: [...g.diagnostics], drift, items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 } }
   if (g.diagnostics.length) return result
 
@@ -93,6 +98,8 @@ export function planConfig(input: PlanInput): PlanResult {
         case 'count':
           if (ctx.count === undefined) throw new EvalError('Reference to "count" in non-counted context', 'The "count" object can only be used in "resource" blocks when the "count" argument is set.')
           return walk({ index: ctx.count }, path.slice(1))
+        case 'self':
+          throw new EvalError('Invalid "self" reference', 'The "self" object is not available in this context.')
         case 'path':
           return walk({ module: '.', root: '.', cwd: '.' }, path.slice(1))
         case 'terraform':
@@ -119,6 +126,7 @@ export function planConfig(input: PlanInput): PlanResult {
     },
   })
 
+  const consumed = new Set<string>()
   const planResource = (node: GNode) => {
     const b = node.block!
     const [type, name] = b.labels
@@ -152,9 +160,20 @@ export function planConfig(input: PlanInput): PlanResult {
         continue
       }
       const address = instanceAddress({ mode: 'managed', type, name }, key)
-      const prior = findInstance(refreshed, address)?.instance.attributes
+      let prior = findInstance(refreshed, address)?.instance.attributes
+      let movedFrom: string | undefined
+      // Adding or removing `count = 1` moves the lone instance between `x` and `x[0]` (Terraform 1.1+).
+      if (!prior && ex.kind !== 'for_each' && (key === 0 || key === undefined)) {
+        const old = instanceAddress({ mode: 'managed', type, name }, key === 0 ? undefined : 0)
+        const found = findInstance(refreshed, old)
+        if (found) {
+          prior = found.instance.attributes
+          movedFrom = old
+          consumed.add(old)
+        }
+      }
       const p = diffInstance(schema, ar.args, prior, lc.lifecycle.ignoreChanges)
-      result.items.push({ address, type, name, key, action: p.action, changes: p.changes })
+      result.items.push({ address, type, name, key, action: p.action, changes: p.changes, ...(movedFrom ? { movedFrom } : {}) })
       planned.set(key, complete(p.planned, schema))
     }
     if (failed) return
@@ -164,9 +183,17 @@ export function planConfig(input: PlanInput): PlanResult {
     )
   }
 
+  const broken = new Set<string>()
   for (const addr of g.order) {
     const node = g.nodes.get(addr)!
     const b = node.block
+    // A failed node's dependents are not visited; their errors would only mislead.
+    if (node.deps.some((d) => broken.has(d))) {
+      broken.add(addr)
+      values.set(addr, UNKNOWN)
+      continue
+    }
+    const errorsBefore = errors.length
     switch (node.kind) {
       case 'variable': {
         const name = b!.labels[0]
@@ -181,7 +208,7 @@ export function planConfig(input: PlanInput): PlanResult {
         break
       }
       case 'local':
-        values.set(addr, evalAt(node, node.pos, () => evalExpr(node.value!, scopeFor({}))))
+        values.set(addr, evalAt(node, node.pos, () => evalExpr(node.value!, scopeFor({})), 'locals'))
         break
       case 'data': {
         const [type, name] = b!.labels
@@ -195,7 +222,9 @@ export function planConfig(input: PlanInput): PlanResult {
       case 'output': {
         const value = b!.attrs.find((a) => a.name === 'value')
         const sensitive = b!.attrs.find((a) => a.name === 'sensitive')
-        const v = value ? evalAt(node, value.pos, () => evalExpr(value.value, scopeFor({})), `output "${b!.labels[0]}"`) : null
+        const octx = `output "${b!.labels[0]}"`
+        if (!value) fail(node.file, node.pos, 'Missing required argument', 'The argument "value" is required, but no definition was found.', octx)
+        const v = value ? evalAt(node, value.pos, () => evalExpr(value.value, scopeFor({})), octx) : null
         result.outputs.push({ name: b!.labels[0], value: v, sensitive: sensitive?.value.kind === 'lit' && sensitive.value.value === true })
         break
       }
@@ -203,6 +232,7 @@ export function planConfig(input: PlanInput): PlanResult {
         planResource(node)
         break
     }
+    if (errors.length > errorsBefore) broken.add(addr)
   }
 
   if (errors.length) {
@@ -218,7 +248,7 @@ export function planConfig(input: PlanInput): PlanResult {
     const schema = schemaFor(r.type)
     for (const inst of r.instances) {
       const address = instanceAddress(r, inst.index_key)
-      if (planned.has(address)) continue
+      if (planned.has(address) || consumed.has(address)) continue
       result.items.push({
         address,
         type: r.type,
@@ -231,7 +261,7 @@ export function planConfig(input: PlanInput): PlanResult {
       })
     }
   }
-  result.items.sort(byAddress)
+  result.items.sort(byInstance)
   result.outputs.sort(byName)
   for (const i of result.items) {
     if (i.action === 'create' || i.action === 'replace') result.summary.add++

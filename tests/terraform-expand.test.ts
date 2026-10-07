@@ -31,6 +31,12 @@ describe('expandInstances', () => {
     expect(expand('  count = var.n', { n: 0 })).toMatchObject({ kind: 'count', keys: [] })
   })
 
+  it('converts a numeric string count (from -var), but not other strings', () => {
+    expect(expand('  count = var.n', { n: '2' })).toMatchObject({ kind: 'count', keys: [0, 1] })
+    expect(bad('  count = var.n', { n: 'x' }).detail).toContain('number required')
+    expect(bad('  count = var.n', { n: ' 2 ' }).detail).toContain('number required')
+  })
+
   it('rejects an unknown, null, negative, fractional or non-number count', () => {
     expect(bad('  count = var.n', { n: UNKNOWN })).toMatchObject({ summary: 'Invalid count argument', detail: expect.stringContaining('cannot be determined until apply') })
     expect(bad('  count = null').summary).toBe('Invalid count argument')

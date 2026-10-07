@@ -210,3 +210,76 @@ describe('planConfig: errors', () => {
     expect(state).toEqual(copy)
   })
 })
+
+describe('planConfig: review fixes', () => {
+  const B = (n?: string) => `resource "aws_s3_bucket" "b" {\n${n ? `  count = ${n}\n` : ''}  bucket = "logs-0"\n}`
+  const b0 = { id: 'logs-0', arn: 'arn:logs-0', bucket: 'logs-0', force_destroy: false }
+  const one = (key?: number) => stateOf({ type: 'aws_s3_bucket', name: 'b', key, attrs: b0 })
+
+  it('moves an unkeyed instance to [0] when count is added, with no destroy', () => {
+    const r = plan(B('1'), { state: one() })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['noop aws_s3_bucket.b[0]'])
+    expect(r.items[0].movedFrom).toBe('aws_s3_bucket.b')
+    expect(r.summary.destroy).toBe(0)
+  })
+
+  it('moves [0] back to the unkeyed address when count is removed', () => {
+    const r = plan(B(), { state: one(0) })
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['noop aws_s3_bucket.b'])
+    expect(r.items[0].movedFrom).toBe('aws_s3_bucket.b[0]')
+  })
+
+  it('count=2 moves the unkeyed instance to [0] and creates [1]', () => {
+    const r = plan(B('2'), { state: one() })
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['noop aws_s3_bucket.b[0]', 'create aws_s3_bucket.b[1]'])
+    expect(r.items[1].movedFrom).toBeUndefined()
+  })
+
+  it('uses the real instance when both forms exist, and destroys the other', () => {
+    const state = stateOf({ type: 'aws_s3_bucket', name: 'b', attrs: b0 }, { type: 'aws_s3_bucket', name: 'b', key: 0, attrs: { ...b0, id: 'logs-x', arn: 'arn:logs-x' } })
+    const r = plan(B('1'), { state })
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['destroy aws_s3_bucket.b', 'noop aws_s3_bucket.b[0]'])
+    expect(r.items.every((i) => i.movedFrom === undefined)).toBe(true)
+  })
+
+  it('never moves for_each instances', () => {
+    const r = plan('resource "aws_s3_bucket" "b" {\n  for_each = toset(["a"])\n  bucket = "logs-0"\n}', { state: one() })
+    expect(actions(r)).toEqual(['destroy aws_s3_bucket.b', 'create aws_s3_bucket.b["a"]'])
+  })
+
+  it('reports only the root error when a node fails, not its dependents', () => {
+    expect(plan('variable "n" {}\n' + B('var.n')).diagnostics.map((d) => d.summary)).toEqual(['No value for required variable'])
+    expect(plan('variable "e" {}\nresource "aws_s3_bucket" "b" {\n  for_each = toset([var.e])\n}').diagnostics.map((d) => d.summary)).toEqual(['No value for required variable'])
+    const r = plan('resource "aws_nope" "x" {}\nresource "aws_s3_bucket" "b" {\n  bucket = aws_nope.x.id\n}')
+    expect(r.diagnostics.map((d) => d.summary)).toEqual(['Invalid resource type'])
+  })
+
+  it('accepts a numeric string for count', () => {
+    expect(plan('variable "n" {}\n' + B('var.n'), { vars: { n: '2' } }).items).toHaveLength(2)
+  })
+
+  it('orders instances by type, name, then numeric key', () => {
+    const r = plan(B('12') + '\nresource "aws_s3_bucket" "b2" {\n  bucket = "x"\n}')
+    expect(r.items.map((i) => i.address)).toEqual([...Array.from({ length: 12 }, (_, i) => `aws_s3_bucket.b[${i}]`), 'aws_s3_bucket.b2'])
+  })
+
+  it('orders an unkeyed destroy before keyed instances of the same name', () => {
+    const r = plan(B('2'), { state: stateOf({ type: 'aws_s3_bucket', name: 'b', attrs: b0 }, { type: 'aws_s3_bucket', name: 'b', key: 0, attrs: b0 }) })
+    expect(r.items.map((i) => i.address)).toEqual(['aws_s3_bucket.b', 'aws_s3_bucket.b[0]', 'aws_s3_bucket.b[1]'])
+  })
+
+  it('does not alias the caller\'s state when refresh is off', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'v', attrs: { ...VPC, tags: { a: '1' } } })
+    const r = planConfig({ files: [{ name: 'main.tf', text: 'resource "aws_vpc" "v" {\n  cidr_block = "10.0.0.0/16"\n}' }], state, reality: {}, vars: {}, refresh: false })
+    const before = r.items[0].changes.find((c) => c.name === 'tags')!.before as Record<string, Value>
+    before.a = 'mutated'
+    expect(state.resources[0].instances[0].attributes.tags).toEqual({ a: '1' })
+  })
+
+  it('errors on an output without a value, on self outside a provisioner, and tags local errors', () => {
+    expect(plan('output "o" {}')).toMatchObject({ diagnostics: [{ summary: 'Missing required argument', detail: 'The argument "value" is required, but no definition was found.', context: 'output "o"' }] })
+    expect(plan('output "o" {\n  value = self.id\n}').diagnostics[0].summary).toBe('Invalid "self" reference')
+    expect(plan('locals {\n  x = 1 / 0\n}').diagnostics[0].context).toBe('locals')
+  })
+})
