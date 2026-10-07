@@ -20,7 +20,7 @@ export interface GNode {
 }
 export interface Graph {
   nodes: Map<string, GNode>
-  order: string[] // dependencies before dependents; cycle members are left out
+  order: string[] // dependencies before dependents; empty when a cycle makes ordering impossible
   diagnostics: Diagnostic[]
 }
 
@@ -70,6 +70,16 @@ function exprRefs(e: Expr, out: Ref[]): void {
 // provider/providers name a provider configuration; ignore_changes names
 // attributes. Neither is a reference to another object.
 function blockRefs(b: Block, out: Ref[], top: boolean): void {
+  if (b.type === 'dynamic') {
+    // The iterator (default: the block label) is local to the dynamic block, not an object.
+    const it = b.attrs.find((a) => a.name === 'iterator')?.value
+    const name = it?.kind === 'ref' ? it.path[0] : b.labels[0]
+    const inner: Ref[] = []
+    for (const a of b.attrs) if (a.name !== 'iterator') exprRefs(a.value, inner)
+    for (const n of b.blocks) blockRefs(n, inner, false)
+    out.push(...inner.filter((r) => r.path[0] !== name))
+    return
+  }
   for (const a of b.attrs) {
     if (top && (a.name === 'provider' || a.name === 'providers')) continue
     if (b.type === 'lifecycle' && a.name === 'ignore_changes') continue

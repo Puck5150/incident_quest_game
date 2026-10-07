@@ -133,4 +133,27 @@ resource "aws_instance" "web" {
     expect(r.nodes.get('x.b')!.deps).toEqual(['x.a'])
     expect(r.diagnostics[0]).toMatchObject({ file: 'c.tf', summary: 'Argument or block definition required' })
   })
+
+  it('treats dynamic block iterators as local, keeping outer references', () => {
+    const r = g(`
+variable "rules" {}
+resource "aws_vpc" "main" {}
+resource "aws_security_group" "s" {
+  dynamic "ingress" {
+    for_each = var.rules
+    content {
+      port = ingress.value.port
+      vpc  = aws_vpc.main.id
+    }
+  }
+}
+`)
+    expect(r.diagnostics).toEqual([])
+    expect(r.nodes.get('aws_security_group.s')!.deps).toEqual(['aws_vpc.main', 'var.rules'])
+  })
+
+  it('handles a custom dynamic iterator', () => {
+    const r = g('variable "rules" {}\nresource "x" "s" {\n  dynamic "ingress" {\n    for_each = var.rules\n    iterator = rule\n    content {\n      port = rule.value.port\n    }\n  }\n}\n')
+    expect(r.diagnostics).toEqual([])
+  })
 })
