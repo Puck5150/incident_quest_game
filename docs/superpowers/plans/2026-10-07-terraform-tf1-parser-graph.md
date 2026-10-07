@@ -116,7 +116,7 @@ describe('lex', () => {
   it('rejects an unterminated comment, heredoc and interpolation', () => {
     expect(lexError('/* never closed').summary).toBe('Unterminated comment')
     expect(lexError('a = <<EOT\nbody\n').summary).toBe('Unterminated heredoc')
-    expect(lexError('a = "${x"').summary).toBe('Unterminated template interpolation')
+    expect(lexError('a = "${x').summary).toBe('Unterminated template interpolation')
   })
 
   it('rejects template directives and stray characters', () => {
