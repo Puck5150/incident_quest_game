@@ -70,4 +70,18 @@ describe('expandInstances', () => {
     const e = bad('  count = var.missing')
     expect(e).toMatchObject({ summary: 'Reference to undeclared value', pos: { line: 2 } })
   })
+
+  it('caps instances at 1000 for count and for_each', () => {
+    const d = 'The given "count" argument value is unsuitable: this lab supports at most 1000 instances of one resource.'
+    expect(bad('  count = 1001')).toMatchObject({ summary: 'Invalid count argument', detail: d })
+    expect(bad('  count = 1000000000')).toMatchObject({ detail: d })
+    expect(bad('  count = 1e308')).toMatchObject({ detail: d })
+    const ok = expand('  count = 1000')
+    expect(ok.ok && ok.keys.length).toBe(1000)
+    const vars = { s: Array.from({ length: 1001 }, (_, i) => String(i)) }
+    expect(bad('  for_each = var.s', vars)).toMatchObject({
+      summary: 'Invalid for_each argument',
+      detail: 'The given "for_each" argument value is unsuitable: this lab supports at most 1000 instances of one resource.',
+    })
+  })
 })

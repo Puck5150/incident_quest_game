@@ -68,6 +68,8 @@ export function lifecycleOf(block: Block): LifecycleResult {
   if (blocks.length > 1) {
     return { ok: false, summary: 'Duplicate lifecycle block', detail: 'Only one lifecycle block is allowed per resource.', pos: blocks[1].pos }
   }
+  const nested = blocks[0]?.blocks[0]
+  if (nested) return { ok: false, summary: 'Unsupported block type', detail: `Blocks of type "${nested.type}" are not supported by this lab yet.`, pos: nested.pos }
   for (const a of blocks[0]?.attrs ?? []) {
     const fail = (summary: string, detail: string): LifecycleResult => ({ ok: false, summary, detail, pos: a.pos })
     switch (a.name) {
@@ -80,7 +82,8 @@ export function lifecycleOf(block: Block): LifecycleResult {
       }
       case 'prevent_destroy':
       case 'create_before_destroy': {
-        if (a.value.kind !== 'lit' || typeof a.value.value !== 'boolean') return fail('Variables not allowed', 'Variables may not be used here.')
+        if (a.value.kind !== 'lit') return fail('Variables not allowed', 'Variables may not be used here.')
+        if (typeof a.value.value !== 'boolean') return fail('Unsuitable value type', 'Unsuitable value: a bool is required.')
         if (a.name === 'prevent_destroy') lifecycle.preventDestroy = a.value.value
         else lifecycle.createBeforeDestroy = a.value.value
         break

@@ -16,6 +16,9 @@ const COUNT_UNKNOWN =
 const FOR_EACH_UNKNOWN =
   'The "for_each" map includes keys derived from resource attributes that cannot be determined until apply, and so Terraform cannot determine the full set of keys that will identify the instances of this resource.\n\nWhen working with unknown values in for_each, it\'s better to define the map keys statically in your configuration and place apply-time results only in the map values.\n\nAlternatively, you could use the -target argument to first apply only the resources that the for_each value depends on.'
 
+const MAX_INSTANCES = 1000
+const TOO_MANY = `this lab supports at most ${MAX_INSTANCES} instances of one resource`
+
 export function expandInstances(block: Block, scope: Scope): Expansion {
   const count = block.attrs.find((a) => a.name === 'count')
   const forEach = block.attrs.find((a) => a.name === 'for_each')
@@ -40,6 +43,7 @@ export function expandInstances(block: Block, scope: Scope): Expansion {
     if (typeof v !== 'number') return unsuitable(v === null ? 'the given value is null' : 'number required')
     if (!Number.isInteger(v)) return unsuitable('must be a whole number')
     if (v < 0) return unsuitable('must be greater than or equal to zero')
+    if (v > MAX_INSTANCES) return unsuitable(TOO_MANY)
     return { ok: true, kind: 'count', keys: Array.from({ length: v }, (_, i) => i), each: noEach }
   }
 
@@ -50,10 +54,12 @@ export function expandInstances(block: Block, scope: Scope): Expansion {
     const wrong = v.find((x) => typeof x !== 'string')
     if (wrong !== undefined) return unsuitable(`"for_each" supports maps and sets of strings, but you have provided a set containing type ${typeName(wrong)}`)
     const keys = [...new Set(v as string[])].sort()
+    if (keys.length > MAX_INSTANCES) return unsuitable(TOO_MANY)
     return { ok: true, kind: 'for_each', keys, each: noEach }
   }
   if (typeof v === 'object' && v !== null) {
     const map = v as { [key: string]: Value }
+    if (Object.keys(map).length > MAX_INSTANCES) return unsuitable(TOO_MANY)
     return { ok: true, kind: 'for_each', keys: Object.keys(map).sort(), each: (key) => ({ key, value: Object.hasOwn(map, key) ? map[key] : null }) }
   }
   return unsuitable(`the "for_each" argument must be a map, or set of strings, and you have provided a value of type ${typeName(v)}`)

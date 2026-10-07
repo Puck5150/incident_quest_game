@@ -83,4 +83,12 @@ describe('lifecycleOf', () => {
     expect(lc('    nope = 1')).toMatchObject({ ok: false, summary: 'Unsupported argument', detail: 'An argument named "nope" is not expected here.' })
     expect(lifecycleOf(block('  lifecycle {\n  }\n  lifecycle {\n  }'))).toMatchObject({ ok: false, summary: 'Duplicate lifecycle block' })
   })
+
+  it('reports non-bool literals as a type error and rejects blocks inside lifecycle', () => {
+    for (const v of ['"true"', 'null']) {
+      expect(lc(`    prevent_destroy = ${v}`)).toMatchObject({ ok: false, summary: 'Unsuitable value type', detail: 'Unsuitable value: a bool is required.' })
+      expect(lc(`    create_before_destroy = ${v}`)).toMatchObject({ ok: false, summary: 'Unsuitable value type' })
+    }
+    expect(lc('    precondition {\n      condition = true\n    }')).toMatchObject({ ok: false, summary: 'Unsupported block type', detail: 'Blocks of type "precondition" are not supported by this lab yet.' })
+  })
 })
