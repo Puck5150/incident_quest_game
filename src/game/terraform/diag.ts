@@ -15,7 +15,7 @@ export function wrap(text: string, width: number): string[] {
 }
 
 export function formatDiagnostic(d: Diagnostic, source = ''): string {
-  const out = ['╷', `│ Error: ${d.summary}`]
+  const out = ['╷', `│ ${d.severity === 'warning' ? 'Warning' : 'Error'}: ${d.summary}`]
   if (d.file && d.line) {
     out.push('│ ', `│   on ${d.file} line ${d.line}${d.context ? `, in ${d.context}` : ''}:`)
     const src = source.split('\n')[d.line - 1]

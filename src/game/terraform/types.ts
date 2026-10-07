@@ -48,7 +48,7 @@ export interface Block {
 }
 
 export interface Diagnostic {
-  severity: 'error'
+  severity: 'error' | 'warning'
   summary: string
   detail: string
   file: string // '' for diagnostics with no source location (e.g. a cycle)

@@ -49,3 +49,10 @@ describe('wrap', () => {
     expect(lines.join(' ')).toBe(text)
   })
 })
+
+describe('formatDiagnostic: warnings', () => {
+  it('labels a warning as Warning', () => {
+    const out = formatDiagnostic({ severity: 'warning', summary: 'Careful', detail: 'short detail', file: '', line: 0, col: 0 })
+    expect(out).toBe(['╷', '│ Warning: Careful', '│ ', '│ short detail', '╵'].join('\n'))
+  })
+})
