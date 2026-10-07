@@ -1,0 +1,119 @@
+import { describe, expect, it } from 'vitest'
+import { parseHcl } from '../src/game/terraform/parse.ts'
+import { evalExpr, EvalError, UNKNOWN, type Scope, type Value } from '../src/game/terraform/eval.ts'
+
+// Evaluate one expression with a scope that resolves references by walking `refs`.
+export const ev = (src: string, refs: Record<string, Value> = {}): Value => {
+  const r = parseHcl('main.tf', `locals {\n  v = ${src}\n}`)
+  if (r.diagnostics.length) throw new Error(`parse: ${r.diagnostics[0].summary}`)
+  const scope: Scope = {
+    ref(path) {
+      let cur: Value = refs as Value
+      for (const p of path) {
+        if (typeof cur !== 'object' || cur === null || Array.isArray(cur) || !(p in cur)) {
+          throw new EvalError('Reference to undeclared value', `No value for ${path.join('.')}.`)
+        }
+        cur = (cur as Record<string, Value>)[p]
+      }
+      return cur
+    },
+  }
+  return evalExpr(r.blocks[0].attrs[0].value, scope)
+}
+
+const fails = (src: string, refs: Record<string, Value> = {}) => {
+  try {
+    ev(src, refs)
+  } catch (e) {
+    if (e instanceof EvalError) return { summary: e.summary, detail: e.detail }
+    throw e
+  }
+  throw new Error('expected an EvalError')
+}
+
+describe('eval: literals, templates, references', () => {
+  it('evaluates literals', () => {
+    expect([ev('1'), ev('"a"'), ev('true'), ev('null')]).toEqual([1, 'a', true, null])
+    expect(ev('[1, "a"]')).toEqual([1, 'a'])
+    expect(ev('{ a = 1, "b-c" = [2] }')).toEqual({ a: 1, 'b-c': [2] })
+  })
+
+  it('builds strings from templates, printing whole numbers without a decimal point', () => {
+    expect(ev('"x-${var.n}-${var.ok}-${var.s}"', { var: { n: 1, ok: true, s: 'z' } })).toBe('x-1-true-z')
+    expect(ev('"${var.f}"', { var: { f: 1.5 } })).toBe(1.5)
+    expect(ev('"n=${var.f}"', { var: { f: 1.5 } })).toBe('n=1.5')
+  })
+
+  it('rejects null and collections inside a template', () => {
+    expect(fails('"x${null}"').summary).toBe('Invalid template interpolation value')
+    expect(fails('"x${[1]}"').summary).toBe('Invalid template interpolation value')
+  })
+
+  it('resolves references through the scope, then attributes and indexes', () => {
+    const refs = { aws_vpc: { main: { id: 'vpc-1' } }, aws_subnet: { s: [{ id: 'a' }, { id: 'b' }] } }
+    expect(ev('aws_vpc.main.id', refs)).toBe('vpc-1')
+    expect(ev('aws_subnet.s[1].id', refs)).toBe('b')
+    expect(ev('aws_subnet.s.0.id', refs)).toBe('a')
+  })
+
+  it('reports a missing attribute or index', () => {
+    expect(fails('aws_vpc.main.nope', { aws_vpc: { main: { id: 'x' } } })).toMatchObject({ summary: 'Reference to undeclared value' })
+    expect(fails('v.a', { v: { b: 1 } }).summary).toBe('Reference to undeclared value')
+    expect(fails('[1][5]').summary).toBe('Invalid index')
+    expect(fails('{ a = 1 }.b').summary).toBe('Unsupported attribute')
+    expect(fails('"s".x').summary).toBe('Unsupported attribute')
+  })
+
+  it('treats an unknown value as unknown through attribute, index and template', () => {
+    const refs = { aws_vpc: { main: { id: UNKNOWN } } }
+    expect(ev('aws_vpc.main.id', refs)).toBe(UNKNOWN)
+    expect(ev('"vpc-${aws_vpc.main.id}"', refs)).toBe(UNKNOWN)
+    expect(ev('aws_vpc.main.id[0]', refs)).toBe(UNKNOWN)
+  })
+})
+
+describe('eval: operators and conditionals', () => {
+  it('does arithmetic with precedence, and coerces numeric strings', () => {
+    expect(ev('1 + 2 * 3')).toBe(7)
+    expect(ev('10 - 2 - 3')).toBe(5)
+    expect(ev('7 % 4')).toBe(3)
+    expect(ev('"2" + 1')).toBe(3)
+    expect(ev('-3 + 1')).toBe(-2)
+  })
+
+  it('rejects a non-number operand', () => {
+    expect(fails('"a" + 1')).toMatchObject({ summary: 'Invalid operand', detail: 'Unsuitable value for left operand: a number is required.' })
+    expect(fails('1 + true').detail).toBe('Unsuitable value for right operand: a number is required.')
+  })
+
+  it('compares and tests equality deeply', () => {
+    expect([ev('1 < 2'), ev('2 <= 2'), ev('3 > 4'), ev('"a" == "a"'), ev('1 != 2')]).toEqual([true, true, false, true, true])
+    expect(ev('[1, { a = 2 }] == [1, { a = 2 }]')).toBe(true)
+    expect(ev('[1] == [2]')).toBe(false)
+    expect(ev('1 == "1"')).toBe(false)
+  })
+
+  it('does logic, and negation', () => {
+    expect([ev('true && false'), ev('false || true'), ev('!false')]).toEqual([false, true, true])
+    expect(fails('1 && true').summary).toBe('Invalid operand')
+    expect(fails('!1').summary).toBe('Invalid operand')
+  })
+
+  it('propagates unknown, except where the answer is already decided', () => {
+    const refs = { u: UNKNOWN }
+    expect(ev('u + 1', refs)).toBe(UNKNOWN)
+    expect(ev('u == 1', refs)).toBe(UNKNOWN)
+    expect(ev('!u', refs)).toBe(UNKNOWN)
+    expect(ev('false && u', refs)).toBe(false)
+    expect(ev('u && false', refs)).toBe(false)
+    expect(ev('true || u', refs)).toBe(true)
+    expect(ev('true && u', refs)).toBe(UNKNOWN)
+  })
+
+  it('evaluates conditionals, lazily in the branch not taken', () => {
+    expect(ev('true ? 1 : 2')).toBe(1)
+    expect(ev('false ? nope.x : 2')).toBe(2)
+    expect(ev('u ? 1 : 2', { u: UNKNOWN })).toBe(UNKNOWN)
+    expect(fails('1 ? 1 : 2').summary).toBe('Incorrect condition type')
+  })
+})
