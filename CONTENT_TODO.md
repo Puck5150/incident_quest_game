@@ -429,3 +429,9 @@ Wording the parser and graph print that is representative, not copied from the d
 - [ ] `Cycle: a, b`: modern Terraform may add `(expand)` suffixes or list more nodes; the node list order is sorted here.
 - [ ] `Invalid <type> block` for a wrong label count: real Terraform has separate `Missing name for resource` / `Extraneous label` messages.
 - [ ] Unsupported on purpose (reported as `Unsupported ...`): `for` expressions, splats, template directives (`%{ }`), template strip markers (`~`), nesting depth beyond 100 levels or 100 operators in one chain.
+
+## terraform simulator (expression evaluator, TF2a)
+- [ ] Evaluator error wording: `Invalid operand`, `Incorrect condition type`, `Unsupported attribute`, `Invalid index`, `Invalid template interpolation value`, `Not enough function arguments` / `Too many function arguments`, `Call to unknown function`: summaries follow the Terraform language docs and CLI; the detail strings are paraphrased.
+- [ ] `Invalid function argument` details for lookup, element, coalesce, tonumber and cidrsubnet: paraphrased from the function docs.
+- [ ] Unsupported on purpose (reported as `Call to unknown function`): `file`, `templatefile`, `try`, `can`, `for` expressions, anything not in the allowlist.
+- [ ] Sets are modeled as sorted, de-duplicated lists, so `toset` output order is by value; real Terraform sets have no defined order.

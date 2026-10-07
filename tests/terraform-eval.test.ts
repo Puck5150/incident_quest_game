@@ -134,3 +134,70 @@ describe('eval: own keys only', () => {
     expect(ev('-u', { u: UNKNOWN })).toBe(UNKNOWN)
   })
 })
+
+describe('eval: functions', () => {
+  it('rejects an unknown function and the wrong number of arguments', () => {
+    expect(fails('nope(1)')).toMatchObject({ summary: 'Call to unknown function', detail: 'There is no function named "nope".' })
+    expect(fails('lookup({ a = 1 })').summary).toBe('Not enough function arguments')
+    expect(fails('upper("a", "b")').summary).toBe('Too many function arguments')
+  })
+
+  it('makes the result unknown when an argument is unknown', () => {
+    expect(ev('upper(u)', { u: UNKNOWN })).toBe(UNKNOWN)
+    expect(ev('merge({ a = 1 }, u)', { u: UNKNOWN })).toBe(UNKNOWN)
+  })
+
+  it('does collections: length, keys, values, concat, contains, element', () => {
+    expect([ev('length([1, 2])'), ev('length("héllo")'), ev('length({ a = 1 })')]).toEqual([2, 5, 1])
+    expect(ev('keys({ b = 1, a = 2 })')).toEqual(['a', 'b'])
+    expect(ev('values({ b = 1, a = 2 })')).toEqual([2, 1])
+    expect(ev('concat([1], [2, 3])')).toEqual([1, 2, 3])
+    expect([ev('contains(["a"], "a")'), ev('contains(["a"], "b")')]).toEqual([true, false])
+    expect([ev('element(["a", "b", "c"], 1)'), ev('element(["a", "b", "c"], 4)')]).toEqual(['b', 'b'])
+  })
+
+  it('merges maps with later keys winning, and looks keys up with an optional default', () => {
+    expect(ev('merge({ a = 1, b = 2 }, { b = 3 })')).toEqual({ a: 1, b: 3 })
+    expect(ev('lookup({ a = 1 }, "a")')).toBe(1)
+    expect(ev('lookup({ a = 1 }, "z", 9)')).toBe(9)
+    expect(fails('lookup({ a = 1 }, "z")').summary).toBe('Invalid function argument')
+    expect(fails('lookup({ a = 1 }, "constructor")').summary).toBe('Invalid function argument')
+    expect(Object.keys(ev('merge({ "__proto__" = 1 }, { b = 2 })') as object)).toEqual(['__proto__', 'b'])
+  })
+
+  it('builds sets as sorted unique lists', () => {
+    expect(ev('toset(["b", "a", "b"])')).toEqual(['a', 'b'])
+    expect(ev('tolist(toset([3, 1, 3]))')).toEqual([1, 3])
+  })
+
+  it('does strings: format, join, upper, lower, replace, trimspace', () => {
+    expect(ev('format("%s-%d-%v-%%", "a", 3, true)')).toBe('a-3-true-%')
+    expect(ev('format("%d", 1.0)')).toBe('1')
+    expect(ev('join(",", ["a", "b"])')).toBe('a,b')
+    expect([ev('upper("a")'), ev('lower("A")'), ev('replace("a-b-c", "-", "_")'), ev('trimspace("  x ")')]).toEqual(['A', 'a', 'a_b_c', 'x'])
+  })
+
+  it('converts types and picks values', () => {
+    expect([ev('tostring(1)'), ev('tonumber("2")'), ev('max(1, 3, 2)'), ev('min(4, 2)')]).toEqual(['1', 2, 3, 2])
+    expect(fails('tonumber("x")').summary).toBe('Invalid function argument')
+    expect(ev('coalesce("", null, "b", "c")')).toBe('b')
+    expect(fails('coalesce("", null)').summary).toBe('Invalid function argument')
+  })
+
+  it('encodes JSON with sorted keys', () => {
+    expect(ev('jsonencode({ b = [1, "x"], a = true, c = null })')).toBe('{"a":true,"b":[1,"x"],"c":null}')
+    expect(ev('jsonencode({ a = u })', { u: UNKNOWN })).toBe(UNKNOWN)
+  })
+
+  it('computes cidrsubnet', () => {
+    expect(ev('cidrsubnet("10.0.0.0/16", 8, 2)')).toBe('10.0.2.0/24')
+    expect(ev('cidrsubnet("10.0.0.0/16", 4, 15)')).toBe('10.0.240.0/20')
+    expect(ev('cidrsubnet("192.168.1.0/24", 1, 1)')).toBe('192.168.1.128/25')
+  })
+
+  it('rejects bad cidrsubnet arguments', () => {
+    expect(fails('cidrsubnet("nope", 8, 0)').summary).toBe('Invalid function argument')
+    expect(fails('cidrsubnet("10.0.0.0/30", 8, 0)').detail).toContain('not enough remaining address space')
+    expect(fails('cidrsubnet("10.0.0.0/16", 2, 4)').detail).toContain('does not accommodate a subnet numbered 4')
+  })
+})
