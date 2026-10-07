@@ -1,5 +1,6 @@
 // The resource graph: which configuration objects exist, what each refers to,
 // the order they can be applied in, and whether that order is possible.
+import { parseAddress } from './addresses.ts'
 import { parseHcl } from './parse.ts'
 import type { Block, Diagnostic, Expr, Pos } from './types.ts'
 
@@ -20,6 +21,7 @@ export interface GNode {
 }
 export interface Graph {
   nodes: Map<string, GNode>
+  blocks: Block[] // every parsed top-level block, in file order
   order: string[] // dependencies before dependents; empty when a cycle makes ordering impossible
   diagnostics: Diagnostic[]
 }
@@ -174,6 +176,16 @@ export function buildGraph(files: { name: string; text: string }[]): Graph {
     put(PREFIX[kind] + b.labels.join('.'), kind, b.file, b.pos, refs, b)
   }
 
+  // An import block's id may use variables and locals, so its target resource depends on them.
+  for (const b of blocks) {
+    if (b.type !== 'import') continue
+    const to = b.attrs.find((a) => a.name === 'to')
+    const id = b.attrs.find((a) => a.name === 'id')
+    const addr = to && parseAddress(to.value)
+    const node = addr && nodes.get(`${addr.type}.${addr.name}`)
+    if (node && id) exprRefs(id.value, node.refs)
+  }
+
   // Resolve references into dependencies.
   for (const node of [...nodes.values()].sort((x, y) => x.address.localeCompare(y.address))) {
     const deps = new Set<string>()
@@ -219,7 +231,7 @@ export function buildGraph(files: { name: string; text: string }[]): Graph {
       }
     }
     diagnostics.push({ severity: 'error', summary: `Cycle: ${[...stuck].sort().join(', ')}`, detail: '', file: '', line: 0, col: 0 })
-    return { nodes, order: [], diagnostics }
+    return { nodes, order: [], blocks, diagnostics }
   }
-  return { nodes, order, diagnostics }
+  return { nodes, order, blocks, diagnostics }
 }

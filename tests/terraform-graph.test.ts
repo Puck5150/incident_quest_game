@@ -174,3 +174,22 @@ resource "aws_security_group" "s" {
     expect(r.diagnostics[0].summary).toBe('Unsupported nesting depth')
   })
 })
+
+describe('graph: blocks and import dependencies', () => {
+  it('exposes every parsed top-level block', () => {
+    const r = g('resource "aws_vpc" "a" {}\nmoved {\n  from = aws_vpc.old\n  to   = aws_vpc.a\n}\n')
+    expect(r.blocks.map((b) => b.type)).toEqual(['resource', 'moved'])
+  })
+
+  it('makes the target resource depend on what an import id references, and does not treat moved/import addresses as references', () => {
+    const r = g('variable "name" {\n  default = "x"\n}\nresource "aws_s3_bucket" "b" {\n  bucket = "x"\n}\nimport {\n  to = aws_s3_bucket.b\n  id = var.name\n}\nmoved {\n  from = aws_s3_bucket.gone\n  to   = aws_s3_bucket.b\n}\n')
+    expect(r.diagnostics).toEqual([])
+    expect(r.nodes.get('aws_s3_bucket.b')!.deps).toEqual(['var.name'])
+    expect(r.order).toEqual(['var.name', 'aws_s3_bucket.b'])
+  })
+
+  it('reports an undeclared variable used by an import id', () => {
+    const r = g('resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}\nimport {\n  to = aws_s3_bucket.b\n  id = var.nope\n}\n')
+    expect(r.diagnostics[0].summary).toBe('Reference to undeclared input variable')
+  })
+})
