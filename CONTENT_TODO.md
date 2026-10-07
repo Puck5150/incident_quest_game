@@ -511,12 +511,12 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Legend wording and symbols (`+ create`, `~ update in-place`, `- destroy`, `-/+ destroy and then create replacement`, `+/- create replacement and then destroy`); omitted entirely for a moves-only plan.
 - [ ] Comment headers: `will be created`, `will be updated in-place`, `must be replaced`, `is tainted, so must be replaced`, `will be replaced, as requested`, `will be replaced due to changes in replace_triggered_by`, `will be destroyed` with `(because … is not in configuration | index […] is out of range for count | key […] is not in for_each map)`, `has moved to`, `will be imported`, and the forget wording.
 - [x] Which unchanged attributes are shown as context (`id`, `name`, `tags`, in full, at every block level) and how hidden attributes are counted (non-null attributes) — source-checked by review.
-- [ ] The forget block (a single `resource "t" "n" {}` row with no symbol) is a guess.
+- [x] The forget block (` .` row, one-space comments, id/name/tags context and hidden count; legend header with no symbol lines) — source-checked by review.
 - [ ] Block-list attributes (`ingress`, …) are rendered as nested blocks by position; real Terraform matches blocks by schema (set-typed blocks have no order) and prints them with its own diff algorithm.
 - [x] Alignment over hidden attributes and all map keys, collection-becomes-unknown, nested block layout (attributes, blank line, blocks), list diffs (position-wise for equal length, one context element), `# forces replacement` on the opening line, and sensitive masking in drift and output changes — source-checked by review.
 - [ ] Map and list diff layout (`# (N unchanged elements hidden)`, `-> null` after a removed map) and the `Plan: N to import, …` summary format.
-- [ ] Drift note text and the 77-character rule; the "No changes. Your infrastructure still matches the configuration." variant after drift.
-- [ ] Output-change block (`Changes to Outputs:`) and its alignment; real Terraform also prints an `apply` hint when only outputs change.
+- [x] Drift note hidden when the plan is otherwise empty, two blank lines before "Unless you have made…", imported objects shown in full, destroy reasons for wrong repetition — source-checked by review. Still unchecked: the 77-character rule.
+- [x] Output-change block alignment over all outputs, and the 78-column apply hint for output-only plans (no actions header) — source-checked by review.
 - [ ] Not rendered: multi-line string values, `<=` data reads, `-target` and `-refresh-only` banners, colour.
 - [ ] Deferred from review: multi-line strings as `<<-EOT` heredocs with per-line diffs.
 - [ ] Deferred from review: JSON strings as `jsonencode(...)` (matters for `aws_iam_role.assume_role_policy`).

@@ -36,7 +36,13 @@ export interface PlanItem {
   triggeredBy?: string[]
   createBeforeDestroy?: boolean
   unchanged?: Record<string, Value>
-  destroyReason?: 'not-in-config' | 'count-index' | 'for-each-key'
+  destroyReason?: 'not-in-config' | 'count-index' | 'for-each-key' | 'wrong-repetition'
+}
+// A still-declared resource whose instance key no longer fits its repetition mode.
+function wrongRepetition(key: string | number | undefined, shape: 'count' | 'for_each' | undefined): NonNullable<PlanItem['destroyReason']> {
+  if (typeof key === 'number') return shape === 'count' ? 'count-index' : 'wrong-repetition'
+  if (typeof key === 'string') return shape === 'for_each' ? 'for-each-key' : 'wrong-repetition'
+  return shape ? 'wrong-repetition' : 'not-in-config'
 }
 export interface PlanOutput {
   name: string
@@ -357,7 +363,7 @@ export function planConfig(input: PlanInput): PlanResult {
       const address = instanceAddress(r, inst.index_key)
       if (planned.has(address) || consumed.has(address)) continue
       if (rm.removals.some((x) => x.from.type === r.type && x.from.name === r.name && !x.destroy)) {
-        result.items.push({ address, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [] })
+        result.items.push({ address, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
         continue
       }
       result.items.push({
@@ -366,7 +372,7 @@ export function planConfig(input: PlanInput): PlanResult {
         name: r.name,
         key: inst.index_key,
         action: 'destroy',
-        destroyReason: !g.nodes.has(`${r.type}.${r.name}`) ? 'not-in-config' : typeof inst.index_key === 'number' ? 'count-index' : typeof inst.index_key === 'string' ? 'for-each-key' : 'not-in-config',
+        destroyReason: !g.nodes.has(`${r.type}.${r.name}`) ? 'not-in-config' : wrongRepetition(inst.index_key, shapes.get(`${r.type}.${r.name}`)),
         changes: Object.entries(inst.attributes)
           .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))
           .sort(byName),

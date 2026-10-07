@@ -34,13 +34,22 @@ function headerLines(item: PlanItem): string[] {
       out.push(`${a} will be destroyed`)
       out.push(
         `(because ${
-          item.destroyReason === 'count-index' ? `index [${item.key}] is out of range for count` : item.destroyReason === 'for-each-key' ? `key [${JSON.stringify(item.key)}] is not in for_each map` : `${item.type}.${item.name} is not in configuration`
+          item.destroyReason === 'count-index'
+            ? `index [${item.key}] is out of range for count`
+            : item.destroyReason === 'for-each-key'
+              ? `key [${JSON.stringify(item.key)}] is not in for_each map`
+              : item.destroyReason === 'wrong-repetition'
+                ? typeof item.key === 'number'
+                  ? 'resource does not use count'
+                  : typeof item.key === 'string'
+                    ? 'resource does not use for_each'
+                    : 'resource uses count or for_each'
+                : `${item.type}.${item.name} is not in configuration`
         })`,
       )
       break
     case 'forget':
-      out.push(`${a} will no longer be managed by Terraform, but will not be destroyed`, '(destroy = false is set in the configuration)')
-      break
+      return [` # ${a} will no longer be managed by Terraform, but will not be destroyed`, ' # (destroy = false is set in the configuration)']
     default:
       out.push(item.movedFrom ? `${item.movedFrom} has moved to ${a}` : item.importing ? `${a} will be imported` : a)
   }
@@ -51,7 +60,6 @@ function headerLines(item: PlanItem): string[] {
 
 function bodyLines(item: PlanItem): string[] {
   const changes = item.changes
-  if (item.action === 'forget') return []
   if (item.action === 'create') return body(6, changes.map((c) => ({ name: c.name, op: '+', after: c.after, sensitive: c.sensitive })))
   if (item.action === 'destroy') return body(6, changes.filter((c) => hasVal(c.before)).map((c) => ({ name: c.name, op: '-', before: c.before, sensitive: c.sensitive })))
   const changed = new Set(changes.map((c) => c.name))
@@ -59,7 +67,7 @@ function bodyLines(item: PlanItem): string[] {
     ...changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: c.sensitive, forces: c.forcesReplacement })),
     ...Object.entries(item.unchanged ?? {})
       .filter(([n, v]) => !changed.has(n) && hasVal(v))
-      .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v })),
+      .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v, show: item.importing !== undefined })),
   ]
   return body(6, fields)
 }
@@ -67,12 +75,23 @@ function bodyLines(item: PlanItem): string[] {
 export function resourceBlock(item: PlanItem): string {
   const open = `resource "${item.type}" "${item.name}" {`
   const header = headerLines(item)
-  if (item.action === 'forget') return [...header, row(2, ' ', `resource "${item.type}" "${item.name}" {}`)].join('\n')
   const resourceRow =
-    item.action === 'replace' ? (item.createBeforeDestroy ? row(0, '+/-', open) : row(0, '-/+', open)) : row(2, item.action === 'create' ? '+' : item.action === 'update' ? '~' : item.action === 'destroy' ? '-' : ' ', open)
+    item.action === 'forget'
+      ? row(0, ' .', open)
+      : item.action === 'replace' ? (item.createBeforeDestroy ? row(0, '+/-', open) : row(0, '-/+', open)) : row(2, item.action === 'create' ? '+' : item.action === 'update' ? '~' : item.action === 'destroy' ? '-' : ' ', open)
   return [...header, resourceRow, ...bodyLines(item), row(2, ' ', '}')].join('\n')
 }
 
+const APPLY_OUTPUTS = 'You can apply this plan to save these new output values to the Terraform state, without changing any real infrastructure.'
+function wrap(text: string, width: number): string[] {
+  const out: string[] = ['']
+  for (const w of text.split(' ')) {
+    const last = out[out.length - 1]
+    if (last && last.length + 1 + w.length > width) out.push(w)
+    else out[out.length - 1] = last ? `${last} ${w}` : w
+  }
+  return out
+}
 const RULE = '─'.repeat(77)
 const symbolOf = (a: string) => (a === 'create' ? '+' : a === 'update' ? '~' : a === 'destroy' ? '-' : '')
 
@@ -118,7 +137,8 @@ function outputChanges(r: PlanResult): string[] {
       rows.push({ name, text: (w) => (hide ? [masked(2, '-', name, w, ' -> null')] : lines(2, '-', name, w, before[name].value, '', true)) })
     }
   }
-  const w = rows.reduce((m, x) => Math.max(m, x.name.length), 0)
+  // Names pad to the longest output, changed or not.
+  const w = [...r.outputs.map((o) => o.name), ...Object.keys(before)].reduce((m, n) => Math.max(m, n.length), 0)
   return rows.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0)).flatMap((x) => x.text(w))
 }
 
@@ -127,8 +147,10 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
   if (r.diagnostics.length) return [...boxed(r.warnings), ...boxed(r.diagnostics)].join('\n\n')
 
   const out: string[] = []
-  const hasDrift = r.drift.length > 0
-  if (hasDrift) {
+  const visible = r.items.filter((i) => i.action !== 'noop' || i.movedFrom || i.importing)
+  const outputs = outputChanges(r)
+  // Drift is only worth a note when something else is going to happen.
+  if (r.drift.length && (visible.length || outputs.length)) {
     out.push(
       [
         'Note: Objects have changed outside of Terraform',
@@ -138,24 +160,18 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
         '',
         r.drift.map((d) => driftBlock(r, d)).join('\n\n'),
         '',
+        '',
         'Unless you have made equivalent changes to your configuration, or ignored the',
         'relevant attributes using ignore_changes, the following plan may include',
         'actions to undo or respond to these changes.',
         '',
         RULE,
-        '',
       ].join('\n'),
     )
   }
 
-  const visible = r.items.filter((i) => i.action !== 'noop' || i.movedFrom || i.importing)
-  const outputs = outputChanges(r)
   if (!visible.length && !outputs.length) {
-    out.push(
-      hasDrift
-        ? 'No changes. Your infrastructure still matches the configuration.\n\nTerraform has checked that the real remote objects still match the result of your most recent changes, and found no differences.'
-        : 'No changes. Your infrastructure matches the configuration.\n\nTerraform has compared your real infrastructure against your configuration\nand found no differences, so no changes are needed.',
-    )
+    out.push('No changes. Your infrastructure matches the configuration.\n\nTerraform has compared your real infrastructure against your configuration\nand found no differences, so no changes are needed.')
   } else {
     const legend: string[] = []
     const used = new Set(visible.map((i) => (i.action === 'replace' ? (i.createBeforeDestroy ? '+/-' : '-/+') : symbolOf(i.action))))
@@ -164,15 +180,16 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
     if (used.has('-')) legend.push('  - destroy')
     if (used.has('-/+')) legend.push('-/+ destroy and then create replacement')
     if (used.has('+/-')) legend.push('+/- create replacement and then destroy')
-    const head = legend.length ? ['Terraform used the selected providers to generate the following execution', 'plan. Resource actions are indicated with the following symbols:', ...legend, ''] : []
-    const parts = [...head, 'Terraform will perform the following actions:', '', visible.map(resourceBlock).join('\n\n')]
+    const head = legend.length || visible.some((i) => i.action === 'forget') ? ['Terraform used the selected providers to generate the following execution', 'plan. Resource actions are indicated with the following symbols:', ...legend, ''] : []
+    const parts = visible.length ? [...head, 'Terraform will perform the following actions:', '', visible.map(resourceBlock).join('\n\n')] : []
     if (visible.length) {
       const s = r.summary
       parts.push('', `Plan: ${r.imported > 0 ? `${r.imported} to import, ` : ''}${s.add} to add, ${s.change} to change, ${s.destroy} to destroy.`)
     }
-    if (outputs.length) parts.push('', 'Changes to Outputs:', ...outputs)
+    if (outputs.length) parts.push(...(visible.length ? [''] : []), 'Changes to Outputs:', ...outputs)
+    if (!visible.length) parts.push('', ...wrap(APPLY_OUTPUTS, 78))
     out.push(parts.join('\n'))
   }
   if (r.warnings.length) out.push(boxed(r.warnings).join('\n\n'))
-  return out.join(hasDrift ? '\n' : '\n\n').replace(/\n\n\n+/g, '\n\n')
+  return out.join('\n\n')
 }

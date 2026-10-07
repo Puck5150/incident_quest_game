@@ -529,7 +529,7 @@ describe('planConfig: removed blocks', () => {
 
   it('forgets with destroy = false: no destroy, no destroy count', () => {
     const r = plan(REMOVED('  lifecycle {\n    destroy = false\n  }\n'), { state: state() })
-    expect(r.items).toMatchObject([{ address: 'aws_vpc.old', action: 'forget', changes: [] }])
+    expect(r.items).toMatchObject([{ address: 'aws_vpc.old', action: 'forget', changes: [], unchanged: VPC }])
     expect(r.summary).toEqual({ add: 0, change: 0, destroy: 0 })
   })
 
@@ -639,5 +639,21 @@ describe('planConfig: facts for the renderer', () => {
     const keyed = stateOf(...['a', 'b'].map((k) => ({ type: 'aws_s3_bucket', name: 'b', key: k, attrs: { id: `b-${k}`, arn: `arn:b-${k}`, bucket: `b-${k}`, force_destroy: false } })))
     const fe = plan('resource "aws_s3_bucket" "b" {\n  for_each = toset(["a"])\n  bucket = "b-${each.key}"\n}', { state: keyed })
     expect(fe.items.find((i) => i.action === 'destroy')).toMatchObject({ address: 'aws_s3_bucket.b["b"]', destroyReason: 'for-each-key' })
+  })
+
+  it('says wrong repetition when count or for_each was added or removed but the block remains', () => {
+    const reason = (tf: string, st: State) => plan(tf, { state: st }).items.find((i) => i.action === 'destroy')
+    const single = stateOf({ type: 'aws_s3_bucket', name: 'b', attrs: BUCKET(0) })
+    const counted = stateOf({ type: 'aws_s3_bucket', name: 'b', key: 1, attrs: BUCKET(1) })
+    const keyed = stateOf({ type: 'aws_s3_bucket', name: 'b', key: 'a', attrs: BUCKET(0) })
+    const addedFor = reason('resource "aws_s3_bucket" "b" {\n  for_each = toset(["a"])\n  bucket = "x-${each.key}"\n}', single)
+    expect(addedFor).toMatchObject({ address: 'aws_s3_bucket.b', destroyReason: 'wrong-repetition' })
+    const removedCount = reason('resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}', counted)
+    expect(removedCount).toMatchObject({ address: 'aws_s3_bucket.b[1]', destroyReason: 'wrong-repetition' })
+    const removedFor = reason('resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}', keyed)
+    expect(removedFor).toMatchObject({ address: 'aws_s3_bucket.b["a"]', destroyReason: 'wrong-repetition' })
+    const swapped = reason('resource "aws_s3_bucket" "b" {\n  count = 1\n  bucket = "x"\n}', keyed)
+    expect(swapped).toMatchObject({ destroyReason: 'wrong-repetition' })
+    expect(reason('# none\n', counted)).toMatchObject({ destroyReason: 'not-in-config' })
   })
 })

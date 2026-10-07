@@ -156,6 +156,13 @@ describe('resourceBlock: destroy, move, import, forget', () => {
     expect(resourceBlock(item({ ...b, address: 'aws_s3_bucket.b["c"]', key: 'c', destroyReason: 'for-each-key' }))).toContain('  # (because key ["c"] is not in for_each map)')
   })
 
+  it('explains wrong-repetition destroys by the instance key type', () => {
+    const b = { action: 'destroy' as const, type: 'aws_s3_bucket', name: 'b', changes: [ch('id', 'x', null)], destroyReason: 'wrong-repetition' as const }
+    expect(resourceBlock(item({ ...b, address: 'aws_s3_bucket.b' }))).toContain('  # (because resource uses count or for_each)')
+    expect(resourceBlock(item({ ...b, address: 'aws_s3_bucket.b[0]', key: 0 }))).toContain('  # (because resource does not use count)')
+    expect(resourceBlock(item({ ...b, address: 'aws_s3_bucket.b["a"]', key: 'a' }))).toContain('  # (because resource does not use for_each)')
+  })
+
   it('renders a pure move', () => {
     expect(resourceBlock(item({ action: 'noop', address: 'aws_db_instance.primary', type: 'aws_db_instance', name: 'primary', movedFrom: 'aws_db_instance.orders', unchanged: { id: 'db-1', engine: 'postgres' } }))).toBe(
       text(
@@ -175,9 +182,34 @@ describe('resourceBlock: destroy, move, import, forget', () => {
     expect(upd).toContain('  # (imported from "legacy")')
   })
 
-  it('renders forget as a single resource row', () => {
-    expect(resourceBlock(item({ action: 'forget', address: 'aws_vpc.old', type: 'aws_vpc', name: 'old' }))).toBe(
-      text('  # aws_vpc.old will no longer be managed by Terraform, but will not be destroyed', '  # (destroy = false is set in the configuration)', '    resource "aws_vpc" "old" {}'),
+  it('renders an imported object in full: blank symbols, no hidden line', () => {
+    const imp = item({ action: 'noop', address: 'aws_s3_bucket.b', type: 'aws_s3_bucket', name: 'b', importing: 'legacy', unchanged: { id: 'legacy', bucket: 'legacy', force_destroy: false, region: null } })
+    expect(resourceBlock(imp)).toBe(
+      text(
+        '  # aws_s3_bucket.b will be imported',
+        '    resource "aws_s3_bucket" "b" {',
+        '        bucket        = "legacy"',
+        '        force_destroy = false',
+        '        id            = "legacy"',
+        '    }',
+      ),
+    )
+  })
+
+  it('renders forget with a . row, one-space comments and an unchanged body', () => {
+    const f = item({ action: 'forget', address: 'aws_vpc.old', type: 'aws_vpc', name: 'old', unchanged: { id: 'vpc-1', tags: { Name: 'old' }, cidr_block: '10.0.0.0/16', arn: 'a', extra: null } })
+    expect(resourceBlock(f)).toBe(
+      text(
+        ' # aws_vpc.old will no longer be managed by Terraform, but will not be destroyed',
+        ' # (destroy = false is set in the configuration)',
+        ' . resource "aws_vpc" "old" {',
+        '        id         = "vpc-1"',
+        '        tags       = {',
+        '            "Name" = "old"',
+        '        }',
+        '        # (2 unchanged attributes hidden)',
+        '    }',
+      ),
     )
   })
 })
@@ -245,13 +277,32 @@ describe('renderPlan', () => {
     expect(renderPlan(result({ items: [imp], imported: 1 }))).toContain('Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.')
   })
 
-  it('says there are no changes, with different wording after drift', () => {
-    expect(renderPlan(result({ items: [item({ action: 'noop', unchanged: { id: 'i-1' } })] }))).toBe(
-      text('No changes. Your infrastructure matches the configuration.', '', 'Terraform has compared your real infrastructure against your configuration', 'and found no differences, so no changes are needed.'),
-    )
+  it('says there are no changes, and hides the drift note when nothing else happens', () => {
+    const plain = text('No changes. Your infrastructure matches the configuration.', '', 'Terraform has compared your real infrastructure against your configuration', 'and found no differences, so no changes are needed.')
+    expect(renderPlan(result({ items: [item({ action: 'noop', unchanged: { id: 'i-1' } })] }))).toBe(plain)
     const drifted = renderPlan(result({ drift: [{ address: 'aws_vpc.main', kind: 'changed', changes: [{ name: 'tags', before: { A: '1' }, after: { A: '2' } }] }], refreshed: stateWith('aws_vpc', 'main', { id: 'vpc-1', tags: { A: '2' }, cidr_block: 'x' }) }))
-    expect(drifted).toContain('No changes. Your infrastructure still matches the configuration.')
-    expect(drifted).toContain('Note: Objects have changed outside of Terraform')
+    expect(drifted).toBe(plain)
+  })
+
+  it('prints only the output changes, an apply hint wrapped at 78 columns, and no actions header', () => {
+    const refreshed = emptyState()
+    refreshed.outputs = { same_long_name: { value: 1 }, a: { value: 'old' } }
+    const out = renderPlan(result({ refreshed, outputs: [{ name: 'a', value: 'new', sensitive: false }, { name: 'same_long_name', value: 1, sensitive: false }] }))
+    expect(out).toBe(
+      text(
+        'Changes to Outputs:',
+        '  ~ a              = "old" -> "new"',
+        '',
+        'You can apply this plan to save these new output values to the Terraform',
+        'state, without changing any real infrastructure.',
+      ),
+    )
+    expect(out).not.toContain('Terraform will perform')
+  })
+
+  it('prints the legend header with no symbol lines for a forget-only plan', () => {
+    const f = item({ action: 'forget', address: 'aws_vpc.old', type: 'aws_vpc', name: 'old', unchanged: { id: 'vpc-1' } })
+    expect(renderPlan(result({ items: [f] })).split('\n\n')[0]).toBe(text('Terraform used the selected providers to generate the following execution', 'plan. Resource actions are indicated with the following symbols:'))
   })
 
   it('renders drift above the plan, for a changed and a deleted object', () => {
@@ -287,6 +338,7 @@ describe('renderPlan', () => {
         '      - id         = "subnet-1" -> null',
         '    }',
         '',
+        '',
         'Unless you have made equivalent changes to your configuration, or ignored the',
         'relevant attributes using ignore_changes, the following plan may include',
         'actions to undo or respond to these changes.',
@@ -304,6 +356,8 @@ describe('renderPlan', () => {
         { address: 'aws_db_instance.gone', kind: 'deleted', changes: [], before: { id: 'db-2', password: 'gonepw' } },
       ],
       refreshed: stateWith('aws_db_instance', 'db', { id: 'db-1', password: 'newpw', engine: 'postgres' }),
+      items: [item({ action: 'create', changes: [ch('ami', undefined, 'a')] })],
+      summary: { add: 1, change: 0, destroy: 0 },
     })
     const out = renderPlan(r)
     expect(out).toContain('      ~ password = (sensitive value)')

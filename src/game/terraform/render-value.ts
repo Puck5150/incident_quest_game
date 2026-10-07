@@ -37,6 +37,7 @@ export interface Field {
   after?: Value
   sensitive?: boolean
   forces?: boolean
+  show?: boolean // print an unchanged (' ') field in full instead of counting it as hidden
 }
 
 // An object body: attributes (aligned over every one, hidden or not, but not
@@ -48,7 +49,7 @@ export function body(col: number, fields: Field[]): string[] {
   const w = maxLen(attrs.map((f) => f.name))
   let hidden = 0
   const out = attrs.flatMap((f) => {
-    if (f.op === ' ' && !IMPORTANT.has(f.name)) {
+    if (f.op === ' ' && !f.show && !IMPORTANT.has(f.name)) {
       hidden++
       return []
     }
@@ -60,6 +61,7 @@ export function body(col: number, fields: Field[]): string[] {
   })
   if (hidden) out.push(row(col, ' ', unchangedText(hidden, 'attribute')))
   const blocks = fs.filter(isBlk).flatMap((f): string[] => {
+    if (f.op === ' ' && f.show) return emit(col, ' ', f.name, 0, f.after as Value)
     if (f.op === ' ') return ['', row(col, ' ', unchangedText((f.after as Obj[]).length, 'block'))]
     if (f.op === '+') return emit(col, '+', f.name, 0, f.after as Value)
     if (f.op === '-') return emit(col, '-', f.name, 0, f.before as Value, '', true)
