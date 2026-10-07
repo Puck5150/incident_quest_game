@@ -477,3 +477,10 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] `[all]` / `["all"]` are accepted for ignore_changes but real Terraform only takes the bare keyword `all`.
 - [ ] `replace_triggered_by` drops function-call items and must be fixed when TF2b-3 makes it act.
 - [ ] A state instance without `attributes` throws a raw TypeError (loader TODO).
+
+## terraform simulator (lifecycle effects, TF2b-3a)
+- [ ] "Instance cannot be destroyed" wording (summary and detail, `Resource ADDRESS has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed. ...`): from memory of the CLI; confirm the exact text and that real Terraform names the instance address (with the `[key]`) here.
+- [ ] "Incompletely-matched force-replace resource instance" (a `-replace` address that matches nothing): summary from memory, the detail text is paraphrased; confirm whether real Terraform reports this as a warning or an error.
+- [ ] `replace_triggered_by` is modeled at resource level only: any update or replacement of any instance of the referenced resource triggers it. Real Terraform also triggers on changes to a specific referenced attribute (`aws_vpc.main.id`) and only for that attribute.
+- [ ] A tainted instance is always reported as `reason: 'tainted'`, even if its arguments would have replaced it anyway; check what the real plan prints in that case.
+- [ ] `create_before_destroy` is only recorded on the plan item (for the renderer); the ordering effect on apply belongs to TF3.

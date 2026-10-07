@@ -359,3 +359,53 @@ describe('planConfig: replace_triggered_by', () => {
     expect(instanceOf(r).action).toBe('noop')
   })
 })
+
+describe('planConfig: prevent_destroy and create_before_destroy', () => {
+  const DB = (encrypted: boolean, cls = 'db.r6g.large', protect = true) =>
+    `resource "aws_db_instance" "orders" {\n  identifier        = "orders-prod"\n  engine            = "postgres"\n  instance_class    = "${cls}"\n  storage_encrypted = ${encrypted}\n${protect ? '  lifecycle {\n    prevent_destroy = true\n  }\n' : ''}}\n`
+  const dbState = () => stateOf({ type: 'aws_db_instance', name: 'orders', attrs: { id: 'db-1', arn: 'arn:db-1', identifier: 'orders-prod', engine: 'postgres', instance_class: 'db.r6g.large', storage_encrypted: false } })
+
+  it('stops a plan that would replace a protected resource, with the real error', () => {
+    const r = plan(DB(true), { state: dbState() })
+    expect(r.diagnostics).toHaveLength(1)
+    expect(r.diagnostics[0]).toMatchObject({ summary: 'Instance cannot be destroyed', file: 'main.tf', line: 1, context: 'resource "aws_db_instance" "orders"' })
+    expect(r.diagnostics[0].detail).toContain('Resource aws_db_instance.orders has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed.')
+    expect(r.diagnostics[0].detail).toContain('reduce the scope of the plan using the -target option')
+    expect(r.items).toEqual([])
+  })
+
+  it('allows plans that do not destroy it: no change, or an in-place update', () => {
+    expect(plan(DB(false), { state: dbState() }).diagnostics).toEqual([])
+    const r = plan(DB(false, 'db.r6g.xlarge'), { state: dbState() })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items[0].action).toBe('update')
+  })
+
+  it('does not protect once the resource block is removed from the configuration', () => {
+    const r = plan('# removed\n', { state: dbState() })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items).toMatchObject([{ address: 'aws_db_instance.orders', action: 'destroy' }])
+  })
+
+  it('protects instances that a smaller count would destroy', () => {
+    const state = stateOf(...[0, 1, 2].map((n) => ({ type: 'aws_s3_bucket', name: 'b', key: n, attrs: BUCKET(n) })))
+    const tf = (n: number) => `resource "aws_s3_bucket" "b" {\n  count  = ${n}\n  bucket = "logs-\${count.index}"\n  lifecycle {\n    prevent_destroy = true\n  }\n}`
+    expect(plan(tf(3), { state }).diagnostics).toEqual([])
+    const r = plan(tf(2), { state })
+    expect(r.diagnostics[0]).toMatchObject({ summary: 'Instance cannot be destroyed' })
+    expect(r.diagnostics[0].detail).toContain('Resource aws_s3_bucket.b[2] has lifecycle.prevent_destroy set')
+  })
+
+  it('protects a protected resource from -replace and from a tainted state', () => {
+    const tf = 'resource "aws_instance" "web" {\n  ami = "ami-1"\n  instance_type = "t3.micro"\n  lifecycle {\n    prevent_destroy = true\n  }\n}'
+    expect(plan(tf, { state: webState(), replace: ['aws_instance.web'] }).diagnostics[0].summary).toBe('Instance cannot be destroyed')
+    expect(plan(tf, { state: webState('tainted') }).diagnostics[0].summary).toBe('Instance cannot be destroyed')
+  })
+
+  it('records create_before_destroy on a replacement only', () => {
+    const tf = (cbd: boolean, ami: string) => `resource "aws_instance" "web" {\n  ami = "${ami}"\n  instance_type = "t3.micro"\n  lifecycle {\n    create_before_destroy = ${cbd}\n  }\n}`
+    expect(plan(tf(true, 'ami-2'), { state: webState() }).items[0]).toMatchObject({ action: 'replace', createBeforeDestroy: true })
+    expect(plan(tf(false, 'ami-2'), { state: webState() }).items[0].createBeforeDestroy).toBeUndefined()
+    expect(plan(tf(true, 'ami-1'), { state: webState() }).items[0].createBeforeDestroy).toBeUndefined()
+  })
+})

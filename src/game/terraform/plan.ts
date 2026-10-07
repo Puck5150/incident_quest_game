@@ -31,6 +31,7 @@ export interface PlanItem {
   movedFrom?: string
   reason?: 'tainted' | 'requested' | 'triggered'
   triggeredBy?: string[]
+  createBeforeDestroy?: boolean
 }
 export interface PlanOutput {
   name: string
@@ -133,6 +134,8 @@ export function planConfig(input: PlanInput): PlanResult {
   const consumed = new Set<string>()
   // Which actions each resource's instances ended up with, for replace_triggered_by.
   const touched = new Map<string, Set<string>>()
+  // Resources that set prevent_destroy, by type.name, with where to point an error.
+  const protectedBy = new Map<string, { file: string; pos: Pos; context: string }>()
   const planResource = (node: GNode) => {
     const b = node.block!
     const [type, name] = b.labels
@@ -155,6 +158,7 @@ export function planConfig(input: PlanInput): PlanResult {
       return
     }
     if (ex.kind !== 'single') shapes.set(node.address, ex.kind)
+    if (lc.lifecycle.preventDestroy) protectedBy.set(`${type}.${name}`, { file: node.file, pos: b.pos, context })
     const planned = new Map<Key, Value>()
     let failed = false
     for (const key of ex.keys) {
@@ -198,6 +202,7 @@ export function planConfig(input: PlanInput): PlanResult {
         ...(movedFrom ? { movedFrom } : {}),
         ...(reason ? { reason } : {}),
         ...(reason === 'triggered' ? { triggeredBy: triggers } : {}),
+        ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
       })
       const seen = touched.get(`${type}.${name}`) ?? new Set<string>()
       touched.set(`${type}.${name}`, seen.add(p.action))
@@ -299,6 +304,23 @@ export function planConfig(input: PlanInput): PlanResult {
       line: 0,
       col: 0,
     })
+  }
+  for (const i of result.items) {
+    const guard = protectedBy.get(`${i.type}.${i.name}`)
+    if (guard && (i.action === 'destroy' || i.action === 'replace')) {
+      fail(
+        guard.file,
+        guard.pos,
+        'Instance cannot be destroyed',
+        `Resource ${i.address} has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed. To avoid this error and continue with the plan, either disable lifecycle.prevent_destroy or reduce the scope of the plan using the -target option.`,
+        guard.context,
+      )
+    }
+  }
+  if (errors.length) {
+    result.items = []
+    result.outputs = []
+    return result
   }
   result.items.sort(byInstance)
   result.outputs.sort(byName)
