@@ -505,3 +505,15 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] The blocked-move warning has no source location (real Terraform's has none either).
 - [ ] State with duplicate instance addresses is not diagnosed by `applyMoves`.
 - [ ] An explicit instance move and a whole-resource move can land on the same instance address with equal chain length (`moved a -> c` plus `moved b[0] -> c[0]`); the ambiguity check compares statement destinations only, so the winner is decided by state order. Exotic; tighten the check if it ever matters.
+
+## terraform simulator (plan renderer, TF2c-1)
+Layout reproduced from memory of Terraform 1.x CLI output; check each against a real `terraform plan`.
+- [ ] Legend wording and symbols (`+ create`, `~ update in-place`, `- destroy`, `-/+ destroy and then create replacement`, `+/- create replacement and then destroy`); omitted entirely for a moves-only plan.
+- [ ] Comment headers: `will be created`, `will be updated in-place`, `must be replaced`, `is tainted, so must be replaced`, `will be replaced, as requested`, `will be replaced due to changes in replace_triggered_by`, `will be destroyed` with `(because … is not in configuration | index […] is out of range for count | key […] is not in for_each map)`, `has moved to`, `will be imported`, and the forget wording.
+- [ ] Which unchanged attributes are shown as context in an update (this renders only `id`; real Terraform also shows some nested containers and names) and how hidden attributes are counted (here: non-null attributes of the prior object).
+- [ ] The forget block (a single `resource "t" "n" {}` row with no symbol) is a guess.
+- [ ] Block-list attributes (`ingress`, …) are rendered as nested blocks by position; real Terraform matches blocks by schema (set-typed blocks have no order) and prints them with its own diff algorithm.
+- [ ] Map and list diff layout (`# (N unchanged elements hidden)`, `-> null` after a removed map, `# forces replacement` placement) and the `Plan: N to import, …` summary format.
+- [ ] Drift note text and the 77-character rule; the "No changes. Your infrastructure still matches the configuration." variant after drift.
+- [ ] Output-change block (`Changes to Outputs:`) and its alignment; real Terraform also prints an `apply` hint when only outputs change.
+- [ ] Not rendered: multi-line string values, `<=` data reads, `-target` and `-refresh-only` banners, colour.

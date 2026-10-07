@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { UNKNOWN } from '../src/game/terraform/eval.ts'
-import type { PlanItem } from '../src/game/terraform/plan.ts'
-import { resourceBlock } from '../src/game/terraform/render.ts'
+import type { PlanItem, PlanResult } from '../src/game/terraform/plan.ts'
+import { renderPlan, resourceBlock } from '../src/game/terraform/render.ts'
+import { emptyState, type State } from '../src/game/terraform/state.ts'
 
 const ch = (name: string, before: unknown, after: unknown, extra: { forcesReplacement?: boolean; sensitive?: boolean } = {}) =>
   ({ name, before, after, forcesReplacement: false, sensitive: false, ...extra }) as PlanItem['changes'][number]
 const item = (o: Partial<PlanItem> & Pick<PlanItem, 'action'>): PlanItem => ({ address: 'aws_instance.web', type: 'aws_instance', name: 'web', changes: [], ...o })
 const text = (...ls: string[]) => ls.join('\n')
+const stateWith = (type: string, name: string, attributes: Record<string, unknown>): State => {
+  const s = emptyState()
+  s.resources.push({ mode: 'managed', type, name, provider: 'p', instances: [{ attributes: attributes as never }] })
+  return s
+}
 
 describe('resourceBlock: create', () => {
   it('renders aligned additions with unknown values and maps', () => {
@@ -141,5 +147,150 @@ describe('resourceBlock: destroy, move, import, forget', () => {
     expect(resourceBlock(item({ action: 'forget', address: 'aws_vpc.old', type: 'aws_vpc', name: 'old' }))).toBe(
       text('  # aws_vpc.old will no longer be managed by Terraform, but will not be destroyed', '  # (destroy = false is set in the configuration)', '    resource "aws_vpc" "old" {}'),
     )
+  })
+})
+
+const result = (o: Partial<PlanResult> = {}): PlanResult => ({
+  diagnostics: [],
+  warnings: [],
+  drift: [],
+  items: [],
+  outputs: [],
+  imported: 0,
+  refreshed: emptyState(),
+  summary: { add: 0, change: 0, destroy: 0 },
+  ...o,
+})
+
+describe('renderPlan', () => {
+  it('renders a create and a destroy with the legend, blocks and summary', () => {
+    const r = result({
+      items: [
+        item({ action: 'create', address: 'aws_instance.new', name: 'new', changes: [ch('ami', undefined, 'ami-1')] }),
+        item({ action: 'destroy', address: 'aws_instance.old', name: 'old', changes: [ch('ami', 'ami-0', null)], destroyReason: 'not-in-config' }),
+      ],
+      summary: { add: 1, change: 0, destroy: 1 },
+    })
+    expect(renderPlan(r)).toBe(
+      text(
+        'Terraform used the selected providers to generate the following execution',
+        'plan. Resource actions are indicated with the following symbols:',
+        '  + create',
+        '  - destroy',
+        '',
+        'Terraform will perform the following actions:',
+        '',
+        '  # aws_instance.new will be created',
+        '  + resource "aws_instance" "new" {',
+        '      + ami = "ami-1"',
+        '    }',
+        '',
+        '  # aws_instance.old will be destroyed',
+        '  # (because aws_instance.old is not in configuration)',
+        '  - resource "aws_instance" "old" {',
+        '      - ami = "ami-0" -> null',
+        '    }',
+        '',
+        'Plan: 1 to add, 0 to change, 1 to destroy.',
+      ),
+    )
+  })
+
+  it('lists the replace symbols, and only the ones used', () => {
+    const r = result({ items: [item({ action: 'replace', changes: [ch('id', 'i-1', UNKNOWN)] })], summary: { add: 1, change: 0, destroy: 1 } })
+    const out = renderPlan(r)
+    expect(out).toContain('plan. Resource actions are indicated with the following symbols:\n-/+ destroy and then create replacement\n')
+    expect(out).not.toContain('  + create')
+    expect(renderPlan(result({ items: [item({ action: 'replace', createBeforeDestroy: true, changes: [ch('id', 'i-1', UNKNOWN)] })] }))).toContain('+/- create replacement and then destroy')
+  })
+
+  it('counts imports in the summary and leaves out the legend for a moves-only plan', () => {
+    const moved = item({ action: 'noop', address: 'aws_db_instance.primary', type: 'aws_db_instance', name: 'primary', movedFrom: 'aws_db_instance.orders', unchanged: { id: 'db-1' } })
+    const out = renderPlan(result({ items: [moved] }))
+    expect(out.startsWith('Terraform will perform the following actions:\n\n  # aws_db_instance.orders has moved to aws_db_instance.primary')).toBe(true)
+    expect(out.endsWith('Plan: 0 to add, 0 to change, 0 to destroy.')).toBe(true)
+    const imp = item({ action: 'noop', importing: 'legacy', unchanged: { id: 'legacy' } })
+    expect(renderPlan(result({ items: [imp], imported: 1 }))).toContain('Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.')
+  })
+
+  it('says there are no changes, with different wording after drift', () => {
+    expect(renderPlan(result({ items: [item({ action: 'noop', unchanged: { id: 'i-1' } })] }))).toBe(
+      text('No changes. Your infrastructure matches the configuration.', '', 'Terraform has compared your real infrastructure against your configuration', 'and found no differences, so no changes are needed.'),
+    )
+    const drifted = renderPlan(result({ drift: [{ address: 'aws_vpc.main', kind: 'changed', changes: [{ name: 'tags', before: { A: '1' }, after: { A: '2' } }] }], refreshed: stateWith('aws_vpc', 'main', { id: 'vpc-1', tags: { A: '2' }, cidr_block: 'x' }) }))
+    expect(drifted).toContain('No changes. Your infrastructure still matches the configuration.')
+    expect(drifted).toContain('Note: Objects have changed outside of Terraform')
+  })
+
+  it('renders drift above the plan, for a changed and a deleted object', () => {
+    const r = result({
+      drift: [
+        { address: 'aws_vpc.main', kind: 'changed', changes: [{ name: 'tags', before: { Name: 'main' }, after: { Name: 'main', Owner: 'ops' } }] },
+        { address: 'aws_subnet.gone', kind: 'deleted', changes: [], before: { id: 'subnet-1', cidr_block: '10.0.1.0/24' } },
+      ],
+      refreshed: stateWith('aws_vpc', 'main', { id: 'vpc-1', tags: { Name: 'main', Owner: 'ops' }, cidr_block: '10.0.0.0/16' }),
+      items: [item({ action: 'create', address: 'aws_subnet.gone', type: 'aws_subnet', name: 'gone', changes: [ch('cidr_block', undefined, '10.0.1.0/24')] })],
+      summary: { add: 1, change: 0, destroy: 0 },
+    })
+    expect(renderPlan(r).split('\nTerraform used the selected providers')[0]).toBe(
+      text(
+        'Note: Objects have changed outside of Terraform',
+        '',
+        'Terraform detected the following changes made outside of Terraform since the',
+        'last "terraform apply" which may have affected this plan:',
+        '',
+        '  # aws_vpc.main has changed',
+        '  ~ resource "aws_vpc" "main" {',
+        '        id   = "vpc-1"',
+        '      ~ tags = {',
+        '          + "Owner" = "ops"',
+        '            # (1 unchanged element hidden)',
+        '        }',
+        '        # (1 unchanged attribute hidden)',
+        '    }',
+        '',
+        '  # aws_subnet.gone has been deleted',
+        '  - resource "aws_subnet" "gone" {',
+        '      - cidr_block = "10.0.1.0/24" -> null',
+        '      - id         = "subnet-1" -> null',
+        '    }',
+        '',
+        'Unless you have made equivalent changes to your configuration, or ignored the',
+        'relevant attributes using ignore_changes, the following plan may include',
+        'actions to undo or respond to these changes.',
+        '',
+        '─'.repeat(77),
+        '',
+      ),
+    )
+  })
+
+  it('shows output changes against the outputs already in state', () => {
+    const refreshed = emptyState()
+    refreshed.outputs = { name: { value: 'old' }, same: { value: 1 }, gone: { value: 'x' } }
+    const r = result({
+      items: [item({ action: 'create', changes: [ch('ami', undefined, 'a')] })],
+      outputs: [
+        { name: 'id', value: UNKNOWN, sensitive: false },
+        { name: 'name', value: 'new', sensitive: false },
+        { name: 'same', value: 1, sensitive: false },
+        { name: 'secret', value: 'hunter2', sensitive: true },
+      ],
+      refreshed,
+      summary: { add: 1, change: 0, destroy: 0 },
+    })
+    const out = renderPlan(r)
+    expect(out.split('Plan: 1 to add, 0 to change, 0 to destroy.\n\n')[1]).toBe(
+      text('Changes to Outputs:', '  - gone   = "x" -> null', '  + id     = (known after apply)', '  ~ name   = "old" -> "new"', '  + secret = (sensitive value)'),
+    )
+  })
+
+  it('prints errors only, with the source line, and appends warnings after a plan', () => {
+    const err = { severity: 'error' as const, summary: 'Bad', detail: 'short', file: 'main.tf', line: 2, col: 1, context: 'resource "a" "b"' }
+    const out = renderPlan(result({ diagnostics: [err] }), { 'main.tf': 'x\n  oops\n' })
+    expect(out).toBe(text('╷', '│ Error: Bad', '│ ', '│   on main.tf line 2, in resource "a" "b":', '│    2:   oops', '│ ', '│ short', '╵'))
+    const warn = { severity: 'warning' as const, summary: 'Careful', detail: '', file: '', line: 0, col: 0 }
+    const withWarning = renderPlan(result({ items: [item({ action: 'create', changes: [ch('a', undefined, 1)] })], summary: { add: 1, change: 0, destroy: 0 }, warnings: [warn] }))
+    expect(withWarning.endsWith('\n\n╷\n│ Warning: Careful\n╵')).toBe(true)
   })
 })
