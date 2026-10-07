@@ -459,3 +459,10 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] `instanceAddress` quoting uses JSON.stringify; Terraform's HCL quoting also doubles `${` and `%{` and escapes U+2028.
 - [ ] `listAddresses` sorts as plain strings (`[10]` before `[2]`, data sources last); check Terraform's real `state list` ordering before TF2c.
 - [ ] `stateJson` fidelity gaps: nested maps like tags not key-sorted, outputs lack `type` and are not sorted, `sensitive_attributes` always `[]` (even for aws_db_instance.password), no `dependencies` field (the destroy-order walker will need `dependencies?: string[]` on StateInstance).
+
+## terraform simulator (plan walker, TF2b-2)
+- [ ] The `count` / `for_each` unknown-value errors ("Invalid count argument", "Invalid for_each argument") and their long detail text, "Missing resource instance key", "No value for required variable", "Reference to undeclared ...": summaries follow the CLI; detail wording is from memory of the Terraform language docs.
+- [ ] A `for_each` over a list is accepted as a set of strings, because the lab represents sets as lists; real Terraform rejects a list ("must be a map, or set of strings, and you have provided a value of type tuple").
+- [ ] Data sources are read from the data entries in state (or unknown if absent); real Terraform reads them from the provider during plan.
+- [ ] Unsupported on purpose (reported as `Unsupported ...`): modules, `dynamic` blocks, `provisioner`/`connection` behavior, `variable` `validation` and `type` conversion.
+- [ ] Nested blocks compare as lists of objects with exactly the attributes written; a state authored with extra provider-set keys in a nested block (for example every field of a security group rule) will show a change.
