@@ -439,3 +439,13 @@ Wording the parser and graph print that is representative, not copied from the d
 - [ ] Unsupported on purpose: `replace` with a `/regex/` search string (`Unsupported function argument`); expressions nested deeper than the stack allows (`Unsupported nesting depth`).
 - [ ] Float formatting differs from Terraform's arbitrary precision (`0.1+0.2` prints 0.30000000000000004; huge numbers print in exponent form).
 - [ ] Conditional branches and `toset` do not unify mixed types; `replace` with an empty search string differs from Go.
+
+## terraform simulator (resource schemas, TF2b-1)
+Which attributes force replacement, which are computed, and the defaults are from experience with the AWS provider; check each against the provider docs ("Forces new resource" notes) before relying on it in an incident.
+- [ ] aws_vpc: `cidr_block` forces replacement; `enable_dns_support` default true, `enable_dns_hostnames` default false.
+- [ ] aws_subnet: `vpc_id`, `cidr_block`, `availability_zone` force replacement.
+- [ ] aws_security_group: `name`, `name_prefix`, `description`, `vpc_id` force replacement; description default "Managed by Terraform".
+- [ ] aws_instance: `ami`, `subnet_id`, `availability_zone`, `key_name` force replacement (subnet_id may be updatable in newer provider versions); `instance_type` and `user_data` update in place.
+- [ ] aws_db_instance: `identifier`, `engine`, `storage_encrypted`, `kms_key_id`, `db_name`, `username` force replacement; `instance_class`, `allocated_storage`, `multi_az` update in place.
+- [ ] aws_s3_bucket (`bucket`), aws_sqs_queue (`name`, `fifo_queue`; defaults 30 s visibility, 345600 s retention), aws_iam_role (`name`, `path`), aws_ecs_service (`name`, `cluster`), aws_cloudwatch_log_group (`name`).
+- [ ] The "Invalid resource type" detail: real Terraform prints only the first sentence; the second is a lab note.
