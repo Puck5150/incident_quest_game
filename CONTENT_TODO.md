@@ -527,6 +527,13 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Deferred from review: destroy reason when a moved target is not in the configuration.
 - [ ] Deferred from review: non-identifier attribute names quoted with `%q`.
 - [x] Drift limited to what changing objects refer to (`driftShown`) — fixed in wave C.
-- [ ] Unverified: a drift entry for a deleted object is shown when the plan creates that address again (wave C rule; the review did not cover it).
+- [x] A deleted object that the plan creates again shows no drift note (nothing refers to itself); a deleted object prints only the attributes the plan uses — fixed in wave D.
+- [ ] **SECURITY / Critical:** sensitive marks do not travel through expressions. `tags = { P = aws_db_instance.db.password }` prints the raw password in another resource's plan attributes where real Terraform prints `(sensitive value)`. Fixing it needs value-level sensitivity tracking in the evaluator; its own task.
+- [ ] Drift address matching should key on the instance address when a reference has a literal index (`web[0].private_ip` shows only `web[0]`; whole-resource references to a counted resource match nothing).
+- [ ] List diffs should pair deletions with additions inside a run (real ProcessSlice zips them in order): `[{a=1},{a=2},{a=9}] -> [{a=3},{a=9}]` prints `~ { a = 1 -> 3 }` then `- { a = 2 }`.
+- [ ] The relevant-reference walk should skip depends_on/lifecycle/count/for_each references and read only the referenced attribute's own expression.
+- [ ] Null attributes inside list/set elements should be skipped (not printed as `null`, not counted in width).
+- [ ] Drift context should show the BEFORE value for changed-but-irrelevant attributes; drift addresses of moved resources are pre-move addresses.
+- [ ] Unknown tags should make `tags_all` `(known after apply)` as a whole.
 - [ ] Deferred from review: driftBlock address parsing for `data.` and `module.` addresses.
 - [ ] Deferred from review: deep nesting recursion (stack depth on deeply nested values).

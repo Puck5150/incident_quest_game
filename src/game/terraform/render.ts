@@ -104,15 +104,18 @@ function driftBlock(r: PlanResult, d: PlanResult['drift'][number]): string {
   const open = `resource "${type}" "${name}" {`
   const secret = (n: string) => specOf(type, n)?.sensitive === true
   if (d.kind === 'deleted') {
+    const use = d.relevant ?? 'all'
     const fields = Object.entries(d.before ?? {})
       .filter(([, v]) => v !== null)
-      .map(([n, v]): Field => ({ name: n, op: '-', before: v, sensitive: secret(n) }))
+      .map(([n, v]): Field =>
+        use === 'all' || use.includes(n) ? { name: n, op: '-', before: v, sensitive: secret(n) } : { name: n, op: ' ', before: v, after: v, sensitive: secret(n) },
+      )
     return [`  # ${d.address} has been deleted`, row(2, '-', open), ...body(6, fields), row(2, ' ', '}')].join('\n')
   }
   const attrs = findInstance(r.refreshed, d.address)?.instance.attributes ?? {}
   const changed = new Set(d.changes.map((c) => c.name))
   const fields: Field[] = [
-    ...d.changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: secret(c.name) })),
+    ...d.changes.map((c): Field => ({ name: c.name, op: '~', before: c.before, after: c.after, sensitive: secret(c.name), set: specOf(type, c.name)?.set === true })),
     ...Object.entries(attrs)
       .filter(([n, v]) => v !== null && !changed.has(n))
       .map(([n, v]): Field => ({ name: n, op: ' ', before: v, after: v, sensitive: secret(n) })),

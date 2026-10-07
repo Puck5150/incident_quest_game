@@ -115,7 +115,10 @@ describe('diffInstance', () => {
   it('turns a removed attribute into a change to null', () => {
     const p = diffInstance(vpc, { cidr_block: '10.0.0.0/16' }, VPC_PRIOR)
     expect(p.action).toBe('update')
-    expect(p.changes).toEqual([{ name: 'tags', before: { Name: 'main' }, after: null, forcesReplacement: false, sensitive: false }])
+    expect(p.changes).toEqual([
+      { name: 'tags', before: { Name: 'main' }, after: null, forcesReplacement: false, sensitive: false },
+      { name: 'tags_all', before: { Name: 'main' }, after: {}, forcesReplacement: false, sensitive: false },
+    ])
   })
 
   it('applies provider defaults when an attribute is omitted', () => {
@@ -169,6 +172,23 @@ describe('diffInstance', () => {
     expect(p.planned.tags_all).toEqual({ Name: 'new' })
     // tags not configured: tags_all is an ordinary computed attribute, left as it is
     expect(diffInstance(vpc, { cidr_block: '10.0.0.0/16' }, { ...VPC_PRIOR, tags: null, tags_all: {} }).action).toBe('noop')
+    expect(diffInstance(vpc, { cidr_block: '10.0.0.0/16' }, { ...VPC_PRIOR, tags: null, tags_all: { Name: 'main' } }).action).toBe('noop')
+  })
+
+  it('leaves tags_all alone when tags is ignored', () => {
+    const inst = schemaFor('aws_instance')!
+    const prior = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', private_ip: '10.0.1.5', tags: { Name: 'web' }, tags_all: { Name: 'web' } }
+    const p = diffInstance(inst, { ami: 'ami-1', instance_type: 't3.micro', tags: { Name: 'web2' } }, prior, ['tags'])
+    expect(p.action).toBe('noop')
+    expect(p.changes).toEqual([])
+  })
+
+  it('empties tags_all when tags is removed from the configuration', () => {
+    const inst = schemaFor('aws_instance')!
+    const prior = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', private_ip: '10.0.1.5', tags: { Name: 'web' }, tags_all: { Name: 'web' } }
+    const p = diffInstance(inst, { ami: 'ami-1', instance_type: 't3.micro' }, prior)
+    expect(p.action).toBe('update')
+    expect(p.changes.map((c) => [c.name, c.before, c.after])).toEqual([['tags', { Name: 'web' }, null], ['tags_all', { Name: 'web' }, {}]])
   })
 
   it('plans the known tags_all value on a replace', () => {

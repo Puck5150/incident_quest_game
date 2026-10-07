@@ -422,6 +422,73 @@ describe('renderPlan', () => {
     )
   })
 
+  it('renders a drifted set as a set: the added element, then the hidden count', () => {
+    const rule = (port: number, cidr: string) => ({ cidr_blocks: [cidr], from_port: port, protocol: 'tcp', to_port: port })
+    const a = rule(22, '10.0.0.0/8')
+    const b = rule(443, '10.0.0.0/8')
+    const c = rule(3389, '0.0.0.0/0')
+    const r = result({
+      drift: [{ address: 'aws_security_group.sg', kind: 'changed', changes: [{ name: 'ingress', before: [a, b], after: [a, b, c] }] }],
+      refreshed: stateWith('aws_security_group', 'sg', { id: 'sg-1', ingress: [a, b, c] }),
+      items: [item({ action: 'create', changes: [ch('ami', undefined, 'a')] })],
+      summary: { add: 1, change: 0, destroy: 0 },
+    })
+    r.driftShown = r.drift
+    expect(renderPlan(r).split('\n\n').slice(2, 3)[0]).toBe(
+      text(
+        '  # aws_security_group.sg has changed',
+        '  ~ resource "aws_security_group" "sg" {',
+        '        id      = "sg-1"',
+        '      ~ ingress = [',
+        '          + {',
+        '              + cidr_blocks = [',
+        '                  + "0.0.0.0/0",',
+        '                ]',
+        '              + from_port   = 3389',
+        '              + protocol    = "tcp"',
+        '              + to_port     = 3389',
+        '            },',
+        '            # (2 unchanged elements hidden)',
+        '        ]',
+        '    }',
+      ),
+    )
+  })
+
+  it('shows only the attributes the plan uses of a deleted object', () => {
+    const before = { id: 'db-1', password: 'pw', engine: 'postgres', port: 5432 }
+    const mk = (relevant: string[] | 'all') =>
+      renderPlan(
+        result({
+          drift: [{ address: 'aws_db_instance.db', kind: 'deleted', changes: [], before, relevant } as never],
+          items: [item({ action: 'create', changes: [ch('ami', undefined, 'a')] })],
+          summary: { add: 1, change: 0, destroy: 0 },
+        }),
+      )
+    const one = mk(['password']).split('\n\n')[2]
+    expect(one).toBe(
+      text(
+        '  # aws_db_instance.db has been deleted',
+        '  - resource "aws_db_instance" "db" {',
+        '        id       = "db-1"',
+        '      - password = (sensitive value) -> null',
+        '        # (2 unchanged attributes hidden)',
+        '    }',
+      ),
+    )
+    expect(mk('all').split('\n\n')[2]).toBe(
+      text(
+        '  # aws_db_instance.db has been deleted',
+        '  - resource "aws_db_instance" "db" {',
+        '      - engine   = "postgres" -> null',
+        '      - id       = "db-1" -> null',
+        '      - password = (sensitive value) -> null',
+        '      - port     = 5432 -> null',
+        '    }',
+      ),
+    )
+  })
+
   it('masks sensitive attributes in drift, changed and deleted', () => {
     const r = result({
       drift: [

@@ -133,8 +133,12 @@ export function diffInstance(
     const spec = specOf(n)
     if (spec.readOnly) return undefined
     if (spec.copyOf !== undefined) {
+      if (ignored(spec.copyOf)) return undefined // core hands the provider the prior source value, so it sees no change
       const source = desired(spec.copyOf)
       if (source !== undefined) return source
+      // source removed from the configuration: the provider's tag diff empties the copy too
+      const old = prior !== undefined && Object.hasOwn(prior, spec.copyOf) ? prior[spec.copyOf] : null
+      if (typeof old === 'object' && old !== null && !Array.isArray(old) && Object.keys(old).length) return {}
     }
     if (Object.hasOwn(config, n) && config[n] !== null) return config[n]
     return spec.default

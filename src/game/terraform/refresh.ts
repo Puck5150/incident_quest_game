@@ -13,6 +13,7 @@ export interface Drift {
   kind: 'deleted' | 'changed'
   changes: { name: string; before: Value; after: Value }[]
   before?: Record<string, Value>
+  relevant?: string[] | 'all' // driftShown only: for a deleted object, the attributes the plan uses
 }
 
 export function refresh(state: State, reality: Reality): { state: State; drift: Drift[] } {

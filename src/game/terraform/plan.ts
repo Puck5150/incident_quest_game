@@ -453,10 +453,9 @@ function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Dri
       else if (have !== 'all') refd.set(key, (have ?? new Set<string>()).add(path[2]))
     }
   }
-  const recreated = new Set(result.items.filter((i) => i.action === 'create').map((i) => i.address))
   return drift.flatMap((d): Drift[] => {
     const want = refd.get(d.address.replace(/\[.*$/, ''))
-    if (d.kind === 'deleted') return want !== undefined || recreated.has(d.address) ? [d] : []
+    if (d.kind === 'deleted') return want === undefined ? [] : [{ ...d, relevant: want === 'all' ? 'all' : [...want] }]
     if (want === undefined) return []
     const changes = want === 'all' ? d.changes : d.changes.filter((c) => want.has(c.name))
     return changes.length ? [{ ...d, changes }] : []

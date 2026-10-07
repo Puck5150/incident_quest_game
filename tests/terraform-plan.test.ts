@@ -91,7 +91,7 @@ resource "aws_subnet" "a" {
     expect(r.driftShown.map((d) => d.changes.map((c) => c.name))).toEqual([['enable_dns_hostnames', 'tags']])
   })
 
-  it('shows a deleted object when the plan creates it again, and not when nothing refers to it', () => {
+  it('shows no drift note for a deleted object the plan creates again, since nothing refers to it', () => {
     const state = stateOf(vpcState, { type: 'aws_s3_bucket', name: 'old', attrs: BUCKET(1) })
     const reality = cloudOf(state)
     delete reality[realityKey('aws_vpc', 'vpc-1')]
@@ -99,7 +99,15 @@ resource "aws_subnet" "a" {
     const r = plan('resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n  tags       = { Name = "main" }\n}', { state, reality })
     expect(r.drift.map((d) => d.address)).toEqual(['aws_vpc.main', 'aws_s3_bucket.old'])
     expect(actions(r)).toContain('create aws_vpc.main')
-    expect(r.driftShown.map((d) => d.address)).toEqual(['aws_vpc.main'])
+    expect(r.driftShown).toEqual([])
+  })
+
+  it('carries the attributes a plan uses on a deleted object', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_subnet', name: 'a', attrs: SUBNET })
+    const reality = cloudOf(state)
+    delete reality[realityKey('aws_vpc', 'vpc-1')]
+    const r = plan(NETWORK('10.0.0.0/16'), { state, reality })
+    expect(r.driftShown).toEqual([{ address: 'aws_vpc.main', kind: 'deleted', changes: [], before: VPC, relevant: ['id'] }])
   })
 })
 
