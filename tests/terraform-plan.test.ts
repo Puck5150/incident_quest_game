@@ -447,3 +447,129 @@ describe('planConfig: prevent_destroy and create_before_destroy', () => {
     expect(plan(tf(true, 'ami-1'), { state: webState() }).items[0].createBeforeDestroy).toBeUndefined()
   })
 })
+
+const DB_ATTRS = { id: 'db-1', arn: 'arn:db-1', identifier: 'orders-prod', engine: 'postgres', instance_class: 'db.r6g.large', storage_encrypted: false }
+const DB_BLOCK = (name: string) => `resource "aws_db_instance" "${name}" {\n  identifier        = "orders-prod"\n  engine            = "postgres"\n  instance_class    = "db.r6g.large"\n  storage_encrypted = false\n}\n`
+const ordersState = () => stateOf({ type: 'aws_db_instance', name: 'orders', attrs: DB_ATTRS })
+
+describe('planConfig: moved blocks', () => {
+  it('shows the destroy-and-create trap without a moved block, and a no-op with one', () => {
+    const trap = plan(DB_BLOCK('primary'), { state: ordersState() })
+    expect(actions(trap)).toEqual(['destroy aws_db_instance.orders', 'create aws_db_instance.primary'])
+    const fixed = plan(DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n', { state: ordersState() })
+    expect(fixed.diagnostics).toEqual([])
+    expect(fixed.items).toMatchObject([{ address: 'aws_db_instance.primary', action: 'noop', movedFrom: 'aws_db_instance.orders' }])
+    expect(fixed.summary).toEqual({ add: 0, change: 0, destroy: 0 })
+    expect(fixed.refreshed.resources[0].name).toBe('orders')
+  })
+
+  it('re-keys count indexes to for_each keys without destroying', () => {
+    const state = stateOf(
+      { type: 'aws_s3_bucket', name: 'b', key: 0, attrs: { id: 'b-a', arn: 'arn:b-a', bucket: 'b-a', force_destroy: false } },
+      { type: 'aws_s3_bucket', name: 'b', key: 1, attrs: { id: 'b-b', arn: 'arn:b-b', bucket: 'b-b', force_destroy: false } },
+    )
+    const tf =
+      'resource "aws_s3_bucket" "b" {\n  for_each = toset(["a", "b"])\n  bucket   = "b-${each.key}"\n}\n' +
+      'moved {\n  from = aws_s3_bucket.b[0]\n  to   = aws_s3_bucket.b["a"]\n}\nmoved {\n  from = aws_s3_bucket.b[1]\n  to   = aws_s3_bucket.b["b"]\n}\n'
+    const r = plan(tf, { state })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items.map((i) => [i.address, i.action, i.movedFrom])).toEqual([
+      ['aws_s3_bucket.b["a"]', 'noop', 'aws_s3_bucket.b[0]'],
+      ['aws_s3_bucket.b["b"]', 'noop', 'aws_s3_bucket.b[1]'],
+    ])
+  })
+
+  it('still diffs a moved resource against its new configuration', () => {
+    const tf = DB_BLOCK('primary').replace('storage_encrypted = false', 'storage_encrypted = true') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n'
+    expect(plan(tf, { state: ordersState() }).items).toMatchObject([{ address: 'aws_db_instance.primary', action: 'replace', movedFrom: 'aws_db_instance.orders' }])
+  })
+
+  it('warns, and carries on, when the old address is still declared', () => {
+    const r = plan(DB_BLOCK('orders') + DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n', { state: ordersState() })
+    expect(r.diagnostics).toEqual([])
+    expect(r.warnings.map((w) => w.summary)).toEqual(['Moved object still exists'])
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['create aws_db_instance.orders', 'noop aws_db_instance.primary'])
+  })
+
+  it('stops with an error for a type mismatch or a move onto an occupied address', () => {
+    const mismatch = plan(DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_vpc.main\n}\n', { state: ordersState() })
+    expect(mismatch.diagnostics[0].summary).toBe('Resource type mismatch')
+    expect(mismatch.items).toEqual([])
+    const both = stateOf({ type: 'aws_db_instance', name: 'orders', attrs: DB_ATTRS }, { type: 'aws_db_instance', name: 'primary', attrs: { ...DB_ATTRS, id: 'db-2' } })
+    const clash = plan(DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n', { state: both })
+    expect(clash.diagnostics[0].summary).toBe('Cannot move to existing object')
+    expect(clash.items).toEqual([])
+  })
+})
+
+describe('planConfig: removed blocks', () => {
+  const state = () => stateOf({ type: 'aws_vpc', name: 'old', attrs: VPC })
+  const REMOVED = (lc: string) => `removed {\n  from = aws_vpc.old\n${lc}}\n`
+
+  it('forgets with destroy = false: no destroy, no destroy count', () => {
+    const r = plan(REMOVED('  lifecycle {\n    destroy = false\n  }\n'), { state: state() })
+    expect(r.items).toMatchObject([{ address: 'aws_vpc.old', action: 'forget', changes: [] }])
+    expect(r.summary).toEqual({ add: 0, change: 0, destroy: 0 })
+  })
+
+  it('destroys with destroy = true or no lifecycle', () => {
+    expect(plan(REMOVED('  lifecycle {\n    destroy = true\n  }\n'), { state: state() }).items[0].action).toBe('destroy')
+    expect(plan(REMOVED(''), { state: state() }).items[0].action).toBe('destroy')
+  })
+
+  it('is an error while the resource is still declared', () => {
+    const r = plan('resource "aws_vpc" "old" {\n  cidr_block = "10.0.0.0/16"\n}\n' + REMOVED(''), { state: state() })
+    expect(r.diagnostics[0].summary).toBe('Removed resource still exists')
+    expect(r.items).toEqual([])
+  })
+})
+
+describe('planConfig: import blocks', () => {
+  const LEGACY = { id: 'legacy-bucket', arn: 'arn:legacy-bucket', bucket: 'legacy-bucket', force_destroy: false }
+  const CLOUD: Reality = { [realityKey('aws_s3_bucket', 'legacy-bucket')]: LEGACY }
+  const BUCKET_TF = (extra = '') => `resource "aws_s3_bucket" "b" {\n  bucket = "legacy-bucket"\n${extra}}\n`
+  const IMPORT = (id = '"legacy-bucket"', to = 'aws_s3_bucket.b') => `import {\n  to = ${to}\n  id = ${id}\n}\n`
+
+  it('would plan a create without the import block, and an import with it', () => {
+    expect(actions(plan(BUCKET_TF(), { reality: CLOUD }))).toEqual(['create aws_s3_bucket.b'])
+    const r = plan(BUCKET_TF() + IMPORT(), { reality: CLOUD })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items).toMatchObject([{ address: 'aws_s3_bucket.b', action: 'noop', importing: 'legacy-bucket' }])
+    expect(r.imported).toBe(1)
+    expect(r.summary).toEqual({ add: 0, change: 0, destroy: 0 })
+  })
+
+  it('shows the difference between the imported object and the configuration', () => {
+    const r = plan(BUCKET_TF('  force_destroy = true\n') + IMPORT(), { reality: CLOUD })
+    expect(r.items[0]).toMatchObject({ action: 'update', importing: 'legacy-bucket', changes: [{ name: 'force_destroy', before: false, after: true }] })
+    expect(r.summary).toEqual({ add: 0, change: 1, destroy: 0 })
+  })
+
+  it('evaluates the id after the variable it uses', () => {
+    const r = plan('variable "bucket" {\n  default = "legacy-bucket"\n}\n' + BUCKET_TF() + IMPORT('var.bucket'), { reality: CLOUD })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items[0].importing).toBe('legacy-bucket')
+  })
+
+  it('imports a keyed instance', () => {
+    const tf = 'resource "aws_s3_bucket" "b" {\n  for_each = toset(["x"])\n  bucket   = "legacy-bucket"\n}\n' + IMPORT('"legacy-bucket"', 'aws_s3_bucket.b["x"]')
+    expect(plan(tf, { reality: CLOUD }).items).toMatchObject([{ address: 'aws_s3_bucket.b["x"]', importing: 'legacy-bucket' }])
+  })
+
+  it('fails with the real errors when the object does not exist or the target is not configured', () => {
+    const none = plan(BUCKET_TF() + IMPORT('"nope"'), { reality: CLOUD })
+    expect(none.diagnostics[0]).toMatchObject({ summary: 'Cannot import non-existent remote object' })
+    expect(none.diagnostics[0].detail).toContain('import an existing object to "aws_s3_bucket.b"')
+    expect(none.items).toEqual([])
+    const unconfigured = plan(BUCKET_TF() + IMPORT('"legacy-bucket"', 'aws_s3_bucket.other'), { reality: CLOUD })
+    expect(unconfigured.diagnostics[0].summary).toBe('Configuration for import target does not exist')
+  })
+
+  it('ignores an import for something already in state', () => {
+    const state = stateOf({ type: 'aws_s3_bucket', name: 'b', attrs: LEGACY })
+    const r = plan(BUCKET_TF() + IMPORT(), { state, reality: CLOUD })
+    expect(r.items).toMatchObject([{ action: 'noop' }])
+    expect(r.items[0].importing).toBeUndefined()
+    expect(r.imported).toBe(0)
+  })
+})

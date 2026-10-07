@@ -485,3 +485,11 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] Real Terraform records only the first triggering reference; the simulator matches this, confirm the renderer shows just one.
 - [ ] `replace_triggered_by = [var.x]`-style references are now rejected ('Invalid replace_triggered_by expression'); confirm wording against real Terraform.
 - [ ] `create_before_destroy` is only recorded on the plan item (for the renderer); ordering and propagation belong to TF3.
+
+## terraform simulator (moved / import / removed, TF2b-3b)
+- [ ] `Moved object still exists` (modeled as a warning), `Resource type mismatch`, `Cannot move to existing object`, `Cycle in move statements`, `Removed resource still exists`: summaries and details from memory of the CLI; confirm wording, and whether "still exists" is a warning or an error in real Terraform.
+- [ ] `Configuration for import target does not exist` and `Cannot import non-existent remote object`: recalled closely, still unverified.
+- [ ] An `import` is read from the simulated cloud by `type:id`; real providers also accept composite or provider-specific ids (for example `bucket-name` for S3, `cluster/service` for ECS). Each incident that imports must seed `reality` under the id it uses.
+- [ ] An `import` block for an instance that is already in state is ignored silently; real Terraform also ignores it only when the ids match.
+- [ ] `moved` is applied in the order resolved by following chains per instance; real Terraform validates the whole set of statements (for example conflicting moves from one address) with more specific errors.
+- [ ] `removed` only supports whole-resource addresses and `lifecycle { destroy = bool }`; provisioner blocks inside `removed` are not modeled.

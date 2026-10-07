@@ -4,10 +4,12 @@
 // instances that are no longer configured. Any configuration error stops the
 // plan: nothing is half-planned.
 import { lifecycleOf, resourceArguments } from './arguments.ts'
+import { importsOf, removedOf } from './declarations.ts'
 import { evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
 import { expandInstances, type Key } from './expand.ts'
 import { buildGraph, type GNode } from './graph.ts'
-import { refresh as refreshState, type Drift, type Reality } from './refresh.ts'
+import { applyMoves, movesOf } from './moves.ts'
+import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
 import type { Diagnostic, Pos } from './types.ts'
@@ -26,9 +28,10 @@ export interface PlanItem {
   type: string
   name: string
   key?: string | number
-  action: Action | 'destroy'
+  action: Action | 'destroy' | 'forget'
   changes: AttrChange[]
   movedFrom?: string
+  importing?: string
   reason?: 'tainted' | 'requested' | 'triggered'
   triggeredBy?: string[]
   createBeforeDestroy?: boolean
@@ -46,6 +49,7 @@ export interface PlanResult {
   outputs: PlanOutput[]
   refreshed: State
   summary: { add: number; change: number; destroy: number }
+  imported: number
 }
 
 const cmp = <T extends string | number>(a: T, b: T) => (a < b ? -1 : a > b ? 1 : 0)
@@ -74,7 +78,7 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
 export function planConfig(input: PlanInput): PlanResult {
   const g = buildGraph(input.files)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
-  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 } }
+  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
   if (g.diagnostics.length) return result
 
   const errors = result.diagnostics
@@ -92,6 +96,36 @@ export function planConfig(input: PlanInput): PlanResult {
       return UNKNOWN
     }
   }
+
+  // moved / removed / import: statements about state.
+  const mv = movesOf(g.blocks)
+  const rm = removedOf(g.blocks)
+  const im = importsOf(g.blocks)
+  errors.push(...mv.diagnostics, ...rm.diagnostics, ...im.diagnostics)
+  const declared = (a: { type: string; name: string }) => g.nodes.has(`${a.type}.${a.name}`)
+  const show = (a: { type: string; name: string; key?: string | number }) => instanceAddress({ mode: 'managed', type: a.type, name: a.name }, a.key)
+  for (const m of mv.moves) {
+    if (m.from.key === undefined && declared(m.from)) {
+      result.warnings.push({
+        severity: 'warning',
+        summary: 'Moved object still exists',
+        detail: `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`,
+        file: m.file,
+        line: m.pos.line,
+        col: m.pos.col,
+      })
+    }
+  }
+  for (const r of rm.removals) {
+    if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
+  }
+  for (const i of im.imports) {
+    if (!declared(i.to)) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
+  }
+  const applied = applyMoves(refreshed, mv.moves)
+  errors.push(...applied.diagnostics)
+  if (errors.length) return result
+  const base = applied.state // the state planning works from: refreshed, with moves applied
 
   const scopeFor = (ctx: { each?: { key: Value; value: Value }; count?: number }): Scope => ({
     ref(path) {
@@ -170,17 +204,39 @@ export function planConfig(input: PlanInput): PlanResult {
         continue
       }
       const address = instanceAddress({ mode: 'managed', type, name }, key)
-      let priorInst = findInstance(refreshed, address)?.instance
-      let movedFrom: string | undefined
+      let priorInst = findInstance(base, address)?.instance
+      let movedFrom: string | undefined = applied.moved.get(address)
       // Adding or removing `count = 1` moves the lone instance between `x` and `x[0]` (Terraform 1.1+).
       if (!priorInst && ex.kind !== 'for_each' && (key === 0 || key === undefined)) {
         const old = instanceAddress({ mode: 'managed', type, name }, key === 0 ? undefined : 0)
-        const found = findInstance(refreshed, old)
+        const found = findInstance(base, old)
         if (found) {
           priorInst = found.instance
           movedFrom = old
           consumed.add(old)
         }
+      }
+      let importing: string | undefined
+      const decl = im.imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key)
+      if (!priorInst && decl) {
+        const before = errors.length
+        const id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor(ctx)), 'import')
+        const object = errors.length === before && typeof id === 'string' && Object.hasOwn(input.reality, realityKey(type, id)) ? input.reality[realityKey(type, id)] : undefined
+        if (!object) {
+          if (errors.length === before) {
+            fail(
+              decl.file,
+              decl.pos,
+              'Cannot import non-existent remote object',
+              `While attempting to import an existing object to "${address}", the provider detected that no object exists with the given id. Only pre-existing objects can be imported; check that the id is correct and that it is associated with the provider's configured region or endpoint, or use "terraform apply" to create a new remote object for this resource.`,
+              'import',
+            )
+          }
+          failed = true
+          continue
+        }
+        priorInst = { attributes: structuredClone(object) }
+        importing = id as string
       }
       const prior = priorInst?.attributes
       // Why an existing instance might be replaced even though its arguments did not force it.
@@ -201,6 +257,7 @@ export function planConfig(input: PlanInput): PlanResult {
         action: p.action,
         changes: p.changes,
         ...(movedFrom ? { movedFrom } : {}),
+        ...(importing ? { importing } : {}),
         ...(reason ? { reason } : {}),
         ...(reason === 'triggered' ? { triggeredBy: [triggers[0]] } : {}),
         ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
@@ -245,7 +302,7 @@ export function planConfig(input: PlanInput): PlanResult {
         break
       case 'data': {
         const [type, name] = b!.labels
-        values.set(addr, refreshed.resources.find((r) => r.mode === 'data' && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
+        values.set(addr, base.resources.find((r) => r.mode === 'data' && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
         break
       }
       case 'module':
@@ -276,12 +333,16 @@ export function planConfig(input: PlanInput): PlanResult {
 
   // In state but no longer configured (or a count/for_each instance that went away).
   const planned = new Set(result.items.map((i) => i.address))
-  for (const r of refreshed.resources) {
+  for (const r of base.resources) {
     if (r.mode !== 'managed') continue
     const schema = schemaFor(r.type)
     for (const inst of r.instances) {
       const address = instanceAddress(r, inst.index_key)
       if (planned.has(address) || consumed.has(address)) continue
+      if (rm.removals.some((x) => x.from.type === r.type && x.from.name === r.name && !x.destroy)) {
+        result.items.push({ address, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [] })
+        continue
+      }
       result.items.push({
         address,
         type: r.type,
@@ -332,6 +393,7 @@ export function planConfig(input: PlanInput): PlanResult {
   }
   result.items.sort(byInstance)
   result.outputs.sort(byName)
+  result.imported = result.items.filter((i) => i.importing !== undefined).length
   for (const i of result.items) {
     if (i.action === 'create' || i.action === 'replace') result.summary.add++
     if (i.action === 'update') result.summary.change++
