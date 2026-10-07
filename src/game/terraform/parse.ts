@@ -13,7 +13,7 @@ export function parseHcl(file: string, text: string): ParseResult {
   } catch (e) {
     if (e instanceof HclError) return { blocks: [], diagnostics: [e.diag] }
     // Pathologically deep input overflowed the stack somewhere in lex/parse.
-    if (e instanceof RangeError) return { blocks: [], diagnostics: [{ severity: 'error', summary: NEST, detail: NEST_DETAIL, file, line: 0, col: 0 }] }
+    if (e instanceof RangeError || (e as Error)?.name === 'InternalError') return { blocks: [], diagnostics: [{ severity: 'error', summary: NEST, detail: NEST_DETAIL, file, line: 0, col: 0 }] }
     throw e
   }
 }

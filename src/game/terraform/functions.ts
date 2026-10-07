@@ -1,6 +1,6 @@
 // The Terraform functions this lab supports. Anything else is "Call to unknown
 // function", the same error real Terraform gives for a name it doesn't have.
-import { equal, EvalError, isUnknown, show, UNKNOWN, type Value } from './eval.ts'
+import { equal, EvalError, hasUnknown, isUnknown, parseNumber, show, UNKNOWN, type Value } from './eval.ts'
 
 type Obj = { [key: string]: Value }
 const isObj = (v: Value): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v) && v !== UNKNOWN
@@ -13,17 +13,14 @@ const arg = (name: string, v: Value, kind: 'string' | 'number' | 'list' | 'map')
 }
 const str = (name: string, v: Value) => arg(name, v, 'string') as string
 const int = (name: string, v: Value) => {
-  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v
-  return typeof n === 'number' && Number.isInteger(n) ? n : (bad(name, 'whole number required.') as never)
+  const n = typeof v === 'string' ? parseNumber(v) : v
+  return typeof n === 'number' && Number.isSafeInteger(n) ? n : (bad(name, 'whole number required.') as never)
 }
 const list = (name: string, v: Value) => arg(name, v, 'list') as Value[]
 const map = (name: string, v: Value) => arg(name, v, 'map') as Obj
 const sorted = (xs: Value[]) => [...xs].sort((a, b) => (typeof a === 'number' && typeof b === 'number' ? a - b : show(a) < show(b) ? -1 : show(a) > show(b) ? 1 : 0))
 const unique = (xs: Value[]) => xs.filter((x, i) => xs.findIndex((y) => equal(x, y)) === i)
 
-function hasUnknown(v: Value): boolean {
-  return v === UNKNOWN || (Array.isArray(v) && v.some(hasUnknown)) || (isObj(v) && Object.values(v).some(hasUnknown))
-}
 function sortKeys(v: Value): Value {
   if (Array.isArray(v)) return v.map(sortKeys)
   if (isObj(v)) {
@@ -49,17 +46,19 @@ function cidrsubnet(prefix: string, newbits: number, netnum: number): string {
 
 function format(fmt: string, args: Value[]): string {
   let i = 0
-  return fmt.replace(/%[\s\S]?/g, (spec) => {
+  const out = fmt.replace(/%[\s\S]?/g, (spec) => {
     if (spec === '%%') return '%'
     if (!/^%[sdv]$/.test(spec)) throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: unsupported format verb.')
     if (i >= args.length) throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: not enough arguments for the format string.')
     const v = args[i++]
     if (spec === '%d') {
-      if (typeof v !== 'number') throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: %d requires a number.')
-      return String(Math.trunc(v))
+      if (typeof v !== 'number' || !Number.isInteger(v)) throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: %d requires a whole number.')
+      return String(v)
     }
     return show(v)
   })
+  if (i < args.length) throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: too many arguments for the format string.')
+  return out
 }
 
 // [min args, max args (Infinity = any), implementation]
@@ -78,20 +77,24 @@ const FNS: Record<string, [number, number, (a: Value[]) => Value]> = {
   concat: [0, Infinity, (a) => a.flatMap((l) => list('concat', l))],
   keys: [1, 1, ([m]) => Object.keys(map('keys', m)).sort()],
   values: [1, 1, ([m]) => { const o = map('values', m); return Object.keys(o).sort().map((k) => o[k]) }],
-  element: [2, 2, ([l, i]) => { const xs = list('element', l); return xs.length ? xs[((int('element', i) % xs.length) + xs.length) % xs.length] : (bad('element', 'cannot use element function with an empty list.') as never) }],
+  element: [2, 2, ([l, i]) => { const xs = list('element', l); const n = int('element', i); if (n < 0) bad('element', 'cannot use element function with a negative index.'); return xs.length ? xs[n % xs.length] : (bad('element', 'cannot use element function with an empty list.') as never) }],
   toset: [1, 1, ([l]) => sorted(unique(list('toset', l)))],
   tolist: [1, 1, ([l]) => list('tolist', l)],
   tostring: [1, 1, ([v]) => (v === null ? null : show(v))],
-  tonumber: [1, 1, ([v]) => (v === null ? null : typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : (bad('tonumber', 'cannot convert to number.') as never))],
+  tonumber: [1, 1, ([v]) => (v === null ? null : typeof v === 'number' ? v : typeof v === 'string' && parseNumber(v) !== undefined ? (parseNumber(v) as number) : (bad('tonumber', 'cannot convert to number.') as never))],
   jsonencode: [1, 1, ([v]) => (hasUnknown(v) ? UNKNOWN : JSON.stringify(sortKeys(v)))],
   upper: [1, 1, ([s]) => str('upper', s).toUpperCase()],
   lower: [1, 1, ([s]) => str('lower', s).toLowerCase()],
   coalesce: [1, Infinity, (a) => a.find((v) => v !== null && v !== '') ?? (bad('coalesce', 'no non-null, non-empty-string arguments.') as never)],
   contains: [2, 2, ([l, v]) => list('contains', l).some((x) => equal(x, v))],
-  replace: [3, 3, ([s, a, b]) => str('replace', s).split(str('replace', a)).join(str('replace', b))],
+  replace: [3, 3, ([s, a, b]) => {
+    const find = str('replace', a)
+    if (find.length > 2 && find.startsWith('/') && find.endsWith('/')) throw new EvalError('Unsupported function argument', 'Regular expression replacement (a /pattern/ search string) is not supported by this lab.')
+    return str('replace', s).split(find).join(str('replace', b))
+  }],
   trimspace: [1, 1, ([s]) => str('trimspace', s).trim()],
-  max: [1, Infinity, (a) => Math.max(...a.map((n) => arg('max', n, 'number') as number))],
-  min: [1, Infinity, (a) => Math.min(...a.map((n) => arg('min', n, 'number') as number))],
+  max: [1, Infinity, (a) => a.reduce((m: number, n) => Math.max(m, arg('max', n, 'number') as number), -Infinity)],
+  min: [1, Infinity, (a) => a.reduce((m: number, n) => Math.min(m, arg('min', n, 'number') as number), Infinity)],
   cidrsubnet: [3, 3, ([p, b, n]) => cidrsubnet(str('cidrsubnet', p), int('cidrsubnet', b), int('cidrsubnet', n))],
 }
 

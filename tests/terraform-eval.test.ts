@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseHcl } from '../src/game/terraform/parse.ts'
+import { callFunction } from '../src/game/terraform/functions.ts'
 import { evalExpr, EvalError, UNKNOWN, type Scope, type Value } from '../src/game/terraform/eval.ts'
 
 // Evaluate one expression with a scope that resolves references by walking `refs`.
@@ -10,7 +11,7 @@ export const ev = (src: string, refs: Record<string, Value> = {}): Value => {
     ref(path) {
       let cur: Value = refs as Value
       for (const p of path) {
-        if (typeof cur !== 'object' || cur === null || Array.isArray(cur) || !(p in cur)) {
+        if (typeof cur !== 'object' || cur === null || Array.isArray(cur) || !Object.hasOwn(cur, p)) {
           throw new EvalError('Reference to undeclared value', `No value for ${path.join('.')}.`)
         }
         cur = (cur as Record<string, Value>)[p]
@@ -221,5 +222,66 @@ describe('eval: functions, nested unknowns and edge cases', () => {
     expect(fails('format("%03d", 5)').summary).toBe('Invalid function argument')
     expect(fails('format("100%")').summary).toBe('Invalid function argument')
     expect([ev('tostring(null)'), ev('tonumber(null)')]).toEqual([null, null])
+  })
+})
+
+describe('eval: final review fixes', () => {
+  it('rejects division/modulo by zero and non-finite numbers', () => {
+    for (const src of ['1/0', '0/0', '5 % 0', '"${1/0}"', 'jsonencode(1/0)']) expect(fails(src).summary).toBe('Operation failed')
+    expect(fails('1e400').summary).toBe('Invalid number')
+    expect(fails('"Infinity" + 1').summary).toBe('Invalid operand')
+    expect(fails('"1e400" + 1').summary).toBe('Invalid operand')
+    expect(fails('tonumber("Infinity")').summary).toBe('Invalid function argument')
+    expect(fails('1e308 * 10').summary).toBe('Invalid number')
+  })
+  it('parses numeric strings in base 10 only', () => {
+    expect(fails('tonumber("0x10")').summary).toBe('Invalid function argument')
+    expect(fails('"0x10" + 1').summary).toBe('Invalid operand')
+    expect(fails('" 3 " + 1').summary).toBe('Invalid operand')
+    expect(ev('"3" + 1')).toBe(4)
+    expect(ev('tonumber("1.5e1")')).toBe(15)
+  })
+  it('turns stack overflow into Unsupported nesting depth', () => {
+    for (const src of ['[1]' + '[0]'.repeat(5000), '{a=1}' + '.a'.repeat(5000), 'false ? 1 : '.repeat(5000) + '2']) {
+      let err: unknown
+      try {
+        ev(src, { x: {} })
+      } catch (e) {
+        err = e
+      }
+      // The parser may reject first (a diagnostic, thrown as a plain Error) or the evaluator may overflow.
+      if (err instanceof EvalError) expect(err.summary).toBe('Unsupported nesting depth')
+      else expect(String(err)).toContain('parse:')
+    }
+    let e = ''
+    for (let i = 0; i < 95; i++) e = `(${e}${'1+'.repeat(99)}1)`
+    const r = parseHcl('main.tf', `locals {\n  v = ${e}\n}`)
+    if (!r.diagnostics.length) expect(() => evalExpr(r.blocks[0].attrs[0].value, { ref: () => 1 })).toThrow(/nested too deeply/)
+  })
+  it('max/min take huge argument lists', () => {
+    const xs = Array.from({ length: 200000 }, (_, i) => i)
+    expect(callFunction('max', xs)).toBe(199999)
+    expect(callFunction('min', xs)).toBe(0)
+  })
+  it('== and != are unknown when an unknown is nested', () => {
+    const u = { u: UNKNOWN }
+    expect([ev('[u] == [u]', u), ev('[u] == [1]', u), ev('{a=u} != {a=1}', u)]).toEqual([UNKNOWN, UNKNOWN, UNKNOWN])
+  })
+  it('element rejects negative indexes', () => {
+    expect(fails('element([1,2], -1)').summary).toBe('Invalid function argument')
+    expect(ev('element([1,2], 3)')).toBe(2)
+  })
+  it('replace rejects the regex form', () => {
+    expect(fails('replace("abc", "/b/", "x")').summary).toBe('Unsupported function argument')
+    expect(ev('replace("abc", "b", "x")')).toBe('axc')
+  })
+  it('format rejects surplus arguments and non-integer %d', () => {
+    expect(fails('format("a", 1)').summary).toBe('Invalid function argument')
+    expect(fails('format("%d", 1.5)').summary).toBe('Invalid function argument')
+    expect(ev('format("%d", 2)')).toBe('2')
+  })
+  it('cidrsubnet rejects bad octets and prefix lengths', () => {
+    expect(fails('cidrsubnet("256.0.0.0/16", 8, 1)').summary).toBe('Invalid function argument')
+    expect(fails('cidrsubnet("10.0.0.0/33", 8, 1)').summary).toBe('Invalid function argument')
   })
 })

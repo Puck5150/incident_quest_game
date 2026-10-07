@@ -46,7 +46,7 @@ function attribute(base: Value, name: string): Value {
 function index(base: Value, key: Value): Value {
   if (isUnknown(base) || isUnknown(key)) return UNKNOWN
   if (Array.isArray(base)) {
-    const n = typeof key === 'string' && key.trim() !== '' ? Number(key) : key
+    const n = typeof key === 'string' ? parseNumber(key) : key
     if (typeof n !== 'number' || !Number.isInteger(n)) throw new EvalError('Invalid index', 'The given key does not identify an element in this collection value: a number is required.')
     if (n < 0 || n >= base.length) throw new EvalError('Invalid index', 'The given key does not identify an element in this collection value.')
     return base[n]
@@ -59,9 +59,21 @@ function index(base: Value, key: Value): Value {
   throw new EvalError('Invalid index', 'This value does not have any indices.')
 }
 
+// Base-10 decimal strings only (no hex, binary or whitespace), finite.
+export function parseNumber(s: string): number | undefined {
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s)) return undefined
+  const n = Number(s)
+  return Number.isFinite(n) ? n : undefined
+}
+
+// An unknown anywhere inside a value (own keys only).
+export function hasUnknown(v: Value): boolean {
+  return v === UNKNOWN || (Array.isArray(v) && v.some(hasUnknown)) || (isObject(v) && Object.values(v).some(hasUnknown))
+}
+
 function number(v: Value, side: string): number {
   if (typeof v === 'number') return v
-  if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) return Number(v)
+  if (typeof v === 'string' && parseNumber(v) !== undefined) return parseNumber(v) as number
   throw new EvalError('Invalid operand', `Unsuitable value for ${side} operand: a number is required.`)
 }
 
@@ -90,10 +102,18 @@ function binary(op: string, l: Value, r: Value): Value {
     return op === '&&' ? bool(l, 'left') && bool(r, 'right') : bool(l, 'left') || bool(r, 'right')
   }
   if (isUnknown(l) || isUnknown(r)) return UNKNOWN
+  if ((op === '==' || op === '!=') && (hasUnknown(l) || hasUnknown(r))) return UNKNOWN
   if (op === '==') return equal(l, r)
   if (op === '!=') return !equal(l, r)
   const a = number(l, 'left')
   const b = number(r, 'right')
+  if ((op === '/' || op === '%') && b === 0) throw new EvalError('Operation failed', "Error during operation: can't divide by zero.")
+  const out = arith(op, a, b)
+  if (typeof out === 'number' && !Number.isFinite(out)) throw new EvalError('Invalid number', 'The number is too large to represent.')
+  return out
+}
+
+function arith(op: string, a: number, b: number): Value {
   switch (op) {
     case '+': return a + b
     case '-': return a - b
@@ -107,9 +127,21 @@ function binary(op: string, l: Value, r: Value): Value {
   }
 }
 
+const NEST = ['Unsupported nesting depth', 'The expression is nested too deeply for this lab.'] as const
 export function evalExpr(e: Expr, scope: Scope): Value {
+  try {
+    return evalNode(e, scope)
+  } catch (err) {
+    // Chrome/Node throw RangeError, Firefox InternalError, on stack overflow.
+    if (err instanceof RangeError || (err as Error)?.name === 'InternalError') throw new EvalError(...NEST)
+    throw err
+  }
+}
+
+function evalNode(e: Expr, scope: Scope): Value {
   switch (e.kind) {
     case 'lit':
+      if (typeof e.value === 'number' && !Number.isFinite(e.value)) throw new EvalError('Invalid number', 'The number is too large to represent.')
       return e.value
     case 'tmpl': {
       let out = ''
@@ -118,7 +150,7 @@ export function evalExpr(e: Expr, scope: Scope): Value {
           out += p
           continue
         }
-        const v = evalExpr(p, scope)
+        const v = evalNode(p, scope)
         if (isUnknown(v)) return UNKNOWN
         out += show(v)
       }
@@ -127,32 +159,32 @@ export function evalExpr(e: Expr, scope: Scope): Value {
     case 'ref':
       return scope.ref(e.path)
     case 'attr':
-      return attribute(evalExpr(e.base, scope), e.name)
+      return attribute(evalNode(e.base, scope), e.name)
     case 'idx':
-      return index(evalExpr(e.base, scope), evalExpr(e.index, scope))
+      return index(evalNode(e.base, scope), evalNode(e.index, scope))
     case 'call':
-      return callFunction(e.name, e.args.map((a) => evalExpr(a, scope)))
+      return callFunction(e.name, e.args.map((a) => evalNode(a, scope)))
     case 'list':
-      return e.items.map((i) => evalExpr(i, scope))
+      return e.items.map((i) => evalNode(i, scope))
     case 'obj': {
       const out: { [key: string]: Value } = {}
       for (const { key, value } of e.entries) {
-        const k = evalExpr(key, scope)
+        const k = evalNode(key, scope)
         if (isUnknown(k)) return UNKNOWN
-        Object.defineProperty(out, show(k), { value: evalExpr(value, scope), enumerable: true, writable: true, configurable: true })
+        Object.defineProperty(out, show(k), { value: evalNode(value, scope), enumerable: true, writable: true, configurable: true })
       }
       return out
     }
     case 'cond': {
-      const test = evalExpr(e.test, scope)
+      const test = evalNode(e.test, scope)
       if (isUnknown(test)) return UNKNOWN
       if (typeof test !== 'boolean') throw new EvalError('Incorrect condition type', 'The condition expression must be of type bool.')
-      return evalExpr(test ? e.yes : e.no, scope)
+      return evalNode(test ? e.yes : e.no, scope)
     }
     case 'bin':
-      return binary(e.op, evalExpr(e.left, scope), evalExpr(e.right, scope))
+      return binary(e.op, evalNode(e.left, scope), evalNode(e.right, scope))
     case 'un': {
-      const v = evalExpr(e.expr, scope)
+      const v = evalNode(e.expr, scope)
       if (isUnknown(v)) return UNKNOWN
       return e.op === '!' ? !bool(v, 'unary') : -number(v, 'unary')
     }

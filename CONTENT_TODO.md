@@ -435,3 +435,7 @@ Wording the parser and graph print that is representative, not copied from the d
 - [ ] `Invalid function argument` details for lookup, element, coalesce, tonumber and cidrsubnet: paraphrased from the function docs.
 - [ ] Unsupported on purpose (reported as `Call to unknown function`): `file`, `templatefile`, `try`, `can`, `for` expressions, anything not in the allowlist.
 - [ ] Sets are modeled as sorted, de-duplicated lists, so `toset` output order is by value; real Terraform sets have no defined order.
+- [ ] Division/modulo by zero: `Operation failed` / `Error during operation: can't divide by zero.` and `Invalid number` / `The number is too large to represent.` (non-finite literals and overflow) are paraphrased.
+- [ ] Unsupported on purpose: `replace` with a `/regex/` search string (`Unsupported function argument`); expressions nested deeper than the stack allows (`Unsupported nesting depth`).
+- [ ] Float formatting differs from Terraform's arbitrary precision (`0.1+0.2` prints 0.30000000000000004; huge numbers print in exponent form).
+- [ ] Conditional branches and `toset` do not unify mixed types; `replace` with an empty search string differs from Go.
