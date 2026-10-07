@@ -160,4 +160,35 @@ describe('parse: operators and collections', () => {
     expect(parse('locals {\n  v = 1 +\n}').diagnostics[0].summary).toBe('Invalid expression')
     expect(parse('locals {\n  v = [1 2]\n}').diagnostics[0].summary).toBe('Missing item separator')
   })
+
+  it('reports excessive nesting or chaining instead of throwing', () => {
+    const wrap = (s: string) => `locals {\n  v = ${s}\n}`
+    const cases = [
+      wrap('('.repeat(1000) + '1' + ')'.repeat(1000)),
+      wrap('['.repeat(1000) + '1' + ']'.repeat(1000)),
+      wrap('"${'.repeat(3000) + '1' + '}"'.repeat(3000)),
+      wrap(Array(5000).fill('1').join('+')),
+      'a {\n'.repeat(5000),
+      wrap('!'.repeat(100000) + 'true'),
+    ]
+    for (const c of cases) {
+      const r = parse(c)
+      expect(r.diagnostics[0].summary).toBe('Unsupported nesting depth')
+    }
+  })
+
+  it('still parses realistic nesting and long chains', () => {
+    const deep = '{ a = '.repeat(20) + '1' + ' }'.repeat(20)
+    expect(parse(`locals {\n  v = ${deep}\n}`).diagnostics).toEqual([])
+    const chain = Array(50).fill('1').join(' + ')
+    expect(parse(`locals {\n  v = ${chain}\n  w = ${chain}\n}`).diagnostics).toEqual([])
+  })
+
+  it('reports provider-defined functions as unsupported', () => {
+    expect(parse('locals {\n  v = provider::aws::arn_parse("x")\n}').diagnostics[0].summary).toBe('Unsupported provider function')
+  })
+
+  it('reads a.0.1 as two integer index segments', () => {
+    expect(ex('a.b.0.1')).toMatchObject({ kind: 'idx', index: { value: 1 }, base: { kind: 'idx', index: { value: 0 } } })
+  })
 })

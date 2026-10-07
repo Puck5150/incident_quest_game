@@ -156,4 +156,21 @@ resource "aws_security_group" "s" {
     const r = g('variable "rules" {}\nresource "x" "s" {\n  dynamic "ingress" {\n    for_each = var.rules\n    iterator = rule\n    content {\n      port = rule.value.port\n    }\n  }\n}\n')
     expect(r.diagnostics).toEqual([])
   })
+
+  it('does not treat variable types or self-referencing validation as references', () => {
+    expect(g('variable "x" {\n  type = string\n}\n').diagnostics).toEqual([])
+    expect(g('variable "x" {\n  type = list(object({ a = string, b = optional(number) }))\n}\n').diagnostics).toEqual([])
+    expect(g('variable "r" {\n  validation {\n    condition = var.r > 0\n    error_message = "x"\n  }\n}\n').diagnostics).toEqual([])
+  })
+
+  it('reports interpolation references at the string position', () => {
+    const r = g('resource "aws_instance" "web" {\n  tags = {\n    Name = "web-${var.nope}"\n  }\n}\n')
+    expect(r.diagnostics[0].summary).toBe('Reference to undeclared input variable')
+    expect(r.diagnostics[0].line).toBe(3)
+  })
+
+  it('survives a very long operator chain', () => {
+    const r = g(`locals {\n  v = ${Array(5000).fill('1').join('+')}\n}\n`)
+    expect(r.diagnostics[0].summary).toBe('Unsupported nesting depth')
+  })
 })

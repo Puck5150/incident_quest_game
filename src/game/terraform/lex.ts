@@ -54,6 +54,9 @@ export function template(raw: string, escapes: boolean, pos: Pos, file: string):
       cur = ''
       parts.push({ src: raw.slice(j + 2, end), pos })
       j = end + 1
+    } else if (c === '%' && raw[j + 1] === '%' && raw[j + 2] === '{') {
+      cur += '%{'
+      j += 3
     } else if (c === '%' && raw[j + 1] === '{') {
       bad('Unsupported template directive', 'Template directives (%{ ... }) are not supported by this lab.')
     } else if (escapes && c === '\\') {
@@ -78,6 +81,7 @@ export function template(raw: string, escapes: boolean, pos: Pos, file: string):
 }
 
 const NUM = /\d+(\.\d+)?([eE][+-]?\d+)?/y
+const INT = /\d+/y
 const ID = /[A-Za-z_][\w-]*/y
 const HEREDOC = /<<(-?)([A-Za-z_]\w*)\r?\n/y
 const PUNCT2 = ['==', '!=', '<=', '>=', '&&', '||', '=>']
@@ -163,8 +167,11 @@ export function lex(file: string, source: string): Tok[] {
       }
     }
     if (c >= '0' && c <= '9') {
-      NUM.lastIndex = i
-      const m = NUM.exec(text)!
+      const prev = toks[toks.length - 1]
+      // after a dot, a.0.1 is index 0 then index 1, not the number 0.1
+      const re = prev && prev.k === 'p' && prev.v === '.' ? INT : NUM
+      re.lastIndex = i
+      const m = re.exec(text)!
       toks.push({ k: 'num', v: Number(m[0]), pos })
       i += m[0].length
       continue
@@ -187,6 +194,7 @@ export function lex(file: string, source: string): Tok[] {
       i++
       continue
     }
+    if (c === '~') fail(file, pos, 'Unsupported template strip marker', 'Template strip markers (~) are not supported by this lab.')
     fail(file, pos, 'Invalid character', 'This character is not used within the language.')
   }
   toks.push({ k: 'eof', pos: posAt(n) })

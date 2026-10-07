@@ -83,6 +83,7 @@ function blockRefs(b: Block, out: Ref[], top: boolean): void {
   for (const a of b.attrs) {
     if (top && (a.name === 'provider' || a.name === 'providers')) continue
     if (b.type === 'lifecycle' && a.name === 'ignore_changes') continue
+    if (top && b.type === 'variable' && a.name === 'type') continue // a type expression, not references
     exprRefs(a.value, out)
   }
   for (const n of b.blocks) blockRefs(n, out, false)
@@ -181,7 +182,7 @@ export function buildGraph(files: { name: string; text: string }[]): Graph {
       if (!r) continue
       const bad = 'want' in r ? (nodes.has(r.want) ? undefined : missing(ref.path)) : r
       if (bad) diagnostics.push({ severity: 'error', ...bad, file: node.file, line: ref.pos.line, col: ref.pos.col })
-      else if ('want' in r) deps.add(r.want)
+      else if ('want' in r && !(node.kind === 'variable' && r.want === node.address)) deps.add(r.want) // validation may read its own variable
     }
     node.deps = [...deps].sort()
   }

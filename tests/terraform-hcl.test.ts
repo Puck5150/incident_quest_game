@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { lex } from '../src/game/terraform/lex.ts'
+import { parseHcl } from '../src/game/terraform/parse.ts'
 import { HclError } from '../src/game/terraform/types.ts'
 
 const kinds = (t: string) =>
@@ -71,5 +72,19 @@ describe('lex', () => {
   it('rejects template directives and stray characters', () => {
     expect(lexError('a = "%{ if x }y%{ endif }"').summary).toBe('Unsupported template directive')
     expect(lexError('a = @').summary).toBe('Invalid character')
+  })
+
+  it('reports template strip markers as unsupported', () => {
+    expect(parseHcl('main.tf', 'locals {\n  a = "${~ var.x ~}"\n}').diagnostics[0].summary).toBe('Unsupported template strip marker')
+    expect(lexError('a = ~').summary).toBe('Unsupported template strip marker')
+  })
+
+  it('treats %%{ as an escaped literal', () => {
+    const t = lex('main.tf', 'a = "%%{x}"').find((x) => x.k === 'str')!
+    expect(t.k === 'str' && t.parts).toEqual(['%{x}'])
+  })
+
+  it('reads a number after a dot as an integer segment', () => {
+    expect(kinds('a.0.1')).toEqual(['id:a', '.', 'num', '.', 'num', 'eof'])
   })
 })

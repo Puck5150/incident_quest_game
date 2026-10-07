@@ -12,9 +12,15 @@ export function parseHcl(file: string, text: string): ParseResult {
     return { blocks: new Parser(file, lex(file, text)).topLevel(), diagnostics: [] }
   } catch (e) {
     if (e instanceof HclError) return { blocks: [], diagnostics: [e.diag] }
+    // Pathologically deep input overflowed the stack somewhere in lex/parse.
+    if (e instanceof RangeError) return { blocks: [], diagnostics: [{ severity: 'error', summary: NEST, detail: NEST_DETAIL, file, line: 0, col: 0 }] }
     throw e
   }
 }
+
+const NEST = 'Unsupported nesting depth'
+const NEST_DETAIL = 'The configuration is nested or chained too deeply for this lab.'
+const MAX_DEPTH = 100
 
 const show = (t: Tok): string =>
   t.k === 'eof' ? 'the end of the file' : t.k === 'nl' ? 'the end of the line' : t.k === 'id' ? `the identifier "${t.v}"` : t.k === 'p' ? `"${t.v}"` : t.k === 'num' ? 'a number' : 'a string'
@@ -30,6 +36,7 @@ class Parser {
   file: string
   toks: Tok[]
   i = 0
+  depth = 0 // nesting of unary() calls, to bound recursion
   skip = 0 // >0 inside ( ) and [ ]: newlines don't end an expression
   ctx: string | undefined // e.g. resource "aws_vpc" "main", for diagnostics
 
@@ -151,22 +158,29 @@ class Parser {
 
   bin(min: number): Expr {
     let left = this.unary()
+    let ops = 0 // operators in this chain (the tree is left-deep, and walkers recurse over it)
     for (;;) {
       const t = this.peek()
       if (t.k !== 'p') return left
       const prec = PREC[t.v]
       if (!prec || prec < min) return left
+      if (++ops > MAX_DEPTH) this.err(t.pos, NEST, NEST_DETAIL)
       this.i++
       left = { kind: 'bin', op: t.v, left, right: this.bin(prec + 1) }
     }
   }
 
   unary(): Expr {
-    if (this.isP('!') || this.isP('-')) {
-      const op = (this.next() as Extract<Tok, { k: 'p' }>).v as '!' | '-'
-      return { kind: 'un', op, expr: this.unary() }
+    if (++this.depth > MAX_DEPTH) this.err(this.peek().pos, NEST, NEST_DETAIL)
+    try {
+      if (this.isP('!') || this.isP('-')) {
+        const op = (this.next() as Extract<Tok, { k: 'p' }>).v as '!' | '-'
+        return { kind: 'un', op, expr: this.unary() }
+      }
+      return this.postfix()
+    } finally {
+      this.depth--
     }
-    return this.postfix()
   }
 
   postfix(): Expr {
@@ -200,6 +214,10 @@ class Parser {
       if (t.v === 'true') return { kind: 'lit', value: true }
       if (t.v === 'false') return { kind: 'lit', value: false }
       if (t.v === 'null') return { kind: 'lit', value: null }
+      if (this.isP(':')) {
+        const n = this.toks[this.i + 1]
+        if (n.k === 'p' && n.v === ':') this.err(t.pos, 'Unsupported provider function', 'Provider-defined functions (provider::name::function) are not supported by this lab.')
+      }
       if (this.isP('(')) return this.call(t)
       return this.ref(t)
     }
@@ -303,7 +321,12 @@ class Parser {
   // Parse the inside of a ${ } sequence. Errors are reported at the string.
   sub(src: string, pos: Pos): Expr {
     try {
-      const p = new Parser(this.file, lex(this.file, src))
+      // Tokens (and nested interpolations) all report at the string's position.
+      const toks = lex(this.file, src).map((t): Tok =>
+        t.k === 'str' ? { ...t, pos, parts: t.parts.map((x) => (typeof x === 'string' ? x : { ...x, pos })) } : { ...t, pos },
+      )
+      const p = new Parser(this.file, toks)
+      p.depth = this.depth
       p.skip = 1
       p.ctx = this.ctx
       const e = p.expr()
