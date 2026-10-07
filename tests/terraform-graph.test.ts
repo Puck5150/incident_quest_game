@@ -192,4 +192,12 @@ describe('graph: blocks and import dependencies', () => {
     const r = g('resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}\nimport {\n  to = aws_s3_bucket.b\n  id = var.nope\n}\n')
     expect(r.diagnostics[0].summary).toBe('Reference to undeclared input variable')
   })
+
+  it('reports an undeclared variable in an import id against the import block file', () => {
+    const r = buildGraph([
+      { name: 'main.tf', text: 'resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}\n' },
+      { name: 'imports.tf', text: 'import {\n  to = aws_s3_bucket.b\n  id = var.nope\n}\n' },
+    ])
+    expect(r.diagnostics[0]).toMatchObject({ summary: 'Reference to undeclared input variable', file: 'imports.tf', line: 3 })
+  })
 })

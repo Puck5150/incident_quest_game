@@ -8,6 +8,7 @@ export type NodeKind = 'resource' | 'data' | 'variable' | 'local' | 'output' | '
 export interface Ref {
   path: string[]
   pos: Pos
+  file?: string // set when the reference lives in another block's file (import ids)
 }
 export interface GNode {
   address: string
@@ -183,7 +184,11 @@ export function buildGraph(files: { name: string; text: string }[]): Graph {
     const id = b.attrs.find((a) => a.name === 'id')
     const addr = to && parseAddress(to.value)
     const node = addr && nodes.get(`${addr.type}.${addr.name}`)
-    if (node && id) exprRefs(id.value, node.refs)
+    if (node && id) {
+      const found: Ref[] = []
+      exprRefs(id.value, found)
+      node.refs.push(...found.map((r) => ({ ...r, file: b.file })))
+    }
   }
 
   // Resolve references into dependencies.
@@ -193,7 +198,7 @@ export function buildGraph(files: { name: string; text: string }[]): Graph {
       const r = resolve(ref.path)
       if (!r) continue
       const bad = 'want' in r ? (nodes.has(r.want) ? undefined : missing(ref.path)) : r
-      if (bad) diagnostics.push({ severity: 'error', ...bad, file: node.file, line: ref.pos.line, col: ref.pos.col })
+      if (bad) diagnostics.push({ severity: 'error', ...bad, file: ref.file ?? node.file, line: ref.pos.line, col: ref.pos.col })
       else if ('want' in r && !(node.kind === 'variable' && r.want === node.address)) deps.add(r.want) // validation may read its own variable
     }
     node.deps = [...deps].sort()

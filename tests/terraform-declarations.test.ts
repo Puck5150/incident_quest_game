@@ -43,3 +43,18 @@ describe('importsOf', () => {
     expect(importsOf(blocks('import {\n  to = var.x\n  id = "x"\n}\n')).diagnostics[0].summary).toBe('Invalid "to" address')
   })
 })
+
+describe('declaration shape errors', () => {
+  it('rejects unknown arguments and labels in removed and import blocks', () => {
+    expect(removedOf(blocks('removed {\n  from = aws_vpc.a\n  to = aws_vpc.b\n}\n')).diagnostics[0]).toMatchObject({ summary: 'Unsupported argument', detail: 'An argument named "to" is not expected here.' })
+    expect(removedOf(blocks('removed "x" {\n  from = aws_vpc.a\n}\n')).diagnostics[0]).toMatchObject({ summary: 'Extraneous label', detail: 'No labels are expected for removed blocks.' })
+    expect(importsOf(blocks('import {\n  to = aws_vpc.a\n  id = "x"\n  name = "y"\n}\n')).diagnostics[0]).toMatchObject({ summary: 'Unsupported argument', detail: 'An argument named "name" is not expected here.' })
+    expect(importsOf(blocks('import "x" {\n  to = aws_vpc.a\n  id = "x"\n}\n')).diagnostics[0].summary).toBe('Extraneous label')
+  })
+
+  it('rejects two import blocks for one target', () => {
+    const r = importsOf(blocks('import {\n  to = aws_vpc.a\n  id = "x"\n}\nimport {\n  to = aws_vpc.a\n  id = "y"\n}\n'))
+    expect(r.diagnostics).toMatchObject([{ summary: 'Duplicate import configuration for "aws_vpc.a"', line: 5 }])
+    expect(r.imports).toHaveLength(1)
+  })
+})

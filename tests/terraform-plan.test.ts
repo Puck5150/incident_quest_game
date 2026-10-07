@@ -484,21 +484,42 @@ describe('planConfig: moved blocks', () => {
     expect(plan(tf, { state: ordersState() }).items).toMatchObject([{ address: 'aws_db_instance.primary', action: 'replace', movedFrom: 'aws_db_instance.orders' }])
   })
 
-  it('warns, and carries on, when the old address is still declared', () => {
-    const r = plan(DB_BLOCK('orders') + DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n', { state: ordersState() })
-    expect(r.diagnostics).toEqual([])
-    expect(r.warnings.map((w) => w.summary)).toEqual(['Moved object still exists'])
-    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['create aws_db_instance.orders', 'noop aws_db_instance.primary'])
+  const MOVE_OP = 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n'
+
+  it('is an error when the old address is still declared', () => {
+    const r = plan(DB_BLOCK('orders') + DB_BLOCK('primary') + MOVE_OP, { state: ordersState() })
+    expect(r.diagnostics[0]).toMatchObject({ summary: 'Moved object still exists', file: 'main.tf' })
+    expect(r.items).toEqual([])
   })
 
-  it('stops with an error for a type mismatch or a move onto an occupied address', () => {
+  it('does not complain about the add-count pattern, but does when an old keyed instance is still planned', () => {
+    const x = 'resource "aws_s3_bucket" "x" {\n  count  = 1\n  bucket = "b"\n}\n'
+    const ok = plan(x + 'moved {\n  from = aws_s3_bucket.x\n  to   = aws_s3_bucket.x[0]\n}\n')
+    expect(ok.diagnostics).toEqual([])
+    const bad = plan(x + 'moved {\n  from = aws_s3_bucket.x[0]\n  to   = aws_s3_bucket.x["a"]\n}\n')
+    expect(bad.diagnostics[0].summary).toBe('Moved object still exists')
+  })
+
+  it('keeps the original address when the implicit count move follows an explicit one', () => {
+    const state = stateOf({ type: 'aws_s3_bucket', name: 'x_old', attrs: BUCKET(1) })
+    const r = plan('resource "aws_s3_bucket" "x" {\n  count  = 1\n  bucket = "logs-1"\n}\nmoved {\n  from = aws_s3_bucket.x_old\n  to   = aws_s3_bucket.x\n}\n', { state })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items).toMatchObject([{ address: 'aws_s3_bucket.x[0]', movedFrom: 'aws_s3_bucket.x_old' }])
+  })
+
+  it('errors for a type mismatch', () => {
     const mismatch = plan(DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_vpc.main\n}\n', { state: ordersState() })
     expect(mismatch.diagnostics[0].summary).toBe('Resource type mismatch')
     expect(mismatch.items).toEqual([])
+  })
+
+  it('warns, and lets the existing object win, for a move onto an occupied address', () => {
     const both = stateOf({ type: 'aws_db_instance', name: 'orders', attrs: DB_ATTRS }, { type: 'aws_db_instance', name: 'primary', attrs: { ...DB_ATTRS, id: 'db-2' } })
-    const clash = plan(DB_BLOCK('primary') + 'moved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n', { state: both })
-    expect(clash.diagnostics[0].summary).toBe('Cannot move to existing object')
-    expect(clash.items).toEqual([])
+    const r = plan(DB_BLOCK('primary') + MOVE_OP, { state: both })
+    expect(r.diagnostics).toEqual([])
+    expect(r.warnings.map((w) => w.summary)).toEqual(['Unresolved resource instance address changes'])
+    expect(r.warnings[0].detail).toContain('move aws_db_instance.orders to aws_db_instance.primary')
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['destroy aws_db_instance.orders', 'noop aws_db_instance.primary'])
   })
 })
 
@@ -563,6 +584,28 @@ describe('planConfig: import blocks', () => {
     expect(none.items).toEqual([])
     const unconfigured = plan(BUCKET_TF() + IMPORT('"legacy-bucket"', 'aws_s3_bucket.other'), { reality: CLOUD })
     expect(unconfigured.diagnostics[0].summary).toBe('Configuration for import target does not exist')
+  })
+
+  it('errors when the import target instance is not in the expansion', () => {
+    const counted = 'resource "aws_s3_bucket" "b" {\n  count  = 2\n  bucket = "legacy-bucket"\n}\n'
+    const keyed = 'resource "aws_s3_bucket" "b" {\n  for_each = toset(["a"])\n  bucket   = "legacy-bucket"\n}\n'
+    for (const [tf, to] of [[counted, 'aws_s3_bucket.b[5]'], [counted, 'aws_s3_bucket.b'], [keyed, 'aws_s3_bucket.b["A"]']]) {
+      const r = plan(tf + IMPORT('"legacy-bucket"', to), { reality: CLOUD })
+      expect(r.diagnostics.map((d) => d.summary)).toEqual(['Configuration for import target does not exist'])
+      expect(r.items).toEqual([])
+    }
+  })
+
+  it('converts a number id, and rejects a null id', () => {
+    const num = plan(BUCKET_TF() + IMPORT('123'), { reality: { [realityKey('aws_s3_bucket', '123')]: LEGACY } })
+    expect(num.items[0].importing).toBe('123')
+    const nul = plan(BUCKET_TF() + IMPORT('null'), { reality: CLOUD })
+    expect(nul.diagnostics[0]).toMatchObject({ summary: 'Invalid import id argument', detail: 'The given import id for aws_s3_bucket.b must be a known string value.' })
+  })
+
+  it('evaluates the id without the target instance context', () => {
+    const tf = 'resource "aws_s3_bucket" "b" {\n  for_each = toset(["x"])\n  bucket   = "legacy-bucket"\n}\n' + IMPORT('each.key', 'aws_s3_bucket.b["x"]')
+    expect(plan(tf, { reality: CLOUD }).diagnostics[0].summary).toBe('Reference to "each" in context without for_each')
   })
 
   it('ignores an import for something already in state', () => {

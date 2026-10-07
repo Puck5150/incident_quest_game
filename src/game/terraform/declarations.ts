@@ -1,9 +1,18 @@
 // `removed` and `import` blocks: statements about state rather than resources.
 import { parseAddress, type Address } from './addresses.ts'
+import { instanceAddress } from './state.ts'
 import type { Block, Diagnostic, Expr, Pos } from './types.ts'
 
 const diag = (file: string, pos: Pos, summary: string, detail: string): Diagnostic => ({ severity: 'error', summary, detail, file, line: pos.line, col: pos.col })
 const missing = (b: Block, name: string) => diag(b.file, b.pos, 'Missing required argument', `The argument "${name}" is required, but no definition was found.`)
+
+// Arguments and labels a statement block does not take.
+export function shapeErrors(b: Block, allowed: string[]): Diagnostic[] {
+  const out: Diagnostic[] = []
+  if (b.labels.length) out.push(diag(b.file, b.pos, 'Extraneous label', `No labels are expected for ${b.type} blocks.`))
+  for (const a of b.attrs) if (!allowed.includes(a.name)) out.push(diag(b.file, a.pos, 'Unsupported argument', `An argument named "${a.name}" is not expected here.`))
+  return out
+}
 
 export interface Removal {
   from: Address
@@ -17,6 +26,7 @@ export function removedOf(blocks: Block[]): { removals: Removal[]; diagnostics: 
   const diagnostics: Diagnostic[] = []
   for (const b of blocks) {
     if (b.type !== 'removed') continue
+    diagnostics.push(...shapeErrors(b, ['from']))
     const fromAttr = b.attrs.find((a) => a.name === 'from')
     if (!fromAttr) {
       diagnostics.push(missing(b, 'from'))
@@ -59,6 +69,7 @@ export function importsOf(blocks: Block[]): { imports: ImportDecl[]; diagnostics
   const diagnostics: Diagnostic[] = []
   for (const b of blocks) {
     if (b.type !== 'import') continue
+    diagnostics.push(...shapeErrors(b, ['to', 'id']))
     const toAttr = b.attrs.find((a) => a.name === 'to')
     const idAttr = b.attrs.find((a) => a.name === 'id')
     if (!toAttr) diagnostics.push(missing(b, 'to'))
@@ -67,6 +78,11 @@ export function importsOf(blocks: Block[]): { imports: ImportDecl[]; diagnostics
     const to = parseAddress(toAttr.value)
     if (!to) {
       diagnostics.push(diag(b.file, toAttr.pos, 'Invalid "to" address', 'Import block addresses must be resource instance addresses such as aws_instance.web or aws_instance.web[0].'))
+      continue
+    }
+    const key = instanceAddress({ mode: 'managed', type: to.type, name: to.name }, to.key)
+    if (imports.some((x) => x.to.type === to.type && x.to.name === to.name && x.to.key === to.key)) {
+      diagnostics.push(diag(b.file, b.pos, `Duplicate import configuration for "${key}"`, `An import block for ${key} was already declared. A resource instance can have only one import block.`))
       continue
     }
     imports.push({ to, id: idAttr.value, idPos: idAttr.pos, file: b.file, pos: b.pos })

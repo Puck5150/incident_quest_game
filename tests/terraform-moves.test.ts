@@ -44,6 +44,23 @@ describe('movesOf', () => {
   })
 })
 
+describe('movesOf: shape errors', () => {
+  it('rejects a move whose source and destination are the same, without a cycle', () => {
+    const r = moves(MV('aws_vpc.a', 'aws_vpc.a'))
+    expect(r.moves).toEqual([])
+    expect(r.diagnostics).toMatchObject([{ summary: 'Redundant move statement', file: 'main.tf', line: 1 }])
+    expect(r.diagnostics[0].detail).toBe('The move statement aws_vpc.a to aws_vpc.a has the same source and destination, so it has no effect.')
+  })
+
+  it('rejects unknown arguments and labels', () => {
+    const r = moves('moved "x" {\n  from = aws_vpc.a\n  to = aws_vpc.b\n  extra = 1\n}\n')
+    expect(r.diagnostics.map((d) => [d.summary, d.detail])).toEqual([
+      ['Extraneous label', 'No labels are expected for moved blocks.'],
+      ['Unsupported argument', 'An argument named "extra" is not expected here.'],
+    ])
+  })
+})
+
 describe('applyMoves', () => {
   it('renames a resource, keeping instance keys, and reports old addresses', () => {
     const r = run(MV('aws_s3_bucket.old', 'aws_s3_bucket.new'), stateWith({ type: 'aws_s3_bucket', name: 'old', keys: ['a', 'b'] }, { type: 'aws_vpc', name: 'v' }))
@@ -76,15 +93,28 @@ describe('applyMoves', () => {
     expect(s).toEqual(copy)
   })
 
-  it('refuses to move onto an occupied address', () => {
-    const r = run(MV('aws_vpc.a', 'aws_vpc.b'), stateWith({ type: 'aws_vpc', name: 'a' }, { type: 'aws_vpc', name: 'b' }))
-    expect(r.diagnostics[0]).toMatchObject({ severity: 'error', summary: 'Cannot move to existing object' })
-    expect(r.diagnostics[0].detail).toContain('aws_vpc.b')
+  it('leaves the source in place when a move would land on an occupied address, in either state order', () => {
+    for (const order of [['a', 'b'], ['b', 'a']]) {
+      const s = stateWith(...order.map((name) => ({ type: 'aws_vpc', name })))
+      const r = run(MV('aws_vpc.a', 'aws_vpc.b'), s)
+      expect(r.diagnostics).toEqual([])
+      expect(r.blocked).toEqual([{ from: 'aws_vpc.a', to: 'aws_vpc.b' }])
+      expect(listAddresses(r.state).sort()).toEqual(['aws_vpc.a', 'aws_vpc.b'])
+      expect(r.moved.size).toBe(0)
+      expect(r.state.resources.find((x) => x.name === 'b')!.instances[0].attributes.id).toBe('b-x')
+    }
   })
 
   it('reports a cycle instead of looping', () => {
     const r = run(MV('aws_vpc.a', 'aws_vpc.b') + MV('aws_vpc.b', 'aws_vpc.a'), stateWith({ type: 'aws_vpc', name: 'a' }))
     expect(r.diagnostics.map((d) => d.summary)).toContain('Cycle in move statements')
+  })
+
+  it('reports a cycle once, at a move statement, however many instances are in it', () => {
+    const r = run(MV('aws_vpc.a[0]', 'aws_vpc.a[1]') + MV('aws_vpc.a[1]', 'aws_vpc.a[0]'), stateWith({ type: 'aws_vpc', name: 'a', keys: [0, 1] }))
+    expect(r.diagnostics).toHaveLength(1)
+    expect(r.diagnostics[0]).toMatchObject({ summary: 'Cycle in move statements', file: 'main.tf' })
+    expect(r.diagnostics[0].line).toBeGreaterThan(0)
   })
 
   it('does not move an instance of a whole-resource move when both addresses are keyed', () => {

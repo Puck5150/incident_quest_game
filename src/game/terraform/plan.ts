@@ -104,18 +104,6 @@ export function planConfig(input: PlanInput): PlanResult {
   errors.push(...mv.diagnostics, ...rm.diagnostics, ...im.diagnostics)
   const declared = (a: { type: string; name: string }) => g.nodes.has(`${a.type}.${a.name}`)
   const show = (a: { type: string; name: string; key?: string | number }) => instanceAddress({ mode: 'managed', type: a.type, name: a.name }, a.key)
-  for (const m of mv.moves) {
-    if (m.from.key === undefined && declared(m.from)) {
-      result.warnings.push({
-        severity: 'warning',
-        summary: 'Moved object still exists',
-        detail: `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`,
-        file: m.file,
-        line: m.pos.line,
-        col: m.pos.col,
-      })
-    }
-  }
   for (const r of rm.removals) {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
   }
@@ -124,6 +112,16 @@ export function planConfig(input: PlanInput): PlanResult {
   }
   const applied = applyMoves(refreshed, mv.moves)
   errors.push(...applied.diagnostics)
+  for (const x of applied.blocked) {
+    result.warnings.push({
+      severity: 'warning',
+      summary: 'Unresolved resource instance address changes',
+      detail: `Terraform was not able to move ${x.from} to ${x.to}: an object already exists at ${x.to}, so the existing object takes priority and ${x.from} is left where it is.`,
+      file: '',
+      line: 0,
+      col: 0,
+    })
+  }
   if (errors.length) return result
   const base = applied.state // the state planning works from: refreshed, with moves applied
 
@@ -212,7 +210,7 @@ export function planConfig(input: PlanInput): PlanResult {
         const found = findInstance(base, old)
         if (found) {
           priorInst = found.instance
-          movedFrom = old
+          movedFrom = applied.moved.get(old) ?? old
           consumed.add(old)
         }
       }
@@ -220,7 +218,13 @@ export function planConfig(input: PlanInput): PlanResult {
       const decl = im.imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key)
       if (!priorInst && decl) {
         const before = errors.length
-        const id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor(ctx)), 'import')
+        let id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor({})), 'import')
+        if (errors.length === before && typeof id === 'number') id = String(id)
+        if (errors.length === before && typeof id !== 'string') {
+          fail(decl.file, decl.idPos, 'Invalid import id argument', `The given import id for ${address} must be a known string value.`, 'import')
+          failed = true
+          continue
+        }
         const object = errors.length === before && typeof id === 'string' && Object.hasOwn(input.reality, realityKey(type, id)) ? input.reality[realityKey(type, id)] : undefined
         if (!object) {
           if (errors.length === before) {
@@ -333,6 +337,14 @@ export function planConfig(input: PlanInput): PlanResult {
 
   // In state but no longer configured (or a count/for_each instance that went away).
   const planned = new Set(result.items.map((i) => i.address))
+  // Instance-level checks need the expansion, so they run after the walk.
+  for (const m of mv.moves) {
+    const still = m.from.key === undefined && m.to.key === undefined ? declared(m.from) : planned.has(show(m.from))
+    if (still) fail(m.file, m.pos, 'Moved object still exists', `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`)
+  }
+  for (const i of im.imports) {
+    if (declared(i.to) && !planned.has(show(i.to))) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
+  }
   for (const r of base.resources) {
     if (r.mode !== 'managed') continue
     const schema = schemaFor(r.type)

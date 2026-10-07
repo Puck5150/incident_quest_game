@@ -487,9 +487,16 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] `create_before_destroy` is only recorded on the plan item (for the renderer); ordering and propagation belong to TF3.
 
 ## terraform simulator (moved / import / removed, TF2b-3b)
-- [ ] `Moved object still exists` (modeled as a warning), `Resource type mismatch`, `Cannot move to existing object`, `Cycle in move statements`, `Removed resource still exists`: summaries and details from memory of the CLI; confirm wording, and whether "still exists" is a warning or an error in real Terraform.
+- [ ] `Moved object still exists` (an error, per review of move_validate.go), `Resource type mismatch`, `Cycle in move statements`, `Removed resource still exists`: summaries and details from memory of the CLI; confirm wording.
 - [ ] `Configuration for import target does not exist` and `Cannot import non-existent remote object`: recalled closely, still unverified.
 - [ ] An `import` is read from the simulated cloud by `type:id`; real providers also accept composite or provider-specific ids (for example `bucket-name` for S3, `cluster/service` for ECS). Each incident that imports must seed `reality` under the id it uses.
 - [ ] An `import` block for an instance that is already in state is ignored silently; real Terraform also ignores it only when the ids match.
 - [ ] `moved` is applied in the order resolved by following chains per instance; real Terraform validates the whole set of statements (for example conflicting moves from one address) with more specific errors.
 - [ ] `removed` only supports whole-resource addresses and `lifecycle { destroy = bool }`; provisioner blocks inside `removed` are not modeled.
+- [ ] `Unresolved resource instance address changes` wording is from memory (real Terraform records a blocked move and reports it in the plan).
+- [ ] `Redundant move statement` wording is from review.
+- [ ] The message for an invalid import id (`Invalid import id argument`) is invented.
+- [ ] A moved instance that is then destroyed by a smaller count loses its `movedFrom` (renderer cosmetic).
+- [ ] An import that references its own resource (`id = aws_s3_bucket.x.id`) reports a location-less Cycle error.
+- [ ] The plan summary has no "to forget" count; the renderer can count `forget` items.
+- [ ] Duplicate `removed` blocks, and `removed` combined with `moved` on one address, are not diagnosed.
