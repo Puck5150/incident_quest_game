@@ -49,8 +49,9 @@ function cidrsubnet(prefix: string, newbits: number, netnum: number): string {
 
 function format(fmt: string, args: Value[]): string {
   let i = 0
-  return fmt.replace(/%[sdv%]/g, (spec) => {
+  return fmt.replace(/%[\s\S]?/g, (spec) => {
     if (spec === '%%') return '%'
+    if (!/^%[sdv]$/.test(spec)) throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: unsupported format verb.')
     if (i >= args.length) throw new EvalError('Invalid function argument', 'Invalid value for "format" parameter: not enough arguments for the format string.')
     const v = args[i++]
     if (spec === '%d') {
@@ -80,8 +81,8 @@ const FNS: Record<string, [number, number, (a: Value[]) => Value]> = {
   element: [2, 2, ([l, i]) => { const xs = list('element', l); return xs.length ? xs[((int('element', i) % xs.length) + xs.length) % xs.length] : (bad('element', 'cannot use element function with an empty list.') as never) }],
   toset: [1, 1, ([l]) => sorted(unique(list('toset', l)))],
   tolist: [1, 1, ([l]) => list('tolist', l)],
-  tostring: [1, 1, ([v]) => show(v)],
-  tonumber: [1, 1, ([v]) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : (bad('tonumber', 'cannot convert to number.') as never))],
+  tostring: [1, 1, ([v]) => (v === null ? null : show(v))],
+  tonumber: [1, 1, ([v]) => (v === null ? null : typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : (bad('tonumber', 'cannot convert to number.') as never))],
   jsonencode: [1, 1, ([v]) => (hasUnknown(v) ? UNKNOWN : JSON.stringify(sortKeys(v)))],
   upper: [1, 1, ([s]) => str('upper', s).toUpperCase()],
   lower: [1, 1, ([s]) => str('lower', s).toLowerCase()],
@@ -100,6 +101,7 @@ export function callFunction(name: string, args: Value[]): Value {
   const [min, max, fn] = f
   if (args.length < min) throw new EvalError('Not enough function arguments', `Function "${name}" expects at least ${min} argument(s). Pass only ${args.length}.`)
   if (args.length > max) throw new EvalError('Too many function arguments', `Function "${name}" expects at most ${max} argument(s). Pass ${args.length}.`)
-  if (name !== 'jsonencode' && args.some(isUnknown)) return UNKNOWN
+  // These inspect element values, so an unknown at any depth makes the result unknown.
+  if (['join', 'contains', 'toset', 'format'].includes(name) ? args.some(hasUnknown) : name !== 'jsonencode' && args.some(isUnknown)) return UNKNOWN
   return fn(args)
 }

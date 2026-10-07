@@ -201,3 +201,25 @@ describe('eval: functions', () => {
     expect(fails('cidrsubnet("10.0.0.0/16", 2, 4)').detail).toContain('does not accommodate a subnet numbered 4')
   })
 })
+
+describe('eval: functions, nested unknowns and edge cases', () => {
+  const u = { u: UNKNOWN }
+  it('makes value-inspecting functions unknown when an element is unknown', () => {
+    expect(ev('join(",", [u, "x"])', u)).toBe(UNKNOWN)
+    expect(ev('toset([u, "a"])', u)).toBe(UNKNOWN)
+    expect(ev('contains([u], "x")', u)).toBe(UNKNOWN)
+    expect(ev('format("%s-%s", "a", u)', u)).toBe(UNKNOWN)
+  })
+
+  it('lets partial unknowns pass through functions that only move values', () => {
+    expect(ev('element([u, "b"], 1)', u)).toBe('b')
+    expect(ev('element([u, "b"], 0)', u)).toBe(UNKNOWN)
+    expect(ev('lookup({ a = u }, "b", 1)', u)).toBe(1)
+  })
+
+  it('rejects unsupported format verbs and converts null', () => {
+    expect(fails('format("%03d", 5)').summary).toBe('Invalid function argument')
+    expect(fails('format("100%")').summary).toBe('Invalid function argument')
+    expect([ev('tostring(null)'), ev('tonumber(null)')]).toEqual([null, null])
+  })
+})
