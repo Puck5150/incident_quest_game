@@ -19,6 +19,7 @@ export interface PlanInput {
   vars: Record<string, Value>
   workspace?: string
   refresh?: boolean
+  replace?: string[]
 }
 export interface PlanItem {
   address: string
@@ -28,6 +29,8 @@ export interface PlanItem {
   action: Action | 'destroy'
   changes: AttrChange[]
   movedFrom?: string
+  reason?: 'tainted' | 'requested' | 'triggered'
+  triggeredBy?: string[]
 }
 export interface PlanOutput {
   name: string
@@ -36,6 +39,7 @@ export interface PlanOutput {
 }
 export interface PlanResult {
   diagnostics: Diagnostic[]
+  warnings: Diagnostic[]
   drift: Drift[]
   items: PlanItem[]
   outputs: PlanOutput[]
@@ -69,7 +73,7 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
 export function planConfig(input: PlanInput): PlanResult {
   const g = buildGraph(input.files)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
-  const result: PlanResult = { diagnostics: [...g.diagnostics], drift, items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 } }
+  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 } }
   if (g.diagnostics.length) return result
 
   const errors = result.diagnostics
@@ -127,6 +131,8 @@ export function planConfig(input: PlanInput): PlanResult {
   })
 
   const consumed = new Set<string>()
+  // Which actions each resource's instances ended up with, for replace_triggered_by.
+  const touched = new Map<string, Set<string>>()
   const planResource = (node: GNode) => {
     const b = node.block!
     const [type, name] = b.labels
@@ -160,20 +166,41 @@ export function planConfig(input: PlanInput): PlanResult {
         continue
       }
       const address = instanceAddress({ mode: 'managed', type, name }, key)
-      let prior = findInstance(refreshed, address)?.instance.attributes
+      let priorInst = findInstance(refreshed, address)?.instance
       let movedFrom: string | undefined
       // Adding or removing `count = 1` moves the lone instance between `x` and `x[0]` (Terraform 1.1+).
-      if (!prior && ex.kind !== 'for_each' && (key === 0 || key === undefined)) {
+      if (!priorInst && ex.kind !== 'for_each' && (key === 0 || key === undefined)) {
         const old = instanceAddress({ mode: 'managed', type, name }, key === 0 ? undefined : 0)
         const found = findInstance(refreshed, old)
         if (found) {
-          prior = found.instance.attributes
+          priorInst = found.instance
           movedFrom = old
           consumed.add(old)
         }
       }
-      const p = diffInstance(schema, ar.args, prior, lc.lifecycle.ignoreChanges)
-      result.items.push({ address, type, name, key, action: p.action, changes: p.changes, ...(movedFrom ? { movedFrom } : {}) })
+      const prior = priorInst?.attributes
+      // Why an existing instance might be replaced even though its arguments did not force it.
+      const triggers = prior ? lc.lifecycle.replaceTriggeredBy.filter((a) => touched.get(a)?.has('update') || touched.get(a)?.has('replace')) : []
+      const forced = !prior ? undefined : priorInst?.status === 'tainted' ? 'tainted' : input.replace?.includes(address) ? 'requested' : triggers.length ? 'triggered' : undefined
+      let p = diffInstance(schema, ar.args, prior, lc.lifecycle.ignoreChanges)
+      let reason: PlanItem['reason'] = priorInst?.status === 'tainted' ? 'tainted' : undefined
+      if (forced && p.action !== 'replace') {
+        p = diffInstance(schema, ar.args, prior, lc.lifecycle.ignoreChanges, true)
+        reason = forced
+      }
+      result.items.push({
+        address,
+        type,
+        name,
+        key,
+        action: p.action,
+        changes: p.changes,
+        ...(movedFrom ? { movedFrom } : {}),
+        ...(reason ? { reason } : {}),
+        ...(reason === 'triggered' ? { triggeredBy: triggers } : {}),
+      })
+      const seen = touched.get(`${type}.${name}`) ?? new Set<string>()
+      touched.set(`${type}.${name}`, seen.add(p.action))
       planned.set(key, complete(p.planned, schema))
     }
     if (failed) return
@@ -260,6 +287,18 @@ export function planConfig(input: PlanInput): PlanResult {
           .sort(byName),
       })
     }
+  }
+  const known = new Set(result.items.map((i) => i.address))
+  for (const a of input.replace ?? []) {
+    if (known.has(a)) continue
+    result.warnings.push({
+      severity: 'warning',
+      summary: 'Incompletely-matched force-replace resource instance',
+      detail: `Your force-replace request for ${a} doesn't match any resource instance in the plan, so it has no effect.`,
+      file: '',
+      line: 0,
+      col: 0,
+    })
   }
   result.items.sort(byInstance)
   result.outputs.sort(byName)

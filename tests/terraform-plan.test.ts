@@ -5,7 +5,7 @@ import { realityKey, type Reality } from '../src/game/terraform/refresh.ts'
 import { emptyState, type State } from '../src/game/terraform/state.ts'
 
 const AWS = 'provider["registry.terraform.io/hashicorp/aws"]'
-type Seed = { type: string; name: string; key?: string | number; attrs: Record<string, Value>; mode?: 'managed' | 'data' }
+type Seed = { type: string; name: string; key?: string | number; attrs: Record<string, Value>; mode?: 'managed' | 'data'; status?: 'tainted' }
 const stateOf = (...seeds: Seed[]): State => {
   const s = emptyState()
   for (const x of seeds) {
@@ -15,7 +15,7 @@ const stateOf = (...seeds: Seed[]): State => {
       r = { mode, type: x.type, name: x.name, provider: AWS, instances: [] }
       s.resources.push(r)
     }
-    r.instances.push({ ...(x.key === undefined ? {} : { index_key: x.key }), attributes: x.attrs })
+    r.instances.push({ ...(x.key === undefined ? {} : { index_key: x.key }), ...(x.status ? { status: x.status } : {}), attributes: x.attrs })
   }
   return s
 }
@@ -23,9 +23,9 @@ const stateOf = (...seeds: Seed[]): State => {
 const cloudOf = (state: State): Reality =>
   Object.fromEntries(state.resources.filter((r) => r.mode === 'managed').flatMap((r) => r.instances.map((i) => [realityKey(r.type, i.attributes.id as string), i.attributes] as const)))
 
-const plan = (tf: string, o: { state?: State; reality?: Reality; vars?: Record<string, Value> } = {}): PlanResult => {
+const plan = (tf: string, o: { state?: State; reality?: Reality; vars?: Record<string, Value>; replace?: string[] } = {}): PlanResult => {
   const state = o.state ?? emptyState()
-  return planConfig({ files: [{ name: 'main.tf', text: tf }], state, reality: o.reality ?? cloudOf(state), vars: o.vars ?? {} })
+  return planConfig({ files: [{ name: 'main.tf', text: tf }], state, reality: o.reality ?? cloudOf(state), vars: o.vars ?? {}, ...(o.replace ? { replace: o.replace } : {}) })
 }
 const actions = (r: PlanResult) => r.items.filter((i) => i.action !== 'noop').map((i) => `${i.action} ${i.address}`)
 
@@ -281,5 +281,81 @@ describe('planConfig: review fixes', () => {
     expect(plan('output "o" {}')).toMatchObject({ diagnostics: [{ summary: 'Missing required argument', detail: 'The argument "value" is required, but no definition was found.', context: 'output "o"' }] })
     expect(plan('output "o" {\n  value = self.id\n}').diagnostics[0].summary).toBe('Invalid "self" reference')
     expect(plan('locals {\n  x = 1 / 0\n}').diagnostics[0].context).toBe('locals')
+  })
+})
+
+const INSTANCE = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro' }
+const WEB = 'resource "aws_instance" "web" {\n  ami           = "ami-1"\n  instance_type = "t3.micro"\n}\n'
+const webState = (status?: 'tainted') => stateOf({ type: 'aws_instance', name: 'web', attrs: INSTANCE, ...(status ? { status } : {}) })
+
+describe('planConfig: forced replacement', () => {
+  it('replaces a tainted instance even though nothing changed, and says why', () => {
+    const r = plan(WEB, { state: webState('tainted') })
+    expect(r.items).toMatchObject([{ address: 'aws_instance.web', action: 'replace', reason: 'tainted' }])
+    expect(r.items[0].changes.find((c) => c.name === 'id')).toMatchObject({ before: 'i-1', after: UNKNOWN })
+    expect(r.summary).toEqual({ add: 1, change: 0, destroy: 1 })
+  })
+
+  it('leaves an untainted, unchanged instance alone', () => {
+    expect(plan(WEB, { state: webState() }).items).toMatchObject([{ action: 'noop' }])
+  })
+
+  it('replaces exactly the instances named by -replace, with reason requested', () => {
+    const state = stateOf(...[0, 1, 2].map((n) => ({ type: 'aws_s3_bucket', name: 'b', key: n, attrs: BUCKET(n) })))
+    const tf = 'resource "aws_s3_bucket" "b" {\n  count  = 3\n  bucket = "logs-${count.index}"\n}'
+    const r = plan(tf, { state, replace: ['aws_s3_bucket.b[1]'] })
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['noop aws_s3_bucket.b[0]', 'replace aws_s3_bucket.b[1]', 'noop aws_s3_bucket.b[2]'])
+    expect(r.items[1].reason).toBe('requested')
+    expect(r.warnings).toEqual([])
+  })
+
+  it('records no reason when the instance would be replaced anyway', () => {
+    const tf = 'resource "aws_instance" "web" {\n  ami           = "ami-2"\n  instance_type = "t3.micro"\n}\n'
+    const r = plan(tf, { state: webState(), replace: ['aws_instance.web'] })
+    expect(r.items[0].action).toBe('replace')
+    expect(r.items[0].reason).toBeUndefined()
+  })
+
+  it('keeps a forced replacement of something that does not exist a plain create', () => {
+    const r = plan(WEB, { replace: ['aws_instance.web'] })
+    expect(r.items).toMatchObject([{ action: 'create' }])
+    expect(r.items[0].reason).toBeUndefined()
+    expect(r.warnings).toEqual([])
+  })
+
+  it('warns about a -replace address that matches nothing, without changing the plan', () => {
+    const r = plan(WEB, { state: webState(), replace: ['aws_instance.nope'] })
+    expect(r.diagnostics).toEqual([])
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatchObject({ severity: 'warning', summary: 'Incompletely-matched force-replace resource instance' })
+    expect(r.warnings[0].detail).toContain('aws_instance.nope')
+    expect(r.items).toMatchObject([{ action: 'noop' }])
+  })
+})
+
+describe('planConfig: replace_triggered_by', () => {
+  const TF = (dns: boolean, cidr = '10.0.0.0/16') =>
+    `resource "aws_vpc" "main" {\n  cidr_block = "${cidr}"\n  enable_dns_hostnames = ${dns}\n}\nresource "aws_instance" "web" {\n  ami           = "ami-1"\n  instance_type = "t3.micro"\n  lifecycle {\n    replace_triggered_by = [aws_vpc.main]\n  }\n}\n`
+  const both = () => stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_instance', name: 'web', attrs: INSTANCE })
+  const instanceOf = (r: PlanResult) => r.items.find((i) => i.address === 'aws_instance.web')!
+
+  it('does nothing while the referenced resource is unchanged', () => {
+    expect(instanceOf(plan(TF(false), { state: both() })).action).toBe('noop')
+  })
+
+  it('replaces when the referenced resource is updated, and says what triggered it', () => {
+    const r = plan(TF(true), { state: both() })
+    expect(r.items.find((i) => i.address === 'aws_vpc.main')!.action).toBe('update')
+    expect(instanceOf(r)).toMatchObject({ action: 'replace', reason: 'triggered', triggeredBy: ['aws_vpc.main'] })
+  })
+
+  it('replaces when the referenced resource is replaced', () => {
+    expect(instanceOf(plan(TF(false, '10.9.0.0/16'), { state: both() }))).toMatchObject({ action: 'replace', reason: 'triggered' })
+  })
+
+  it('does not trigger when the referenced resource is only being created', () => {
+    const r = plan(TF(false), { state: webState() })
+    expect(r.items.find((i) => i.address === 'aws_vpc.main')!.action).toBe('create')
+    expect(instanceOf(r).action).toBe('noop')
   })
 })
