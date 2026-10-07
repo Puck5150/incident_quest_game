@@ -35,6 +35,8 @@ export interface PlanItem {
   reason?: 'tainted' | 'requested' | 'triggered'
   triggeredBy?: string[]
   createBeforeDestroy?: boolean
+  unchanged?: Record<string, Value>
+  destroyReason?: 'not-in-config' | 'count-index' | 'for-each-key'
 }
 export interface PlanOutput {
   name: string
@@ -253,6 +255,8 @@ export function planConfig(input: PlanInput): PlanResult {
       let p = diffInstance(schema, ar.args, prior, ignore)
       if (forced && p.action !== 'replace') p = diffInstance(schema, ar.args, prior, ignore, true)
       const reason: PlanItem['reason'] = p.action === 'replace' ? (triggers.length ? 'triggered' : tainted ? 'tainted' : requested ? 'requested' : undefined) : undefined
+      const changed = new Set(p.changes.map((c) => c.name))
+      const unchanged = prior ? Object.fromEntries(Object.entries(prior).filter(([n, v]) => v !== null && !changed.has(n))) : undefined
       result.items.push({
         address,
         type,
@@ -263,6 +267,7 @@ export function planConfig(input: PlanInput): PlanResult {
         ...(movedFrom ? { movedFrom } : {}),
         ...(importing ? { importing } : {}),
         ...(reason ? { reason } : {}),
+        ...(unchanged ? { unchanged } : {}),
         ...(reason === 'triggered' ? { triggeredBy: [triggers[0]] } : {}),
         ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
       })
@@ -361,6 +366,7 @@ export function planConfig(input: PlanInput): PlanResult {
         name: r.name,
         key: inst.index_key,
         action: 'destroy',
+        destroyReason: !g.nodes.has(`${r.type}.${r.name}`) ? 'not-in-config' : typeof inst.index_key === 'number' ? 'count-index' : typeof inst.index_key === 'string' ? 'for-each-key' : 'not-in-config',
         changes: Object.entries(inst.attributes)
           .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))
           .sort(byName),

@@ -12,6 +12,7 @@ export interface Drift {
   address: string
   kind: 'deleted' | 'changed'
   changes: { name: string; before: Value; after: Value }[]
+  before?: Record<string, Value>
 }
 
 export function refresh(state: State, reality: Reality): { state: State; drift: Drift[] } {
@@ -33,7 +34,7 @@ export function refresh(state: State, reality: Reality): { state: State; drift: 
         continue
       }
       if (!now) {
-        drift.push({ address, kind: 'deleted', changes: [] })
+        drift.push({ address, kind: 'deleted', changes: [], before: structuredClone(inst.attributes) })
         continue
       }
       const changes: Drift['changes'] = []

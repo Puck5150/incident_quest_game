@@ -83,7 +83,7 @@ describe('refresh', () => {
   it('drops a resource deleted in the cloud from the refreshed state and reports it', () => {
     const r = refresh(sample(), {})
     const d = r.drift.find((x) => x.address === 'aws_vpc.main')!
-    expect(d).toEqual({ address: 'aws_vpc.main', kind: 'deleted', changes: [] })
+    expect(d).toEqual({ address: 'aws_vpc.main', kind: 'deleted', changes: [], before: { id: 'vpc-1', cidr_block: '10.0.0.0/16', tags: { Name: 'main' } } })
     expect(findInstance(r.state, 'aws_vpc.main')).toBeUndefined()
     expect(r.state.resources.some((x) => x.type === 'aws_vpc')).toBe(false)
   })

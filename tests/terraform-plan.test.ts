@@ -83,7 +83,7 @@ describe('planConfig: single resources and dependencies', () => {
   it('plans a create for something deleted outside Terraform', () => {
     const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC })
     const r = plan('resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}', { state, reality: {} })
-    expect(r.drift).toEqual([{ address: 'aws_vpc.main', kind: 'deleted', changes: [] }])
+    expect(r.drift).toEqual([{ address: 'aws_vpc.main', kind: 'deleted', changes: [], before: VPC }])
     expect(actions(r)).toEqual(['create aws_vpc.main'])
   })
 
@@ -614,5 +614,30 @@ describe('planConfig: import blocks', () => {
     expect(r.items).toMatchObject([{ action: 'noop' }])
     expect(r.items[0].importing).toBeUndefined()
     expect(r.imported).toBe(0)
+  })
+})
+
+describe('planConfig: facts for the renderer', () => {
+  it('records the unchanged non-null attributes of an updated instance', () => {
+    const r = plan('resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n  enable_dns_hostnames = true\n}', { state: stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }) })
+    const item = r.items[0]
+    expect(item.action).toBe('update')
+    expect(item.unchanged).toEqual({ id: 'vpc-1', arn: 'arn:vpc-1', cidr_block: '10.0.0.0/16', enable_dns_support: true, default_security_group_id: 'sg-1' })
+  })
+
+  it('has no unchanged facts for a create or a destroy', () => {
+    expect(plan(NETWORK('10.0.0.0/16')).items.every((i) => i.unchanged === undefined)).toBe(true)
+    expect(plan('# none\n', { state: stateOf({ type: 'aws_vpc', name: 'old', attrs: VPC }) }).items[0].unchanged).toBeUndefined()
+  })
+
+  it('says why an instance is destroyed', () => {
+    const gone = plan('# none\n', { state: stateOf({ type: 'aws_vpc', name: 'old', attrs: VPC }) })
+    expect(gone.items[0].destroyReason).toBe('not-in-config')
+    const buckets = stateOf(...[0, 1, 2].map((n) => ({ type: 'aws_s3_bucket', name: 'b', key: n, attrs: BUCKET(n) })))
+    const counted = plan('resource "aws_s3_bucket" "b" {\n  count = 2\n  bucket = "logs-${count.index}"\n}', { state: buckets })
+    expect(counted.items.find((i) => i.action === 'destroy')).toMatchObject({ address: 'aws_s3_bucket.b[2]', destroyReason: 'count-index' })
+    const keyed = stateOf(...['a', 'b'].map((k) => ({ type: 'aws_s3_bucket', name: 'b', key: k, attrs: { id: `b-${k}`, arn: `arn:b-${k}`, bucket: `b-${k}`, force_destroy: false } })))
+    const fe = plan('resource "aws_s3_bucket" "b" {\n  for_each = toset(["a"])\n  bucket = "b-${each.key}"\n}', { state: keyed })
+    expect(fe.items.find((i) => i.action === 'destroy')).toMatchObject({ address: 'aws_s3_bucket.b["b"]', destroyReason: 'for-each-key' })
   })
 })
