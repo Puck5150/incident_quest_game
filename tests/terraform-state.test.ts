@@ -50,6 +50,12 @@ describe('state model', () => {
     bad.resources[0].instances[0].attributes.id = UNKNOWN
     expect(() => stateJson(bad)).toThrow(/unknown/i)
   })
+
+  it('refuses an unknown output value', () => {
+    const bad = sample()
+    bad.outputs = { vpc: { value: UNKNOWN } }
+    expect(() => stateJson(bad)).toThrow(/output "vpc".*unknown value/)
+  })
 })
 
 describe('refresh', () => {
@@ -89,7 +95,7 @@ describe('refresh', () => {
     expect(r.drift.find((x) => x.address === 'data.aws_ami.x')).toBeUndefined()
   })
 
-  it('does not report drift for a resource whose other instances survive', () => {
+  it('reports only the instances missing from the cloud as deleted, keeping the survivors', () => {
     const r = refresh(sample(), { [vpcKey]: { id: 'vpc-1' }, [realityKey('aws_s3_bucket', 'bkt-a')]: { id: 'bkt-a' } })
     expect(r.drift.filter((d) => d.kind === 'deleted').map((d) => d.address).sort()).toEqual(['aws_s3_bucket.b["b"]', 'aws_subnet.s[0]'])
     expect(findInstance(r.state, 'aws_s3_bucket.b["a"]')).toBeDefined()

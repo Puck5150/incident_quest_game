@@ -163,7 +163,8 @@ export function diffInstance(
   for (const n of names) {
     const spec = specOf(n)
     if (spec.readOnly || ignored(n)) continue
-    const before = Object.hasOwn(prior, n) ? prior[n] : undefined
+    // a state that predates a default-bearing attribute counts as holding the default
+    const before = (Object.hasOwn(prior, n) ? prior[n] : undefined) ?? spec.default
     let d = desired(n)
     if (d === undefined) {
       if (spec.computed) continue // the provider keeps its own value
@@ -177,7 +178,9 @@ export function diffInstance(
 
   if (!changes.length) return { action: 'noop', changes, planned: Object.fromEntries(next) }
   if (changes.some((c) => c.forcesReplacement)) {
-    const planned = fresh()
+    // Ignored attributes are settled before planning, so the replacement keeps the prior values.
+    const kept = names.filter((n) => ignored(n) && Object.hasOwn(prior, n)).map((n): [string, Value] => [n, prior[n]])
+    const planned = Object.fromEntries([...Object.entries(fresh()), ...kept])
     // What the new object will get from the provider instead of the old one.
     const recomputed = Object.entries(planned)
       .filter(([n, v]) => v === UNKNOWN && !changes.some((c) => c.name === n))

@@ -449,3 +449,13 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] aws_db_instance: `identifier`, `engine`, `storage_encrypted`, `kms_key_id`, `db_name`, `username` force replacement; `instance_class`, `allocated_storage`, `multi_az` update in place.
 - [ ] aws_s3_bucket (`bucket`), aws_sqs_queue (`name`, `fifo_queue`; defaults 30 s visibility, 345600 s retention), aws_iam_role (`name`, `path`), aws_ecs_service (`name`, `cluster`), aws_cloudwatch_log_group (`name`).
 - [ ] The "Invalid resource type" detail: real Terraform prints only the first sentence; the second is a lab note.
+
+## terraform simulator (requirements found in TF2b-1 review)
+
+- [ ] TF2b-2 loader/validator must reject malformed author-shaped input instead of letting raw JS errors out: a state instance without `attributes`, a null/string reality entry.
+- [ ] readOnly attributes (id, arn...) set in configuration should be reported by validate as an unconfigurable attribute, not silently ignored (diffInstance ignores them by design).
+- [ ] `apply` must structuredClone `planned` before writing it into state (planned is a shallow copy of prior).
+- [ ] Numeric strings vs numbers (`retention_in_days = "7"` vs state 7) show a spurious update because comparison is strict and attributes have no types.
+- [ ] `instanceAddress` quoting uses JSON.stringify; Terraform's HCL quoting also doubles `${` and `%{` and escapes U+2028.
+- [ ] `listAddresses` sorts as plain strings (`[10]` before `[2]`, data sources last); check Terraform's real `state list` ordering before TF2c.
+- [ ] `stateJson` fidelity gaps: nested maps like tags not key-sorted, outputs lack `type` and are not sorted, `sensitive_attributes` always `[]` (even for aws_db_instance.password), no `dependencies` field (the destroy-order walker will need `dependencies?: string[]` on StateInstance).

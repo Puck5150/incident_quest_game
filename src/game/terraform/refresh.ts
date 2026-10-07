@@ -15,6 +15,7 @@ export interface Drift {
 }
 
 export function refresh(state: State, reality: Reality): { state: State; drift: Drift[] } {
+  // State never holds unknown values (stateJson refuses them); structuredClone would lose the sentinel's identity.
   const drift: Drift[] = []
   const resources: StateResource[] = []
   for (const r of state.resources) {

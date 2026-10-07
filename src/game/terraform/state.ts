@@ -56,6 +56,7 @@ const sortedAttributes = (attrs: Record<string, Value>): Record<string, Value> =
   Object.fromEntries(Object.entries(attrs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 
 export function stateJson(state: State): string {
+  for (const [name, o] of Object.entries(state.outputs)) if (hasUnknown(o.value)) throw new Error(`cannot write output "${name}" to state: it holds an unknown value`)
   const doc = {
     version: state.version,
     terraform_version: state.terraform_version,

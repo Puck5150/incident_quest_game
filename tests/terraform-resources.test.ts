@@ -48,6 +48,27 @@ const VPC_PRIOR = {
 }
 
 describe('diffInstance', () => {
+  it('treats an attribute missing from older state as holding its default', () => {
+    const sg = schemaFor('aws_security_group')!
+    expect(diffInstance(sg, { name: 'web', vpc_id: 'vpc-1' }, { id: 'sg-1', name: 'web', vpc_id: 'vpc-1' }).action).toBe('noop')
+    const role = schemaFor('aws_iam_role')!
+    expect(diffInstance(role, { name: 'r' }, { id: 'r', name: 'r' }).action).toBe('noop')
+    const q = schemaFor('aws_sqs_queue')!
+    expect(diffInstance(q, { name: 'q' }, { id: 'q', name: 'q', fifo_queue: null }).action).toBe('noop')
+    const p = diffInstance(role, { name: 'r', path: '/svc/' }, { id: 'r', name: 'r' })
+    expect(p.action).toBe('replace')
+    expect(p.changes.find((c) => c.name === 'path')).toMatchObject({ before: '/', after: '/svc/', forcesReplacement: true })
+  })
+
+  it('keeps prior values of ignored attributes on a replace', () => {
+    const inst = schemaFor('aws_instance')!
+    const prior = { id: 'i-1', ami: 'ami-1', tags: { a: 'old' } }
+    const p = diffInstance(inst, { ami: 'ami-2', tags: { a: 'new' } }, prior, ['tags'])
+    expect(p.action).toBe('replace')
+    expect(p.planned.tags).toEqual({ a: 'old' })
+    expect(p.changes.find((c) => c.name === 'tags')).toBeUndefined()
+  })
+
   it('creates, with defaults filled in and provider-set values unknown', () => {
     const p = diffInstance(vpc, { cidr_block: '10.0.0.0/16', tags: { Name: 'main' } }, undefined)
     expect(p.action).toBe('create')
