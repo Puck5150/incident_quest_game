@@ -42,6 +42,10 @@ export function movesOf(blocks: Block[]): { moves: Move[]; diagnostics: Diagnost
       diagnostics.push(diag(b.file, b.pos, 'Redundant move statement', `The move statement ${fmt(from)} to ${fmt(to)} has the same source and destination, so it has no effect.`))
       continue
     }
+    if (moves.some((m) => fmt(m.to) === fmt(to))) {
+      diagnostics.push(diag(b.file, b.pos, 'Ambiguous move statements', `Each move statement must have a distinct destination: ${fmt(to)} is the destination of more than one move statement.`))
+      continue
+    }
     moves.push({ from, to, file: b.file, pos: b.pos })
   }
   return { moves, diagnostics }
@@ -64,25 +68,28 @@ function step(moves: Move[], a: Address): { next: Address; move: Move } | undefi
 export function applyMoves(
   state: State,
   moves: Move[],
-): { state: State; moved: Map<string, string>; blocked: { from: string; to: string }[]; diagnostics: Diagnostic[] } {
+): { state: State; moved: Map<string, string>; blocked: { from: string; to: string; claimed?: true }[]; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = []
   const cycles = new Set<string>()
-  const final = (start: Address): Address => {
+  // The destination and the number of steps taken to reach it.
+  const final = (start: Address): { dest: Address; len: number } => {
     const path = [fmt(start)]
+    const taken: Move[] = []
     let cur = start
     for (;;) {
       const s = step(moves, cur)
-      if (!s) return cur
+      if (!s) return { dest: cur, len: taken.length }
       const k = fmt(s.next)
       const at = path.indexOf(k)
       if (at >= 0) {
-        const key = path.slice(at).sort().join(',')
+        const key = [...new Set([...taken.slice(at), s.move].map((m) => `${m.file}:${m.pos.line}:${m.pos.col}`))].sort().join(',')
         if (!cycles.has(key)) {
           cycles.add(key)
           diagnostics.push(diag(s.move.file, s.move.pos, 'Cycle in move statements', `Terraform found a cycle among the move statements involving ${k}.`))
         }
-        return start
+        return { dest: start, len: 0 }
       }
+      taken.push(s.move)
       path.push(k)
       cur = s.next
     }
@@ -91,7 +98,7 @@ export function applyMoves(
   const groups = new Map<string, StateResource>()
   const placed = new Set<string>()
   const moved = new Map<string, string>()
-  const blocked: { from: string; to: string }[] = []
+  const blocked: { from: string; to: string; claimed?: true }[] = []
   const place = (r: StateResource, inst: StateInstance, dest: Address) => {
     const gk = `${r.mode}:${dest.type}.${dest.name}`
     let group = groups.get(gk)
@@ -105,30 +112,32 @@ export function applyMoves(
     group.instances.push(copy)
     placed.add(instanceAddress({ mode: r.mode, type: dest.type, name: dest.name }, dest.key))
   }
-  const todo: { r: StateResource; inst: StateInstance; from: Address; dest: Address; oldAddr: string; newAddr: string }[] = []
+  const todo: { r: StateResource; inst: StateInstance; from: Address; dest: Address; len: number; oldAddr: string; newAddr: string }[] = []
   for (const r of state.resources) {
     for (const inst of r.instances) {
       const from = { type: r.type, name: r.name, key: inst.index_key }
-      const dest = r.mode === 'data' ? from : final(from)
+      const { dest, len } = r.mode === 'data' ? { dest: from, len: 0 } : final(from)
       const oldAddr = instanceAddress(r, inst.index_key)
       const newAddr = instanceAddress({ mode: r.mode, type: dest.type, name: dest.name }, dest.key)
-      todo.push({ r, inst, from, dest, oldAddr, newAddr })
+      todo.push({ r, inst, from, dest, len, oldAddr, newAddr })
     }
   }
   // Unmoved objects first, so a moved one can never displace an existing object.
   for (const t of todo) if (t.oldAddr === t.newAddr) place(t.r, t.inst, t.dest)
+  const unmoved = new Set(placed)
   const stay: typeof todo = []
-  for (const t of todo) {
-    if (t.oldAddr === t.newAddr) continue
+  // The mover nearest its destination wins a contested address; state order only breaks ties.
+  const movers = todo.filter((t) => t.oldAddr !== t.newAddr).sort((x, y) => x.len - y.len)
+  for (const t of movers) {
     if (placed.has(t.newAddr)) {
-      blocked.push({ from: t.oldAddr, to: t.newAddr })
+      blocked.push({ from: t.oldAddr, to: t.newAddr, ...(unmoved.has(t.newAddr) ? {} : { claimed: true as const }) })
       stay.push(t)
       continue
     }
     place(t.r, t.inst, t.dest)
     moved.set(t.newAddr, t.oldAddr)
   }
-  // ponytail: a blocked source whose old address was also taken is dropped; real Terraform would error earlier.
+  // ponytail: a blocked source whose old address is taken by another moved object is dropped. Unreachable unless state holds duplicate addresses, which applyMoves does not diagnose.
   for (const t of stay) if (!placed.has(t.oldAddr)) place(t.r, t.inst, t.from)
   return { state: { ...structuredClone(state), resources: [...groups.values()] }, moved, blocked, diagnostics }
 }

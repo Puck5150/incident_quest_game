@@ -116,7 +116,7 @@ export function planConfig(input: PlanInput): PlanResult {
     result.warnings.push({
       severity: 'warning',
       summary: 'Unresolved resource instance address changes',
-      detail: `Terraform was not able to move ${x.from} to ${x.to}: an object already exists at ${x.to}, so the existing object takes priority and ${x.from} is left where it is.`,
+      detail: `Terraform was not able to move ${x.from} to ${x.to}: ${x.claimed ? `another object was moved there first, so ${x.from} is left where it is.` : `an object already exists at ${x.to}, so the existing object takes priority and ${x.from} is left where it is.`}`,
       file: '',
       line: 0,
       col: 0,

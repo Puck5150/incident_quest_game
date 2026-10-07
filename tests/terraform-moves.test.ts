@@ -45,6 +45,13 @@ describe('movesOf', () => {
 })
 
 describe('movesOf: shape errors', () => {
+  it('rejects two statements with the same destination, at the second', () => {
+    const r = moves(MV('aws_vpc.a', 'aws_vpc.c') + MV('aws_vpc.b', 'aws_vpc.c'))
+    expect(r.moves).toHaveLength(1)
+    expect(r.diagnostics).toMatchObject([{ summary: 'Ambiguous move statements', file: 'main.tf', line: 5 }])
+    expect(r.diagnostics[0].detail).toBe('Each move statement must have a distinct destination: aws_vpc.c is the destination of more than one move statement.')
+  })
+
   it('rejects a move whose source and destination are the same, without a cycle', () => {
     const r = moves(MV('aws_vpc.a', 'aws_vpc.a'))
     expect(r.moves).toEqual([])
@@ -105,6 +112,15 @@ describe('applyMoves', () => {
     }
   })
 
+  it('lets the mover nearest its destination win, whatever the state order', () => {
+    for (const order of [['a', 'b'], ['b', 'a']]) {
+      const r = run(MV('aws_vpc.a', 'aws_vpc.b') + MV('aws_vpc.b', 'aws_vpc.c'), stateWith(...order.map((name) => ({ type: 'aws_vpc', name }))))
+      expect(r.moved.get('aws_vpc.c')).toBe('aws_vpc.b')
+      expect(r.blocked).toEqual([{ from: 'aws_vpc.a', to: 'aws_vpc.c', claimed: true }])
+      expect(listAddresses(r.state).sort()).toEqual(['aws_vpc.a', 'aws_vpc.c'])
+    }
+  })
+
   it('reports a cycle instead of looping', () => {
     const r = run(MV('aws_vpc.a', 'aws_vpc.b') + MV('aws_vpc.b', 'aws_vpc.a'), stateWith({ type: 'aws_vpc', name: 'a' }))
     expect(r.diagnostics.map((d) => d.summary)).toContain('Cycle in move statements')
@@ -115,6 +131,13 @@ describe('applyMoves', () => {
     expect(r.diagnostics).toHaveLength(1)
     expect(r.diagnostics[0]).toMatchObject({ summary: 'Cycle in move statements', file: 'main.tf' })
     expect(r.diagnostics[0].line).toBeGreaterThan(0)
+  })
+
+  it('reports a whole-resource cycle once, and two different cycles once each', () => {
+    const one = run(MV('aws_vpc.a', 'aws_vpc.b') + MV('aws_vpc.b', 'aws_vpc.a'), stateWith({ type: 'aws_vpc', name: 'a', keys: [0, 1, 2] }))
+    expect(one.diagnostics.map((d) => d.summary)).toEqual(['Cycle in move statements'])
+    const two = run(MV('aws_vpc.a', 'aws_vpc.b') + MV('aws_vpc.b', 'aws_vpc.a') + MV('aws_vpc.c', 'aws_vpc.d') + MV('aws_vpc.d', 'aws_vpc.c'), stateWith({ type: 'aws_vpc', name: 'a', keys: [0, 1] }, { type: 'aws_vpc', name: 'c', keys: [0, 1] }))
+    expect(two.diagnostics.map((d) => d.summary)).toEqual(['Cycle in move statements', 'Cycle in move statements'])
   })
 
   it('does not move an instance of a whole-resource move when both addresses are keyed', () => {

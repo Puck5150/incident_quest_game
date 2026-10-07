@@ -500,3 +500,7 @@ Which attributes force replacement, which are computed, and the defaults are fro
 - [ ] An import that references its own resource (`id = aws_s3_bucket.x.id`) reports a location-less Cycle error.
 - [ ] The plan summary has no "to forget" count; the renderer can count `forget` items.
 - [ ] Duplicate `removed` blocks, and `removed` combined with `moved` on one address, are not diagnosed.
+- [ ] An import id of `true`/`false` is rejected, but real Terraform converts it to a string.
+- [ ] Nested blocks inside `moved`/`import`/`removed` (for example `lifecycle {}` in `moved`) are silently accepted.
+- [ ] The blocked-move warning has no source location (real Terraform's has none either).
+- [ ] State with duplicate instance addresses is not diagnosed by `applyMoves`.
