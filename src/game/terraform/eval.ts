@@ -36,7 +36,7 @@ export function show(v: Value): string {
 function attribute(base: Value, name: string): Value {
   if (isUnknown(base)) return UNKNOWN
   if (isObject(base)) {
-    if (name in base) return base[name]
+    if (Object.hasOwn(base, name)) return base[name]
     throw new EvalError('Unsupported attribute', `This object does not have an attribute named "${name}".`)
   }
   if (Array.isArray(base)) throw new EvalError('Unsupported attribute', 'This value does not have any attributes.')
@@ -53,7 +53,7 @@ function index(base: Value, key: Value): Value {
   }
   if (isObject(base)) {
     const k = show(key)
-    if (k in base) return base[k]
+    if (Object.hasOwn(base, k)) return base[k]
     throw new EvalError('Invalid index', 'The given key does not identify an element in this collection value.')
   }
   throw new EvalError('Invalid index', 'This value does not have any indices.')
@@ -76,7 +76,7 @@ export function equal(a: Value, b: Value): boolean {
     if (!isObject(a) || !isObject(b)) return false
     const [oa, ob] = [a as { [key: string]: Value }, b as { [key: string]: Value }]
     const ka = Object.keys(oa)
-    return ka.length === Object.keys(ob).length && ka.every((k) => k in ob && equal(oa[k], ob[k]))
+    return ka.length === Object.keys(ob).length && ka.every((k) => Object.hasOwn(ob, k) && equal(oa[k], ob[k]))
   }
   return a === b
 }
@@ -139,7 +139,7 @@ export function evalExpr(e: Expr, scope: Scope): Value {
       for (const { key, value } of e.entries) {
         const k = evalExpr(key, scope)
         if (isUnknown(k)) return UNKNOWN
-        out[show(k)] = evalExpr(value, scope)
+        Object.defineProperty(out, show(k), { value: evalExpr(value, scope), enumerable: true, writable: true, configurable: true })
       }
       return out
     }

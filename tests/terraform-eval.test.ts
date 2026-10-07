@@ -117,3 +117,20 @@ describe('eval: operators and conditionals', () => {
     expect(fails('1 ? 1 : 2').summary).toBe('Incorrect condition type')
   })
 })
+
+describe('eval: own keys only', () => {
+  it('does not resolve inherited keys', () => {
+    expect(fails('{ a = 1 }.constructor').summary).toBe('Unsupported attribute')
+    expect(fails('{ a = 1 }.toString').summary).toBe('Unsupported attribute')
+    expect(fails('{ a = 1 }["constructor"]').summary).toBe('Invalid index')
+  })
+
+  it('keeps __proto__ as an ordinary key', () => {
+    expect(Object.keys(ev('{ "__proto__" = 1 }') as object)).toContain('__proto__')
+    expect(ev('{} == { "__proto__" = 1 }')).toBe(false)
+  })
+
+  it('propagates unknown through unary minus', () => {
+    expect(ev('-u', { u: UNKNOWN })).toBe(UNKNOWN)
+  })
+})
