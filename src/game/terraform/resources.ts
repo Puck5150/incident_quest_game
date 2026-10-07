@@ -2,7 +2,7 @@
 // attributes the provider computes, which are secret, and which force the
 // resource to be destroyed and re-created when they change ("forces
 // replacement" in a plan). Types not listed here are not modeled.
-import type { Value } from './eval.ts'
+import { equal, hasUnknown, UNKNOWN, type Value } from './eval.ts'
 
 export interface AttrSpec {
   forceNew?: boolean // changing it replaces the resource
@@ -95,4 +95,94 @@ export function unsupportedType(type: string): { summary: string; detail: string
     summary: 'Invalid resource type',
     detail: `The provider hashicorp/${provider} does not support resource type "${type}". (This lab only models some resource types.)`,
   }
+}
+
+export type Action = 'create' | 'update' | 'replace' | 'noop'
+export interface AttrChange {
+  name: string
+  before: Value | undefined
+  after: Value
+  forcesReplacement: boolean
+  sensitive: boolean
+}
+export interface InstancePlan {
+  action: Action
+  changes: AttrChange[] // sorted by attribute name, like a plan prints them
+  planned: Record<string, Value> // the attributes after apply; UNKNOWN where only apply can say
+}
+
+const byName = (a: AttrChange, b: AttrChange) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+
+// Diff one resource instance's configuration against what state holds.
+// `config` holds the evaluated arguments (null means "unset"); `prior` is the
+// instance's attributes in state (undefined if it doesn't exist yet).
+export function diffInstance(
+  schema: ResourceSchema,
+  config: Record<string, Value>,
+  prior: Record<string, Value> | undefined,
+  ignore: string[] | 'all' = [],
+): InstancePlan {
+  const ignored = (n: string) => ignore === 'all' || ignore.includes(n)
+  const specOf = (n: string): AttrSpec => (Object.hasOwn(schema.attrs, n) ? schema.attrs[n] : {})
+  // What the configuration asks for, with the provider's default if omitted.
+  const desired = (n: string): Value | undefined => {
+    const spec = specOf(n)
+    if (spec.readOnly) return undefined
+    if (Object.hasOwn(config, n) && config[n] !== null) return config[n]
+    return spec.default
+  }
+  const names = [...new Set([...Object.keys(schema.attrs), ...Object.keys(config)])].sort()
+  const change = (name: string, before: Value | undefined, after: Value, forcesReplacement = false): AttrChange => ({
+    name,
+    before,
+    after,
+    forcesReplacement,
+    sensitive: !!specOf(name).sensitive,
+  })
+
+  // The attributes of a brand-new object.
+  const fresh = (): Record<string, Value> => {
+    const entries: [string, Value][] = []
+    for (const n of names) {
+      const spec = specOf(n)
+      const d = desired(n)
+      if (spec.readOnly) entries.push([n, UNKNOWN])
+      else if (d !== undefined) entries.push([n, d])
+      else if (spec.computed) entries.push([n, UNKNOWN])
+    }
+    return Object.fromEntries(entries)
+  }
+
+  if (!prior) {
+    const planned = fresh()
+    return { action: 'create', planned, changes: Object.entries(planned).map(([n, after]) => change(n, undefined, after)) }
+  }
+
+  const next = new Map(Object.entries(prior))
+  const changes: AttrChange[] = []
+  for (const n of names) {
+    const spec = specOf(n)
+    if (spec.readOnly || ignored(n)) continue
+    const before = Object.hasOwn(prior, n) ? prior[n] : undefined
+    let d = desired(n)
+    if (d === undefined) {
+      if (spec.computed) continue // the provider keeps its own value
+      if (before === undefined || before === null) continue
+      d = null // removed from the configuration
+    }
+    if (!hasUnknown(d) && equal(before ?? null, d)) continue
+    changes.push(change(n, before, d, !!spec.forceNew))
+    next.set(n, d)
+  }
+
+  if (!changes.length) return { action: 'noop', changes, planned: Object.fromEntries(next) }
+  if (changes.some((c) => c.forcesReplacement)) {
+    const planned = fresh()
+    // What the new object will get from the provider instead of the old one.
+    const recomputed = Object.entries(planned)
+      .filter(([n, v]) => v === UNKNOWN && !changes.some((c) => c.name === n))
+      .map(([n]) => change(n, Object.hasOwn(prior, n) ? prior[n] : undefined, UNKNOWN))
+    return { action: 'replace', planned, changes: [...changes, ...recomputed].sort(byName) }
+  }
+  return { action: 'update', changes, planned: Object.fromEntries(next) }
 }
