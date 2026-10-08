@@ -36,6 +36,12 @@ describe('the terraform command in the shell', () => {
     expect(after.output).toContain('forces replacement')
   })
 
+  it('plan -out writes the plan file where the path points', async () => {
+    const [, , abs, , sub] = await run(scenario(), "sed -i 's/10.0.0.0/10.1.0.0/' main.tf", 'terraform plan -out=/tmp/p1', 'cat /tmp/p1', 'terraform plan -out=plans/next', 'cat plans/next')
+    expect(abs.output).toMatch(/^TFPLAN1\np[0-9a-f]{8}$/)
+    expect(sub.output).toMatch(/^TFPLAN1\np[0-9a-f]{8}$/)
+  })
+
   it('works with pipes and redirection like any command', async () => {
     const [grep, count] = await run(scenario(), 'terraform state list | grep -c vpc', 'terraform version > v.txt && cat v.txt | head -1')
     expect(grep.output).toBe('1')

@@ -475,6 +475,7 @@ plus an `Outputs:` section.
 - Saved plans: `terraform plan -out=f` then `terraform apply f` applies exactly that plan without asking. If the state has changed since (another apply, for example), it fails as stale. Variables and `-replace` cannot be given with a saved plan.
 - A failed apply leaves a half-applied world: what succeeded before the error stays in state and the cloud; the rest does not happen. The player fixes the cause and applies again.
 - `terraform destroy` honours `prevent_destroy` and fails the same way a plan would.
+- Evidence matches per command: a `terraform.evidence` entry with `command: plan` does not match the same text printed by `apply` or `destroy`. If the player might see the clue there, add a second entry with `command: apply` (or `destroy`).
 
 `faults` script provider failures. They are the only way a create/update/delete
 fails besides the simulator's own errors:

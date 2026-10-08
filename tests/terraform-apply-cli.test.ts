@@ -5,6 +5,7 @@ import type { TerraformBlock } from '../src/schema/scenario.ts'
 
 const DIR = '/home/you/infra'
 const NET = 'resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}\n\nresource "aws_subnet" "a" {\n  vpc_id     = aws_vpc.main.id\n  cidr_block = "10.0.1.0/24"\n}\n'
+const VPC = { type: 'aws_vpc', name: 'main', attrs: { id: 'vpc-1', arn: 'arn:vpc-1', cidr_block: '10.0.0.0/16', enable_dns_support: true, enable_dns_hostnames: false, default_security_group_id: 'sg-1' } }
 const DB = (protect: boolean) =>
   `resource "aws_db_instance" "main" {\n  identifier     = "orders"\n  engine         = "postgres"\n  instance_class = "db.t3.micro"\n  username       = "app"\n  password       = "hunter22"\n${protect ? '\n  lifecycle {\n    prevent_destroy = true\n  }\n' : ''}}\n`
 const DB_STATE = {
@@ -221,11 +222,43 @@ describe('terraform apply', () => {
     expect((await w.run('apply', 'tfplan')).exitCode).toBe(0)
   })
 
-  it('a no-change plan -out writes nothing', async () => {
+  it('a no-change plan -out still saves, replacing an older plan under that name', async () => {
+    const VPC_TF = 'resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}\n'
+    const w = world({ files: [{ path: 'main.tf', content: VPC_TF }], state: [VPC] })
+    w.disk[`${DIR}/main.tf`] = VPC_TF.replace('10.0.0.0', '10.9.0.0')
+    expect((await w.run('plan', '-out=tfplan')).stdout).toContain('must be replaced')
+    w.disk[`${DIR}/main.tf`] = VPC_TF
+    const quiet = await w.run('plan', '-out=tfplan')
+    expect(quiet.stdout).toMatch(/No changes\.[\s\S]*no changes are needed\.$/)
+    expect(w.disk[`${DIR}/tfplan`]).toMatch(/^TFPLAN1\np[0-9a-f]{8}\n$/)
+    const before = structuredClone(w.lab.state)
+    const r = await w.run('apply', 'tfplan')
+    expect(r.stdout).toBe('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
+    expect(r.exitCode).toBe(0)
+    expect(w.lab.state).toEqual(before)
+  })
+
+  it('plan -out resolves absolute and relative paths, and apply finds them', async () => {
     const w = world()
-    await w.run('apply', '-auto-approve')
-    await w.run('plan', '-out=tfplan')
-    expect(Object.hasOwn(w.disk, `${DIR}/tfplan`)).toBe(false)
+    await w.run('plan', '-out=/tmp/p1')
+    expect(w.disk['/tmp/p1']).toMatch(/^TFPLAN1\np[0-9a-f]{8}\n$/)
+    await w.run('plan', '-out=../x')
+    expect(w.disk['/home/you/x']).toMatch(/^TFPLAN1\np[0-9a-f]{8}\n$/)
+    expect(Object.keys(w.disk).filter((k) => k.startsWith(`${DIR}/`))).toEqual([`${DIR}/main.tf`, `${DIR}/.terraform.lock.hcl`])
+    const r = await w.run('apply', '../x')
+    expect(r.stdout).toBe(`${PROGRESS}\n\n${DONE}`)
+  })
+
+  it('a no-change apply saves the refreshed state once', async () => {
+    const VPC_TF = 'resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}\n'
+    const w = world({ files: [{ path: 'main.tf', content: VPC_TF }], state: [VPC], cloud: { patch: [{ type: 'aws_vpc', id: 'vpc-1', set: { default_security_group_id: 'sg-2' } }] } })
+    const serial = w.lab.state.serial
+    const r = await w.run('apply')
+    expect(r.stdout).toMatch(/^aws_vpc\.main: Refreshing state\.\.\. \[id=vpc-1\]\n\nNo changes\.[\s\S]*\n\nApply complete! Resources: 0 added, 0 changed, 0 destroyed\.$/)
+    expect(w.lab.state.serial).toBe(serial + 1)
+    expect(w.lab.state.resources[0].instances[0].attributes.default_security_group_id).toBe('sg-2')
+    expect((await w.run('apply')).exitCode).toBe(0)
+    expect(w.lab.state.serial).toBe(serial + 1)
   })
 
   it('outside the lab directory touches nothing in the lab world', async () => {
@@ -285,7 +318,9 @@ describe('terraform destroy', () => {
 
   it('with nothing to destroy completes at once', async () => {
     const r = await world().run('destroy')
-    expect(r.stdout).toMatch(/No changes\.[\s\S]*\n\nDestroy complete! Resources: 0 destroyed\.$/)
+    expect(r.stdout).toBe(
+      'No changes. No objects need to be destroyed.\n\nEither you have not created any objects yet or the existing objects were already deleted outside of Terraform.\n\nDestroy complete! Resources: 0 destroyed.',
+    )
     expect(r.exitCode).toBe(0)
   })
 

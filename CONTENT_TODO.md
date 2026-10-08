@@ -584,9 +584,9 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Import progress lines.
 - [ ] Saved-plan marker file (real plan files are zips) and the wording of the stale/load errors.
 - [ ] Wording of `Can't set variables/-replace when applying a saved plan`.
-- [ ] Apply with drift but no changes writes nothing; real Terraform saves the refreshed state and bumps the serial.
 - [ ] A saved plan applies with the apply-time refresh setting and the current reality.
-- [ ] `destroy` on empty state prints the normal No changes block; real is probably `No changes. No objects need to be destroyed.`
+- [ ] `destroy` with nothing in state prints `No changes. No objects need to be destroyed.` + `Either you have not created any objects yet or the existing objects were already deleted outside of Terraform.`: wording from memory, unverified.
+- [ ] `plan -out` with no changes writes the plan file silently (no `Saved the plan to` footer): unverified whether real Terraform prints anything.
 - [ ] Piped empty stdin is treated as declined; real Terraform would error on EOF.
 - [ ] `Outputs:` section after apply: format and which outputs show.
 - [ ] Help one-liners for `apply`/`destroy` (help currently lists just the commands).

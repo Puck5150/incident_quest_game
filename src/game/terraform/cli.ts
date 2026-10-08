@@ -472,16 +472,22 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boole
     stdout += f.out
       ? `\n\n${RULE}\n\nSaved the plan to: ${f.out}\n\nTo perform exactly these actions, run the following command to apply:\n    terraform apply "${f.out}"`
       : `\n\n${RULE}\n\nNote: You didn't use the -out option to save this plan, so Terraform can't\nguarantee to take exactly these actions if you run "terraform apply" now.`
-    if (f.out !== undefined && here) {
-      const { lineage, serial } = ctx.lab.state
-      const id = planId(lineage, serial, f.out)
-      ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage })
-      await ctx.write(cfg.dir, f.out, `TFPLAN1\n${id}\n`)
-    }
+  }
+  // Saved even with no changes, so an older plan file under the same name can't be applied later.
+  if (f.out !== undefined && here) {
+    const { lineage, serial } = ctx.lab.state
+    const path = resolvePath(cfg.dir, f.out)
+    const id = planId(lineage, serial, path)
+    ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage })
+    const slash = path.lastIndexOf('/')
+    await ctx.write(path.slice(0, slash) || '/', path.slice(slash + 1), `TFPLAN1\n${id}\n`)
   }
   return { ...withWarn(p.warning, ok(stdout)), exitCode: f.detailed && p.changes ? 2 : 0 }
 }
 
+const NO_CHANGES =
+  'No changes. Your infrastructure matches the configuration.\n\nTerraform has compared your real infrastructure against your configuration\nand found no differences, so no changes are needed.'
+const NO_DESTROY = 'No changes. No objects need to be destroyed.\n\nEither you have not created any objects yet or the existing objects were already deleted outside of Terraform.'
 const APPLY_PROMPT = "\nDo you want to perform these actions?\n  Terraform will perform the actions described above.\n  Only 'yes' will be accepted to approve.\n\n  Enter a value: "
 const DESTROY_PROMPT =
   "\nDo you really want to destroy all resources?\n  Terraform will destroy all your managed infrastructure, as shown above.\n  There is no undo. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
@@ -517,14 +523,10 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     const p = await makePlan(f, ctx, cfg, destroy)
     if (!('result' in p)) return p
     warning = p.warning
-    if (!p.changes) {
-      const none = { imported: 0, added: 0, changed: 0, destroyed: 0 }
-      const end = renderApplyEnd({ plan: p.result, steps: [], errors: [], state: ctx.lab.state, reality: ctx.lab.reality, counts: none }, mode)
-      return withWarn(warning, ok(`${p.stdout}\n${end}`))
-    }
     input = { files: cfg.tf, vars: p.vars, replace: f.replace, destroy }
-    head = p.stdout
-    if (!f.autoApprove) {
+    // No changes: nothing to ask, but the apply still runs so the refreshed state is saved.
+    head = p.changes || !destroy ? p.stdout : p.stdout.replace(NO_CHANGES, NO_DESTROY)
+    if (p.changes && !f.autoApprove) {
       const prompt = destroy ? DESTROY_PROMPT : APPLY_PROMPT
       // The hook gets everything a player must see to decide; stdout still carries it all for the transcript.
       const shown = withWarn(warning, ok(`${head}\n${prompt}`)).stdout
