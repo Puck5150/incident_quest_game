@@ -1,4 +1,4 @@
-import { useMemo, useReducer, useState } from 'react'
+import { useMemo, useReducer, useRef, useState } from 'react'
 import type { Scenario } from '../schema/scenario.ts'
 import { actionsTaken, fixComplete, hintsUsed, newSession, step, type Feedback, type GameEvent, type Session } from '../game/engine.ts'
 import Terminal from '../components/Terminal.tsx'
@@ -54,11 +54,15 @@ export default function IncidentScreen({
   onResolved: (log: GameEvent[]) => void
 }) {
   const [session, dispatch] = useReducer((s: Session, e: GameEvent) => step(scenario, s, e), initial, (i) => i ?? newSession())
-  // `step` is pure, so the next session can be reported without waiting for the reducer.
+  // `step` is pure, so the next session can be reported without waiting for the
+  // reducer. From the latest session, not this render's: a shell command still
+  // running (one that asked for an answer meanwhile) reports through an older render.
+  const latest = useRef(session)
   const send = (intent: Intent) => {
     const e = { ...intent, at: Date.now() } as GameEvent
     dispatch(e)
-    onChange?.(step(scenario, session, e))
+    latest.current = step(scenario, latest.current, e)
+    onChange?.(latest.current)
   }
   const [selected, setPicked] = useState<string>()
   // Authors list the right answer first; shuffle so order isn't a tell. Seeded
@@ -88,9 +92,10 @@ export default function IncidentScreen({
   // multi-stage incident, reopens it into the next stage.
   function close() {
     const e: GameEvent = { type: 'CLOSE_INCIDENT', at: Date.now() }
-    const next = step(scenario, session, e)
+    const next = step(scenario, latest.current, e)
     if (next.phase === 'resolved') return onResolved(next.log)
     dispatch(e)
+    latest.current = next
     onChange?.(next)
   }
 
@@ -106,6 +111,7 @@ export default function IncidentScreen({
           onShellRan={(commands) => send({ type: 'SHELL_RAN', commands })}
           onTakeAction={(id) => send({ type: 'TAKE_ACTION', id })}
           onEdited={(path, content) => send({ type: 'EDITED', path, content })}
+          onAnswered={(value) => send({ type: 'ANSWERED', value })}
         />
       ),
     },

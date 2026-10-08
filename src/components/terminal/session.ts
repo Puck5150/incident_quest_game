@@ -29,6 +29,14 @@ export function promptIn(prompt: string, cwd: string | undefined, home: string |
 // use, one command at a time, in order. On mount the session's shell commands
 // are replayed so the shell's state (directory, files, variables) matches.
 export type Editing = { path: string; content: string; done: (content: string | null) => void }
+// An interactive prompt (terraform apply's "Enter a value:"): `shown` is
+// everything the command printed up to and including the prompt.
+export type Prompting = { shown: string; done: (value: string) => void }
+
+type Answered = Extract<GameEvent, { type: 'ANSWERED' }>
+// The next recorded answer while replaying; undefined once they run out (the
+// command is then cancelled, as if the prompt went unanswered).
+export const takeAnswer = (queue: Answered[]): string | undefined => queue.shift()?.value
 
 export function useTerminalSession(
   scenario: Scenario,
@@ -37,6 +45,7 @@ export function useTerminalSession(
   onShellRan?: (commands: string[]) => void,
   onTakeAction?: (id: string) => void,
   onEdited?: (path: string, content: string) => void,
+  onAnswered?: (value: string) => void,
 ) {
   const basePrompt = scenario.terminal!.prompt
   const nextId = useRef(0)
@@ -53,12 +62,16 @@ export function useTerminalSession(
   const queue = useRef<Promise<unknown>>(Promise.resolve())
 
   const edited = useRef(onEdited)
+  const answered = useRef(onAnswered)
   useLayoutEffect(() => {
     edited.current = onEdited
+    answered.current = onAnswered
   })
   // While replaying, the saved edits that followed the command stand in for the editor.
   const replayEdits = useRef<Extract<GameEvent, { type: 'EDITED' }>[] | undefined>(undefined)
   const [editing, setEditing] = useState<Editing>()
+  const replayAnswers = useRef<Answered[] | undefined>(undefined)
+  const [prompting, setPrompting] = useState<Prompting>()
   const getShell = () =>
     (shell.current ??= import('../../game/shell.ts').then((m) => {
       const sh = new m.IncidentShell(scenario)
@@ -75,6 +88,19 @@ export function useTerminalSession(
               setEditing(undefined)
               if (c !== null && c !== content) edited.current?.(path, c)
               done(c)
+            },
+          }),
+        )
+      }
+      sh.onConfirm = (shown) => {
+        if (replayAnswers.current) return Promise.resolve(takeAnswer(replayAnswers.current))
+        return new Promise((done) =>
+          setPrompting({
+            shown,
+            done: (value) => {
+              setPrompting(undefined)
+              answered.current?.(value)
+              done(value)
             },
           }),
         )
@@ -142,11 +168,14 @@ export function useTerminalSession(
         if (engineHandles(scenario, cmd, before)) output = terminalOutput(scenario, cmd, before)
         else {
           const next = snapshot.findIndex((x, j) => j > i && x.type === 'RUN_COMMAND')
-          replayEdits.current = snapshot.slice(i + 1, next < 0 ? undefined : next).filter((x) => x.type === 'EDITED')
+          const after = snapshot.slice(i + 1, next < 0 ? undefined : next)
+          replayEdits.current = after.filter((x) => x.type === 'EDITED')
+          replayAnswers.current = after.filter((x) => x.type === 'ANSWERED')
           try {
             output = (await sh.run(cmd, atStage(scenario, stageAt(before)), actionsTaken(before))).output
           } finally {
             replayEdits.current = undefined
+            replayAnswers.current = undefined
           }
         }
         rebuilt.push({ id: id(), prompt, input: cmd, output })
@@ -213,5 +242,5 @@ export function useTerminalSession(
     return common.length > stem.length ? { input: head + common } : { input, options: names }
   }
 
-  return { initial, replayed, prompt, history, run, completeLine, completePath, id, editing }
+  return { initial, replayed, prompt, history, run, completeLine, completePath, id, editing, prompting }
 }

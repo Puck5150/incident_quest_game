@@ -3,6 +3,7 @@ import type { Scenario } from '../schema/scenario.ts'
 import type { GameEvent } from '../game/engine.ts'
 import { hint, useTerminalSession, type Line } from './terminal/session.ts'
 import FileEditor from './terminal/FileEditor.tsx'
+import ConfirmPrompt from './terminal/ConfirmPrompt.tsx'
 
 const XtermTerminal = lazy(() => import('./terminal/XtermTerminal.tsx'))
 
@@ -13,6 +14,7 @@ type Props = {
   onShellRan?: (commands: string[]) => void // scripted commands the shell ran inside a pipeline
   onTakeAction?: (id: string) => void // a fix made by editing a file
   onEdited?: (path: string, content: string) => void // the player saved a file in the editor
+  onAnswered?: (value: string) => void // the player answered an interactive prompt (terraform apply)
 }
 
 // The full terminal (xterm.js) where it works well: a real browser with a
@@ -36,8 +38,8 @@ export default function Terminal(props: Props) {
 
 // A text input plus a scrolling transcript. Real text (not a canvas), so
 // screen readers and copy/paste just work.
-function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction, onEdited }: Props) {
-  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction, onEdited)
+function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction, onEdited, onAnswered }: Props) {
+  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction, onEdited, onAnswered)
   const [lines, setLines] = useState<Line[]>(session.initial)
   const [cursor, setCursor] = useState<number>() // position while browsing history with ↑/↓
   const [input, setInput] = useState('')
@@ -111,9 +113,10 @@ function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction, onEdit
     // Clicking anywhere focuses the prompt, unless the player is selecting text to copy.
     <div
       className="relative flex h-[28rem] flex-col rounded-lg border border-line bg-bg font-mono text-sm"
-      onClick={() => !session.editing && window.getSelection()?.isCollapsed && field.current?.focus()}
+      onClick={() => !session.editing && !session.prompting && window.getSelection()?.isCollapsed && field.current?.focus()}
     >
       {session.editing && <FileEditor key={session.editing.path} editing={session.editing} />}
+      {session.prompting && <ConfirmPrompt prompting={session.prompting} />}
       <div ref={out} role="log" aria-label="Terminal output" className="flex-1 overflow-auto p-3">
         <p className="text-muted">{hint(scenario)}</p>
         {lines.map((l) =>

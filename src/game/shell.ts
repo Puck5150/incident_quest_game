@@ -156,7 +156,7 @@ export class IncidentShell {
     return this.user === 'root' ? '/root' : `/home/${this.user}`
   }
   get cwd() {
-    return this.envs.get(this.host)?.PWD ?? this.home
+    return this.envs.get(this.host)?.PWD ?? (this.host === this.mainHost ? startDir(this.base) : this.home)
   }
   get currentHost() {
     return this.host

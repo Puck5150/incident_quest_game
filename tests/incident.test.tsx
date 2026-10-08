@@ -328,3 +328,31 @@ it('a file saved in the editor is still there after the terminal remounts', asyn
   type('cat /tmp/notes')
   await waitFor(() => expect(output()).toMatch(/cat \/tmp\/notes\s*pass two/))
 })
+
+it('terraform apply asks in a dialog, and the answer replays after a remount', async () => {
+  const { default: IncidentScreen } = await import('../src/screens/IncidentScreen.tsx')
+  const item = await (await import('virtual:content')).loadItem('terraform-forces-replacement')
+  if (item.kind !== 'incident') throw new Error('expected an incident')
+  let saved: import('../src/game/engine.ts').Session | undefined
+  const props = { scenario: item.scenario, onResolved: () => {}, onChange: (s: typeof saved) => (saved = s) }
+  const first = render(<IncidentScreen {...props} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
+
+  type('terraform init')
+  type(`sed -i '/prevent_destroy/d' db.tf`)
+  type('terraform apply')
+  const dialog = await screen.findByRole('dialog', { name: 'Confirm terraform action' })
+  expect(dialog.textContent).toMatch(/must be replaced[\s\S]*Enter a value:/)
+  const answer = within(dialog).getByLabelText('Enter a value')
+  fireEvent.change(answer, { target: { value: 'yes' } })
+  fireEvent.keyDown(answer, { key: 'Enter' })
+  await waitFor(() => expect(output()).toMatch(/Apply complete!/))
+  await waitFor(() => expect(saved!.log.filter((e) => e.type === 'ANSWERED')).toEqual([expect.objectContaining({ value: 'yes' })]))
+  const before = output()
+  first.unmount()
+
+  render(<IncidentScreen {...props} initial={saved} />)
+  await waitFor(() => expect(output()).toMatch(/Apply complete!/))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(output()).toBe(before)
+})

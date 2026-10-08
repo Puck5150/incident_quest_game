@@ -6,6 +6,7 @@ import type { Scenario } from '../../schema/scenario.ts'
 import type { GameEvent } from '../../game/engine.ts'
 import { hint, useTerminalSession, type Line } from './session.ts'
 import FileEditor from './FileEditor.tsx'
+import ConfirmPrompt from './ConfirmPrompt.tsx'
 
 const GREEN = (s: string) => `\x1b[32m${s}\x1b[0m`
 const DIM = (s: string) => `\x1b[2m${s}\x1b[0m`
@@ -39,6 +40,7 @@ export default function XtermTerminal({
   onShellRan,
   onTakeAction,
   onEdited,
+  onAnswered,
 }: {
   scenario: Scenario
   log: GameEvent[]
@@ -46,8 +48,9 @@ export default function XtermTerminal({
   onShellRan?: (commands: string[]) => void
   onTakeAction?: (id: string) => void
   onEdited?: (path: string, content: string) => void
+  onAnswered?: (value: string) => void
 }) {
-  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction, onEdited)
+  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction, onEdited, onAnswered)
   const host = useRef<HTMLDivElement>(null)
   const term = useRef<Xterm>(undefined)
   // The session changes every render; the terminal's handlers read the latest.
@@ -293,10 +296,10 @@ export default function XtermTerminal({
     // the terminal is created once; handlers read the latest session through refs
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Back to the prompt when the editor closes.
+  // Back to the prompt when the editor or a confirm prompt closes.
   useEffect(() => {
-    if (!session.editing) term.current?.focus()
-  }, [session.editing])
+    if (!session.editing && !session.prompting) term.current?.focus()
+  }, [session.editing, session.prompting])
 
   // When the shell has replayed the session, redraw the transcript with its output.
   useEffect(() => {
@@ -314,6 +317,7 @@ export default function XtermTerminal({
   return (
     <div className="relative h-[28rem] rounded-lg border border-line bg-bg p-2">
       {session.editing && <FileEditor key={session.editing.path} editing={session.editing} />}
+      {session.prompting && <ConfirmPrompt prompting={session.prompting} />}
       <div ref={host} className="h-full w-full" role="application" aria-label="Terminal (switch to the simple terminal in the header for screen readers)" />
     </div>
   )

@@ -44,7 +44,7 @@ export default function DebriefScreen({
   const seen = evidenceSeen(scenario, log)
   const start = log[0]?.at ?? 0
   const closes: GameEvent[] = log.filter((e) => e.type === 'CLOSE_INCIDENT')
-  const steps = log.filter((e) => e.type !== 'SHELL_RAN' && e.type !== 'EDITED').map((e) => ({ at: e.at - start, text: describe(scenario, e, closes.indexOf(e)) }))
+  const steps = log.filter((e) => e.type !== 'SHELL_RAN' && e.type !== 'EDITED' && e.type !== 'ANSWERED').map((e) => ({ at: e.at - start, text: describe(scenario, e, closes.indexOf(e)) }))
   const { debrief, analogy } = scenario
   // Multi-stage incidents: root cause, ideal path and evidence per stage.
   const n = stageCount(scenario)
@@ -270,6 +270,7 @@ function describe(scenario: Scenario, e: GameEvent, close: number): string {
     }
     case 'SHELL_RAN':
     case 'EDITED':
+    case 'ANSWERED':
       return '' // part of the command line before it; not a step of its own
     case 'CLOSE_INCIDENT':
       return close < all.length - 1 ? `Closed stage ${close + 1}: reopened` : 'Closed the incident'

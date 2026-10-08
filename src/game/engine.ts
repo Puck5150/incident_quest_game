@@ -22,6 +22,9 @@ export type GameEvent =
   // The player saved a file in the editor (path, new content). Recorded so a
   // remounted terminal can replay the edit; no effect on game state.
   | { type: 'EDITED'; path: string; content: string; at: number }
+  // The player answered an interactive prompt (terraform's "Enter a value:").
+  // Recorded so a remounted terminal can replay it; no effect on game state.
+  | { type: 'ANSWERED'; value: string; at: number }
   | { type: 'OPEN_ARTIFACT'; kind: ArtifactKind; name: string; at: number }
   | { type: 'REQUEST_HINT'; at: number }
   | { type: 'DECLARE_HYPOTHESIS'; id: string; at: number }
@@ -73,6 +76,7 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
     case 'OPEN_ARTIFACT':
     case 'SHELL_RAN':
     case 'EDITED':
+    case 'ANSWERED':
       return working ? { ...s, log: [...s.log, e] } : s
 
     case 'REQUEST_HINT':
