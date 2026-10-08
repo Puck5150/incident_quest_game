@@ -227,6 +227,18 @@ describe('lock, workspace, workspaces', () => {
     expect(lab.workspaces.get('prod')!.hasState).toBe(true)
   })
 
+  it('lab: reality is the union of every workspace, then cloud edits apply', () => {
+    const lab = labFromScenario(
+      { files: [FILE], state: [VPC], workspace: 'dev', workspaces: WS, cloud: { patch: [{ type: 'aws_vpc', id: 'vpc-9', set: { cidr_block: '1.1.1.1/32' } }], delete: [{ type: 'aws_vpc', id: 'vpc-1' }], add: [{ type: 'aws_s3_bucket', attrs: { id: 'b' } }] } } as TerraformBlock,
+      '/w',
+      '/h',
+    )
+    expect(Object.keys(lab.reality).sort()).toEqual([realityKey('aws_s3_bucket', 'b'), realityKey('aws_vpc', 'vpc-9')].sort())
+    expect(lab.reality[realityKey('aws_vpc', 'vpc-9')]!.cidr_block).toBe('1.1.1.1/32')
+    const all = labFromScenario({ files: [FILE], state: [VPC], workspaces: WS } as TerraformBlock, '/w', '/h')
+    expect(Object.keys(all.reality)).toEqual([realityKey('aws_vpc', 'vpc-1'), realityKey('aws_vpc', 'vpc-9')])
+  })
+
   it('lab: __proto__ is just a workspace name', () => {
     // zod drops a __proto__ record key (never a prototype write), so the schema rejects it cleanly...
     expect(bad({ workspaces: { ['__proto__']: { state: [VPC] } } })).toEqual([])

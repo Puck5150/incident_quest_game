@@ -89,10 +89,12 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
   all.delete(workspace)
 
   const reality: Reality = {}
-  for (const r of state.resources) {
-    if (r.mode !== 'managed') continue
-    for (const i of r.instances) reality[realityKey(r.type, i.attributes.id as string)] = structuredClone(i.attributes)
-  }
+  // The cloud is shared by every workspace.
+  for (const st of [state, ...[...all.values()].map((w) => w.state)])
+    for (const r of st.resources) {
+      if (r.mode !== 'managed') continue
+      for (const i of r.instances) reality[realityKey(r.type, i.attributes.id as string)] = structuredClone(i.attributes)
+    }
   // add, then patch (a patch may aim at an added object), then delete.
   for (const a of tf.cloud?.add ?? []) reality[realityKey(a.type, a.attrs.id as string)] = structuredClone(a.attrs) as Record<string, Value>
   for (const p of tf.cloud?.patch ?? []) {
