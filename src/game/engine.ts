@@ -19,6 +19,9 @@ export type GameEvent =
   // The real shell ran these scripted commands inside a pipeline or script
   // (each as written in the scenario). They count like typing them alone.
   | { type: 'SHELL_RAN'; commands: string[]; at: number }
+  // The player saved a file in the editor (path, new content). Recorded so a
+  // remounted terminal can replay the edit; no effect on game state.
+  | { type: 'EDITED'; path: string; content: string; at: number }
   | { type: 'OPEN_ARTIFACT'; kind: ArtifactKind; name: string; at: number }
   | { type: 'REQUEST_HINT'; at: number }
   | { type: 'DECLARE_HYPOTHESIS'; id: string; at: number }
@@ -69,6 +72,7 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
     }
     case 'OPEN_ARTIFACT':
     case 'SHELL_RAN':
+    case 'EDITED':
       return working ? { ...s, log: [...s.log, e] } : s
 
     case 'REQUEST_HINT':

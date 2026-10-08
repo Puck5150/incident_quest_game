@@ -105,6 +105,7 @@ export default function IncidentScreen({
           onRun={(input) => send({ type: 'RUN_COMMAND', input })}
           onShellRan={(commands) => send({ type: 'SHELL_RAN', commands })}
           onTakeAction={(id) => send({ type: 'TAKE_ACTION', id })}
+          onEdited={(path, content) => send({ type: 'EDITED', path, content })}
         />
       ),
     },

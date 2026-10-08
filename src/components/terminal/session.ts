@@ -36,6 +36,7 @@ export function useTerminalSession(
   onRun: (input: string) => void,
   onShellRan?: (commands: string[]) => void,
   onTakeAction?: (id: string) => void,
+  onEdited?: (path: string, content: string) => void,
 ) {
   const basePrompt = scenario.terminal!.prompt
   const nextId = useRef(0)
@@ -51,11 +52,30 @@ export function useTerminalSession(
   const shell = useRef<Promise<IncidentShell>>(undefined)
   const queue = useRef<Promise<unknown>>(Promise.resolve())
 
+  const edited = useRef(onEdited)
+  useLayoutEffect(() => {
+    edited.current = onEdited
+  })
+  // While replaying, the saved edits that followed the command stand in for the editor.
+  const replayEdits = useRef<Extract<GameEvent, { type: 'EDITED' }>[] | undefined>(undefined)
   const [editing, setEditing] = useState<Editing>()
   const getShell = () =>
     (shell.current ??= import('../../game/shell.ts').then((m) => {
       const sh = new m.IncidentShell(scenario)
-      sh.onEdit = (path, content) => new Promise((done) => setEditing({ path, content, done: (c) => (setEditing(undefined), done(c)) }))
+      sh.onEdit = (path, content) => {
+        if (replayEdits.current) return Promise.resolve(replayEdits.current.find((x) => x.path === path)?.content ?? null)
+        return new Promise((done) =>
+          setEditing({
+            path,
+            content,
+            done: (c) => {
+              setEditing(undefined)
+              if (c !== null && c !== content) edited.current?.(path, c)
+              done(c)
+            },
+          }),
+        )
+      }
       setHome(sh.home)
       return sh
     }))
@@ -115,9 +135,17 @@ export function useTerminalSession(
           continue
         }
         const prompt = promptIn(onHost(basePrompt, sh.currentHost), sh.cwd, sh.home)
-        const output = engineHandles(scenario, cmd, before)
-          ? terminalOutput(scenario, cmd, before)
-          : (await sh.run(cmd, atStage(scenario, stageAt(before)), actionsTaken(before))).output
+        let output: string
+        if (engineHandles(scenario, cmd, before)) output = terminalOutput(scenario, cmd, before)
+        else {
+          const next = snapshot.findIndex((x, j) => j > i && x.type === 'RUN_COMMAND')
+          replayEdits.current = snapshot.slice(i + 1, next < 0 ? undefined : next).filter((x) => x.type === 'EDITED')
+          try {
+            output = (await sh.run(cmd, atStage(scenario, stageAt(before)), actionsTaken(before))).output
+          } finally {
+            replayEdits.current = undefined
+          }
+        }
         rebuilt.push({ id: id(), prompt, input: cmd, output })
       }
       setReplayed(rebuilt)

@@ -38,14 +38,16 @@ export default function XtermTerminal({
   onRun,
   onShellRan,
   onTakeAction,
+  onEdited,
 }: {
   scenario: Scenario
   log: GameEvent[]
   onRun: (input: string) => void
   onShellRan?: (commands: string[]) => void
   onTakeAction?: (id: string) => void
+  onEdited?: (path: string, content: string) => void
 }) {
-  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction)
+  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction, onEdited)
   const host = useRef<HTMLDivElement>(null)
   const term = useRef<Xterm>(undefined)
   // The session changes every render; the terminal's handlers read the latest.

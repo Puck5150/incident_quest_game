@@ -292,3 +292,31 @@ it('editing a config file is the fix: sed -i before naming the cause counts once
   type('cat /tmp/notes /etc/logrotate.d/app')
   await waitFor(() => expect(output()).toMatch(/checked logrotate\s*\/var\/log\/app\/\*\.log/))
 })
+
+it('a file saved in the editor is still there after the terminal remounts', async () => {
+  const { default: IncidentScreen } = await import('../src/screens/IncidentScreen.tsx')
+  const item = await (await import('virtual:content')).loadItem('full-disk')
+  if (item.kind !== 'incident') throw new Error('expected an incident')
+  let saved: import('../src/game/engine.ts').Session | undefined
+  const props = { scenario: item.scenario, onResolved: () => {}, onChange: (s: typeof saved) => (saved = s) }
+  const first = render(<IncidentScreen {...props} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
+
+  type('nano /tmp/notes')
+  const editor = await screen.findByRole('dialog', { name: 'Editing /tmp/notes' })
+  fireEvent.change(within(editor).getByLabelText('Contents of /tmp/notes'), { target: { value: 'checked logrotate\n' } })
+  fireEvent.click(within(editor).getByRole('button', { name: 'Save and exit' }))
+  await waitFor(() => expect(saved?.log.some((e) => e.type === 'EDITED' && e.path === '/tmp/notes')).toBe(true))
+  type('nano /tmp/other') // quit without saving: nothing is logged
+  const quit = await screen.findByRole('dialog', { name: 'Editing /tmp/other' })
+  fireEvent.click(within(quit).getByRole('button', { name: 'Exit without saving' }))
+  type('cat /tmp/notes')
+  await waitFor(() => expect(output()).toMatch(/checked logrotate/))
+  expect(saved!.log.filter((e) => e.type === 'EDITED')).toHaveLength(1)
+  first.unmount()
+
+  render(<IncidentScreen {...props} initial={saved} />)
+  await waitFor(() => expect(output()).toMatch(/cat \/tmp\/notes[\s\S]*checked logrotate/))
+  type('cat /tmp/notes')
+  await waitFor(() => expect(output().match(/checked logrotate/g)!.length).toBeGreaterThanOrEqual(2))
+})

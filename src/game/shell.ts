@@ -102,7 +102,8 @@ const withNewline = (s: string) => (s && !s.endsWith('\n') ? s + '\n' : s)
 type Ctx = { cwd: string; exec?: (command: string, options: { cwd: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }> }
 type TfCtx = {
   cwd: string
-  env: Record<string, string>
+  env: Map<string, string>
+  exportedEnv?: Record<string, string>
   fs: {
     resolvePath(b: string, p: string): string
     readdir(p: string): Promise<string[]>
@@ -277,7 +278,7 @@ export class IncidentShell {
       lab: this.lab!,
       cwd: ctx.cwd,
       mainHost,
-      env: ctx.env,
+      env: ctx.exportedEnv ?? Object.fromEntries(ctx.env),
       async listFiles(dir) {
         const out: { name: string; text: string }[] = []
         for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
@@ -296,8 +297,9 @@ export class IncidentShell {
         await fs.writeFile(`${dir}/${name}`, text)
       },
     })
+    if (r.ran) this.hits.push(r.ran)
     this.hits.push(...r.evidence)
-    return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode }
+    return { stdout: withNewline(r.stdout), stderr: withNewline(r.stderr), exitCode: r.exitCode }
   }
 
   // A tool invocation inside the shell: the scripted output whose command

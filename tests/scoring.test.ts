@@ -74,6 +74,12 @@ describe('scoring', () => {
     expect(score(scenario, log([...FIX, 'run help', 'run dff -h'])).verified).toBe(false)
   })
 
+  it('a terraform run after the fix verifies it (the shell reports it as a hit)', () => {
+    const l = log(FIX)
+    l.splice(-1, 0, { type: 'SHELL_RAN', commands: ['terraform plan'], at: 9000 })
+    expect(score(scenario, l).verified).toBe(true)
+  })
+
   it('penalties: hints are cumulative, mistakes count each time', () => {
     const s = score(
       scenario,

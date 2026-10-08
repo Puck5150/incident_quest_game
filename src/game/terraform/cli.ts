@@ -32,8 +32,10 @@ export interface CliResult {
   stderr: string
   exitCode: number
   evidence: string[]
+  // The command as typed ("terraform plan"), empty when it is not one the simulator runs.
+  ran: string
 }
-type Out = Omit<CliResult, 'evidence'>
+type Out = Omit<CliResult, 'evidence' | 'ran'>
 type File = { name: string; text: string }
 interface Config {
   dir: string
@@ -513,5 +515,7 @@ export async function runTerraform(args: string[], ctx: CliContext): Promise<Cli
   const command = (first[0] === 'state' || first[0] === 'workspace') && second !== undefined && !second.startsWith('-') ? `${first[0]} ${second}` : (first[0] ?? '')
   const text = out.stdout + out.stderr
   const evidence = ctx.lab.evidence.filter((e) => e.command === command && text.includes(e.contains)).map((e) => `evidence:${e.evidence}`)
-  return { ...out, evidence }
+  const known = ['version', '-version', '--version', '-v', 'init', 'validate', 'plan', 'show', 'state', 'output', 'workspace']
+  const ran = first[0] !== undefined && known.includes(first[0]) ? `terraform ${command.replace(/^(-version|--version|-v)$/, 'version')}` : ''
+  return { ...out, evidence, ran }
 }

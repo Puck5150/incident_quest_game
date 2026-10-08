@@ -176,3 +176,15 @@ describe('terminal transcript from the log', () => {
     expect(transcript(scenario, log).map((l) => l.input)).toEqual(['help'])
   })
 })
+
+describe('EDITED', () => {
+  it('is logged and changes nothing else', () => {
+    const before = play(start, run('df -h'))
+    const after = step(scenario, before, { type: 'EDITED', path: '/tmp/x', content: 'hi', at: 5 })
+    expect(after.phase).toBe(before.phase)
+    expect(after.feedback).toBe(before.feedback)
+    expect(after.log).toEqual([...before.log, { type: 'EDITED', path: '/tmp/x', content: 'hi', at: 5 }])
+    expect(evidenceSeen(scenario, after.log)).toEqual(evidenceSeen(scenario, before.log))
+    expect(step(scenario, newSession(), { type: 'EDITED', path: '/tmp/x', content: 'hi', at: 5 }).log).toEqual([])
+  })
+})

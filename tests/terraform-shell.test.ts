@@ -68,7 +68,31 @@ describe('the terraform command in the shell', () => {
   it('reports simulator evidence as hits', async () => {
     const s = scenario({ evidence: [{ evidence: 'listed', command: 'state list', contains: 'aws_vpc.main' }] })
     const [r] = await run(s, 'terraform state list')
-    expect(r.hits).toEqual(['evidence:listed'])
+    expect(r.hits).toEqual(['terraform state list', 'evidence:listed'])
+  })
+
+  it('reads TF_VAR_ from exported variables only (just-bash gives commands a Map env)', async () => {
+    const s = scenario({ files: [{ path: 'main.tf', content: 'variable "cidr" {\n  type = string\n}\nresource "aws_vpc" "main" {\n  cidr_block = var.cidr\n}\n' }] })
+    const [, exported, prefixed, plain] = await run(s, 'export TF_VAR_cidr=10.9.0.0/16', 'terraform plan', 'TF_VAR_cidr=10.8.0.0/16 terraform plan', 'unset TF_VAR_cidr; TF_VAR_cidr=10.7.0.0/16; terraform plan')
+    expect(exported.output).toContain('10.9.0.0/16')
+    expect(prefixed.output).toContain('10.8.0.0/16')
+    expect(plain.output).not.toContain('10.7.0.0/16')
+  })
+
+  it('ends every output line with a newline, so the shell sees real lines', async () => {
+    const [v, status, wc] = await run(scenario(), 'terraform version', 'terraform plan; echo $?', 'terraform version | wc -l')
+    expect(v.output.split('\n')).toHaveLength(3)
+    expect(status.output.split('\n').at(-1)).toBe('0')
+    expect(status.output.split('\n').at(-2)).not.toMatch(/0$/)
+    expect(wc.output.trim()).toBe('3')
+  })
+
+  it('reports the subcommand it ran as a hit, only for ones it runs', async () => {
+    const [plan, state, bare, unknown] = await run(scenario(), 'terraform plan', 'terraform state list', 'terraform', 'terraform frobnicate')
+    expect(plan.hits).toEqual(['terraform plan'])
+    expect(state.hits).toEqual(['terraform state list'])
+    expect(bare.hits).toEqual([])
+    expect(unknown.hits).toEqual([])
   })
 
   it('leaves incidents without a terraform block on the scripted tool', async () => {
@@ -90,5 +114,28 @@ describe('engine support', () => {
     const help = runCommand(scenario(), 'help', new Set()).output
     for (const c of ['terraform init', 'terraform validate', 'terraform plan', 'terraform show', 'terraform state list', 'terraform state show ADDRESS', 'terraform output', 'terraform version']) expect(help).toContain(`  ${c}`)
     expect(runCommand({ ...scenario(), terraform: undefined } as Scenario, 'help', new Set()).output).not.toContain('terraform plan')
+  })
+})
+
+describe('commandsHit', () => {
+  it('lists terraform runs and drops evidence tokens', async () => {
+    const { commandsHit } = await import('../src/game/engine.ts')
+    const log: GameEvent[] = [{ type: 'SHELL_RAN', commands: ['terraform plan', 'evidence:x'], at: 0 }]
+    expect([...commandsHit(scenario(), log)]).toEqual(['terraform plan'])
+  })
+})
+
+describe('editor replay protocol', () => {
+  it('a saved edit stands in for the editor; no saved edit means quit without saving', async () => {
+    const s = scenario()
+    const sh = new IncidentShell(s)
+    const saved = [{ path: '/home/you/infra/main.tf', content: 'resource "aws_vpc" "main" {\n  cidr_block = "10.1.0.0/16"\n}\n' }]
+    sh.onEdit = async (path) => saved.find((e) => e.path === path)?.content ?? null
+    await sh.run('nano main.tf', s, new Set())
+    expect((await sh.run('terraform plan', s, new Set())).output).toContain('forces replacement')
+    sh.onEdit = async () => null
+    const before = (await sh.run('cat main.tf', s, new Set())).output
+    await sh.run('nano main.tf', s, new Set())
+    expect((await sh.run('cat main.tf', s, new Set())).output).toBe(before)
   })
 })

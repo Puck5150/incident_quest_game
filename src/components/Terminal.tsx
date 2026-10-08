@@ -12,6 +12,7 @@ type Props = {
   onRun: (input: string) => void
   onShellRan?: (commands: string[]) => void // scripted commands the shell ran inside a pipeline
   onTakeAction?: (id: string) => void // a fix made by editing a file
+  onEdited?: (path: string, content: string) => void // the player saved a file in the editor
 }
 
 // The full terminal (xterm.js) where it works well: a real browser with a
@@ -35,8 +36,8 @@ export default function Terminal(props: Props) {
 
 // A text input plus a scrolling transcript. Real text (not a canvas), so
 // screen readers and copy/paste just work.
-function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction }: Props) {
-  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction)
+function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction, onEdited }: Props) {
+  const session = useTerminalSession(scenario, log, onRun, onShellRan, onTakeAction, onEdited)
   const [lines, setLines] = useState<Line[]>(session.initial)
   const [cursor, setCursor] = useState<number>() // position while browsing history with ↑/↓
   const [input, setInput] = useState('')
