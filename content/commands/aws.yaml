@@ -102,6 +102,7 @@
   parts:
     - { token: "--instance-ids i-0checkoutold", meaning: "Only this instance." }
     - { token: "--query Reservations[0].Instances[0].State", meaning: "The first instance's state (running, stopped, terminated)." }
+    - { token: "--filters Name=tag:Name,Values=orders-db-*", meaning: "Only instances whose Name tag matches; * is a wildcard." }
   why: "Confirms whether something still exists and is running before you trust anything that points at it."
   alternatives:
     - { command: "aws ec2 describe-instance-status --instance-ids ID", note: "Status checks for running instances." }
@@ -149,6 +150,7 @@
   summary: "Lists subnets."
   parts:
     - { token: "--query Subnets[].[SubnetId,AvailabilityZone,Tags[0].Value]", meaning: "For each: id, zone, and its first tag's value (usually the Name)." }
+    - { token: "--filters Name=vpc-id,Values=VPC", meaning: "Only the subnets in this VPC." }
   why: "Maps subnet ids to zones and names, so you know which one you're looking at."
   alternatives:
     - { command: "aws ec2 describe-subnets --filters Name=vpc-id,Values=VPC", note: "Only one VPC's subnets." }

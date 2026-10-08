@@ -1,0 +1,549 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-count-to-for-each
+track: iac
+difficulty: 3
+title: "A tidy-up PR wants to destroy the database hosts"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  severity: SEV4
+  body: |
+    My PR (refactor/subnets-by-az) only tidies up how we declare the private
+    subnets and the two Postgres hosts. No settings change. CI's terraform
+    plan fails with "Instance cannot be destroyed" on the db hosts. Nobody
+    asked to destroy anything. Can I drop prevent_destroy so the pipeline
+    goes green? Branch is checked out in ~/infra.
+
+environment: |
+  The core network for the orders platform lives in account 123456789012,
+  us-east-1: one VPC with a private subnet in us-east-1a and one in
+  us-east-1b. Each subnet runs a self-managed Postgres host (primary in
+  1a, replica in 1b) on EC2 with its data on the instance. The Terraform
+  code is in ~/infra; main holds what was last applied.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "git log --oneline -3"
+      output: |
+        9c41e7a refactor: key private subnets and db hosts by AZ
+        52be0d3 db: bump instance type to r6i.large
+        e1a8f40 network: tag private subnets with their AZ
+    - match: "git log --oneline"
+      output: |
+        9c41e7a refactor: key private subnets and db hosts by AZ
+        52be0d3 db: bump instance type to r6i.large
+        e1a8f40 network: tag private subnets with their AZ
+        7d03b92 network: private subnets in two AZs
+        2f6a1c5 initial VPC
+    - match: "git diff main -- network.tf db.tf"
+      evidence: refactor-diff
+      output: |
+        diff --git a/network.tf b/network.tf
+        index 3b1c2d4..8f0e9a1 100644
+        --- a/network.tf
+        +++ b/network.tf
+        @@ -11,12 +11,12 @@ locals {
+         }
+
+         resource "aws_subnet" "private" {
+        -  count             = length(var.azs)
+        +  for_each          = toset(var.azs)
+           vpc_id            = aws_vpc.main.id
+        -  cidr_block        = local.private_cidrs[var.azs[count.index]]
+        -  availability_zone = var.azs[count.index]
+        +  cidr_block        = local.private_cidrs[each.key]
+        +  availability_zone = each.key
+
+           tags = {
+        -    Name = "private-${var.azs[count.index]}"
+        +    Name = "private-${each.key}"
+           }
+         }
+        diff --git a/db.tf b/db.tf
+        index 6a7d9e2..d24c5b8 100644
+        --- a/db.tf
+        +++ b/db.tf
+        @@ -1,10 +1,10 @@
+         resource "aws_instance" "db" {
+        -  count         = length(var.azs)
+        +  for_each      = aws_subnet.private
+           ami           = "ami-0c7217cdde317cfec"
+           instance_type = "r6i.large"
+        -  subnet_id     = aws_subnet.private[count.index].id
+        +  subnet_id     = each.value.id
+
+           tags = {
+        -    Name = "orders-db-${var.azs[count.index]}"
+        +    Name = "orders-db-${each.key}"
+           }
+    - match: "git diff main"
+      evidence: refactor-diff
+      output: |
+        diff --git a/network.tf b/network.tf
+        index 3b1c2d4..8f0e9a1 100644
+        --- a/network.tf
+        +++ b/network.tf
+        @@ -11,12 +11,12 @@ locals {
+         }
+
+         resource "aws_subnet" "private" {
+        -  count             = length(var.azs)
+        +  for_each          = toset(var.azs)
+           vpc_id            = aws_vpc.main.id
+        -  cidr_block        = local.private_cidrs[var.azs[count.index]]
+        -  availability_zone = var.azs[count.index]
+        +  cidr_block        = local.private_cidrs[each.key]
+        +  availability_zone = each.key
+
+           tags = {
+        -    Name = "private-${var.azs[count.index]}"
+        +    Name = "private-${each.key}"
+           }
+         }
+        diff --git a/db.tf b/db.tf
+        index 6a7d9e2..d24c5b8 100644
+        --- a/db.tf
+        +++ b/db.tf
+        @@ -1,10 +1,10 @@
+         resource "aws_instance" "db" {
+        -  count         = length(var.azs)
+        +  for_each      = aws_subnet.private
+           ami           = "ami-0c7217cdde317cfec"
+           instance_type = "r6i.large"
+        -  subnet_id     = aws_subnet.private[count.index].id
+        +  subnet_id     = each.value.id
+
+           tags = {
+        -    Name = "orders-db-${var.azs[count.index]}"
+        +    Name = "orders-db-${each.key}"
+           }
+    - match: "aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0f3e2a9c41b7d5e60"
+      evidence: subnets-exist
+      output: |
+        {
+            "Subnets": [
+                {
+                    "AvailabilityZone": "us-east-1a",
+                    "AvailableIpAddressCount": 250,
+                    "CidrBlock": "10.20.1.0/24",
+                    "MapPublicIpOnLaunch": false,
+                    "State": "available",
+                    "SubnetId": "subnet-0a4c1e7f9b2d3a581",
+                    "VpcId": "vpc-0f3e2a9c41b7d5e60",
+                    "OwnerId": "123456789012",
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "private-us-east-1a"
+                        }
+                    ],
+                    "SubnetArn": "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0a4c1e7f9b2d3a581"
+                },
+                {
+                    "AvailabilityZone": "us-east-1b",
+                    "AvailableIpAddressCount": 250,
+                    "CidrBlock": "10.20.2.0/24",
+                    "MapPublicIpOnLaunch": false,
+                    "State": "available",
+                    "SubnetId": "subnet-0b8d2f6e0c3e4b692",
+                    "VpcId": "vpc-0f3e2a9c41b7d5e60",
+                    "OwnerId": "123456789012",
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "private-us-east-1b"
+                        }
+                    ],
+                    "SubnetArn": "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0b8d2f6e0c3e4b692"
+                }
+            ]
+        }
+    - match: "aws ec2 describe-subnets"
+      evidence: subnets-exist
+      output: |
+        {
+            "Subnets": [
+                {
+                    "AvailabilityZone": "us-east-1a",
+                    "AvailableIpAddressCount": 250,
+                    "CidrBlock": "10.20.1.0/24",
+                    "MapPublicIpOnLaunch": false,
+                    "State": "available",
+                    "SubnetId": "subnet-0a4c1e7f9b2d3a581",
+                    "VpcId": "vpc-0f3e2a9c41b7d5e60",
+                    "OwnerId": "123456789012",
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "private-us-east-1a"
+                        }
+                    ],
+                    "SubnetArn": "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0a4c1e7f9b2d3a581"
+                },
+                {
+                    "AvailabilityZone": "us-east-1b",
+                    "AvailableIpAddressCount": 250,
+                    "CidrBlock": "10.20.2.0/24",
+                    "MapPublicIpOnLaunch": false,
+                    "State": "available",
+                    "SubnetId": "subnet-0b8d2f6e0c3e4b692",
+                    "VpcId": "vpc-0f3e2a9c41b7d5e60",
+                    "OwnerId": "123456789012",
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "private-us-east-1b"
+                        }
+                    ],
+                    "SubnetArn": "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0b8d2f6e0c3e4b692"
+                }
+            ]
+        }
+    - match: "aws ec2 describe-instances --filters Name=tag:Name,Values=orders-db-*"
+      output: |
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0d1a5c3e7b9f2a401",
+                            "InstanceType": "r6i.large",
+                            "Placement": { "AvailabilityZone": "us-east-1a" },
+                            "PrivateIpAddress": "10.20.1.24",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-0a4c1e7f9b2d3a581",
+                            "Tags": [ { "Key": "Name", "Value": "orders-db-us-east-1a" } ]
+                        }
+                    ]
+                },
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0e2b6d4f8c0a3b512",
+                            "InstanceType": "r6i.large",
+                            "Placement": { "AvailabilityZone": "us-east-1b" },
+                            "PrivateIpAddress": "10.20.2.37",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-0b8d2f6e0c3e4b692",
+                            "Tags": [ { "Key": "Name", "Value": "orders-db-us-east-1b" } ]
+                        }
+                    ]
+                }
+            ]
+        }
+    - match: "aws ec2 describe-instances"
+      output: |
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0d1a5c3e7b9f2a401",
+                            "InstanceType": "r6i.large",
+                            "Placement": { "AvailabilityZone": "us-east-1a" },
+                            "PrivateIpAddress": "10.20.1.24",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-0a4c1e7f9b2d3a581",
+                            "Tags": [ { "Key": "Name", "Value": "orders-db-us-east-1a" } ]
+                        }
+                    ]
+                },
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0e2b6d4f8c0a3b512",
+                            "InstanceType": "r6i.large",
+                            "Placement": { "AvailabilityZone": "us-east-1b" },
+                            "PrivateIpAddress": "10.20.2.37",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-0b8d2f6e0c3e4b692",
+                            "Tags": [ { "Key": "Name", "Value": "orders-db-us-east-1b" } ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: vars.tf
+      content: |
+        variable "azs" {
+          type    = list(string)
+          default = ["us-east-1a", "us-east-1b"]
+        }
+    - path: network.tf
+      content: |
+        resource "aws_vpc" "main" {
+          cidr_block = "10.20.0.0/16"
+
+          tags = {
+            Name = "orders-core"
+          }
+        }
+
+        locals {
+          private_cidrs = {
+            "us-east-1a" = "10.20.1.0/24"
+            "us-east-1b" = "10.20.2.0/24"
+          }
+        }
+
+        resource "aws_subnet" "private" {
+          for_each          = toset(var.azs)
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = local.private_cidrs[each.key]
+          availability_zone = each.key
+
+          tags = {
+            Name = "private-${each.key}"
+          }
+        }
+    - path: db.tf
+      content: |
+        resource "aws_instance" "db" {
+          for_each      = aws_subnet.private
+          ami           = "ami-0c7217cdde317cfec"
+          instance_type = "r6i.large"
+          subnet_id     = each.value.id
+
+          tags = {
+            Name = "orders-db-${each.key}"
+          }
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-0f3e2a9c41b7d5e60
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0f3e2a9c41b7d5e60"
+        cidr_block: 10.20.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-03c1d5e7a9b2c4f60
+        tags: { Name: orders-core }
+        tags_all: { Name: orders-core }
+    - type: aws_subnet
+      name: private
+      key: 0
+      attrs:
+        id: subnet-0a4c1e7f9b2d3a581
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0a4c1e7f9b2d3a581"
+        vpc_id: vpc-0f3e2a9c41b7d5e60
+        cidr_block: 10.20.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: private-us-east-1a }
+        tags_all: { Name: private-us-east-1a }
+    - type: aws_subnet
+      name: private
+      key: 1
+      attrs:
+        id: subnet-0b8d2f6e0c3e4b692
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0b8d2f6e0c3e4b692"
+        vpc_id: vpc-0f3e2a9c41b7d5e60
+        cidr_block: 10.20.2.0/24
+        availability_zone: us-east-1b
+        map_public_ip_on_launch: false
+        tags: { Name: private-us-east-1b }
+        tags_all: { Name: private-us-east-1b }
+    - type: aws_instance
+      name: db
+      key: 0
+      attrs:
+        id: i-0d1a5c3e7b9f2a401
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0d1a5c3e7b9f2a401"
+        ami: ami-0c7217cdde317cfec
+        instance_type: r6i.large
+        subnet_id: subnet-0a4c1e7f9b2d3a581
+        availability_zone: us-east-1a
+        private_ip: 10.20.1.24
+        tags: { Name: orders-db-us-east-1a }
+        tags_all: { Name: orders-db-us-east-1a }
+    - type: aws_instance
+      name: db
+      key: 1
+      attrs:
+        id: i-0e2b6d4f8c0a3b512
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0e2b6d4f8c0a3b512"
+        ami: ami-0c7217cdde317cfec
+        instance_type: r6i.large
+        subnet_id: subnet-0b8d2f6e0c3e4b692
+        availability_zone: us-east-1b
+        private_ip: 10.20.2.37
+        tags: { Name: orders-db-us-east-1b }
+        tags_all: { Name: orders-db-us-east-1b }
+  evidence:
+    - evidence: prevent-destroy-saved-you
+      command: plan
+      contains: "Instance cannot be destroyed"
+    - evidence: address-changed
+      command: state list
+      contains: "aws_subnet.private[0]"
+    - evidence: plan-destroys-subnets
+      command: plan
+      contains: "aws_subnet.private[0] will be destroyed"
+
+hypotheses:
+  - id: addresses-changed
+    text: "Switching from count to for_each changed every address from an index to a key, so state's [0]/[1] no longer match the configuration's [\"us-east-1a\"]/[\"us-east-1b\"]."
+    correct: true
+  - id: azs-changed
+    text: "The PR changed the availability zones, so Terraform has to rebuild the subnets and the hosts in them."
+    feedback: "var.azs is still us-east-1a and us-east-1b, and git diff shows only count turning into for_each. The objects in state already sit in exactly those zones."
+  - id: provider-bug
+    text: "A provider bug: nothing in the resources changed, so the AWS provider shouldn't be planning to destroy them."
+    feedback: "The provider only diffs an object Terraform hands it. Which object belongs to which block is Terraform's job, and it matches them by address: state holds aws_instance.db[0], the configuration now declares aws_instance.db[\"us-east-1a\"]."
+  - id: console-deleted
+    text: "Someone deleted the subnets in the console, so Terraform wants to create them again."
+    feedback: "describe-subnets finds both subnets, available, with the ids state records. A deleted object would show up as drift that refresh removes, not as a destroy of something still in state."
+
+actions:
+  - id: move-addresses
+    label: "Tell Terraform the objects moved to their new keys (moved blocks applied with terraform apply, or terraform state mv for each subnet and host), then confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - state_has: 'aws_subnet.private["us-east-1a"]'
+        - state_has: 'aws_subnet.private["us-east-1b"]'
+        - state_has: 'aws_instance.db["us-east-1a"]'
+        - state_has: 'aws_instance.db["us-east-1b"]'
+        - plan_clean: true
+        - not: { applied: { op: delete, address: aws_subnet.private } }
+        - not: { applied: { op: delete, address: aws_instance.db } }
+    feedback: "The same two subnets and the same two hosts now live at their AZ keys, and the plan is empty. The refactor can merge without touching production."
+  - id: ignore-and-revert
+    label: "Revert the PR back to count and close it"
+    kind: wrong
+    feedback: "The plan goes quiet, but the subnets stay keyed by list position: remove or reorder an AZ and Terraform will want to destroy and recreate whatever shifted. The refactor was right; it only needed to tell Terraform where the objects went."
+  - id: remove-prevent-destroy
+    label: "Remove prevent_destroy from the db hosts and apply so CI goes green"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_subnet.private }
+        - applied: { op: delete, address: aws_instance.db }
+    feedback: "prevent_destroy was the only thing standing between this refactor and production. Without it Terraform terminates both Postgres hosts, with their data, and builds empty ones."
+
+solution_paths:
+  - [move-addresses]
+
+key_evidence: [prevent-destroy-saved-you, address-changed, refactor-diff, subnets-exist]
+
+evidence_labels:
+  prevent-destroy-saved-you: "The plan would destroy a db host, and prevent_destroy stops it"
+  address-changed: "State holds the subnets and hosts at [0] and [1]"
+  refactor-diff: "The PR swaps count for for_each and changes nothing else"
+  subnets-exist: "Both subnets exist in AWS with the ids state records"
+
+hints:
+  nudge: "How does Terraform decide which object in state belongs to which block in the configuration?"
+  direction: "Compare the addresses in terraform state list with the instance keys the configuration now produces."
+  answer: "count addresses are [0] and [1]; for_each addresses are [\"us-east-1a\"] and [\"us-east-1b\"]. Add moved blocks from each old address to its new one (or run terraform state mv for each), then plan until it says No changes."
+
+analogy:
+  title: "Renumbering the parking spaces"
+  text: |
+    The garage repaints its spaces from numbers to names: space 1 becomes
+    "North", space 2 "South". The attendant's list still says "car in space
+    1". Reading the new signs, the attendant decides the car in space 1 is
+    abandoned and calls the tow truck, while a new car must be bought for
+    "North". A note saying "space 1 is now North" fixes it; towing the cars
+    does not.
+
+debrief:
+  root_cause: |
+    Terraform matches state to configuration by resource address. With
+    count the subnets and hosts were aws_subnet.private[0]/[1] and
+    aws_instance.db[0]/[1]; with for_each they are keyed by AZ name. The
+    refactor kept every object identical but gave every one a new address,
+    so Terraform saw four objects to destroy (they no longer appear in the
+    configuration under those addresses) and four new ones to create. The
+    db hosts set lifecycle.prevent_destroy, so planning failed with
+    "Instance cannot be destroyed" instead of terminating the database.
+    Telling Terraform where each object went (moved blocks, or terraform
+    state mv) keeps the same objects under their new keys.
+  ideal_path:
+    - "Read the plan error: it names aws_instance.db[0], an index the configuration no longer produces."
+    - "Compare terraform state list ([0], [1]) with the PR diff (count to for_each, nothing else)."
+    - "Confirm in AWS that the subnets and hosts are the ones state records."
+    - "Add a moved block from each old index to its new AZ key, plan (four moves, nothing to add, change or destroy) and apply."
+    - "Plan again: No changes. Keep prevent_destroy."
+  real_world: |
+    Treat a change to count, for_each or a resource name as a change of
+    identity and ship moved blocks in the same PR. They are reviewed with
+    the code, every workspace and environment picks them up on its next
+    apply, and the plan shows each move. terraform state mv does the same
+    thing directly on one state, outside review, so it suits a one-off
+    fix. Keep prevent_destroy on anything holding data you can't
+    recreate: here it turned a refactor into a failed plan instead of a
+    database rebuild. It only guards while its resource block exists:
+    delete the block and the objects are destroyed anyway. Read the reason line under each "will be destroyed"
+    in a plan before deciding how to unblock it.
+
+concepts:
+  - term: "Resource address"
+    text: "How Terraform names an object in state: type, name and, with count or for_each, an index or key. Change the address and Terraform sees a different object."
+    url: "https://developer.hashicorp.com/terraform/cli/state/resource-addressing"
+  - term: "moved block"
+    text: "Records in configuration that the object at one address now lives at another, so Terraform moves it in state instead of destroying and recreating it."
+    url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+  - term: "terraform state mv"
+    text: "Moves an object to a new address in state directly, without a plan or review."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/mv"
+  - term: "prevent_destroy"
+    text: "A lifecycle setting that makes any plan that would destroy the resource fail with an error."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+
+sources:
+  - title: "Terraform: Refactoring (moved blocks)"
+    url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: state mv"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/mv"
+    retrieved: 2026-10-08
+  - title: "Terraform: The lifecycle meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-08
+  - title: "Terraform: The for_each meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+    retrieved: 2026-10-08
+  - title: "Terraform: Resource addressing"
+    url: "https://developer.hashicorp.com/terraform/cli/state/resource-addressing"
+    retrieved: 2026-10-08
+  - title: "Terraform source v1.9.8: plan reason lines (internal/command/jsonformat/plan.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/command/jsonformat/plan.go"
+    retrieved: 2026-10-08
+  - title: "Terraform source v1.9.8: prevent_destroy check (internal/terraform/node_resource_abstract_instance.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/terraform/node_resource_abstract_instance.go"
+    retrieved: 2026-10-08
+command_notes:
+  "git log --oneline -3": "The top commit is the refactor. The ones before it are what main last applied."
+  "git log --oneline": "The top commit is the refactor. The ones before it are what main last applied."
+  "git diff main -- network.tf db.tf": "count becomes for_each and count.index becomes each.key. Every argument evaluates to the same value as before: same zones, CIDRs, AMI, type and tags."
+  "git diff main": "count becomes for_each and count.index becomes each.key. Every argument evaluates to the same value as before: same zones, CIDRs, AMI, type and tags."
+  "aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0f3e2a9c41b7d5e60": "Both subnets exist, available, with the ids state records under [0] and [1]."
+  "aws ec2 describe-subnets": "Both subnets exist, available, with the ids state records under [0] and [1]."
+  "aws ec2 describe-instances": "Both Postgres hosts are running in those subnets, with the instance ids state records. Nothing changed in AWS."
+  "aws ec2 describe-instances --filters Name=tag:Name,Values=orders-db-*": "Both Postgres hosts are running in those subnets, with the instance ids state records. Nothing changed in AWS."
