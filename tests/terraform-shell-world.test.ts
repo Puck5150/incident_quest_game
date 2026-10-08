@@ -35,6 +35,17 @@ describe('IncidentShell.doneWhen', () => {
     expect(await sh.doneWhen({ plan_clean: true })).toBe(true)
   })
 
+  it('plan_clean sees only exported variables, like terraform plan', async () => {
+    const s = scenario({ state: [VPC_STATE], files: [{ path: 'main.tf', content: VPC + 'variable "c" {\n  type = string\n}\n' }] })
+    const sh = new IncidentShell(s)
+    await run(sh, s, 'cd ~/infra', 'TF_VAR_c=x')
+    expect((await sh.run('terraform plan', s, new Set())).output).toContain('No value for required variable')
+    expect(await sh.doneWhen({ plan_clean: true })).toBe(false)
+    await run(sh, s, 'export TF_VAR_c')
+    expect((await sh.run('terraform plan', s, new Set())).output).toContain('No changes.')
+    expect(await sh.doneWhen({ plan_clean: true })).toBe(true)
+  })
+
   it('applied sees the delete half of a replace', async () => {
     const s = scenario({ state: [VPC_STATE] })
     const sh = new IncidentShell(s)

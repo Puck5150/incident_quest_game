@@ -395,7 +395,7 @@ it('applying the replacement takes the destructive action from the world, once, 
   fireEvent.click(screen.getByLabelText(/storage_encrypted can't be changed/))
   fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
   await waitFor(() => expect(taken()).toEqual([expect.objectContaining({ id: 'remove-guard' })]))
-  await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/destroy the production orders database/))
+  await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/destroys the production orders database/))
   await type('terraform plan') // more checks after more commands take nothing more
   await waitFor(() => expect(saved!.log.at(-1)).toMatchObject({ type: 'RUN_COMMAND', input: 'terraform plan' }))
   await waitFor(() => expect(screen.getByRole('log', { name: 'Terminal output' }).getAttribute('aria-busy')).toBe('false'))
@@ -408,4 +408,54 @@ it('applying the replacement takes the destructive action from the world, once, 
   await waitFor(() => expect(screen.getByRole('log', { name: 'Terminal output' }).getAttribute('aria-busy')).toBe('false'))
   expect(taken()).toHaveLength(1)
   expect(score(item.scenario, saved!.log).mistakes.destructive).toBe(1)
+})
+
+// The root cause named first, then the world changes: a check queued with an
+// older log (ANSWERED and SHELL_RAN re-render mid-command) must not take the action again.
+const tfFirst = async () => {
+  const { default: IncidentScreen } = await import('../src/screens/IncidentScreen.tsx')
+  const item = await (await import('virtual:content')).loadItem('terraform-forces-replacement')
+  if (item.kind !== 'incident') throw new Error('expected an incident')
+  const box: { saved?: import('../src/game/engine.ts').Session } = {}
+  render(<IncidentScreen scenario={item.scenario} onResolved={() => {}} onChange={(s) => (box.saved = s)} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
+  fireEvent.click(screen.getByLabelText(/storage_encrypted can't be changed/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  await type('terraform init')
+  const settle = async () => {
+    await type('ls') // a later command, and the checks queued behind it, finish
+    await waitFor(() => expect(box.saved!.log.at(-1)).toMatchObject({ type: 'RUN_COMMAND', input: 'ls' }))
+    await waitFor(() => expect(screen.getByRole('log', { name: 'Terminal output' }).getAttribute('aria-busy')).toBe('false'))
+  }
+  return { taken: () => box.saved!.log.filter((e) => e.type === 'TAKE_ACTION').map((e) => (e as { id: string }).id), settle }
+}
+
+it('root cause first, then apply with the prompt: remove-guard is taken once', async () => {
+  const { taken, settle } = await tfFirst()
+  await type(`sed -i '/prevent_destroy/d' db.tf`)
+  await type('terraform apply')
+  const answer = within(await screen.findByRole('dialog', { name: 'Confirm terraform action' })).getByLabelText('Enter a value')
+  fireEvent.change(answer, { target: { value: 'yes' } })
+  fireEvent.keyDown(answer, { key: 'Enter' })
+  await waitFor(() => expect(output()).toMatch(/Apply complete!/))
+  await settle()
+  expect(taken()).toEqual(['remove-guard'])
+})
+
+it('root cause first, then apply -auto-approve: remove-guard is taken once', async () => {
+  const { taken, settle } = await tfFirst()
+  await type(`sed -i '/prevent_destroy/d' db.tf`)
+  await type('terraform apply -auto-approve')
+  await waitFor(() => expect(output()).toMatch(/Apply complete!/))
+  await settle()
+  expect(taken()).toEqual(['remove-guard'])
+})
+
+it('root cause first, then the revert: revert-and-migrate is taken once', async () => {
+  const { taken, settle } = await tfFirst()
+  await type("sed -i 's/storage_encrypted *= true/storage_encrypted = false/' db.tf") // typed runs of spaces collapse
+  await type('terraform plan')
+  await waitFor(() => expect(output()).toMatch(/terraform plan[\s\S]*No changes\./))
+  await settle()
+  expect(taken()).toEqual(['revert-and-migrate'])
 })

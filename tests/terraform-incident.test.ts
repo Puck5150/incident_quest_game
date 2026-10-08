@@ -100,6 +100,15 @@ describe('terraform-forces-replacement on the simulator', () => {
     expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': true, 'ignore-encryption': false, 'modify-console': false })
   })
 
+  it('done_when, state rm path: a second orders-db is refused like in AWS, and the revert is no fix', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform state rm aws_db_instance.orders', "sed -i 's/storage_encrypted   = true/storage_encrypted   = false/' db.tf", 'terraform apply -auto-approve')
+    expect(out[3].exitCode).toBe(1)
+    expect(out[3].output).toContain('creating RDS DB Instance (orders-db): operation error RDS: CreateDBInstance')
+    expect(out[3].output).toContain('DBInstanceAlreadyExists')
+    expect(new RegExp(fix.file!.matches, 'm').test((await sh.read(db()))!)).toBe(true)
+    expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': false, 'ignore-encryption': false, 'modify-console': false })
+  })
+
   it('done_when: ignore_changes on storage_encrypted is detected as that wrong action only', async () => {
     const { sh } = await play('cd ~/infra', `sed -i 's/prevent_destroy = true/prevent_destroy = true\\n    ignore_changes = [storage_encrypted]/' db.tf`)
     expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': false, 'ignore-encryption': true, 'modify-console': false })

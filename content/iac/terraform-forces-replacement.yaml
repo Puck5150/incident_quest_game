@@ -136,6 +136,7 @@ actions:
       all:
         - plan_clean: true
         - not: { applied: { op: delete, address: aws_db_instance.orders } }
+        - not: { applied: { op: create, address: aws_db_instance.orders } }
     file:
       path: "/home/you/infra/db.tf"
       matches: "storage_encrypted\\s*=\\s*false"
@@ -162,7 +163,7 @@ actions:
     label: "Remove prevent_destroy for this PR and apply"
     kind: destructive
     done_when: { applied: { op: delete, address: aws_db_instance.orders } }
-    feedback: "Terraform would destroy the production orders database and create a new, empty, encrypted one. The guard exists to stop exactly that."
+    feedback: "Terraform destroys the production orders database and creates a new, empty, encrypted one. The guard exists to stop exactly that."
   - id: ignore-encryption
     label: "Add storage_encrypted to ignore_changes"
     kind: wrong

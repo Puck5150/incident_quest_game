@@ -72,11 +72,17 @@ describe('alreadyExists', () => {
     [realityKey('aws_s3_bucket', 'legacy')]: { id: 'legacy', bucket: 'legacy' },
     [realityKey('aws_iam_role', 'app')]: { id: 'app', name: 'app' },
     [realityKey('aws_sqs_queue', 'https://q/jobs')]: { id: 'https://q/jobs', name: 'jobs' },
+    [realityKey('aws_db_instance', 'db-ORDERS1234')]: { id: 'db-ORDERS1234', identifier: 'orders-db' },
   }
   it('returns the provider error when the natural name is taken', () => {
     expect(alreadyExists('aws_s3_bucket', { bucket: 'legacy' }, reality, 's')).toMatch(/^creating S3 Bucket \(legacy\): operation error S3: CreateBucket, https response error StatusCode: 409, RequestID: [0-9a-f-]{36}, BucketAlreadyOwnedByYou: /)
     expect(alreadyExists('aws_iam_role', { name: 'app' }, reality, 's')).toContain('EntityAlreadyExists: Role with name app already exists.')
     expect(alreadyExists('aws_sqs_queue', { name: 'jobs' }, reality, 's')).toContain('creating SQS Queue (jobs): QueueNameExists')
+  })
+  it('matches the natural-key attribute, not only the reality key (an RDS instance keyed by its resource id)', () => {
+    expect(alreadyExists('aws_db_instance', { identifier: 'orders-db' }, reality, 's')).toContain('creating RDS DB Instance (orders-db): operation error RDS: CreateDBInstance')
+    expect(alreadyExists('aws_db_instance', { identifier: 'other-db' }, reality, 's')).toBeUndefined()
+    expect(alreadyExists('aws_iam_role', { name: 'orders-db' }, reality, 's')).toBeUndefined() // only objects of the same type
   })
   it('is undefined when the name is free or the type has no natural key', () => {
     expect(alreadyExists('aws_s3_bucket', { bucket: 'fresh' }, reality, 's')).toBeUndefined()

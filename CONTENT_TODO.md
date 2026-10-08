@@ -639,3 +639,7 @@ Workspaces:
 - [ ] Names `.` and `..` are accepted by the name rule; real Terraform likely refuses them.
 - [ ] Lineages: scenario workspaces use `…0000000000NN` from 02, `workspace new` uses 10 + counter; they collide with 9+ authored workspaces.
 - [ ] `terraform.tfstate.d/NAME/terraform.tfstate` files are not on the simulated disk.
+
+## terraform simulator (done_when predicates, TF3d)
+- [ ] `applied` history is not scoped per workspace: an apply in another workspace satisfies it. Scope it if a scenario uses workspaces with `done_when`.
+- [ ] Schema errors for a malformed `done_when` are opaque (the zod union reports every branch); give authors a clearer message.

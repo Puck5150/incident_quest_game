@@ -609,19 +609,20 @@ actions:
       all:
         - plan_clean: true
         - not: { applied: { op: delete, address: aws_db_instance.orders } }
+        - not: { applied: { op: create, address: aws_db_instance.orders } }
 ```
 
 Leaves (one key each):
 
 | Leaf | True when |
 |---|---|
-| `plan_clean: true` | A real refresh and plan, run now on the files on disk with variables resolved as `terraform plan` does (including `TF_VAR_*` from the saved shell environment), shows no changes and no diagnostics. It ignores locks. False when the configuration cannot be planned (syntax error, missing variable, no config). |
+| `plan_clean: true` | A real refresh and plan, run now on the files on disk with variables resolved as `terraform plan` does (including exported `TF_VAR_*` from the saved shell environment), shows no changes and no diagnostics. It ignores locks. False when the configuration cannot be planned (syntax error, missing variable, no config). |
 | `plan_has: { no_destroy: [ADDR, …] }` | That same plan would not destroy or replace any listed address. Same plan caveats as `plan_clean`; false if it cannot be planned. |
 | `state_has: ADDR` / `state_lacks: ADDR` | The address is (or is not) in state. |
 | `lock_free: true` | No state lock is held. |
 | `reality_has: { type, id, attr?, equals? }` | The cloud holds that object. With `attr` it must have the attribute, and with `equals` the value must match. `type` must be a supported resource type. |
 | `reality_lacks: { type, id }` | The cloud no longer holds it. |
-| `applied: { op, address }` | An apply did `op` (`create`, `update`, `delete`, `import`, `forget`) to the address at some point in this lab. It survives a recreate, so it catches "destroyed at some point". |
+| `applied: { op, address }` | An apply did `op` (`create`, `update`, `delete`, `import`, `forget`) to the address at some point in this lab. It survives a recreate, so it catches "destroyed at some point". Only apply steps count (including `import` and `removed` blocks); the CLI's `terraform import` and `terraform state rm` record nothing. The history is not per workspace: an apply in any workspace counts. |
 | `file_contains: { path, matches }` | The file at the absolute `path` matches the regex (multiline). |
 
 ```yaml
@@ -645,11 +646,10 @@ How it runs:
 
 Author guidance:
 - Pair every `destructive` trap with an `applied` or `reality_*` predicate, so the penalty comes from the real destroy, not from a button.
-- A fix whose file text could look fixed after the resource was destroyed and recreated needs `not: { applied: { op: delete, address: … } }` as well as the plan or file check. Use `terraform-forces-replacement.yaml` as the model: the trap is `applied delete`, the fix is `plan_clean` and not `applied delete`, and the wrong fix is a `file_contains` for `ignore_changes`.
+- A fix whose file text could look fixed after the resource was destroyed and recreated needs `not: { applied: { op: delete, address: … } }` as well as the plan or file check. Use `terraform-forces-replacement.yaml` as the model: the trap is `applied delete`, the fix is `plan_clean` and neither `applied delete` nor `applied create` (a `state rm` then apply would otherwise recreate it), and the wrong fix is a `file_contains` for `ignore_changes`.
 - Evidence timing: `terraform.evidence` entries are visible from the start at every stage. Do not make evidence that depends on a world a fix changes (for example the lock error after `force-unlock`) a `key_evidence` tag of a later stage; the player may already have lost the chance to see it.
 
 Known gaps to design around:
 - Sensitive values are not tracked through expressions: a secret copied into another attribute prints in the clear.
 - Lists and sets render the way the AWS provider shows its attributes.
-- `plan_clean` ignores `-target` and `-refresh-only` (see `done_when` below).
 - The block is top-level only; there are no per-stage `terraform` blocks.

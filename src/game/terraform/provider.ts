@@ -155,7 +155,8 @@ export function alreadyExists(type: string, attrs: Attrs, reality: Reality, seed
   const name = str(attrs[nat.key])
   if (name === undefined) return undefined
   const prefix = `${type}:`
-  const taken = Object.keys(reality).some((k) => k.startsWith(prefix) && (k === realityKey(type, name) || (type === 'aws_sqs_queue' && reality[k].name === name)))
+  // The name is taken when an object of the type has it as its key or as its natural-key attribute (an RDS id is not its identifier).
+  const taken = Object.keys(reality).some((k) => k.startsWith(prefix) && (k === realityKey(type, name) || reality[k][nat.key] === name))
   return taken ? nat.error(name, requestId(seed)) : undefined
 }
 

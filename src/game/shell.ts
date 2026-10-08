@@ -447,7 +447,10 @@ export class IncidentShell {
       const lab = this.lab
       const bash = this.hosts.get(this.mainHost)!
       const env = this.envs.get(this.mainHost) ?? {}
-      const ctx = this.cliContext({ cwd: lab.dir, env: new Map(Object.entries(env)), exportedEnv: env, fs: bash.fs }, true)
+      // terraform sees only exported variables; the saved env has every shell variable.
+      const exported = (await bash.exec('export -p', { env, cwd: lab.dir })).stdout
+      const exportedEnv = Object.fromEntries([...exported.matchAll(/^declare -x ([A-Za-z_]\w*)/gm)].flatMap(([, n]) => (Object.hasOwn(env, n) ? [[n, env[n]]] : [])))
+      const ctx = this.cliContext({ cwd: lab.dir, env: new Map(Object.entries(env)), exportedEnv, fs: bash.fs }, true)
       // World.plan is synchronous; the plan reads files, so it is made up front, and only when asked for.
       const leaves = (Object.hasOwn(pred, 'all') ? (pred as { all: Leaf[] }).all : Object.hasOwn(pred, 'any') ? (pred as { any: Leaf[] }).any : [pred]) as (Leaf | { not: Leaf })[]
       const wantsPlan = leaves.some((x) => {
