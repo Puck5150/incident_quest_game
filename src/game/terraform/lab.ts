@@ -34,6 +34,7 @@ export interface Lab {
   faults: Fault[]
   attempts: Map<number, number>
   savedPlans: Map<string, SavedPlan>
+  history: string[] // "OP ADDRESS" per step that completed, in order, across workspaces
 }
 
 // One workspace's state: expand the entries and derive each instance's dependencies.
@@ -122,5 +123,6 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     faults: structuredClone(tf.faults ?? []) as Fault[],
     attempts: new Map(),
     savedPlans: new Map(),
+    history: [],
   }
 }

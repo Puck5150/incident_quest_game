@@ -578,6 +578,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   ctx.lab.state = r.state
   ctx.lab.reality = r.reality
   ctx.lab.hasState = true
+  for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}`)
   const progress = renderProgress(r)
   const stdout = [head, progress, renderApplyEnd(r, mode)].filter(Boolean).join('\n')
   return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(input.files)), exitCode: r.errors.length ? 1 : 0 }
@@ -880,7 +881,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   if (Object.hasOwn(HELP, sub) && more.some((a) => a === '-help' || a === '--help')) return ok(`Usage: terraform [global options] ${sub} [options]\n\n${HELP[sub]}`)
   // State lives per directory, on the host the scenario is about: anywhere else there is none.
   const here = ctx.mainHost && dir === resolvePath('/', ctx.lab.dir)
-  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), lock: undefined, workspace: 'default', workspaces: new Map() } }
+  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), history: [], lock: undefined, workspace: 'default', workspaces: new Map() } }
   const cfg = await loadConfig(ctx, dir)
   switch (sub) {
     case 'version':

@@ -330,3 +330,42 @@ describe('terraform destroy', () => {
     expect(r.exitCode).toBe(1)
   })
 })
+
+describe('lab history', () => {
+  it('records created resources in order, and nothing for a cancel, a lock, another directory or no change', async () => {
+    const w = world()
+    await w.run('apply', '-auto-approve')
+    expect(w.lab.history).toEqual(['create aws_vpc.main', 'create aws_subnet.a'])
+    await w.run('apply', '-auto-approve')
+    expect(w.lab.history).toHaveLength(2)
+
+    const c = world({}, { stdin: 'no\n' })
+    await c.run('apply')
+    expect(c.lab.history).toEqual([])
+
+    const l = world({ lock: { id: 'abc', who: 'x@y', created: '2026-01-01T00:00:00Z' } } as Partial<TerraformBlock>)
+    expect((await l.run('apply', '-auto-approve')).exitCode).toBe(1)
+    expect(l.lab.history).toEqual([])
+
+    const o = world()
+    o.disk['/tmp/main.tf'] = NET
+    o.disk['/tmp/.terraform.lock.hcl'] = LOCK_FILE
+    await o.run('-chdir=/tmp', 'apply', '-auto-approve')
+    expect(o.lab.history).toEqual([])
+  })
+
+  it('records delete then create for a replace, and only the first step of a failed apply', async () => {
+    const w = world({ state: [VPC] })
+    await w.run('apply', '-auto-approve', '-replace=aws_vpc.main')
+    expect(w.lab.history).toEqual(['delete aws_vpc.main', 'create aws_vpc.main', 'create aws_subnet.a'])
+    const f = world({ faults: [{ at: 'aws_subnet.a', on: 'create', error: 'boom', times: 1 }] })
+    await f.run('apply', '-auto-approve')
+    expect(f.lab.history).toEqual(['create aws_vpc.main'])
+  })
+
+  it('records deletes for destroy', async () => {
+    const w = world({ files: [{ path: 'main.tf', content: DB(false) }], state: [DB_STATE] })
+    await w.run('destroy', '-auto-approve')
+    expect(w.lab.history).toEqual(['delete aws_db_instance.main'])
+  })
+})
