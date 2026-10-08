@@ -6,7 +6,7 @@ import { emptyState, type State } from '../src/game/terraform/state.ts'
 
 const ch = (name: string, before: unknown, after: unknown, extra: { forcesReplacement?: boolean; sensitive?: boolean } = {}) =>
   ({ name, before, after, forcesReplacement: false, sensitive: false, ...extra }) as PlanItem['changes'][number]
-const item = (o: Partial<PlanItem> & Pick<PlanItem, 'action'>): PlanItem => ({ address: 'aws_instance.web', type: 'aws_instance', name: 'web', changes: [], ...o })
+const item = (o: Partial<PlanItem> & Pick<PlanItem, 'action'>): PlanItem => ({ address: 'aws_instance.web', type: 'aws_instance', name: 'web', changes: [], dependsOn: [], ...o })
 const text = (...ls: string[]) => ls.join('\n')
 const stateWith = (type: string, name: string, attributes: Record<string, unknown>): State => {
   const s = emptyState()
@@ -282,6 +282,7 @@ const result = (o: Partial<PlanResult> = {}): PlanResult => ({
   outputs: [],
   imported: 0,
   refreshed: emptyState(),
+  baseState: emptyState(),
   summary: { add: 0, change: 0, destroy: 0 },
   ...o,
   driftShown: o.driftShown ?? o.drift ?? [],
