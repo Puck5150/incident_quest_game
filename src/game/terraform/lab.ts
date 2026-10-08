@@ -23,6 +23,9 @@ export interface Lab {
   files: { path: string; content: string }[]
   hasState: boolean
   state: State
+  workspace: string
+  workspaces: Map<string, { state: State; hasState: boolean }>
+  lock?: { id: string; who: string; operation: string; created: string; path: string; info: string; message: string }
   reality: Reality
   vars: Record<string, Value>
   evidence: NonNullable<TerraformBlock['evidence']>
@@ -31,11 +34,10 @@ export interface Lab {
   savedPlans: Map<string, SavedPlan>
 }
 
-export function labFromScenario(tf: TerraformBlock, startDir: string, home: string): Lab {
-  const dir = labDir(tf, startDir, home)
-  const version = tf.version ?? '1.9.8'
-  const state = { ...emptyState(version, '00000000-0000-4000-8000-000000000001'), serial: 12 }
-  for (const s of tf.state ?? []) {
+// One workspace's state: expand the entries and derive each instance's dependencies.
+function buildState(version: string, lineage: string, entries: NonNullable<TerraformBlock['state']>, outputs: TerraformBlock['outputs']): State {
+  const state = { ...emptyState(version, lineage), serial: 12 }
+  for (const s of entries) {
     const mode = s.mode ?? 'managed'
     let r = state.resources.find((x) => x.mode === mode && x.type === s.type && x.name === s.name)
     if (!r) {
@@ -49,7 +51,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
       attributes: structuredClone(s.attrs) as Record<string, Value>,
     })
   }
-  state.outputs = structuredClone(tf.outputs ?? {}) as State['outputs']
+  state.outputs = structuredClone(outputs ?? {}) as State['outputs']
 
   const ids = new Map<string, string>() // managed id -> type.name
   for (const r of state.resources) if (r.mode === 'managed') for (const i of r.instances) ids.set(String(i.attributes.id), `${r.type}.${r.name}`)
@@ -68,6 +70,23 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
       if (into.size) i.dependencies = [...into].sort()
     }
   }
+  return state
+}
+
+export function labFromScenario(tf: TerraformBlock, startDir: string, home: string): Lab {
+  const dir = labDir(tf, startDir, home)
+  const version = tf.version ?? '1.9.8'
+  const lineage = (n: number) => `00000000-0000-4000-8000-0000000000${String(n).padStart(2, '0')}`
+  const all = new Map<string, { state: State; hasState: boolean }>([['default', { state: buildState(version, lineage(1), tf.state ?? [], tf.outputs), hasState: tf.state !== undefined }]])
+  Object.keys(tf.workspaces ?? {})
+    .sort()
+    .forEach((name, i) => {
+      const w = tf.workspaces![name]!
+      all.set(name, { state: buildState(version, lineage(i + 2), w.state ?? [], w.outputs), hasState: w.state !== undefined })
+    })
+  const workspace = tf.workspace ?? 'default'
+  const { state, hasState } = all.get(workspace)!
+  all.delete(workspace)
 
   const reality: Reality = {}
   for (const r of state.resources) {
@@ -87,8 +106,11 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     version,
     initialized: tf.initialized ?? true,
     files: labFiles(tf, startDir, home),
-    hasState: tf.state !== undefined,
+    hasState,
     state,
+    workspace,
+    workspaces: all,
+    ...(tf.lock ? { lock: { operation: 'OperationTypeApply', path: 'terraform.tfstate', info: '', message: 'resource temporarily unavailable', ...tf.lock } } : {}),
     reality,
     vars: structuredClone(tf.vars ?? {}) as Record<string, Value>,
     evidence: tf.evidence ?? [],

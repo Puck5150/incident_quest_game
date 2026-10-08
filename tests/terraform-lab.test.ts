@@ -176,3 +176,64 @@ describe('labFromScenario: dependencies', () => {
     expect(deps).toEqual({ 'aws_vpc.main': undefined, 'aws_subnet.s': ['aws_vpc.main'], 'aws_instance.i': ['aws_subnet.s', 'aws_vpc.main'] })
   })
 })
+
+describe('lock, workspace, workspaces', () => {
+  const LOCK = { id: 'abc-1', who: 'ci@runner', created: '2026-10-08 09:00:00 UTC' }
+  const WS = { dev: { state: [VPC] }, prod: { state: [{ ...VPC, attrs: { id: 'vpc-9', cidr_block: '10.9.0.0/16' } }] } }
+  const bad = (extra: object) => issues({ files: [FILE], ...extra })
+
+  it('accepts a valid fixture', () => {
+    expect(bad({ lock: { ...LOCK, operation: 'OperationTypePlan', path: 's.tfstate', info: 'x', message: 'm' }, workspace: 'dev', workspaces: WS })).toEqual([])
+  })
+
+  it('rejects bad locks, workspaces and workspace states', () => {
+    for (const k of ['id', 'who', 'created']) expect(bad({ lock: { ...LOCK, [k]: undefined } })).not.toEqual([])
+    expect(bad({ lock: { ...LOCK, extra: 1 } })).not.toEqual([])
+    expect(bad({ workspace: 'a b' })).not.toEqual([])
+    expect(bad({ workspace: 'prod' }).join()).toMatch(/terraform\.workspace:/)
+    expect(bad({ workspace: 'prod', workspaces: { dev: {} } })).not.toEqual([])
+    expect(bad({ workspaces: { default: {} } })).not.toEqual([])
+    expect(bad({ workspaces: { dev: { state: [{ ...VPC, attrs: { id: 5 } }] } } }).join()).toMatch(/terraform\.workspaces\.dev\.state\.0\.attrs: needs a string id/)
+    expect(bad({ workspaces: { dev: { state: [VPC, VPC] } } }).join()).toMatch(/terraform\.workspaces\.dev\.state\.1: duplicate/)
+    expect(bad({ workspaces: { dev: { extra: 1 } } })).not.toEqual([])
+  })
+
+  it('accepts the new evidence commands', () => {
+    const evidence = ['apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete'].map((command, i) => ({ evidence: `e${i}`, command, contains: 'x' }))
+    expect(bad({ evidence })).toEqual([])
+  })
+
+  it('lab: defaults without the new fields', () => {
+    const lab = labFromScenario({ files: [FILE], state: [VPC] } as TerraformBlock, '/w', '/h')
+    expect(lab.workspace).toBe('default')
+    expect(lab.workspaces.size).toBe(0)
+    expect(lab.lock).toBeUndefined()
+  })
+
+  it('lab: fills lock defaults', () => {
+    const lab = labFromScenario({ files: [FILE], lock: LOCK } as TerraformBlock, '/w', '/h')
+    expect(lab.lock).toEqual({ ...LOCK, operation: 'OperationTypeApply', path: 'terraform.tfstate', info: '', message: 'resource temporarily unavailable' })
+  })
+
+  it('lab: current workspace is in lab.state, the rest in the map', () => {
+    const lab = labFromScenario({ files: [FILE], state: [VPC], workspace: 'dev', workspaces: WS } as TerraformBlock, '/w', '/h')
+    expect(lab.workspace).toBe('dev')
+    expect(lab.state.lineage).toBe('00000000-0000-4000-8000-000000000002')
+    expect(listAddresses(lab.state)).toEqual(['aws_vpc.main'])
+    expect([...lab.workspaces.keys()].sort()).toEqual(['default', 'prod'])
+    expect(lab.workspaces.get('default')!.state.lineage).toBe('00000000-0000-4000-8000-000000000001')
+    expect(lab.workspaces.get('prod')!.state.lineage).toBe('00000000-0000-4000-8000-000000000003')
+    expect(lab.workspaces.get('prod')!.state.serial).toBe(12)
+    expect(lab.workspaces.get('prod')!.hasState).toBe(true)
+  })
+
+  it('lab: __proto__ is just a workspace name', () => {
+    // zod drops a __proto__ record key (never a prototype write), so the schema rejects it cleanly...
+    expect(bad({ workspaces: { ['__proto__']: { state: [VPC] } } })).toEqual([])
+    expect(bad({ workspace: '__proto__' }).join()).toMatch(/not a key/)
+    // ...and a hand-built block still works through the lab.
+    const lab = labFromScenario({ files: [FILE], workspace: '__proto__', workspaces: Object.fromEntries([['__proto__', { state: [VPC] }]]) } as TerraformBlock, '/w', '/h')
+    expect(lab.workspace).toBe('__proto__')
+    expect(lab.workspaces.has('default')).toBe(true)
+  })
+})

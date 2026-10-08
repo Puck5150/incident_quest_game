@@ -174,6 +174,18 @@ const StageSchema = z.strictObject({
 // cloud defaults to exactly what state says; `cloud` lists only the differences.
 const json = z.json()
 const TfAttrs = z.record(z.string(), json)
+const TfState = z.array(
+  z.strictObject({
+    type: z.string().min(1),
+    name: z.string().min(1),
+    key: z.union([z.string(), z.int()]).optional(),
+    mode: z.enum(['managed', 'data']).optional(),
+    status: z.literal('tainted').optional(),
+    attrs: TfAttrs,
+  }),
+)
+const TfOutputs = z.record(z.string(), z.strictObject({ value: json, sensitive: z.boolean().optional() }))
+const wsName = z.string().regex(/^[A-Za-z0-9._-]+$/, 'may only contain letters, digits, ".", "_" and "-"')
 export const TerraformSchema = z.strictObject({
   dir: z.string().min(1).optional(),
   version: z.string().regex(/^\d+\.\d+\.\d+$/, 'must look like 1.9.8').optional(),
@@ -187,19 +199,26 @@ export const TerraformSchema = z.strictObject({
     )
     .min(1),
   vars: TfAttrs.optional(),
-  state: z
-    .array(
-      z.strictObject({
-        type: z.string().min(1),
-        name: z.string().min(1),
-        key: z.union([z.string(), z.int()]).optional(),
-        mode: z.enum(['managed', 'data']).optional(),
-        status: z.literal('tainted').optional(),
-        attrs: TfAttrs,
-      }),
+  state: TfState.optional(),
+  outputs: TfOutputs.optional(),
+  lock: z
+    .strictObject({
+      id: z.string().min(1),
+      who: z.string().min(1),
+      operation: z.string().min(1).optional(),
+      created: z.string().min(1),
+      path: z.string().min(1).optional(),
+      info: z.string().optional(),
+      message: z.string().min(1).optional(),
+    })
+    .optional(),
+  workspace: wsName.optional(),
+  workspaces: z
+    .record(
+      wsName.refine((n) => n !== 'default', 'the default workspace is the top-level state'),
+      z.strictObject({ state: TfState.optional(), outputs: TfOutputs.optional() }),
     )
     .optional(),
-  outputs: z.record(z.string(), z.strictObject({ value: json, sensitive: z.boolean().optional() })).optional(),
   cloud: z
     .strictObject({
       patch: z.array(z.strictObject({ type: z.string().min(1), id: z.string().min(1), set: TfAttrs })).optional(),
@@ -211,7 +230,7 @@ export const TerraformSchema = z.strictObject({
     .array(
       z.strictObject({
         evidence: id,
-        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list']),
+        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete']),
         contains: z.string().min(1),
       }),
     )
@@ -517,19 +536,25 @@ export const ScenarioSchema = z
     if (s.terraform) {
       const tf = s.terraform
       if (!s.terminal) issue('terraform needs a terminal to type into', ['terraform'])
-      const seen = new Set<string>()
+      const checkState = (entries: NonNullable<typeof tf.state>, path: (string | number)[], into?: Set<string>) => {
+        const seen = new Set<string>()
+        entries.forEach((e, i) => {
+          const mode = e.mode ?? 'managed'
+          if (mode === 'managed' && !schemaFor(e.type)) issue(`"${e.type}" is not a resource type the Terraform lab models`, [...path, i, 'type'])
+          if (mode === 'managed') {
+            if (typeof e.attrs.id !== 'string') issue('needs a string id attribute', [...path, i, 'attrs'])
+            else into?.add(`${e.type}:${e.attrs.id}`)
+          }
+          const k = `${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
+          if (seen.has(k)) issue(`duplicate state entry ${e.type}.${e.name}[${e.key ?? ''}]`, [...path, i])
+          seen.add(k)
+        })
+      }
       const known = new Set<string>()
-      tf.state?.forEach((e, i) => {
-        const mode = e.mode ?? 'managed'
-        if (mode === 'managed' && !schemaFor(e.type)) issue(`"${e.type}" is not a resource type the Terraform lab models`, ['terraform', 'state', i, 'type'])
-        if (mode === 'managed') {
-          if (typeof e.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'state', i, 'attrs'])
-          else known.add(`${e.type}:${e.attrs.id}`)
-        }
-        const k = `${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
-        if (seen.has(k)) issue(`duplicate state entry ${e.type}.${e.name}[${e.key ?? ''}]`, ['terraform', 'state', i])
-        seen.add(k)
-      })
+      checkState(tf.state ?? [], ['terraform', 'state'], known)
+      for (const [name, w] of Object.entries(tf.workspaces ?? {})) checkState(w.state ?? [], ['terraform', 'workspaces', name, 'state'])
+      if (tf.workspace && tf.workspace !== 'default' && !Object.hasOwn(tf.workspaces ?? {}, tf.workspace))
+        issue(`workspace "${tf.workspace}" is not a key of terraform.workspaces`, ['terraform', 'workspace'])
       tf.cloud?.add?.forEach((a, i) => {
         if (typeof a.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'cloud', 'add', i, 'attrs'])
         else known.add(`${a.type}:${a.attrs.id}`)

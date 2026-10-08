@@ -279,6 +279,136 @@
             "additionalProperties": false
           }
         },
+        "lock": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "who": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "created": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "info": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "who",
+            "created"
+          ],
+          "additionalProperties": false
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "workspaces": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "key": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "managed",
+                        "data"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "tainted"
+                    },
+                    "attrs": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/definitions/__schema0"
+                      }
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "name",
+                    "attrs"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "outputs": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "$ref": "#/definitions/__schema0"
+                    },
+                    "sensitive": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
         "cloud": {
           "type": "object",
           "properties": {
@@ -385,7 +515,19 @@
                   "state show",
                   "state pull",
                   "workspace show",
-                  "workspace list"
+                  "workspace list",
+                  "apply",
+                  "destroy",
+                  "import",
+                  "taint",
+                  "untaint",
+                  "refresh",
+                  "force-unlock",
+                  "state mv",
+                  "state rm",
+                  "workspace new",
+                  "workspace select",
+                  "workspace delete"
                 ]
               },
               "contains": {
