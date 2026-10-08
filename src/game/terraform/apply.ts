@@ -58,13 +58,14 @@ const opOf = (i: PlanItem): ApplyStep['op'] =>
 function pickNext(items: PlanItem[], state: State, failed: Set<string>, done: Set<string>): PlanItem | undefined {
   const settled = (a: string) => done.has(`${a}:create`) || done.has(`${a}:update`)
   const todo = items.filter((i) => pending(i) && !settled(i.address) && !done.has(`${i.address}:${opOf(i)}`))
+  // A plain destroy waits for updates that move off it; a replace does not (its dependents wait for it instead).
   const priorDeps = (o: PlanItem) => findInstance(state, o.address)?.instance.dependencies ?? []
   const tier1 = todo.find(
     (i) =>
       destroyPhase(i) &&
       i.importing === undefined &&
       !failed.has(i.address) &&
-      !todo.some((o) => o !== i && ((destroyPhase(o) && o.dependsOn.includes(res(i))) || (o.action === 'update' && priorDeps(o).includes(res(i))))),
+      !todo.some((o) => o !== i && ((destroyPhase(o) && o.dependsOn.includes(res(i))) || (i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
   )
   if (tier1) return tier1
   const tier2 = todo.find((i) => i.action === 'forget' || i.importing !== undefined)

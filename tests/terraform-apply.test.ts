@@ -132,6 +132,17 @@ describe('executeApply: update, replace, destroy', () => {
     expect(listAddresses(r.state)).toEqual(['aws_instance.w'])
   })
 
+  it('replaces a resource that an updated dependent recorded in state, without stalling', () => {
+    const W = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', tags: { v: 'old' }, tags_all: { v: 'old' } }
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_instance', name: 'w', attrs: W, deps: ['aws_vpc.main'] })
+    const tf = 'resource "aws_vpc" "main" {\n  cidr_block = "10.1.0.0/16"\n}\nresource "aws_instance" "w" {\n  ami = "ami-1"\n  instance_type = "t3.micro"\n  tags = { v = aws_vpc.main.id }\n}\n'
+    const r = run(tf, { state })
+    expect(r.errors).toEqual([])
+    expect(ops(r)).toEqual(['delete aws_vpc.main', 'create aws_vpc.main', 'update aws_instance.w'])
+    const vpc = findInstance(r.state, 'aws_vpc.main')!.instance.attributes
+    expect(findInstance(r.state, 'aws_instance.w')!.instance.attributes.tags).toEqual({ v: vpc.id })
+  })
+
   it('brings a drifted cloud back to the configuration, persisting the refresh first', () => {
     const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: { ...VPC, tags: { Name: 'main' }, tags_all: { Name: 'main' } } })
     const reality = cloudOf(state)
