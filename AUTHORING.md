@@ -511,9 +511,9 @@ Rules:
 ### State commands
 
 These change the current workspace's state only, never the cloud:
-- `terraform state mv SRC DST`: renames an address in state (whole resources or single instances). `-dry-run` prints what would move without changing anything.
+- `terraform state mv SRC DST`: renames an address in state (whole resources or single instances; a resource with one unkeyed instance can move into an indexed address, e.g. `aws_vpc.main` to `aws_vpc.main[0]`). `-dry-run` prints what would move without changing anything.
 - `terraform state rm ADDR...`: forgets objects; they stay in the cloud, so the next plan wants to create them again. `-dry-run` works here too.
-- `terraform import ADDR ID`: adopts a cloud object into state. The resource block must be declared in the configuration (a keyed address only needs its block) and the object must exist in the cloud: put it in `cloud.add`, or in another workspace's state. Importing an address already in state fails. Works without a state file.
+- `terraform import ADDR ID`: adopts a cloud object into state. The resource block must be declared in the configuration, a keyed address must be an instance the configuration produces (`count = 1` means only `[0]`; accepted if `count`/`for_each` can't be evaluated yet), and the object must exist in the cloud: put it in `cloud.add`, or in another workspace's state. Importing an address already in state fails. Works without a state file.
 - `terraform taint ADDR` / `untaint ADDR`: marks or clears an instance as tainted; a tainted instance plans as `-/+` replace. `-allow-missing` turns a missing address into a silent success.
 - `terraform refresh`: saves cloud drift into state (serial + 1 only when something changed) and prints the outputs. It plans no resource changes, so plan errors such as `prevent_destroy` do not stop it.
 

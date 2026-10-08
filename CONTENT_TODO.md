@@ -606,6 +606,8 @@ State commands:
 - [ ] import: the error family (`Invalid address` is invented; undeclared, already managed, no remote object) and the progress/success output.
 - [ ] import and refresh work without a state file; the other state commands require one (NO_STATE plain for mv/rm, boxed for taint/untaint).
 - [ ] refresh: output layout, and real Terraform may print a deprecation warning pointing at `apply -refresh-only`. Outputs are printed from state, not re-evaluated from the configuration.
+- [ ] `refresh` with no state file prints nothing; real Terraform warns that the state is empty.
+- [ ] `Invalid address` / `ADDR is not a valid resource instance address.` for an unparseable address in import, state rm, taint and untaint: invented wording.
 - [ ] Unknown flags on the new commands use the boxed `Failed to parse command-line flags` form; the generic ignored flags (`-state`, `-backup`, …) are accepted silently.
 
 Locks:
@@ -613,6 +615,7 @@ Locks:
 - [ ] No "Acquiring state lock" / "Releasing state lock" lines are printed (real remote backends print them).
 - [ ] `-lock-timeout` is accepted but never waits.
 - [ ] Locks are authored only: an interrupted or failed apply never leaves one. One lock per lab, not per workspace.
+- [ ] A wrong-ID `force-unlock` reveals the real lock ID in its error (real Terraform does the same per the brief; check, and whether that's a hint we want).
 - [ ] force-unlock texts: prompt, success, `force-unlock cancelled.` (from memory), `Expected a single argument: LOCK_ID.`, `no lock is held on this state`, the ID-mismatch text; the blank line between the echoed answer and the result; asking before the lock/ID checks (recalled order).
 - [ ] The notYet box's "You can still use" list (our UI text) now includes `force-unlock` and `workspace`.
 

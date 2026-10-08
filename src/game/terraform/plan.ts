@@ -12,7 +12,7 @@ import { applyMoves, movesOf } from './moves.ts'
 import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
-import { NO_REMOTE_OBJECT, noRemoteObjectDetail } from './state-ops.ts'
+import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjectDetail } from './state-ops.ts'
 import type { Diagnostic, Pos } from './types.ts'
 
 export interface PlanInput {
@@ -124,7 +124,7 @@ export function planConfig(input: PlanInput): PlanResult {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
   }
   for (const i of input.destroy ? [] : imports) {
-    if (!declared(i.to)) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
+    if (!declared(i.to)) fail(i.file, i.pos, NO_IMPORT_CONFIG, noImportConfigDetail(show(i.to)))
   }
   const applied = applyMoves(refreshed, mv.moves)
   errors.push(...applied.diagnostics)
@@ -366,7 +366,7 @@ export function planConfig(input: PlanInput): PlanResult {
     if (still) fail(m.file, m.pos, 'Moved object still exists', `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`)
   }
   for (const i of imports) {
-    if (declared(i.to) && !planned.has(show(i.to))) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
+    if (declared(i.to) && !planned.has(show(i.to))) fail(i.file, i.pos, NO_IMPORT_CONFIG, noImportConfigDetail(show(i.to)))
   }
   for (const r of base.resources) {
     if (r.mode !== 'managed') continue

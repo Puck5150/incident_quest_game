@@ -204,10 +204,25 @@ describe('terraform import', () => {
     expect((await refused(w, 'import', '-var=nope=1', 'aws_s3_bucket.b', 'legacy')).stderr).toContain('Value for undeclared variable')
   })
 
-  it('a keyed address needs only the resource block', async () => {
-    const w = world({ cloud: { add: [{ type: 'aws_s3_bucket', attrs: { ...BUCKET.attrs, id: 'other' } }] } })
-    expect((await w.run('import', 'aws_s3_bucket.b["x"]', 'other')).exitCode).toBe(0)
-    expect((await w.run('state', 'list')).stdout).toContain('aws_s3_bucket.b["x"]')
+  it('a keyed address must be an instance the configuration produces', async () => {
+    const COUNT_TF = 'resource "aws_s3_bucket" "c" {\n  count  = 1\n  bucket = "b${count.index}"\n}\n'
+    const EACH_TF = 'resource "aws_s3_bucket" "e" {\n  for_each = toset(["x"])\n  bucket   = each.key\n}\n'
+    const w = world({ files: [{ path: 'main.tf', content: VPC_TF + BUCKET_TF + COUNT_TF + EACH_TF }], cloud: { add: [{ type: 'aws_s3_bucket', attrs: { ...BUCKET.attrs, id: 'b0', bucket: 'b0' } }, { type: 'aws_s3_bucket', attrs: { ...BUCKET.attrs, id: 'x', bucket: 'x' } }] } })
+    for (const [a, id] of [['aws_s3_bucket.c[5]', 'b0'], ['aws_s3_bucket.e["y"]', 'x'], ['aws_s3_bucket.b["x"]', 'x']]) {
+      const err = (await refused(w, 'import', a, id)).stderr
+      expect(err).toContain('Error: Configuration for import target does not exist')
+      expect(err).toContain(`The configuration for the given import target ${a} does not`)
+    }
+    expect((await w.run('import', 'aws_s3_bucket.c[0]', 'b0')).exitCode).toBe(0)
+    expect((await w.run('import', 'aws_s3_bucket.e["x"]', 'x')).exitCode).toBe(0)
+    expect((await w.run('state', 'list')).stdout).toContain('aws_s3_bucket.c[0]\naws_s3_bucket.e["x"]')
+  })
+
+  it('accepts a keyed address when count cannot be evaluated yet', async () => {
+    const UNKNOWN_TF = 'resource "aws_s3_bucket" "u" {\n  count  = length(aws_vpc.main.arn) > 0 ? 1 : 0\n  bucket = "u"\n}\n'
+    const w = world({ files: [{ path: 'main.tf', content: VPC_TF + BUCKET_TF + UNKNOWN_TF }], state: [BUCKET], cloud: { add: [{ type: 'aws_s3_bucket', attrs: { ...BUCKET.attrs, id: 'u', bucket: 'u' } }] } })
+    expect((await w.run('plan')).exitCode).toBe(1)
+    expect((await w.run('import', 'aws_s3_bucket.u[3]', 'u')).exitCode).toBe(0)
   })
 
   it('needs a configuration and does nothing outside the lab directory', async () => {

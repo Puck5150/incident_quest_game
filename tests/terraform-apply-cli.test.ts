@@ -65,9 +65,9 @@ Terraform will perform the following actions:
 
 Plan: 2 to add, 0 to change, 0 to destroy.`
 const PROGRESS = `aws_vpc.main: Creating...
-aws_vpc.main: Creation complete after 1s [id=vpc-06357f366]
+aws_vpc.main: Creation complete after 1s [id=vpc-08990910b]
 aws_subnet.a: Creating...
-aws_subnet.a: Creation complete after 1s [id=subnet-0ff41c09b]`
+aws_subnet.a: Creation complete after 1s [id=subnet-0a982817c]`
 const DONE = 'Apply complete! Resources: 2 added, 0 changed, 0 destroyed.'
 const APPLY_PROMPT = "\nDo you want to perform these actions?\n  Terraform will perform the actions described above.\n  Only 'yes' will be accepted to approve.\n\n  Enter a value: "
 const DESTROY_PROMPT =
@@ -145,7 +145,7 @@ describe('terraform apply', () => {
     const error = "creating EC2 Subnet: api error InvalidSubnet.Conflict: The CIDR '10.0.1.0/24' conflicts with another subnet"
     const w = world({ faults: [{ at: 'aws_subnet.a', on: 'create', error, times: 1 }] })
     const r = await w.run('apply', '-auto-approve')
-    expect(r.stdout).toBe(`${PLAN}\naws_vpc.main: Creating...\naws_vpc.main: Creation complete after 1s [id=vpc-06357f366]\naws_subnet.a: Creating...`)
+    expect(r.stdout).toBe(`${PLAN}\naws_vpc.main: Creating...\naws_vpc.main: Creation complete after 1s [id=vpc-08990910b]\naws_subnet.a: Creating...`)
     expect(r.stderr).toContain(`Error: ${error}`)
     expect(r.stderr).toContain('with aws_subnet.a,')
     expect(r.exitCode).toBe(1)

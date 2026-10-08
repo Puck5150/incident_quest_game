@@ -24,7 +24,7 @@ export interface ApplyContext {
   faults: Fault[]
   taken: Set<string> // actions the player has taken
   attempts: Map<number, number> // fault index -> times it has fired (persisted by the caller across runs)
-  seed: string // salt for generated ids; the caller passes the state serial, e.g. String(state.serial)
+  seed: string // salt for generated ids; the caller passes lineage and serial, e.g. `${state.lineage}:${state.serial}`
 }
 export interface ApplyStep {
   address: string

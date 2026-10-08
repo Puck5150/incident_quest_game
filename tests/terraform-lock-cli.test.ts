@@ -149,6 +149,12 @@ describe('a held state lock', () => {
     expect((await w.run('taint')).stderr).toBe('Exactly one argument expected.')
     expect((await w.run('import', 'aws_s3_bucket.zz', 'x')).stderr).toContain('does not exist in the configuration')
     expect((await w.run('state', 'mv', 'nope', 'aws_s3_bucket.c')).stderr).toContain('Invalid source address')
+    for (const args of [['state', 'rm', 'aws_s3_bucket.b', 'nope'], ['taint', 'nope'], ['untaint', 'nope']]) {
+      const r = await w.run(...args)
+      expect(r.stderr, args.join(' ')).toContain('Error: Invalid address')
+      expect(r.stderr, args.join(' ')).toContain('nope is not a valid resource instance address.')
+      expect(r.stderr, args.join(' ')).not.toContain('state lock')
+    }
     expect((await w.run('apply', 'missing.tfplan')).stderr).toContain('Failed to load "missing.tfplan" as a plan file')
     expect((await w.run('plan', '-var=nope=1')).stderr).toContain('Value for undeclared variable')
     delete w.disk[`${DIR}/.terraform.lock.hcl`]
@@ -156,6 +162,11 @@ describe('a held state lock', () => {
     delete w.disk[`${DIR}/main.tf`]
     expect((await w.run('plan')).stderr).toContain('No configuration files')
     expect(w.lab.lock?.id).toBe(LOCK_ID)
+  })
+
+  it('state lookups (no such object) come after the lock error', async () => {
+    const w = world()
+    for (const args of [['state', 'rm', 'aws_s3_bucket.zz'], ['taint', 'aws_s3_bucket.zz'], ['untaint', 'aws_s3_bucket.zz']]) expect((await w.run(...args)).stderr, args.join(' ')).toContain('Error acquiring the state lock')
   })
 
   it('configuration (graph) errors come before the lock error for plan, apply and destroy', async () => {

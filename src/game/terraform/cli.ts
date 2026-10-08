@@ -15,7 +15,7 @@ import { refresh as refreshState } from './refresh.ts'
 import { renderPlan } from './render.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
-import { importObject, NO_SUCH_INSTANCE, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
+import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
 import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
 import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
@@ -572,7 +572,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   }
   const r: ApplyResult = executeApply(
     { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, refresh: f.refresh },
-    { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: String(ctx.lab.state.serial) },
+    { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: `${ctx.lab.state.lineage}:${ctx.lab.state.serial}` },
   )
   // Outside the lab directory ctx.lab is a throwaway copy, so this commit is discarded.
   ctx.lab.state = r.state
@@ -647,6 +647,8 @@ function cmdStateRm(args: string[], ctx: CliContext): Out {
   const a = parseArgs(args, ['-dry-run'])
   if (!('pos' in a)) return a
   if (!a.pos.length) return fail('At least one address is required.')
+  const bad = a.pos.find((x) => !parseAddress(x).ok)
+  if (bad !== undefined) return boxFail(INVALID_ADDRESS, invalidAddressDetail(bad))
   const locked = checkLock(ctx, a.lock)
   if (locked) return locked
   if (!ctx.lab.hasState) return fail(NO_STATE)
@@ -666,7 +668,8 @@ function cmdTaint(args: string[], ctx: CliContext, verb: 'taint' | 'untaint'): O
   const addr = a.pos[0]
   const allowMissing = a.set.has('-allow-missing')
   const t = parseAddress(addr)
-  const locked = t.ok && t.mode === 'managed' && checkLock(ctx, a.lock)
+  if (!t.ok) return boxFail(INVALID_ADDRESS, invalidAddressDetail(addr))
+  const locked = t.mode === 'managed' && checkLock(ctx, a.lock)
   if (locked) return locked
   if (!ctx.lab.hasState) return allowMissing ? ok('') : boxFail(NO_STATE_SUMMARY, NO_STATE_DETAIL)
   const r = verb === 'taint' ? taintInstance(ctx.lab.state, addr) : untaintInstance(ctx.lab.state, addr)
@@ -686,6 +689,12 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const t = parseAddress(addr)
   // A keyed address needs only its resource block; count and for_each are not checked.
   const declared = t.ok && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  // A keyed address must be an instance the configuration produces; if count/for_each can't be evaluated, accept it.
+  if (declared && t.mode === 'managed' && t.key !== undefined) {
+    const target = instanceAddress(t, t.key)
+    const p = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
+    if (!p.diagnostics.length && !p.items.some((i) => i.address === target && i.action !== 'destroy' && i.action !== 'forget')) return withWarn(s.warning, boxFail(NO_IMPORT_CONFIG, noImportConfigDetail(target)))
+  }
   const locked = declared && t.mode === 'managed' && checkLock(ctx, a.lock)
   if (locked) return locked
   const r = importObject(ctx.lab.state, ctx.lab.reality, addr, id, declared)

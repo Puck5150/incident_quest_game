@@ -106,8 +106,22 @@ describe('stateMove', () => {
       fail('Invalid target address', 'Cannot move to aws_instance.web: aws_instance.web already has instances with keys, so it has no unkeyed instance.'),
     )
   })
-  it('refuses a keyed target for a whole-resource source', () => {
-    expect(pure(NET(), (x) => stateMove(x, 'aws_vpc.old', 'aws_vpc.new[0]'))).toEqual(fail('Invalid target address', 'Cannot move aws_vpc.old to aws_vpc.new[0]: the target must also be a whole resource.'))
+  it('moves a resource with one unkeyed instance into an indexed resource', () => {
+    const r = pure(NET(), (x) => stateMove(x, 'aws_vpc.old', 'aws_vpc.old[0]'))
+    expect(r).toMatchObject({ ok: true, moved: [{ from: 'aws_vpc.old', to: 'aws_vpc.old[0]' }] })
+    if (!r.ok) return
+    expect(findInstance(r.state, 'aws_vpc.old[0]')?.instance.attributes.id).toBe('vpc-1')
+    expect(findInstance(r.state, 'aws_vpc.old')).toBeUndefined()
+    const each = pure(NET(), (x) => stateMove(x, 'aws_vpc.old', 'aws_vpc.new["a"]'))
+    expect(each).toMatchObject({ ok: true, moved: [{ from: 'aws_vpc.old', to: 'aws_vpc.new["a"]' }] })
+    if (!each.ok) return
+    expect(listAddresses(each.state)).toContain('aws_vpc.new["a"]')
+    expect(findInstance(each.state, 'aws_subnet.a')?.instance.dependencies).toEqual(['aws_vpc.new'])
+  })
+  it('refuses a keyed target for a whole resource with several or keyed instances', () => {
+    expect(pure(NET(), (x) => stateMove(x, 'aws_instance.web', 'aws_instance.x[0]'))).toEqual(fail('Invalid target address', 'Cannot move aws_instance.web to aws_instance.x[0]: the target must also be a whole resource.'))
+    const one = stateOf({ type: 'aws_instance', name: 'web', key: 0, attrs: { id: 'i-0' } })
+    expect(pure(one, (x) => stateMove(x, 'aws_instance.web', 'aws_instance.x[0]'))).toEqual(fail('Invalid target address', 'Cannot move aws_instance.web to aws_instance.x[0]: the target must also be a whole resource.'))
   })
   it('refuses an existing destination', () => {
     expect(pure(NET(), (x) => stateMove(x, 'aws_instance.web[0]', 'aws_instance.web[1]'))).toEqual(

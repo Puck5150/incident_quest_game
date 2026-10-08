@@ -53,6 +53,23 @@ describe('terraform workspace show and list', () => {
   })
 })
 
+describe('generated ids across workspaces', () => {
+  it('two workspaces applying the same config get different ids; destroying one leaves the other', async () => {
+    const w = world({}, { main: VPC_TF })
+    const vpcId = async () => (JSON.parse((await w.run('state', 'pull')).stdout) as { resources: { instances: { attributes: { id: string } }[] }[] }).resources[0].instances[0].attributes.id
+    await w.run('workspace', 'new', 'a')
+    expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
+    const a = await vpcId()
+    await w.run('workspace', 'new', 'b')
+    expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
+    const b = await vpcId()
+    expect(b).not.toBe(a)
+    expect((await w.run('destroy', '-auto-approve')).exitCode).toBe(0)
+    expect(Object.hasOwn(w.lab.reality, `aws_vpc:${a}`)).toBe(true)
+    expect(Object.hasOwn(w.lab.reality, `aws_vpc:${b}`)).toBe(false)
+  })
+})
+
 describe('terraform workspace new', () => {
   it('creates an empty workspace and switches to it', async () => {
     const w = world()

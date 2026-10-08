@@ -131,7 +131,7 @@ describe('engine support', () => {
 
   it('lists the terraform commands in help for such incidents only', () => {
     const help = runCommand(scenario(), 'help', new Set()).output
-    for (const c of ['terraform init', 'terraform validate', 'terraform plan', 'terraform show', 'terraform state list', 'terraform state show ADDRESS', 'terraform output', 'terraform version', 'terraform apply', 'terraform destroy', 'terraform import ADDRESS ID', 'terraform taint ADDRESS', 'terraform untaint ADDRESS', 'terraform refresh', 'terraform force-unlock LOCK_ID', 'terraform state mv SOURCE DESTINATION', 'terraform state rm ADDRESS', 'terraform workspace new NAME', 'terraform workspace select NAME', 'terraform workspace delete NAME']) expect(help).toContain(`  ${c}`)
+    for (const c of ['terraform init', 'terraform validate', 'terraform plan', 'terraform show', 'terraform state list', 'terraform state show ADDRESS', 'terraform output', 'terraform version', 'terraform apply', 'terraform destroy', 'terraform import ADDRESS ID', 'terraform taint ADDRESS', 'terraform untaint ADDRESS', 'terraform refresh', 'terraform force-unlock LOCK_ID', 'terraform state mv SOURCE DESTINATION', 'terraform state rm ADDRESS', 'terraform workspace new NAME', 'terraform workspace select NAME', 'terraform workspace delete NAME', 'terraform state pull', 'terraform workspace show']) expect(help).toContain(`  ${c}`)
     expect(runCommand({ ...scenario(), terraform: undefined } as Scenario, 'help', new Set()).output).not.toContain('terraform plan')
   })
 })
