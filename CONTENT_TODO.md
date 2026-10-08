@@ -591,3 +591,7 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] `Outputs:` section after apply: format and which outputs show.
 - [ ] Help one-liners for `apply`/`destroy` (help currently lists just the commands).
 - [ ] The xterm confirm overlay has only been tested in jsdom; check it by hand in a browser.
+
+## terraform incidents: world-changing outcomes need detection (found in TF3b final review)
+- [ ] `terraform-forces-replacement`: a player can remove `prevent_destroy` and `terraform apply`, destroying and recreating the prod DB with exit 0. The `remove-guard` destructive action is a button only, so there is no penalty, and reverting `storage_encrypted` afterwards still credits `revert-and-migrate` ("The plan is clean again") while `terraform plan` shows a new replace. Needs TF3d: world-state predicates that take a `destructive` action when the apply actually destroys a protected resource, and fix predicates (`done_when`) that look at the world rather than only file text. Same applies to every future incident with a destructive apply.
+- [ ] Evidence tags earned from `state show`/scripted AWS output (`unencrypted`) can no longer be earned once an apply has changed the world; revisit with TF3d.
