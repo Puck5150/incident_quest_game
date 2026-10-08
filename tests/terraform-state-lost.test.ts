@@ -5,12 +5,12 @@ import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 const scenario = loadIncident('terraform-state-lost')
 const { play, detectedAll } = playbook(scenario)
 
-const ADDRS = ['aws_cloudwatch_log_group.api', 'aws_iam_role.task', 'aws_s3_bucket.app_logs', 'aws_sqs_queue.jobs']
+const ADDRS = ['aws_cloudwatch_log_group.api', 'aws_cloudwatch_log_group.worker', 'aws_iam_role.task', 'aws_s3_bucket.app_logs']
 const IMPORTS = [
   'terraform import aws_s3_bucket.app_logs acme-app-logs',
   'terraform import aws_cloudwatch_log_group.api /acme/api',
   'terraform import aws_iam_role.task acme-task-role',
-  'terraform import aws_sqs_queue.jobs https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs',
+  'terraform import aws_cloudwatch_log_group.worker /acme/worker',
 ]
 const IMPORT_BLOCKS = `cat > imports.tf <<'EOF'
 import {
@@ -29,8 +29,8 @@ import {
 }
 
 import {
-  to = aws_sqs_queue.jobs
-  id = "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
+  to = aws_cloudwatch_log_group.worker
+  id = "/acme/worker"
 }
 EOF`
 const NONE = { 'import-resources': false, 'apply-anyway': false, 'delete-and-recreate': false }
@@ -59,8 +59,10 @@ describe('terraform-state-lost on the simulator', () => {
     expect(apply.exitCode).toBe(1)
     expect(apply.output).toContain('BucketAlreadyOwnedByYou')
     expect(apply.output).toContain('EntityAlreadyExists: Role with name acme-task-role already exists.')
-    expect(apply.output).toContain('ResourceAlreadyExistsException: The specified log group already exists')
-    expect(apply.output).toContain('QueueNameExists')
+    expect(apply.output).toContain('creating CloudWatch Logs Log Group (/acme/api)')
+    expect(apply.output).toContain('creating CloudWatch Logs Log Group (/acme/worker)')
+    expect(apply.output.match(/ResourceAlreadyExistsException: The specified log group already exists/g)).toHaveLength(2)
+    expect(apply.output).not.toContain('SQS')
     expect(out[2].output).not.toMatch(/aws_/)
     expect(await detectedAll(sh)).toEqual(NONE)
     // the fix is still reachable afterwards
@@ -96,7 +98,7 @@ describe('terraform-state-lost on the simulator', () => {
   })
 
   it('(f) importing with a wrong id fails and changes nothing', async () => {
-    const { sh, out } = await play('cd ~/infra', 'terraform import aws_sqs_queue.jobs acme-jobs', 'terraform state list')
+    const { sh, out } = await play('cd ~/infra', 'terraform import aws_cloudwatch_log_group.worker acme/worker', 'terraform state list')
     expect(out[1].exitCode).toBe(1)
     expect(out[1].output).toContain('Cannot import non-existent remote object')
     expect(out[2].output).toContain('No state file was found!')

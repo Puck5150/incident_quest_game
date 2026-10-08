@@ -15,12 +15,13 @@ ticket:
     resources, which are all live in prod. Is it safe to just apply?
 
 environment: |
-  The API stack (an S3 bucket for app logs, a CloudWatch Logs log group, the
-  ECS task role and the jobs queue) lives in account 123456789012, us-east-1.
+  The API stack (an S3 bucket for app logs, CloudWatch Logs log groups for
+  the API and the worker, and the ECS task role) lives in account
+  123456789012, us-east-1.
   The Terraform code in ~/infra has no backend block, so state was kept in a
   local terraform.tfstate, which .gitignore keeps out of the repo.
-  Production services write to the bucket, the log group and the queue
-  around the clock.
+  Production services write to the bucket and both log groups around the
+  clock.
 
 terminal:
   prompt: "you@laptop:~/infra$"
@@ -39,11 +40,6 @@ terminal:
             "UserId": "AROA3XFRBF23EXAMPLE:you",
             "Account": "123456789012",
             "Arn": "arn:aws:sts::123456789012:assumed-role/PlatformEngineer/you"
-        }
-    - match: "aws sqs get-queue-url --queue-name acme-jobs"
-      output: |
-        {
-            "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
         }
 
 terraform:
@@ -78,6 +74,11 @@ terraform:
           name              = "/acme/api"
           retention_in_days = 30
         }
+
+        resource "aws_cloudwatch_log_group" "worker" {
+          name              = "/acme/worker"
+          retention_in_days = 14
+        }
     - path: iam.tf
       content: |
         resource "aws_iam_role" "task" {
@@ -90,11 +91,6 @@ terraform:
               Principal = { Service = "ecs-tasks.amazonaws.com" }
             }]
           })
-        }
-    - path: queue.tf
-      content: |
-        resource "aws_sqs_queue" "jobs" {
-          name = "acme-jobs"
         }
   cloud:
     add:
@@ -118,15 +114,12 @@ terraform:
           name: acme-task-role
           path: /
           assume_role_policy: '{"Statement":[{"Action":"sts:AssumeRole","Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"}}],"Version":"2012-10-17"}'
-      - type: aws_sqs_queue
+      - type: aws_cloudwatch_log_group
         attrs:
-          id: "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
-          arn: "arn:aws:sqs:us-east-1:123456789012:acme-jobs"
-          name: acme-jobs
-          url: "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
-          fifo_queue: false
-          visibility_timeout_seconds: 30
-          message_retention_seconds: 345600
+          id: /acme/worker
+          arn: "arn:aws:logs:us-east-1:123456789012:log-group:/acme/worker"
+          name: /acme/worker
+          retention_in_days: 14
   evidence:
     - evidence: no-state
       command: state list
@@ -151,19 +144,19 @@ hypotheses:
 
 actions:
   - id: import-resources
-    label: "Import the four existing objects into state (the bucket and role by name, the log group by name, the queue by its URL), then confirm terraform plan shows no changes"
+    label: "Import the four existing objects into state (the bucket, the role and both log groups, each by its name), then confirm terraform plan shows no changes"
     kind: fix
     done_when:
       all:
         - state_has: aws_s3_bucket.app_logs
         - state_has: aws_cloudwatch_log_group.api
         - state_has: aws_iam_role.task
-        - state_has: aws_sqs_queue.jobs
+        - state_has: aws_cloudwatch_log_group.worker
         - plan_clean: true
         - not: { applied: { op: delete, address: aws_s3_bucket.app_logs } }
         - not: { applied: { op: delete, address: aws_cloudwatch_log_group.api } }
         - not: { applied: { op: delete, address: aws_iam_role.task } }
-        - not: { applied: { op: delete, address: aws_sqs_queue.jobs } }
+        - not: { applied: { op: delete, address: aws_cloudwatch_log_group.worker } }
     feedback: "State maps every block to its live object again, and the plan is empty: the code and production agree. Next, move this state into a remote backend so it can't live on one laptop again."
   - id: apply-anyway
     label: "Run terraform apply and let it create the missing resources"
@@ -177,8 +170,8 @@ actions:
         - applied: { op: delete, address: aws_s3_bucket.app_logs }
         - applied: { op: delete, address: aws_cloudwatch_log_group.api }
         - applied: { op: delete, address: aws_iam_role.task }
-        - applied: { op: delete, address: aws_sqs_queue.jobs }
-    feedback: "You destroy the app logs in the bucket and the log group, drop every message waiting in the queue, and break every task that assumes the role until the new one exists. Terraform could have adopted the live objects with import."
+        - applied: { op: delete, address: aws_cloudwatch_log_group.worker }
+    feedback: "You destroy the app logs in the bucket and both log groups, and break every task that assumes the role until the new one exists. Terraform could have adopted the live objects with import."
 
 solution_paths:
   - [import-resources]
@@ -194,7 +187,7 @@ evidence_labels:
 hints:
   nudge: "How does Terraform know that a resource block already has an object in AWS?"
   direction: "Compare what Terraform's state holds with what AWS holds, then look at how Terraform adopts objects that already exist."
-  answer: "The local state was lost with the laptop. Import each object (bucket and role by name, log group by name, queue by URL) and plan until it says No changes."
+  answer: "The local state was lost with the laptop. Import each object by its name (bucket, role, both log groups) and plan until it says No changes."
 
 analogy:
   title: "The warehouse lost its inventory ledger"
@@ -226,8 +219,8 @@ debrief:
     locking and versioning, such as the s3 backend with use_lockfile and
     versioning on the bucket, so state survives people leaving and earlier
     versions can be restored. When state is lost anyway, import before any apply: each
-    resource type documents its import ID (a bucket name, a role name, a
-    queue URL), and import blocks let the team review the import in a PR.
+    resource type documents its import ID (for these, the bucket, role and
+    log group names; for others it can be a URL or an ARN), and import blocks let the team review the import in a PR.
 
 concepts:
   - term: "Terraform state"
@@ -259,9 +252,6 @@ sources:
   - title: "Terraform AWS provider docs: aws_s3_bucket (Import)"
     url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/s3_bucket.html.markdown"
     retrieved: 2026-10-08
-  - title: "Terraform AWS provider docs: aws_sqs_queue (Import)"
-    url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/sqs_queue.html.markdown"
-    retrieved: 2026-10-08
   - title: "Terraform AWS provider docs: aws_iam_role (Import)"
     url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/iam_role.html.markdown"
     retrieved: 2026-10-08
@@ -274,4 +264,3 @@ sources:
 command_notes:
   "aws s3api head-bucket --bucket acme-app-logs": "head-bucket succeeds only if the bucket exists and you can access it. It does, in this account, even though Terraform has no record of it."
   "aws sts get-caller-identity": "The account is 123456789012, the stack's account, so the CLI is not pointed somewhere else."
-  "aws sqs get-queue-url --queue-name acme-jobs": "An SQS queue is imported by its URL, not its name; this is where to get it."

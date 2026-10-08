@@ -646,10 +646,12 @@ Workspaces:
 
 ## terraform incidents batch 1 (TF4)
 
+Simulator defects found while authoring (fix later in the simulator, not in content):
+- [ ] SIMULATOR defect: `aws_sqs_queue` already-exists should adopt the existing queue when the attributes are identical. Per the SQS CreateQueue API Reference (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html), CreateQueue with an existing name and the same attributes returns the existing queue's URL; `QueueNameExists` is returned only when attribute values differ. The simulator always fails with `QueueNameExists ... different value for attribute VisibilityTimeout`. (terraform-state-lost uses a second log group instead of a queue because of this.)
+- [ ] SIMULATOR defect: `terraform import` leaves `tags_all` out of the imported state; the real provider stores `tags_all = {}`, so `state show` after an import omits it.
+
 terraform-state-lost:
-- [ ] Simulator realism: an SQS `CreateQueue` for an existing name with identical attributes returns the existing queue's URL (AWS API Reference, CreateQueue; `QueueNameExists` only when attributes differ), so real Terraform's apply would "create" (silently adopt) `acme-jobs` instead of failing. The simulator always fails with `QueueNameExists ... different value for attribute VisibilityTimeout`. The incident text avoids claiming the queue error; the apply output still shows it.
 - [ ] `aws s3api head-bucket` output (`BucketRegion`, `AccessPointAlias: false`): both are documented output fields, but the CLI reference example says a successful call returns no output. Check what CLI v2 prints today for a general purpose bucket.
 - [ ] `aws sts get-caller-identity` output: the `UserId` (role id + session name) and the `PlatformEngineer` role are invented.
 - [ ] Story (local state on a wiped laptop, `.gitignore` excluding `*.tfstate`) is illustrative, not from a published incident.
-- [ ] After import the simulator's state has no `tags_all` (real provider stores `tags_all = {}`); `state show` therefore omits it.
-- [ ] Provider import ID formats (bucket name, role name, log group name, queue URL) verified on the provider's GitHub docs (`website/docs/r/*.html.markdown`); the registry pages render with JS and could not be opened.
+- [ ] Provider import ID formats (bucket name, role name, log group name) verified on the provider's GitHub docs (`website/docs/r/*.html.markdown`); the registry pages render with JS and could not be opened.
