@@ -75,6 +75,8 @@ describe('renderApplyErrors', () => {
     expect(out).toContain('│   with aws_s3_bucket.b,')
     expect(out).toContain('│   on main.tf line 1, in resource "aws_s3_bucket" "b":')
     expect(out).toContain('│    1: resource "aws_s3_bucket" "b" {}')
-    expect(out.split('╵\n\n╷')).toHaveLength(2)
+    // Consecutive boxes print back to back, as views.View.Diagnostics does.
+    expect(out.split('╵\n╷')).toHaveLength(2)
+    expect(out).not.toContain('╵\n\n')
   })
 })

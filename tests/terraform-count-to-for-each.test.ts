@@ -57,6 +57,8 @@ describe('terraform-count-to-for-each on the simulator', () => {
     for (const a of ['aws_subnet.private[0]', 'aws_subnet.private[1]', 'aws_instance.db[0]', 'aws_instance.db[1]']) expect(plan.output).toContain(`  # ${a} will be destroyed\n  # (because resource does not use count)`)
     for (const a of ['aws_subnet.private["us-east-1a"]', 'aws_subnet.private["us-east-1b"]', 'aws_instance.db["us-east-1a"]', 'aws_instance.db["us-east-1b"]']) expect(plan.output).toContain(`  # ${a} will be created`)
     expect(plan.output).toContain('Plan: 4 to add, 0 to change, 4 to destroy.\n╷\n│ Error: Instance cannot be destroyed')
+    // the two errors print back to back
+    expect(plan.output).toContain('of the plan using the -target option.\n╵\n╷\n│ Error: Instance cannot be destroyed')
     expect(plan.output.indexOf('Plan: 4 to add')).toBeLessThan(plan.output.indexOf('Error: Instance cannot be destroyed'))
     expect(plan.output).not.toContain("Note: You didn't use the -out option")
     expect(plan.hits).toContain('evidence:prevent-destroy-saved-you')
@@ -97,6 +99,17 @@ describe('terraform-count-to-for-each on the simulator', () => {
   it('(b2) moved blocks without an apply are not the fix: state is still indexed', async () => {
     const { sh } = await play('cd ~/infra', MOVED, 'terraform plan')
     expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(b3) moved blocks applied with prevent_destroy removed: nothing is destroyed, but it is neither the fix nor the trap until the guard is back', async () => {
+    const { sh, out } = await play('cd ~/infra', MOVED, UNPROTECT, 'terraform apply -auto-approve', 'terraform plan')
+    expect(out[3].exitCode).toBe(0)
+    expect(out[3].output).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
+    expect(out[4].output).toContain('No changes.')
+    // The player sees a clean plan, but the fix is not credited: db.tf no longer guards the hosts.
+    expect(await detectedAll(sh)).toEqual(NONE)
+    await sh.run("sed -i 's/^  lifecycle {$/  lifecycle {\\n    prevent_destroy = true/' db.tf", atStage(scenario, 0), new Set())
+    expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
   it('(c) route B: four terraform state mv commands, then No changes', async () => {

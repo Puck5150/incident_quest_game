@@ -421,7 +421,7 @@ hypotheses:
 
 actions:
   - id: move-addresses
-    label: "Tell Terraform the objects moved to their new keys (moved blocks applied with terraform apply, or terraform state mv for each subnet and host), then confirm the plan has no changes"
+    label: "Tell Terraform the objects moved to their new keys (moved blocks applied with terraform apply, or terraform state mv for each subnet and host), keep prevent_destroy, then confirm the plan has no changes"
     kind: fix
     done_when:
       all:
@@ -430,6 +430,7 @@ actions:
         - state_has: 'aws_instance.db["us-east-1a"]'
         - state_has: 'aws_instance.db["us-east-1b"]'
         - plan_clean: true
+        - file_contains: { path: /home/you/infra/db.tf, matches: 'prevent_destroy\s*=\s*true' }
         - not: { applied: { op: delete, address: aws_subnet.private } }
         - not: { applied: { op: delete, address: aws_instance.db } }
     feedback: "The same two subnets and the same two hosts now live at their AZ keys, and the plan is empty. The refactor can merge without touching production."
@@ -444,7 +445,7 @@ actions:
       any:
         - applied: { op: delete, address: aws_subnet.private }
         - applied: { op: delete, address: aws_instance.db }
-    feedback: "prevent_destroy was the only thing standing between this refactor and production. Without it Terraform terminates both Postgres hosts, with their data, and builds empty ones."
+    feedback: "prevent_destroy was the only thing standing between this refactor and production. Without it Terraform terminates both Postgres hosts, and their data with them."
 
 solution_paths:
   - [move-addresses]
@@ -500,8 +501,9 @@ debrief:
     fix. Keep prevent_destroy on anything holding data you can't
     recreate: here it turned a refactor into a failed plan instead of a
     database rebuild. It only guards while its resource block exists:
-    delete the block and the objects are destroyed anyway. Read the reason line under each "will be destroyed"
-    in a plan before deciding how to unblock it.
+    delete the block and the objects are destroyed anyway. Read the reason
+    line under each "will be destroyed" in a plan before deciding how to
+    unblock it.
 
 concepts:
   - term: "Resource address"

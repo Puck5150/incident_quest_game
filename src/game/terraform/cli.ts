@@ -143,7 +143,7 @@ const notYet = (sub: string) =>
 const sourcesOf = (files: File[]) => Object.fromEntries(files.map((f) => [f.name, f.text]))
 const boxes = (list: Diagnostic[], files: File[]) => {
   const src = sourcesOf(files)
-  return list.map((d) => formatDiagnostic(d, Object.hasOwn(src, d.file) ? src[d.file] : '')).join('\n\n')
+  return list.map((d) => formatDiagnostic(d, Object.hasOwn(src, d.file) ? src[d.file] : '')).join('\n')
 }
 
 function resolvePath(base: string, p: string): string {
@@ -382,8 +382,8 @@ async function resolveVars(ctx: CliContext, cfg: Config, cmdline: VarSource[], d
     box('warning', 'Value for undeclared variable', `The root module does not declare a variable named "${w.name}" but a value was found in file "${w.file}". If you meant to use this value, add a "variable" block to the configuration.\n\nTo silence these warnings, use TF_VAR_... environment variables to provide certain "global" settings to all configurations in your organization. To reduce the verbosity of these warnings, use the -compact-warnings option.`, true),
   )
   if (undeclared.length > 2) warns.push(box('warning', 'Values for undeclared variables', `In addition to the other similar warnings shown, ${undeclared.length - 2} other variable(s) defined without being declared.`))
-  const warnings = warns.join('\n\n')
-  return errors.length ? { warnings, error: errors.join('\n\n') } : { warnings, vars: Object.fromEntries(final) }
+  const warnings = warns.join('\n')
+  return errors.length ? { warnings, error: errors.join('\n') } : { warnings, vars: Object.fromEntries(final) }
 }
 
 type Cmd = 'plan' | 'apply' | 'destroy'

@@ -211,7 +211,7 @@ debrief:
     through an encrypted snapshot copy.
   ideal_path:
     - "Read the error: prevent_destroy blocked a destroy."
-    - "Find why: storage_encrypted forces a new resource."
+    - "Find why: the failed plan marks storage_encrypted false -> true \"# forces replacement\" on aws_db_instance.orders, and the provider docs excerpt lists storage_encrypted as \"Forces new resource\"."
     - "Confirm the live instance is unencrypted; there's no in-place switch."
     - "Revert, and plan an encrypted-snapshot migration with a cutover."
   real_world: |

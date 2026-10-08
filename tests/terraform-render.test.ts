@@ -544,7 +544,10 @@ describe('renderPlan', () => {
     expect(out).toBe(text('╷', '│ Error: Bad', '│ ', '│   on main.tf line 2, in resource "a" "b":', '│    2:   oops', '│ ', '│ short', '╵'))
     const warn = { severity: 'warning' as const, summary: 'Careful', detail: '', file: '', line: 0, col: 0 }
     const withWarning = renderPlan(result({ items: [item({ action: 'create', changes: [ch('a', undefined, 1)] })], summary: { add: 1, change: 0, destroy: 0 }, warnings: [warn] }))
-    expect(withWarning.endsWith('\n\n╷\n│ Warning: Careful\n╵')).toBe(true)
+    expect(withWarning.endsWith('Plan: 1 to add, 0 to change, 0 to destroy.\n╷\n│ Warning: Careful\n╵')).toBe(true)
+    const two = renderPlan(result({ items: [item({ action: 'create', changes: [ch('a', undefined, 1)] })], summary: { add: 1, change: 0, destroy: 0 }, warnings: [warn, warn] }))
+    expect(two.endsWith('\n╷\n│ Warning: Careful\n╵\n╷\n│ Warning: Careful\n╵')).toBe(true)
+    expect(renderPlan(result({ diagnostics: [err, err] }))).toContain('╵\n╷\n│ Error: Bad')
   })
 
   it('a partial plan (prevent_destroy) renders what was planned under its own heading; its errors and warnings come from renderPlanErrors', () => {
@@ -568,7 +571,7 @@ describe('renderPlan', () => {
       ),
     )
     const sources = { 'main.tf': 'resource "aws_instance" "web" {\n' }
-    expect(renderPlanErrors(r, sources)).toBe(text('╷', '│ Warning: Careful', '╵', '', '╷', '│ Error: Instance cannot be destroyed', '│ ', '│   on main.tf line 1, in resource "aws_instance" "web":', '│    1: resource "aws_instance" "web" {', '│ ', '│ short', '╵'))
+    expect(renderPlanErrors(r, sources)).toBe(text('╷', '│ Warning: Careful', '╵', '╷', '│ Error: Instance cannot be destroyed', '│ ', '│   on main.tf line 1, in resource "aws_instance" "web":', '│    1: resource "aws_instance" "web" {', '│ ', '│ short', '╵'))
     // Without `partial` the same diagnostics render errors only, as before.
     expect(renderPlan({ ...r, partial: undefined }, sources)).toBe(renderPlanErrors(r, sources))
   })

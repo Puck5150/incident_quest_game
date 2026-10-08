@@ -36,4 +36,4 @@ export function renderApplyEnd(r: ApplyResult, mode: 'apply' | 'destroy'): strin
 }
 
 export const renderApplyErrors = (r: ApplyResult, sources: Record<string, string>): string =>
-  r.errors.map((d) => formatDiagnostic(d, sources[d.file] ?? '')).join('\n\n')
+  r.errors.map((d) => formatDiagnostic(d, sources[d.file] ?? '')).join('\n')

@@ -155,7 +155,7 @@ export const hasChanges = (r: PlanResult): boolean => r.items.some((i) => i.acti
 
 const boxed = (list: PlanResult['diagnostics'], sources: Record<string, string>) => list.map((d) => formatDiagnostic(d, sources[d.file] ?? ''))
 // A failed plan's warnings and errors, boxed.
-export const renderPlanErrors = (r: PlanResult, sources: Record<string, string> = {}): string => [...boxed(r.warnings, sources), ...boxed(r.diagnostics, sources)].join('\n\n')
+export const renderPlanErrors = (r: PlanResult, sources: Record<string, string> = {}): string => [...boxed(r.warnings, sources), ...boxed(r.diagnostics, sources)].join('\n')
 
 // A plan that failed with a configuration error renders only its errors. A
 // partial plan (prevent_destroy) renders what was planned; its errors come
@@ -209,6 +209,7 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
     if (!visible.length) parts.push('', ...wrap(APPLY_OUTPUTS, 78))
     out.push(parts.join('\n'))
   }
-  if (r.warnings.length && !r.partial) out.push(boxed(r.warnings, sources).join('\n\n'))
-  return out.join('\n\n')
+  // Diagnostics print right after the plan, and back to back (views.View.Diagnostics adds no separators).
+  const text = out.join('\n\n')
+  return r.warnings.length && !r.partial ? `${text}\n${boxed(r.warnings, sources).join('\n')}` : text
 }
