@@ -774,18 +774,28 @@ const UNLOCKED =
 
 // Outside the lab directory ctx.lab is a throwaway copy with no lock.
 async function cmdForceUnlock(args: string[], ctx: CliContext): Promise<Out> {
-  const a = parseArgs(args, ['-force'])
-  if (!('pos' in a)) return a
-  if (a.pos.length !== 1) return fail('Expected a single argument: LOCK_ID.')
-  const held = ctx.lab.lock
-  if (!held) return boxFail('Failed to unlock state', 'no lock is held on this state')
-  if (held.id !== a.pos[0]) return boxFail('Failed to unlock state', `failed to unlock state: lock ID "${a.pos[0]}" does not match existing lock ID "${held.id}"`)
+  let force = false
+  const pos: string[] = []
+  for (const raw of args) {
+    if (!raw.startsWith('-') || raw === '-') pos.push(raw)
+    else if (/^--?force(=(true|false))?$/.test(raw)) force = !raw.endsWith('=false')
+    else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${raw.replace(/^--/, '-').split('=')[0]}`)
+  }
+  if (pos.length !== 1) return fail('Expected a single argument: LOCK_ID.')
+  // Terraform asks first and only finds out whether the lock exists when it tries to remove it.
   let head = ''
-  if (!a.set.has('-force')) {
+  if (!force) {
     const answer = ctx.stdin !== undefined ? ctx.stdin.split('\n')[0].trim() : ctx.confirm ? await ctx.confirm(UNLOCK_PROMPT) : undefined
     head = `${UNLOCK_PROMPT}${answer ?? ''}\n\n`
-    if (answer !== 'yes') return { ...ok(`${head}Unlock cancelled.`), exitCode: 1 }
+    if (answer !== 'yes') return { ...ok(`${head}force-unlock cancelled.`), exitCode: 1 }
   }
+  const held = ctx.lab.lock
+  const error = !held
+    ? 'no lock is held on this state'
+    : held.id !== pos[0]
+      ? `failed to unlock state: lock ID "${pos[0]}" does not match existing lock ID "${held.id}"`
+      : undefined
+  if (error) return { ...boxFail('Failed to unlock state', error), stdout: head }
   delete ctx.lab.lock
   return ok(`${head}${UNLOCKED}`)
 }

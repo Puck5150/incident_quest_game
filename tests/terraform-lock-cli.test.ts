@@ -171,6 +171,12 @@ describe('a held state lock', () => {
     expect(w.lab.lock?.id).toBe(LOCK_ID)
   })
 
+  it('beats import\'s "already managed" error, since the state is read under the lock', async () => {
+    const free = await world({}).run('import', 'aws_s3_bucket.b', 'legacy')
+    expect(free.stderr).toContain('Error: Resource already managed by Terraform')
+    expect(await world().run('import', 'aws_s3_bucket.b', 'legacy')).toMatchObject({ exitCode: 1, stdout: '', stderr: lockError() })
+  })
+
   it('is never left behind by a failed apply', async () => {
     const w = world({ faults: [{ at: 'aws_s3_bucket.n', on: 'create', error: 'creating S3 Bucket: api error Throttling', times: 1 }] })
     w.disk[`${DIR}/main.tf`] = `${VPC_TF}${BUCKET_TF}resource "aws_s3_bucket" "n" {\n  bucket = "new"\n}\n`
@@ -189,30 +195,43 @@ describe('terraform force-unlock', () => {
     }
   })
 
-  it('refuses when no lock is held', async () => {
-    const r = await world({}).run('force-unlock', '-force', LOCK_ID)
-    expect(r).toMatchObject({ exitCode: 1, stdout: '', stderr: '╷\n│ Error: Failed to unlock state\n│ \n│ no lock is held on this state\n╵' })
+  const NO_LOCK = '╷\n│ Error: Failed to unlock state\n│ \n│ no lock is held on this state\n╵'
+  const MISMATCH = `╷\n│ Error: Failed to unlock state\n│ \n│ failed to unlock state: lock ID "abc" does not match existing lock ID\n│ "${LOCK_ID}"\n╵`
+
+  it('refuses when no lock is held, after the question unless -force', async () => {
+    expect(await world({}).run('force-unlock', '-force', LOCK_ID)).toMatchObject({ exitCode: 1, stdout: '', stderr: NO_LOCK })
+    expect(await world({}, { stdin: 'yes\n' }).run('force-unlock', LOCK_ID)).toMatchObject({ exitCode: 1, stdout: `${PROMPT}yes\n\n`, stderr: NO_LOCK })
   })
 
-  it('refuses the wrong lock id', async () => {
+  it('refuses the wrong lock id, after the question unless -force', async () => {
     const w = world(undefined, { stdin: 'yes\n' })
-    const r = await w.run('force-unlock', 'abc')
-    expect(r).toMatchObject({ exitCode: 1, stdout: '', stderr: `╷\n│ Error: Failed to unlock state\n│ \n│ failed to unlock state: lock ID "abc" does not match existing lock ID\n│ "${LOCK_ID}"\n╵` })
+    expect(await w.run('force-unlock', 'abc')).toMatchObject({ exitCode: 1, stdout: `${PROMPT}yes\n\n`, stderr: MISMATCH })
+    expect(await w.run('force-unlock', '-force', 'abc')).toMatchObject({ exitCode: 1, stdout: '', stderr: MISMATCH })
     expect(w.lab.lock?.id).toBe(LOCK_ID)
+  })
+
+  it('asks before it knows whether the lock exists or matches', async () => {
+    const asked: string[] = []
+    const none = world({}, { confirm: async (p) => (asked.push(p), 'no') })
+    expect(await none.run('force-unlock', LOCK_ID)).toMatchObject({ exitCode: 1, stderr: '', stdout: `${PROMPT}no\n\nforce-unlock cancelled.` })
+    const wrong = world(undefined, { confirm: async (p) => (asked.push(p), 'no') })
+    expect(await wrong.run('force-unlock', 'abc')).toMatchObject({ exitCode: 1, stderr: '', stdout: `${PROMPT}no\n\nforce-unlock cancelled.` })
+    expect(asked).toEqual([PROMPT, PROMPT])
+    expect(wrong.lab.lock?.id).toBe(LOCK_ID)
   })
 
   it('a declined answer keeps the lock', async () => {
     const w = world(undefined, { stdin: 'no\n' })
-    expect(await w.run('force-unlock', LOCK_ID)).toMatchObject({ exitCode: 1, stderr: '', stdout: `${PROMPT}no\n\nUnlock cancelled.` })
+    expect(await w.run('force-unlock', LOCK_ID)).toMatchObject({ exitCode: 1, stderr: '', stdout: `${PROMPT}no\n\nforce-unlock cancelled.` })
     expect(w.lab.lock?.id).toBe(LOCK_ID)
     expect((await w.run('plan')).stderr).toBe(lockError())
   })
 
   it('no way to answer cancels', async () => {
     const w = world()
-    expect(await w.run('force-unlock', LOCK_ID)).toMatchObject({ exitCode: 1, stdout: `${PROMPT}\n\nUnlock cancelled.` })
+    expect(await w.run('force-unlock', LOCK_ID)).toMatchObject({ exitCode: 1, stdout: `${PROMPT}\n\nforce-unlock cancelled.` })
     const hook = world(undefined, { confirm: async () => undefined })
-    expect((await hook.run('force-unlock', LOCK_ID)).stdout).toBe(`${PROMPT}\n\nUnlock cancelled.`)
+    expect((await hook.run('force-unlock', LOCK_ID)).stdout).toBe(`${PROMPT}\n\nforce-unlock cancelled.`)
     expect(hook.lab.lock?.id).toBe(LOCK_ID)
   })
 
@@ -243,9 +262,13 @@ describe('terraform force-unlock', () => {
     expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
   })
 
-  it('rejects unknown flags', async () => {
-    const w = world()
-    expect((await w.run('force-unlock', '-nope', LOCK_ID)).stderr).toContain('flag provided but not defined: -nope')
+  it('takes only -force', async () => {
+    const w = world(undefined, { stdin: 'yes\n' })
+    for (const flag of ['-nope', '-lock=false', '-lock-timeout=5s', '-state=x', '-no-color']) {
+      const name = flag.split('=')[0]
+      expect(await w.run('force-unlock', flag, LOCK_ID), flag).toMatchObject({ exitCode: 1, stdout: '', stderr: `╷\n│ Error: Failed to parse command-line flags\n│ \n│ flag provided but not defined: ${name}\n╵` })
+    }
     expect(w.lab.lock?.id).toBe(LOCK_ID)
+    expect((await w.run('force-unlock', '--force', LOCK_ID)).stdout).toBe(UNLOCKED)
   })
 })
