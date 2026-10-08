@@ -49,6 +49,19 @@ describe('the terraform block in the scenario schema', () => {
     expect(issues({ files: [FILE], evidence: [{ evidence: 'a', command: 'plan', contains: 'x' }, { evidence: 'a', command: 'show', contains: 'y' }] }).join()).toMatch(/duplicate/)
   })
 
+  it('validates faults', () => {
+    const act = base.actions[0].id
+    const f = { at: 'aws_s3_bucket.b', on: 'create', error: 'AccessDenied', times: 1, if: { attr: 'bucket', equals: 'x' }, until_actions: [act] }
+    const bad = (o: object) => issues({ files: [FILE], faults: [{ ...f, ...o }] })
+    expect(issues({ files: [FILE], faults: [f, { at: 'aws_s3_bucket.b["k"]', on: 'delete', error: 'e' }] })).toEqual([])
+    expect(bad({ at: 'Bad' })).not.toEqual([])
+    expect(bad({ on: 'read' })).not.toEqual([])
+    expect(bad({ times: 0 })).not.toEqual([])
+    expect(bad({ error: '' })).not.toEqual([])
+    expect(bad({ until_actions: ['nope'] }).join()).toMatch(/unknown action "nope"/)
+    expect(bad({ extra: 1 })).not.toEqual([])
+  })
+
   it('needs a terminal', () => {
     const r = ScenarioSchema.safeParse({ ...structuredClone(base), terminal: undefined, terraform: { files: [FILE] } })
     expect(r.success).toBe(false)
@@ -132,6 +145,16 @@ describe('labFromScenario', () => {
     )
     expect(lab.reality[realityKey('aws_s3_bucket', 'legacy')]).toEqual({ id: 'legacy', bucket: 'legacy', acl: 'private' })
     expect(Object.keys(lab.reality)).not.toContain(realityKey('aws_s3_bucket', 'gone'))
+  })
+
+  it('copies faults and starts attempts and savedPlans empty', () => {
+    const faults = [{ at: 'aws_vpc.main', on: 'create' as const, error: 'boom' }]
+    const lab = labFromScenario(tf({ faults }), '/w', '/h')
+    expect(lab.faults).toEqual(faults)
+    expect(lab.faults).not.toBe(faults)
+    expect(lab.faults[0]).not.toBe(faults[0])
+    expect(lab.attempts.size).toBe(0)
+    expect(lab.savedPlans.size).toBe(0)
   })
 
   it('does not alias the scenario data', () => {

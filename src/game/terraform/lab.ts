@@ -1,10 +1,20 @@
 // A scenario's Terraform world, turned into the engine's State and Reality.
 import type { TerraformBlock } from '../../schema/scenario.ts'
+import type { Fault } from './apply.ts'
 import type { Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { labDir, labFiles } from './layout.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
+
+export interface SavedPlan {
+  files: { name: string; text: string }[]
+  vars: Record<string, Value>
+  replace: string[]
+  destroy: boolean
+  serial: number
+  lineage: string
+}
 
 export interface Lab {
   dir: string
@@ -16,6 +26,9 @@ export interface Lab {
   reality: Reality
   vars: Record<string, Value>
   evidence: NonNullable<TerraformBlock['evidence']>
+  faults: Fault[]
+  attempts: Map<number, number>
+  savedPlans: Map<string, SavedPlan>
 }
 
 export function labFromScenario(tf: TerraformBlock, startDir: string, home: string): Lab {
@@ -79,5 +92,8 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     reality,
     vars: structuredClone(tf.vars ?? {}) as Record<string, Value>,
     evidence: tf.evidence ?? [],
+    faults: structuredClone(tf.faults ?? []) as Fault[],
+    attempts: new Map(),
+    savedPlans: new Map(),
   }
 }

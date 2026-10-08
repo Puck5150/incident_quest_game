@@ -216,6 +216,18 @@ export const TerraformSchema = z.strictObject({
       }),
     )
     .optional(),
+  faults: z
+    .array(
+      z.strictObject({
+        at: z.string().regex(/^[a-z][\w]*\.[\w-]+(\[(\d+|"[^"]*")\])?$/, 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]'),
+        on: z.enum(['create', 'update', 'delete']),
+        error: z.string().min(1),
+        times: z.int().min(1).optional(),
+        if: z.strictObject({ attr: z.string().min(1), equals: json }).optional(),
+        until_actions: z.array(id).optional(),
+      }),
+    )
+    .optional(),
 })
 export type TerraformBlock = z.infer<typeof TerraformSchema>
 
@@ -525,6 +537,11 @@ export const ScenarioSchema = z
       ;(['patch', 'delete'] as const).forEach((w) =>
         tf.cloud?.[w]?.forEach((c, i) => {
           if (!known.has(`${c.type}:${c.id}`)) issue(`no object with id "${c.id}" in state or cloud.add`, ['terraform', 'cloud', w, i, 'id'])
+        }),
+      )
+      tf.faults?.forEach((f, i) =>
+        f.until_actions?.forEach((a) => {
+          if (!actionIds.has(a)) issue(`unknown action "${a}"`, ['terraform', 'faults', i, 'until_actions'])
         }),
       )
       dupes((tf.evidence ?? []).map((e) => e.evidence)).forEach((d) => issue(`duplicate terraform evidence tag "${d}"`, ['terraform', 'evidence']))

@@ -400,6 +400,65 @@
             ],
             "additionalProperties": false
           }
+        },
+        "faults": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "pattern": "^[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+              },
+              "on": {
+                "type": "string",
+                "enum": [
+                  "create",
+                  "update",
+                  "delete"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1
+              },
+              "times": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "if": {
+                "type": "object",
+                "properties": {
+                  "attr": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "equals": {
+                    "$ref": "#/definitions/__schema0"
+                  }
+                },
+                "required": [
+                  "attr",
+                  "equals"
+                ],
+                "additionalProperties": false
+              },
+              "until_actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                }
+              }
+            },
+            "required": [
+              "at",
+              "on",
+              "error"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
