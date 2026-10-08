@@ -1,6 +1,7 @@
-// The `terraform` command: init, validate, plan, apply, show, state, output,
-// import, taint, refresh and workspace read the player's working directory and
-// the lab's state; everything else answers honestly that it is not simulated yet. Nothing here throws on
+// The `terraform` command: init, validate, plan, apply, destroy, show, state
+// (list, show, pull, mv, rm), output, import, taint, untaint, refresh, workspace
+// and version read the player's working directory and the lab's state; everything
+// else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
@@ -10,10 +11,11 @@ import type { Lab, SavedPlan } from './lab.ts'
 import { parseHcl } from './parse.ts'
 import { planConfig, type PlanResult } from './plan.ts'
 import { hex } from './provider.ts'
+import { refresh as refreshState } from './refresh.ts'
 import { renderPlan } from './render.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
-import { importObject, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
+import { importObject, NO_SUCH_INSTANCE, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
 import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
 import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
@@ -643,7 +645,7 @@ function cmdTaint(args: string[], ctx: CliContext, verb: 'taint' | 'untaint'): O
   const allowMissing = a.set.has('-allow-missing')
   if (!ctx.lab.hasState) return allowMissing ? ok('') : boxFail(NO_STATE_SUMMARY, NO_STATE_DETAIL)
   const r = verb === 'taint' ? taintInstance(ctx.lab.state, addr) : untaintInstance(ctx.lab.state, addr)
-  if (!r.ok) return allowMissing && r.summary === 'No such resource instance' ? ok('') : opFail(r)
+  if (!r.ok) return allowMissing && r.summary === NO_SUCH_INSTANCE ? ok('') : opFail(r)
   commit(ctx, r)
   return ok(verb === 'taint' ? `Resource instance ${addr} has been marked as tainted.` : `Resource instance ${addr} has been successfully untainted.`)
 }
@@ -675,13 +677,16 @@ async function cmdRefresh(args: string[], ctx: CliContext, cfg: Config): Promise
   const a = parseArgs(args, [], ['-var', '-var-file'])
   if (!('pos' in a)) return a
   if (a.pos.length) return boxFail('Too many command line arguments', 'Expected no positional arguments. Did you mean to use -chdir?')
-  const p = await makePlan({ sources: a.sources, replace: [], refresh: true, detailed: false, autoApprove: false }, ctx, cfg, false)
-  if (!('result' in p)) return p
+  const p = await prepare(a.sources, ctx, cfg)
+  if (!('vars' in p)) return p
+  if (p.graph.diagnostics.length) return withWarn(p.warning, fail(boxes(p.graph.diagnostics, cfg.tf)))
+  // Refresh-only: no resource changes are planned and no moved blocks apply, so plan errors don't stop it.
   const before = ctx.lab.state
   const lines = refreshLines(before, true)
+  const refreshed = refreshState(before, ctx.lab.reality).state
   const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
   // Like an apply with nothing to do: the refreshed state is saved, with a new serial only if it differs.
-  if (content(p.result.refreshed) !== content(before)) commit(ctx, { ok: true, state: { ...p.result.refreshed, serial: before.serial + 1 } })
+  if (content(refreshed) !== content(before)) commit(ctx, { ok: true, state: { ...refreshed, serial: before.serial + 1 } })
   const outputs = ctx.lab.state.outputs
   const tail = Object.keys(outputs).length ? `Outputs:\n\n${outputsText(outputs, undefined, 'hcl').stdout}` : ''
   return withWarn(p.warning, ok([lines.join('\n'), tail].filter(Boolean).join('\n\n')))

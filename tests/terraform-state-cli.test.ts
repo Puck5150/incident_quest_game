@@ -236,6 +236,16 @@ describe('terraform refresh', () => {
     expect(w.lab.state.serial).toBe(12)
   })
 
+  it('plans no resource changes, so a blocked replacement does not stop it', async () => {
+    const PROTECTED = 'resource "aws_vpc" "main" {\n  cidr_block = "10.9.0.0/16"\n\n  lifecycle {\n    prevent_destroy = true\n  }\n}\n'
+    const w = world({ files: [{ path: 'main.tf', content: PROTECTED + BUCKET_TF }], cloud: { patch: [{ type: 'aws_s3_bucket', id: 'legacy', set: { force_destroy: true } }] } })
+    expect((await w.run('plan')).stderr).toContain('prevent_destroy')
+    const r = await w.run('refresh')
+    expect(r).toMatchObject({ exitCode: 0, stderr: '', stdout: 'aws_s3_bucket.b: Refreshing state... [id=legacy]\naws_vpc.main: Refreshing state... [id=vpc-1]' })
+    expect(w.lab.state.resources.find((x) => x.name === 'b')?.instances[0].attributes.force_destroy).toBe(true)
+    expect(w.lab.state.serial).toBe(13)
+  })
+
   it('does nothing outside the lab directory', async () => {
     const w = world({ cloud: { patch: [{ type: 'aws_s3_bucket', id: 'legacy', set: { force_destroy: true } }] } })
     w.disk[`/tmp/main.tf`] = BUCKET_TF

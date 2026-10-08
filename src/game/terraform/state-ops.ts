@@ -94,12 +94,14 @@ export function stateRemove(state: State, addresses: string[]): OpResult<{ remov
   return { ok: true, state: s, removed }
 }
 
+export const NO_SUCH_INSTANCE = 'No such resource instance'
+
 function withInstance(state: State, address: string, verb: string, change: (i: StateInstance) => OpResult | undefined): OpResult {
   const a = parseAddress(address)
   if (a.ok && a.mode === 'data') return fail('Invalid resource address', `Data sources cannot be ${verb}.`)
   const s = bumped(state)
   const found = a.ok ? findInstance(s, instanceAddress(a, a.key)) : undefined
-  if (!found) return fail('No such resource instance', `There is no resource instance with the address ${address} in the current state.`)
+  if (!found) return fail(NO_SUCH_INSTANCE, `There is no resource instance with the address ${address} in the current state.`)
   return change(found.instance) ?? { ok: true, state: s }
 }
 
