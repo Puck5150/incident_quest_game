@@ -428,3 +428,43 @@ player chooses the cloud before starting. Start from
 - When you base output on your own real-world experience and it isn't shown verbatim
   in the docs, that's fine, but add a line to `CONTENT_TODO.md` noting it.
 - If you can't verify something, don't guess. Put it in `CONTENT_TODO.md`.
+
+## Terraform incidents (the `terraform:` block)
+
+Add a top-level `terraform:` block and the player gets a real `terraform`
+command working on real `.tf` files in a lab directory. Its output (plan,
+errors, state) comes from the simulator, not from scripted text, so do NOT
+script `terraform …` commands in `terminal.commands`. Keep scripting other
+tools (`git`, `aws`) as usual.
+
+```yaml
+terraform:
+  dir: "~/infra"            # where the files live (players cd there)
+  files:
+    - path: main.tf         # relative paths only, no leading / or ..
+      content: |
+        resource "aws_s3_bucket" "logs" { bucket = "acme-logs" }
+  state:                    # what Terraform last applied
+    - type: aws_s3_bucket
+      name: logs
+      attrs: { id: acme-logs, bucket: acme-logs }
+  evidence:
+    - { evidence: drift, command: plan, contains: "must be replaced" }
+```
+
+Fields:
+- `dir`: the lab directory (default the shell's starting directory; `~/` and absolute paths work). `version`: Terraform version like `1.9.8`. `initialized`: false makes the player run `terraform init` first.
+- `files`: the starting `.tf` files (at least one). `vars`: values for `variable` blocks.
+- `state`: managed (or `mode: data`) objects. Every `attrs` needs a string `id`. `key` makes a `count` or `for_each` instance; `status: tainted` marks one tainted. `outputs`: output values (`sensitive: true` hides them).
+- `cloud`: what really exists. By default it is exactly what `state` says. `cloud.patch` changes attributes of an existing object (drift), `cloud.delete` removes one, `cloud.add` creates one Terraform does not manage.
+- `evidence`: awards a tag when the named subcommand's output contains the substring. Check the exact text by running the command in the shell.
+
+Commands that work: `init`, `validate`, `plan`, `show`, `state list|show|pull`, `output`, `workspace show|list`, `version`. Writing commands (`apply`, `import`, …) answer "not simulated yet".
+
+Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
+
+Known gaps to design around:
+- Sensitive values are not tracked through expressions: a secret copied into another attribute prints in the clear.
+- Lists and sets render the way the AWS provider shows its attributes.
+- `terraform apply` is not available, so the fix is always a file edit that makes the plan clean.
+- The block is top-level only; there are no per-stage `terraform` blocks.

@@ -408,7 +408,8 @@ export const ScenarioSchema = z
       })
       // Continuity: the player must be able to check this stage's fix, so some
       // terminal command's output has to change once a fix is applied.
-      if (!(v.terminal?.commands ?? []).some((c) => c.when_actions?.some((a) => fixIds.has(a))))
+      // A terraform block verifies itself: the simulator's output changes when the files do.
+      if (!s.terraform && !(v.terminal?.commands ?? []).some((c) => c.when_actions?.some((a) => fixIds.has(a))))
         issue("no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix", at('solution_paths'))
 
       v.actions.forEach((a, i) => {

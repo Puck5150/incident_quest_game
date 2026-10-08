@@ -63,6 +63,20 @@ describe('schema', () => {
     ).toContain("stages.0.solution_paths: no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix")
   })
 
+  it('a terraform block verifies fixes through the simulator, so no when_actions command is needed', () => {
+    const msg = "no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix"
+    const noVerify = (r: ReturnType<typeof raw>) => {
+      for (const c of [...r.terminal.commands, ...r.stages[0].terminal.commands]) delete c.when_actions
+    }
+    expect(errors(noVerify).some((e) => e.endsWith(msg))).toBe(true)
+    expect(
+      errors((r) => {
+        noVerify(r)
+        r.terraform = { files: [{ path: 'main.tf', content: '' }] }
+      }).some((e) => e.endsWith(msg)),
+    ).toBe(false)
+  })
+
   it('red herrings point at tagged evidence that is not key evidence', () => {
     expect(errors((r) => (r.red_herrings[0].evidence = 'nope'))).toContain('red_herrings.0.evidence: no artifact or command is tagged with evidence "nope"')
     expect(errors((r) => (r.red_herrings[0].evidence = 'timeout'))).toContain('red_herrings.0.evidence: "timeout" is key evidence, so it can\'t be a red herring')
