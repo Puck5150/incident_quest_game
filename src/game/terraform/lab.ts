@@ -3,6 +3,7 @@ import type { TerraformBlock } from '../../schema/scenario.ts'
 import type { Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
+import { labDir, labFiles } from './layout.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
 export interface Lab {
@@ -17,10 +18,8 @@ export interface Lab {
   evidence: NonNullable<TerraformBlock['evidence']>
 }
 
-const join = (a: string, b: string) => `${a.replace(/\/+$/, '')}/${b.replace(/^\.?\//, '')}`
-
 export function labFromScenario(tf: TerraformBlock, startDir: string, home: string): Lab {
-  const dir = !tf.dir ? startDir : tf.dir.startsWith('/') ? tf.dir : tf.dir.startsWith('~/') ? join(home, tf.dir.slice(2)) : join(startDir, tf.dir)
+  const dir = labDir(tf, startDir, home)
   const version = tf.version ?? '1.9.8'
   const state = { ...emptyState(version, '00000000-0000-4000-8000-000000000001'), serial: 12 }
   for (const s of tf.state ?? []) {
@@ -55,7 +54,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     dir,
     version,
     initialized: tf.initialized ?? true,
-    files: tf.files.map((f) => ({ path: join(dir, f.path), content: f.content })),
+    files: labFiles(tf, startDir, home),
     hasState: tf.state !== undefined,
     state,
     reality,

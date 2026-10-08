@@ -537,3 +537,20 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Unknown tags should make `tags_all` `(known after apply)` as a whole.
 - [ ] Deferred from review: driftBlock address parsing for `data.` and `module.` addresses.
 - [ ] Deferred from review: deep nesting recursion (stack depth on deeply nested values).
+
+## terraform simulator (CLI, TF2c-2)
+
+- [ ] `terraform init` transcript and lock file text (provider version 5.67.0 and the `h1:` hash are invented).
+- [ ] Usage text (`terraform` with no arguments / `-help`).
+- [ ] The `Inconsistent dependency lock file` and `No configuration files` error boxes.
+- [ ] The `Refreshing state...` / `Reading...` / `Read complete` lines.
+- [ ] The trailing notes of `plan` with and without `-out`.
+- [ ] `state list` ordering and the `No state file was found!` condition.
+- [ ] `state show` layout: attributes aligned to the longest name, null attributes omitted, `(tainted)` suffix.
+- [ ] `output` list and named formats, and the `No outputs found` warning.
+- [ ] `workspace list` format.
+- [ ] The not-simulated message for apply and friends (to be replaced by TF3).
+- [ ] tfvars parsing wraps the file in a `locals` block: error line numbers are shifted by one and corrected.
+- [ ] Variable type conversion for `-var` values is not done (all values are strings).
+- [ ] `-chdir` and the working-directory rule.
+- [ ] Scripted `terraform` commands are ignored for incidents with a terraform block.

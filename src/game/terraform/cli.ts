@@ -13,6 +13,9 @@ import { schemaFor } from './resources.ts'
 import { findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
 import type { Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
+import { lockFile, PROVIDER_VERSION } from './layout.ts'
+
+export { LOCK_FILE } from './layout.ts'
 
 export interface CliContext {
   lab: Lab
@@ -79,7 +82,6 @@ Global options (use these before the subcommand, if any):
 
 const NOT_YET = new Set(['apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
 const REGISTRY = 'registry.terraform.io/'
-const PROVIDER_VERSION = '5.67.0'
 const RULE = '─'.repeat(77)
 const NO_STATE =
   'No state file was found!\n\nState management commands require a state file. Run this command in a directory where Terraform has been run or use the -state flag to point the command to a specific state location.'
@@ -181,8 +183,7 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
       'so that Terraform can guarantee to make the same selections by default when',
       'you run "terraform init" in the future.',
     )
-    const blocks = providers.map((p) => `provider "${p}" {\n  version = "${PROVIDER_VERSION}"\n  hashes = [\n    "h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs=",\n  ]\n}\n`)
-    await ctx.write(cfg.dir, '.terraform.lock.hcl', `# This file is maintained automatically by "terraform init".\n# Manual edits may be lost in future updates.\n\n${blocks.join('\n')}`)
+    await ctx.write(cfg.dir, '.terraform.lock.hcl', lockFile(providers))
   }
   lines.push(
     '',

@@ -152,7 +152,8 @@ export function runCommand(
     // Every investigation command is listed: exact ones as written, pattern
     // ones by their example. (Typed fixes aren't: they're action buttons.)
     const known = [...new Set(t.commands.flatMap((c) => (c.match ? [c.match] : c.example ? [c.example] : [])))]
-    return { output: ['Commands you might try here:', ...known.map((k) => `  ${k}`), '  clear, history'].join('\n') }
+    const tf = scenario.terraform ? ['init', 'validate', 'plan', 'show', 'state list', 'state show ADDRESS', 'output', 'version'].map((c) => `terraform ${c}`) : []
+    return { output: ['Commands you might try here:', ...[...known, ...tf].map((k) => `  ${k}`), '  clear, history'].join('\n') }
   }
 
   // A pattern command answers a single command; a pipeline or list that
@@ -226,6 +227,7 @@ export function evidenceSeen(scenario: Scenario, log: GameEvent[]): Set<string> 
     if (e.type === 'CLOSE_INCIDENT') cur = atStage(scenario, ++stage)
     if (e.type === 'RUN_COMMAND') tag = runCommand(cur, e.input, taken).evidence
     if (e.type === 'SHELL_RAN') e.commands.forEach((c) => {
+      if (c.startsWith('evidence:')) return void seen.add(c.slice(9))
       const t = runCommand(cur, c, taken).evidence
       if (t) seen.add(t)
     })
@@ -290,7 +292,7 @@ export function transcript(scenario: Scenario, log: GameEvent[]): { input: strin
 export function commandsHit(scenario: Scenario, log: GameEvent[]): Set<string> {
   const hit = new Set<string>()
   log.forEach((e, i) => {
-    if (e.type === 'SHELL_RAN') return e.commands.forEach((c) => hit.add(c))
+    if (e.type === 'SHELL_RAN') return e.commands.forEach((c) => c.startsWith('evidence:') || hit.add(c))
     if (e.type !== 'RUN_COMMAND') return
     const before = log.slice(0, i)
     const cmd = runCommand(atStage(scenario, stageAt(before)), e.input, actionsTaken(before)).command

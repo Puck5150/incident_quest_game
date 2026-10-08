@@ -9,7 +9,9 @@
 import { Bash, defineCommand, getCommandNames, type CommandName } from 'just-bash'
 import type { Scenario } from '../schema/scenario.ts'
 import { normalize } from './engine.ts'
-import { diskPath, filesOnDisk, impliedFile, resolveFrom, startDir } from './paths.ts'
+import { diskPath, filesOnDisk, homeOf, impliedFile, resolveFrom, startDir } from './paths.ts'
+import { runTerraform } from './terraform/cli.ts'
+import { labFromScenario, type Lab } from './terraform/lab.ts'
 
 export { diskPath }
 
@@ -98,6 +100,18 @@ const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/
 const withNewline = (s: string) => (s && !s.endsWith('\n') ? s + '\n' : s)
 
 type Ctx = { cwd: string; exec?: (command: string, options: { cwd: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }> }
+type TfCtx = {
+  cwd: string
+  env: Record<string, string>
+  fs: {
+    resolvePath(b: string, p: string): string
+    readdir(p: string): Promise<string[]>
+    stat(p: string): Promise<{ isFile: boolean }>
+    readFile(p: string): Promise<string>
+    writeFile(p: string, c: string): Promise<void>
+    mkdir(p: string, o: { recursive: boolean }): Promise<void>
+  }
+}
 type Out = { stdout: string; stderr: string; exitCode: number }
 export type ShellResult = { output: string; exitCode: number; hits: string[] }
 
@@ -113,9 +127,11 @@ export class IncidentShell {
   private mounted = new Set<string>()
   private ready: Promise<unknown>
   private readonly base: Scenario
+  private readonly lab?: Lab
 
   constructor(scenario: Scenario) {
     this.base = scenario
+    if (scenario.terraform) this.lab = labFromScenario(scenario.terraform, startDir(scenario), homeOf(scenario))
     this.context = { scenario, taken: new Set() }
     const m = scenario.terminal?.prompt.match(/^([\w.-]+)@([\w.-]+)/)
     this.user = m?.[1] ?? 'ops'
@@ -159,6 +175,7 @@ export class IncidentShell {
     for (const b of BUILTINS) programs.delete(b)
     programs.delete('ssh')
     programs.delete('sudo')
+    if (this.lab) programs.delete('terraform')
     const start = name === this.mainHost ? startDir(this.base) : home
     const bash = new Bash({
       cwd: start,
@@ -175,6 +192,7 @@ export class IncidentShell {
       commands: getCommandNames().filter((c) => !OFF.includes(c)) as CommandName[],
       customCommands: [
         ...[...programs].map((p) => defineCommand(p, (args) => Promise.resolve(this.program(name, p, args)))),
+        ...(this.lab ? [defineCommand('terraform', (args, ctx) => this.terraform(args, ctx as never))] : []),
         defineCommand('ssh', (args) => this.ssh(name, args)),
         // Local scripts the incident runs (./order-sync): files that call back here.
         defineCommand('__scripted', (args) => Promise.resolve(this.program(name, args[0], args.slice(1)))),
@@ -249,6 +267,36 @@ export class IncidentShell {
     const after = await this.onEdit(path, before)
     if (after !== null && after !== before) await ctx.fs.writeFile(path, after)
     return { stdout: '', stderr: '', exitCode: 0 }
+  }
+
+  // terraform: the simulator reads and writes the host's real files, so the
+  // player's edits are what plan sees.
+  private async terraform(args: string[], ctx: TfCtx): Promise<Out> {
+    const fs = ctx.fs
+    const r = await runTerraform(args, {
+      lab: this.lab!,
+      cwd: ctx.cwd,
+      env: ctx.env,
+      async listFiles(dir) {
+        const out: { name: string; text: string }[] = []
+        for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
+          try {
+            const at = `${dir}/${n}`.replace(/\/+/g, '/')
+            if ((await fs.stat(at)).isFile) out.push({ name: n, text: await fs.readFile(at) })
+          } catch {
+            // unreadable: skip
+          }
+        }
+        return out
+      },
+      readFile: (p) => fs.readFile(fs.resolvePath(ctx.cwd, p)).catch(() => undefined),
+      async write(dir, name, text) {
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(`${dir}/${name}`, text)
+      },
+    })
+    this.hits.push(...r.evidence)
+    return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode }
   }
 
   // A tool invocation inside the shell: the scripted output whose command

@@ -2,6 +2,7 @@
 // Shared by the engine (which leaves reading those files to the real shell)
 // and the shell (which puts them there).
 import type { Scenario } from '../schema/scenario.ts'
+import { labDir, labFiles, LOCK_FILE } from './terraform/layout.ts'
 
 // The user the terminal prompt logs in as ("ops@web-01:~$" -> ops), and home.
 export const userOf = (scenario: Scenario) => scenario.terminal?.prompt.match(/^([\w.-]+)@/)?.[1] ?? 'ops'
@@ -66,6 +67,12 @@ export function filesOnDisk(scenario: Scenario): Map<string, string> {
       const at = resolveFrom(scenario, p)
       if (!out.has(at)) out.set(at, c.output)
     }
+  }
+  const tf = scenario.terraform
+  if (tf) {
+    for (const f of labFiles(tf, cwd, home)) if (!out.has(f.path)) out.set(f.path, f.content)
+    const lock = `${labDir(tf, cwd, home)}/.terraform.lock.hcl`
+    if (tf.initialized !== false && !out.has(lock)) out.set(lock, LOCK_FILE)
   }
   return out
 }
