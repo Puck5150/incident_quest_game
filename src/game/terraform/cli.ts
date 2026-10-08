@@ -12,7 +12,7 @@ import { parseHcl } from './parse.ts'
 import { planConfig, type PlanResult } from './plan.ts'
 import { hex } from './provider.ts'
 import { refresh as refreshState } from './refresh.ts'
-import { renderPlan } from './render.ts'
+import { renderPlan, renderPlanErrors } from './render.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
 import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
@@ -496,10 +496,10 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const warning = s.warning
   const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(cfg.tf))
-  if (result.diagnostics.length) return { stdout: warning, stderr: rendered, exitCode: 1 }
-
   const lines = refreshLines(ctx.lab.state, f.refresh)
   const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
+  // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
+  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(cfg.tf)), exitCode: 1 })
   return { warning, vars: s.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
 }
 

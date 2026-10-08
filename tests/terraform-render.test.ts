@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { UNKNOWN } from '../src/game/terraform/eval.ts'
 import type { PlanItem, PlanResult } from '../src/game/terraform/plan.ts'
-import { renderPlan, resourceBlock } from '../src/game/terraform/render.ts'
+import { renderPlan, renderPlanErrors, resourceBlock } from '../src/game/terraform/render.ts'
 import { emptyState, type State } from '../src/game/terraform/state.ts'
 
 const ch = (name: string, before: unknown, after: unknown, extra: { forcesReplacement?: boolean; sensitive?: boolean } = {}) =>
@@ -545,5 +545,31 @@ describe('renderPlan', () => {
     const warn = { severity: 'warning' as const, summary: 'Careful', detail: '', file: '', line: 0, col: 0 }
     const withWarning = renderPlan(result({ items: [item({ action: 'create', changes: [ch('a', undefined, 1)] })], summary: { add: 1, change: 0, destroy: 0 }, warnings: [warn] }))
     expect(withWarning.endsWith('\n\n╷\n│ Warning: Careful\n╵')).toBe(true)
+  })
+
+  it('a partial plan (prevent_destroy) renders what was planned under its own heading; its errors and warnings come from renderPlanErrors', () => {
+    const err = { severity: 'error' as const, summary: 'Instance cannot be destroyed', detail: 'short', file: 'main.tf', line: 1, col: 1, context: 'resource "aws_instance" "web"' }
+    const warn = { severity: 'warning' as const, summary: 'Careful', detail: '', file: '', line: 0, col: 0 }
+    const r = result({ partial: true, diagnostics: [err], warnings: [warn], items: [item({ action: 'replace', changes: [ch('ami', 'ami-0', 'ami-1', { forcesReplacement: true })] })], summary: { add: 1, change: 0, destroy: 1 } })
+    expect(renderPlan(r)).toBe(
+      text(
+        'Terraform used the selected providers to generate the following execution',
+        'plan. Resource actions are indicated with the following symbols:',
+        '-/+ destroy and then create replacement',
+        '',
+        'Terraform planned the following actions, but then encountered a problem:',
+        '',
+        '  # aws_instance.web must be replaced',
+        '-/+ resource "aws_instance" "web" {',
+        '      ~ ami = "ami-0" -> "ami-1" # forces replacement',
+        '    }',
+        '',
+        'Plan: 1 to add, 0 to change, 1 to destroy.',
+      ),
+    )
+    const sources = { 'main.tf': 'resource "aws_instance" "web" {\n' }
+    expect(renderPlanErrors(r, sources)).toBe(text('╷', '│ Warning: Careful', '╵', '', '╷', '│ Error: Instance cannot be destroyed', '│ ', '│   on main.tf line 1, in resource "aws_instance" "web":', '│    1: resource "aws_instance" "web" {', '│ ', '│ short', '╵'))
+    // Without `partial` the same diagnostics render errors only, as before.
+    expect(renderPlan({ ...r, partial: undefined }, sources)).toBe(renderPlanErrors(r, sources))
   })
 })

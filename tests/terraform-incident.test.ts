@@ -19,6 +19,10 @@ describe('terraform-forces-replacement on the simulator', () => {
     expect(out[1].output).toContain('Error: Instance cannot be destroyed')
     expect(out[1].output).toContain('on db.tf line 1')
     expect(out[1].output).toContain('Resource aws_db_instance.orders has lifecycle.prevent_destroy set')
+    // The partial plan comes first: the replacement prevent_destroy refused, then the error.
+    expect(out[1].output).toContain('Terraform planned the following actions, but then encountered a problem:\n\n  # aws_db_instance.orders must be replaced\n-/+ resource "aws_db_instance" "orders" {')
+    expect(out[1].output).toContain('~ storage_encrypted   = false -> true # forces replacement')
+    expect(out[1].output).toContain('Plan: 1 to add, 0 to change, 1 to destroy.\n╷\n│ Error: Instance cannot be destroyed')
     expect(out[1].hits).toContain('evidence:prevent-destroy')
   })
 

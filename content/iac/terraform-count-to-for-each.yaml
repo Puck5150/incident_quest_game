@@ -449,10 +449,11 @@ actions:
 solution_paths:
   - [move-addresses]
 
-key_evidence: [prevent-destroy-saved-you, address-changed, refactor-diff, subnets-exist]
+key_evidence: [prevent-destroy-saved-you, plan-destroys-subnets, address-changed, refactor-diff, subnets-exist]
 
 evidence_labels:
   prevent-destroy-saved-you: "The plan would destroy a db host, and prevent_destroy stops it"
+  plan-destroys-subnets: "The failed plan destroys the [0]/[1] subnets \"because resource does not use count\" and creates them again at AZ keys"
   address-changed: "State holds the subnets and hosts at [0] and [1]"
   refactor-diff: "The PR swaps count for for_each and changes nothing else"
   subnets-exist: "Both subnets exist in AWS with the ids state records"
@@ -485,7 +486,7 @@ debrief:
     Telling Terraform where each object went (moved blocks, or terraform
     state mv) keeps the same objects under their new keys.
   ideal_path:
-    - "Read the plan error: it names aws_instance.db[0], an index the configuration no longer produces."
+    - "Read the failed plan: every [0]/[1] object is destroyed \"because resource does not use count\" and recreated at an AZ key, and the errors name aws_instance.db[0], an index the configuration no longer produces."
     - "Compare terraform state list ([0], [1]) with the PR diff (count to for_each, nothing else)."
     - "Confirm in AWS that the subnets and hosts are the ones state records."
     - "Add a moved block from each old index to its new AZ key, plan (four moves, nothing to add, change or destroy) and apply."

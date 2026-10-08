@@ -276,6 +276,28 @@ describe('terraform apply', () => {
     expect(w.lab.savedPlans.size).toBe(0)
   })
 
+  it('plan and apply refused by prevent_destroy print the partial plan first; apply asks nothing and changes nothing', async () => {
+    const w = world({ files: [{ path: 'main.tf', content: DB(true) }], state: [DB_STATE] }, { stdin: 'yes\n' })
+    const serial = w.lab.state.serial
+    for (const cmd of ['plan', 'apply']) {
+      const r = await w.run(cmd, '-replace=aws_db_instance.main')
+      expect(r.stdout, cmd).toContain('-/+ destroy and then create replacement\n\nTerraform planned the following actions, but then encountered a problem:\n\n  # aws_db_instance.main will be replaced, as requested\n')
+      expect(r.stdout.endsWith('Plan: 1 to add, 0 to change, 1 to destroy.'), cmd).toBe(true)
+      expect(r.stdout, cmd).not.toContain('Enter a value')
+      expect(r.stdout, cmd).not.toContain("Note: You didn't use the -out option")
+      expect(r.stderr, cmd).toContain('│ Error: Instance cannot be destroyed\n│ \n│   on main.tf line 1, in resource "aws_db_instance" "main":')
+      expect(r.exitCode, cmd).toBe(1)
+    }
+    expect(w.lab.state.serial).toBe(serial)
+    expect(w.lab.reality).toEqual(world({ files: [{ path: 'main.tf', content: DB(true) }], state: [DB_STATE] }).lab.reality)
+    // A configuration error still prints only the error.
+    w.disk[`${DIR}/main.tf`] = DB(true) + 'output "x" {\n  value = aws_db_instance.nope.id\n}\n'
+    const bad = await w.run('plan', '-replace=aws_db_instance.main')
+    expect(bad.stdout).toBe('')
+    expect(bad.stderr).not.toContain('Instance cannot be destroyed')
+    expect(bad.exitCode).toBe(1)
+  })
+
   it('keeps -target and -refresh-only unavailable and rejects flags apply does not take', async () => {
     for (const flag of ['-target=aws_vpc.main', '-refresh-only']) {
       const r = await world().run('apply', flag)
@@ -305,6 +327,18 @@ describe('terraform destroy', () => {
     expect(ok.exitCode).toBe(0)
     expect(ok.ran).toBe('terraform destroy')
     expect((await w.run('state', 'list')).stdout).toBe('')
+  })
+
+  it('a refused destroy prints the partial plan on stdout and the error on stderr, and asks nothing', async () => {
+    const w = world({ files: [{ path: 'main.tf', content: DB(true) }], state: [DB_STATE] }, { stdin: 'yes\n' })
+    const r = await w.run('destroy')
+    expect(r.stdout).toMatch(/^aws_db_instance\.main: Refreshing state\.\.\. \[id=db-1\]\n\nTerraform used the selected providers/)
+    expect(r.stdout).toContain('  - destroy\n\nTerraform planned the following actions, but then encountered a problem:\n\n  # aws_db_instance.main will be destroyed\n  - resource "aws_db_instance" "main" {')
+    expect(r.stdout.endsWith('Plan: 0 to add, 0 to change, 1 to destroy.')).toBe(true)
+    expect(r.stdout).not.toContain('Enter a value')
+    expect(r.stderr).toMatch(/^╷\n│ Error: Instance cannot be destroyed\n/)
+    expect(r.exitCode).toBe(1)
+    expect((await w.run('state', 'list')).stdout).toBe('aws_db_instance.main')
   })
 
   it('asks its own question and cancels', async () => {

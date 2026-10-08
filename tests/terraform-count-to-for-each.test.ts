@@ -44,17 +44,23 @@ describe('terraform-count-to-for-each on the simulator', () => {
     expect(scenario.terminal!.commands.some((c) => (c.match ?? c.example ?? '').startsWith('terraform'))).toBe(false)
   })
 
-  it('(a) the first plan fails on prevent_destroy for both db hosts; state list shows the old indexes', async () => {
+  it('(a) the first plan shows the partial plan, then fails on prevent_destroy for both db hosts; state list shows the old indexes', async () => {
     const { sh, out } = await play('cd ~/infra', 'terraform plan', 'terraform state list')
     const plan = out[1]
     expect(plan.exitCode).toBe(1)
     expect(plan.output.match(/Error: Instance cannot be destroyed/g)).toHaveLength(2)
     expect(plan.output).toContain('Resource aws_instance.db[0] has lifecycle.prevent_destroy set, but the plan')
     expect(plan.output).toContain('Resource aws_instance.db[1] has lifecycle.prevent_destroy set')
-    // Simulator gap (CONTENT_TODO): real Terraform 1.9 also prints the partial plan
-    // ("Terraform planned the following actions, but then encountered a problem:"); the simulator prints only the errors.
-    expect(plan.output).not.toContain('will be destroyed')
+    // The partial plan comes first: everything planned before prevent_destroy failed, then the errors.
+    expect(plan.output).toContain('Terraform planned the following actions, but then encountered a problem:')
+    expect(plan.output).not.toContain('Terraform will perform the following actions:')
+    for (const a of ['aws_subnet.private[0]', 'aws_subnet.private[1]', 'aws_instance.db[0]', 'aws_instance.db[1]']) expect(plan.output).toContain(`  # ${a} will be destroyed\n  # (because resource does not use count)`)
+    for (const a of ['aws_subnet.private["us-east-1a"]', 'aws_subnet.private["us-east-1b"]', 'aws_instance.db["us-east-1a"]', 'aws_instance.db["us-east-1b"]']) expect(plan.output).toContain(`  # ${a} will be created`)
+    expect(plan.output).toContain('Plan: 4 to add, 0 to change, 4 to destroy.\n╷\n│ Error: Instance cannot be destroyed')
+    expect(plan.output.indexOf('Plan: 4 to add')).toBeLessThan(plan.output.indexOf('Error: Instance cannot be destroyed'))
+    expect(plan.output).not.toContain("Note: You didn't use the -out option")
     expect(plan.hits).toContain('evidence:prevent-destroy-saved-you')
+    expect(plan.hits).toContain('evidence:plan-destroys-subnets')
     expect(out[2].output.trim().split('\n')).toEqual(['aws_instance.db[0]', 'aws_instance.db[1]', 'aws_subnet.private[0]', 'aws_subnet.private[1]', 'aws_vpc.main'])
     expect(out[2].hits).toContain('evidence:address-changed')
     expect(await detectedAll(sh)).toEqual(NONE)

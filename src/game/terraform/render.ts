@@ -153,9 +153,15 @@ function outputChanges(r: PlanResult): string[] {
 // Anything for a plan to show: a visible item or an output change.
 export const hasChanges = (r: PlanResult): boolean => r.items.some((i) => i.action !== 'noop' || i.movedFrom || i.importing) || outputChanges(r).length > 0
 
+const boxed = (list: PlanResult['diagnostics'], sources: Record<string, string>) => list.map((d) => formatDiagnostic(d, sources[d.file] ?? ''))
+// A failed plan's warnings and errors, boxed.
+export const renderPlanErrors = (r: PlanResult, sources: Record<string, string> = {}): string => [...boxed(r.warnings, sources), ...boxed(r.diagnostics, sources)].join('\n\n')
+
+// A plan that failed with a configuration error renders only its errors. A
+// partial plan (prevent_destroy) renders what was planned; its errors come
+// from renderPlanErrors.
 export function renderPlan(r: PlanResult, sources: Record<string, string> = {}): string {
-  const boxed = (list: PlanResult['diagnostics']) => list.map((d) => formatDiagnostic(d, sources[d.file] ?? ''))
-  if (r.diagnostics.length) return [...boxed(r.warnings), ...boxed(r.diagnostics)].join('\n\n')
+  if (r.diagnostics.length && !r.partial) return renderPlanErrors(r, sources)
 
   const out: string[] = []
   const visible = r.items.filter((i) => i.action !== 'noop' || i.movedFrom || i.importing)
@@ -193,7 +199,8 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
     if (used.has('-/+')) legend.push('-/+ destroy and then create replacement')
     if (used.has('+/-')) legend.push('+/- create replacement and then destroy')
     const head = legend.length || visible.some((i) => i.action === 'forget') ? ['Terraform used the selected providers to generate the following execution', 'plan. Resource actions are indicated with the following symbols:', ...legend, ''] : []
-    const parts = visible.length ? [...head, 'Terraform will perform the following actions:', '', visible.map(resourceBlock).join('\n\n')] : []
+    const intro = r.partial ? 'Terraform planned the following actions, but then encountered a problem:' : 'Terraform will perform the following actions:'
+    const parts = visible.length ? [...head, intro, '', visible.map(resourceBlock).join('\n\n')] : []
     if (visible.length) {
       const s = r.summary
       parts.push('', `Plan: ${r.imported > 0 ? `${r.imported} to import, ` : ''}${s.add} to add, ${s.change} to change, ${s.destroy} to destroy.`)
@@ -202,6 +209,6 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
     if (!visible.length) parts.push('', ...wrap(APPLY_OUTPUTS, 78))
     out.push(parts.join('\n'))
   }
-  if (r.warnings.length) out.push(boxed(r.warnings).join('\n\n'))
+  if (r.warnings.length && !r.partial) out.push(boxed(r.warnings, sources).join('\n\n'))
   return out.join('\n\n')
 }

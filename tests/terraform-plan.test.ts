@@ -480,6 +480,31 @@ describe('planConfig: prevent_destroy and create_before_destroy', () => {
     expect(r.diagnostics[0]).toMatchObject({ summary: 'Instance cannot be destroyed', file: 'main.tf', line: 1, context: 'resource "aws_db_instance" "orders"' })
     expect(r.diagnostics[0].detail).toContain('Resource aws_db_instance.orders has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed.')
     expect(r.diagnostics[0].detail).toContain('reduce the scope of the plan using the -target option')
+    // Terraform records the change before the check fails, and shows it as a partial plan.
+    expect(r.partial).toBe(true)
+    expect(actions(r)).toEqual(['replace aws_db_instance.orders'])
+    expect(r.summary).toEqual({ add: 1, change: 0, destroy: 1 })
+  })
+
+  it('a failed protected resource skips what depends on it, with no errors of its own; the rest is still planned', () => {
+    const tf = [
+      'resource "aws_vpc" "main" {\n  cidr_block = "10.9.0.0/16"\n  lifecycle {\n    prevent_destroy = true\n  }\n}',
+      'resource "aws_subnet" "a" {\n  vpc_id     = aws_vpc.main.id\n  cidr_block = "10.9.1.0/24"\n}',
+      'resource "aws_s3_bucket" "logs" {\n  bucket = "logs"\n}',
+      'output "subnet" {\n  value = aws_subnet.a.id\n}',
+      'output "bucket" {\n  value = "logs"\n}',
+    ].join('\n')
+    const r = plan(tf, { state: stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }) })
+    expect(r.diagnostics.map((d) => d.detail.split(' has ')[0])).toEqual(['Resource aws_vpc.main'])
+    expect(r.partial).toBe(true)
+    expect(actions(r)).toEqual(['create aws_s3_bucket.logs', 'replace aws_vpc.main'])
+    expect(r.outputs.map((o) => o.name)).toEqual(['bucket'])
+    expect(r.summary).toEqual({ add: 2, change: 0, destroy: 1 })
+  })
+
+  it('configuration errors still leave no plan', () => {
+    const r = plan(DB(true) + 'output "x" {\n  value = var.nope\n}\n', { state: dbState() })
+    expect(r.partial).toBeUndefined()
     expect(r.items).toEqual([])
   })
 
@@ -778,6 +803,21 @@ describe('planConfig: destroy mode', () => {
     const tf = 'resource "aws_db_instance" "orders" {\n  identifier = "orders"\n  engine = "postgres"\n  instance_class = "db.t3.micro"\n  storage_encrypted = false\n  lifecycle {\n    prevent_destroy = true\n  }\n}\n'
     const r = plan(tf, { state, destroy: true })
     expect(r.diagnostics[0].summary).toBe('Instance cannot be destroyed')
+    expect(r.partial).toBe(true)
+    expect(actions(r)).toEqual(['destroy aws_db_instance.orders'])
+  })
+  it('a refused destroy skips the destroys of what it depends on in state (they wait for it), not the rest', () => {
+    const state = stateOf(
+      { type: 'aws_vpc', name: 'main', attrs: VPC },
+      { type: 'aws_subnet', name: 'a', attrs: { id: 'subnet-1', arn: 'arn:subnet-1', vpc_id: 'vpc-1', cidr_block: '10.0.1.0/24' } },
+      { type: 'aws_s3_bucket', name: 'b', attrs: BUCKET(0) },
+    )
+    state.resources[1].instances[0].dependencies = ['aws_vpc.main']
+    const tf = 'resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}\nresource "aws_subnet" "a" {\n  vpc_id = aws_vpc.main.id\n  cidr_block = "10.0.1.0/24"\n  lifecycle {\n    prevent_destroy = true\n  }\n}\nresource "aws_s3_bucket" "b" {\n  bucket = "logs-0"\n}\n'
+    const r = plan(tf, { state, destroy: true })
+    expect(r.diagnostics.map((d) => d.summary)).toEqual(['Instance cannot be destroyed'])
+    expect(actions(r)).toEqual(['destroy aws_s3_bucket.b', 'destroy aws_subnet.a'])
+    expect(r.summary.destroy).toBe(2)
   })
   it('ignores moved/import/removed blocks and -replace', () => {
     const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC })

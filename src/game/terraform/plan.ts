@@ -2,7 +2,8 @@
 // dependency order, plan each resource instance from its evaluated arguments
 // and the planned values of what it depends on, then plan destroys for
 // instances that are no longer configured. Any configuration error stops the
-// plan: nothing is half-planned.
+// plan: nothing is half-planned. prevent_destroy is the exception: it fails
+// after planning, and the result keeps the partial plan (`partial`).
 import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
 import { equal, evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
@@ -65,6 +66,7 @@ export interface PlanResult {
   baseState: State // what planning worked from: refreshed, with moves applied
   summary: { add: number; change: number; destroy: number }
   imported: number
+  partial?: boolean // diagnostics came from prevent_destroy after planning: items and outputs hold what was planned
 }
 
 const cmp = <T extends string | number>(a: T, b: T) => (a < b ? -1 : a > b ? 1 : 0)
@@ -409,14 +411,29 @@ export function planConfig(input: PlanInput): PlanResult {
       col: 0,
     })
   }
+  // prevent_destroy fails a resource after its changes are planned. Terraform
+  // skips everything downstream of a failed resource (no changes, no errors)
+  // and shows the rest as a partial plan ahead of the errors.
+  // ponytail: moved/import check errors above keep the old errors-only output; real Terraform would show a partial plan there too.
+  const checked = errors.length > 0
+  const res = (i: PlanItem) => `${i.type}.${i.name}`
+  const guarded = (i: PlanItem) => protectedBy.has(res(i)) && (i.action === 'destroy' || i.action === 'replace')
+  const failing = new Set(result.items.filter(guarded).map(res))
+  const skipped = new Set<string>()
+  if (!checked) for (const a of g.order) if (g.nodes.get(a)!.deps.some((d) => failing.has(d) || skipped.has(d))) skipped.add(a)
   for (const i of result.items) {
-    const guard = protectedBy.get(`${i.type}.${i.name}`)
-    if (guard && (i.action === 'destroy' || i.action === 'replace')) fail(guard.file, guard.pos, ...preventDestroyError(i.address), guard.context)
+    const guard = protectedBy.get(res(i))
+    if (guard && guarded(i) && !skipped.has(res(i))) fail(guard.file, guard.pos, ...preventDestroyError(i.address), guard.context)
   }
-  if (errors.length) {
+  if (checked) {
     result.items = []
     result.outputs = []
     return result
+  }
+  if (errors.length) {
+    result.partial = true
+    result.items = result.items.filter((i) => !skipped.has(res(i)))
+    result.outputs = result.outputs.filter((o) => !skipped.has(`output.${o.name}`))
   }
   result.items.sort(byInstance)
   result.outputs.sort(byName)
@@ -462,12 +479,34 @@ const preventDestroyError = (address: string): [string, string] => [
 function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file: string, pos: Pos, summary: string, detail: string, context?: string) => void): PlanResult {
   const base = { ...result.baseState, resources: result.baseState.resources.filter((r) => r.mode === 'managed') }
   result.baseState = base
+  // Destroying a resource waits for the destroys of what state says depends on
+  // it, so when a protected resource fails, Terraform never plans the
+  // resources it depends on (directly or not): no changes, no errors.
+  const res = (r: { type: string; name: string }) => `${r.type}.${r.name}`
+  const deps = new Map(base.resources.map((r) => [res(r), r.instances.flatMap((i) => i.dependencies ?? [])]))
+  const lifecycle = (r: { type: string; name: string }) => {
+    const node = nodes.get(res(r))
+    return node?.kind === 'resource' && node.block ? lifecycleOf(node.block) : undefined
+  }
+  const configError = base.resources.some((r) => lifecycle(r)?.ok === false)
+  const skipped = new Set<string>()
+  const protects = (r: { type: string; name: string }) => {
+    const lc = lifecycle(r)
+    return lc?.ok === true && lc.lifecycle.preventDestroy
+  }
+  const failing = configError ? [] : base.resources.filter((r) => r.instances.length > 0 && protects(r))
+  for (const todo = failing.flatMap((r) => deps.get(res(r))!); todo.length; ) {
+    const a = todo.pop()!
+    if (!skipped.has(a)) todo.push(...(deps.get(a) ?? []))
+    skipped.add(a)
+  }
   for (const r of base.resources) {
     const node = nodes.get(`${r.type}.${r.name}`)
     const b = node?.kind === 'resource' ? node.block : undefined
     const lc = b && lifecycleOf(b)
     const context = `resource "${r.type}" "${r.name}"`
     if (lc && !lc.ok) fail(node!.file, lc.pos, lc.summary, lc.detail, context)
+    if (skipped.has(res(r))) continue
     for (const inst of r.instances) {
       const address = instanceAddress(r, inst.index_key)
       if (lc?.ok && lc.lifecycle.preventDestroy) fail(node!.file, b!.pos, ...preventDestroyError(address), context)
@@ -483,10 +522,11 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
       })
     }
   }
-  if (result.diagnostics.length) {
+  if (configError) {
     result.items = []
     return result
   }
+  if (result.diagnostics.length) result.partial = true
   result.items.sort(byInstance)
   result.summary.destroy = result.items.length
   result.driftShown = relevantDrift(nodes, result, result.drift)
