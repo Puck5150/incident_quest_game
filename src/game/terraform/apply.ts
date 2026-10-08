@@ -47,11 +47,25 @@ const res = (i: { type: string; name: string }) => `${i.type}.${i.name}`
 const destroyPhase = (i: PlanItem) => i.action === 'destroy' || i.action === 'replace'
 const pending = (i: PlanItem) => destroyPhase(i) || i.action === 'create' || i.action === 'update' || i.action === 'forget' || i.importing !== undefined
 
+const opOf = (i: PlanItem): ApplyStep['op'] =>
+  i.importing !== undefined ? 'import' : i.action === 'forget' ? 'forget' : destroyPhase(i) ? 'delete' : i.action === 'create' ? 'create' : 'update'
+
 // failed holds instance addresses (an instance is never retried in this run) and
 // resource addresses (nothing that depends on a failed resource is attempted).
-function pickNext(items: PlanItem[], failed: Set<string>): PlanItem | undefined {
-  const todo = items.filter(pending)
-  const tier1 = todo.find((i) => destroyPhase(i) && !failed.has(i.address) && !todo.some((o) => o !== i && destroyPhase(o) && o.dependsOn.includes(res(i))))
+// done holds `${address}:${op}` for every successful step: an op never runs twice
+// on one address, and a created or updated instance is settled for this run, so
+// a plan that never converges (e.g. a value that stays unknown) cannot loop.
+function pickNext(items: PlanItem[], state: State, failed: Set<string>, done: Set<string>): PlanItem | undefined {
+  const settled = (a: string) => done.has(`${a}:create`) || done.has(`${a}:update`)
+  const todo = items.filter((i) => pending(i) && !settled(i.address) && !done.has(`${i.address}:${opOf(i)}`))
+  const priorDeps = (o: PlanItem) => findInstance(state, o.address)?.instance.dependencies ?? []
+  const tier1 = todo.find(
+    (i) =>
+      destroyPhase(i) &&
+      i.importing === undefined &&
+      !failed.has(i.address) &&
+      !todo.some((o) => o !== i && ((destroyPhase(o) && o.dependsOn.includes(res(i))) || (o.action === 'update' && priorDeps(o).includes(res(i))))),
+  )
   if (tier1) return tier1
   const tier2 = todo.find((i) => i.action === 'forget' || i.importing !== undefined)
   if (tier2) return tier2
@@ -73,7 +87,7 @@ function addInstance(state: State, item: PlanItem, attributes: Attrs): void {
   let r = state.resources.find((x) => x.mode === 'managed' && x.type === item.type && x.name === item.name)
   if (!r) {
     const prefix = item.type.split('_')[0]
-    r = { mode: 'managed', type: item.type, name: item.name, provider: schemaFor(item.type)?.provider ?? `provider["registry.terraform.io/hashicorp/${prefix}"]`, instances: [] }
+    r = { mode: 'managed', type: item.type, name: item.name, provider: `provider["${schemaFor(item.type)?.provider ?? `registry.terraform.io/hashicorp/${prefix}`}"]`, instances: [] }
     state.resources.push(r)
   }
   r.instances.push({
@@ -90,11 +104,14 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   const errors: Diagnostic[] = []
   const counts = { imported: 0, added: 0, changed: 0, destroyed: 0 }
   const failed = new Set<string>()
+  const done = new Set<string>()
+  const skipImports = new Set<string>() // imported or deleted in this run: its import block is spent
   let first: PlanResult | undefined
 
   const faultFor = (i: PlanItem, on: Fault['on'], attrs: Attrs): string | undefined => {
     for (const [n, f] of ctx.faults.entries()) {
       if (f.on !== on || (f.at !== i.address && f.at !== res(i))) continue
+      // until_actions: [] (or absent) never deactivates the fault.
       if (f.until_actions?.length && f.until_actions.every((a) => ctx.taken.has(a))) continue
       if (f.if && !(Object.hasOwn(attrs, f.if.attr) && equal(attrs[f.if.attr], f.if.equals))) continue
       const fired = ctx.attempts.get(n) ?? 0
@@ -111,27 +128,29 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   }
 
   for (let guard = 0; guard < 2000; guard++) {
-    const plan = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: first ? false : input.refresh })
+    const plan = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: first ? false : input.refresh, skipImports })
     first ??= plan
     if (plan.diagnostics.length) {
       errors.push(...plan.diagnostics)
       break
     }
     state = structuredClone(plan.baseState)
-    const i = pickNext(plan.items, failed)
+    const i = pickNext(plan.items, state, failed, done)
     if (!i) break
     const seed = `${ctx.seed}:${steps.length}`
     const inst = findInstance(state, i.address)?.instance
     const prior = inst?.attributes
 
     if (i.importing !== undefined) {
-      const obj = structuredClone(input.reality[realityKey(i.type, i.importing)])
-      addInstance(state, i, obj)
+      addInstance(state, i, structuredClone(reality.get(realityKey(i.type, i.importing)) ?? {}))
+      skipImports.add(i.address)
       steps.push({ address: i.address, op: 'import', id: i.importing, seconds: 0, ok: true })
+      done.add(`${i.address}:import`)
       counts.imported++
     } else if (i.action === 'forget') {
       removeInstance(state, i.address)
       steps.push({ address: i.address, op: 'forget', seconds: 0, ok: true })
+      done.add(`${i.address}:forget`)
     } else if (destroyPhase(i)) {
       const attrs = prior ?? {}
       const id = typeof attrs.id === 'string' ? attrs.id : ''
@@ -142,7 +161,9 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       else {
         removeInstance(state, i.address)
         reality.delete(realityKey(i.type, id))
+        skipImports.add(i.address)
         steps.push({ address: i.address, op: 'delete', id, seconds: secs, ok: true })
+        done.add(`${i.address}:delete`)
         counts.destroyed++
       }
     } else if (i.action === 'create') {
@@ -155,6 +176,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
         addInstance(state, i, attrs)
         reality.set(realityKey(i.type, id), structuredClone(attrs))
         steps.push({ address: i.address, op: 'create', id, seconds: secs, ok: true })
+        done.add(`${i.address}:create`)
         counts.added++
       }
     } else {
@@ -170,13 +192,14 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
         if (inst) inst.attributes = attrs
         reality.set(realityKey(i.type, id), structuredClone(attrs))
         steps.push({ address: i.address, op: 'update', id, seconds: secs, ok: true })
+        done.add(`${i.address}:update`)
         counts.changed++
       }
     }
   }
 
   if (!errors.length) {
-    const final = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: false })
+    const final = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: false, skipImports })
     state.outputs = Object.fromEntries(final.outputs.filter((o) => !hasUnknown(o.value)).map((o) => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }]))
   }
   if (steps.length) state.serial++

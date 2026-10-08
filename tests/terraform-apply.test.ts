@@ -51,6 +51,7 @@ describe('executeApply: create', () => {
     expect(vpc.attributes.id).toMatch(/^vpc-0[0-9a-f]{8}$/)
     expect(subnet.attributes.vpc_id).toBe(vpc.attributes.id)
     expect(subnet.dependencies).toEqual(['aws_vpc.main'])
+    expect(r.state.resources.map((x) => x.provider)).toEqual([AWS, AWS])
     expect(r.reality[realityKey('aws_subnet', subnet.attributes.id as string)]).toEqual(subnet.attributes)
     expect(r.state.serial).toBe(1)
     expect(r.steps.map((s) => s.seconds)).toEqual([1, 1])
@@ -121,6 +122,16 @@ describe('executeApply: update, replace, destroy', () => {
     expect(moved.steps).toEqual([])
   })
 
+  it('updates a dependent off a removed resource before deleting it (prior-state dependencies)', () => {
+    const SG = { id: 'sg-9', arn: 'arn:sg-9', name: 'web', description: 'Managed by Terraform', vpc_id: null, ingress: [], egress: [] }
+    const W = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', tags: { sg: 'sg-9' }, tags_all: { sg: 'sg-9' } }
+    const state = stateOf({ type: 'aws_security_group', name: 'web', attrs: SG }, { type: 'aws_instance', name: 'w', attrs: W, deps: ['aws_security_group.web'] })
+    const r = run('resource "aws_instance" "w" {\n  ami = "ami-1"\n  instance_type = "t3.micro"\n  tags = { Name = "w" }\n}\n', { state })
+    expect(r.errors).toEqual([])
+    expect(ops(r)).toEqual(['update aws_instance.w', 'delete aws_security_group.web'])
+    expect(listAddresses(r.state)).toEqual(['aws_instance.w'])
+  })
+
   it('brings a drifted cloud back to the configuration, persisting the refresh first', () => {
     const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: { ...VPC, tags: { Name: 'main' }, tags_all: { Name: 'main' } } })
     const reality = cloudOf(state)
@@ -168,6 +179,21 @@ describe('executeApply: failures', () => {
     expect(findInstance(r.state, 'aws_s3_bucket.b')!.instance.attributes.id).toBe('legacy')
     const again = executeApply({ files: [{ name: 'main.tf', text: tf }], state: r.state, reality: r.reality, vars: {} }, ctx())
     expect(again.steps).toEqual([])
+  })
+
+  it('imports, then replaces when the configuration forces it, without re-importing', () => {
+    const tf = 'resource "aws_s3_bucket" "b" {\n  bucket = "other"\n}\nimport {\n  to = aws_s3_bucket.b\n  id = "legacy"\n}\n'
+    const reality: Reality = { [realityKey('aws_s3_bucket', 'legacy')]: { id: 'legacy', arn: 'arn:aws:s3:::legacy', bucket: 'legacy', force_destroy: false } }
+    const r = run(tf, { reality })
+    expect(r.errors).toEqual([])
+    expect(ops(r)).toEqual(['import aws_s3_bucket.b', 'delete aws_s3_bucket.b', 'create aws_s3_bucket.b'])
+    expect(Object.keys(r.reality)).toEqual([realityKey('aws_s3_bucket', 'other')])
+  })
+
+  it('never runs the same operation twice on one address, even if the plan never converges', () => {
+    const tf = 'data "aws_vpc" "x" {}\nresource "aws_subnet" "a" {\n  vpc_id     = data.aws_vpc.x.id\n  cidr_block = "10.0.1.0/24"\n}\n'
+    const r = run(tf)
+    expect(ops(r)).toEqual(['create aws_subnet.a'])
   })
 
   it('keeps going with independent resources after one fails, and leaves a half-applied world', () => {

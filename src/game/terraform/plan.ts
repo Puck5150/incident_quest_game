@@ -22,6 +22,7 @@ export interface PlanInput {
   workspace?: string
   refresh?: boolean
   replace?: string[]
+  skipImports?: Set<string> // instance addresses whose import blocks are already spent (apply imported or deleted them)
 }
 export interface PlanItem {
   address: string
@@ -116,10 +117,11 @@ export function planConfig(input: PlanInput): PlanResult {
   errors.push(...mv.diagnostics, ...rm.diagnostics, ...im.diagnostics)
   const declared = (a: { type: string; name: string }) => g.nodes.has(`${a.type}.${a.name}`)
   const show = (a: { type: string; name: string; key?: string | number }) => instanceAddress({ mode: 'managed', type: a.type, name: a.name }, a.key)
+  const imports = im.imports.filter((i) => !input.skipImports?.has(show(i.to)))
   for (const r of rm.removals) {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
   }
-  for (const i of im.imports) {
+  for (const i of imports) {
     if (!declared(i.to)) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
   }
   const applied = applyMoves(refreshed, mv.moves)
@@ -244,7 +246,7 @@ export function planConfig(input: PlanInput): PlanResult {
         }
       }
       let importing: string | undefined
-      const decl = im.imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key)
+      const decl = imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key)
       if (!priorInst && decl) {
         const before = errors.length
         let id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor({})), 'import')
@@ -376,7 +378,7 @@ export function planConfig(input: PlanInput): PlanResult {
     const still = m.from.key === undefined && m.to.key === undefined ? declared(m.from) : planned.has(show(m.from))
     if (still) fail(m.file, m.pos, 'Moved object still exists', `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`)
   }
-  for (const i of im.imports) {
+  for (const i of imports) {
     if (declared(i.to) && !planned.has(show(i.to))) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
   }
   for (const r of base.resources) {
