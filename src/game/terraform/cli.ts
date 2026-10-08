@@ -1,7 +1,7 @@
 // The `terraform` command: init, validate, plan, apply, destroy, show, state
-// (list, show, pull, mv, rm), output, import, taint, untaint, refresh, workspace
-// and version read the player's working directory and the lab's state; everything
-// else answers honestly that it is not simulated yet. Nothing here throws on
+// (list, show, pull, mv, rm), output, import, taint, untaint, refresh, workspace,
+// force-unlock and version read the player's working directory and the lab's
+// state; everything else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
@@ -97,7 +97,7 @@ Global options (use these before the subcommand, if any):
   -help         Show this help output, or the help for a specified subcommand.
   -version      An alias for the "version" subcommand.`
 
-const NOT_YET = new Set(['force-unlock', 'console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
+const NOT_YET = new Set(['console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
 const REGISTRY = 'registry.terraform.io/'
 const RULE = '─'.repeat(77)
 const NO_STATE_SUMMARY = 'No state file was found!'
@@ -138,7 +138,7 @@ const withWarn = (warn: string, o: Out): Out => (warn ? { ...o, stdout: [warn, o
 const notYet = (sub: string) =>
   boxFail(
     'Not available in this lab yet',
-    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, output, workspace show, workspace list, version.`,
+    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, output, workspace show, workspace list, version.`,
   )
 const sourcesOf = (files: File[]) => Object.fromEntries(files.map((f) => [f.name, f.text]))
 const boxes = (list: Diagnostic[], files: File[]) => {
@@ -196,6 +196,16 @@ function lockError(cfg: Config): Out | undefined {
       true,
     ),
   )
+}
+
+// The commands that write state take the lock first; a held lock stops them unless -lock=false.
+function checkLock(ctx: CliContext, lock: boolean): Out | undefined {
+  const l = ctx.lab.lock
+  if (!lock || !l) return undefined
+  const info = [['ID', l.id], ['Path', l.path], ['Operation', l.operation], ['Who', l.who], ['Version', ctx.lab.version], ['Created', l.created], ['Info', l.info]].map(([k, v]) => `  ${`${k}:`.padEnd(11)}${v}`)
+  const tail =
+    'Terraform acquires a state lock to protect the state from being written\nby multiple users at the same time. Please resolve the issue above and try\nagain. For most commands, you can disable locking with the "-lock=false"\nflag, but this is not recommended.'
+  return fail(box('error', 'Error acquiring the state lock', `Error message: ${l.message}\nLock Info:\n${info.join('\n')}\n\n\n${tail}`, true))
 }
 
 function cmdVersion(ctx: CliContext, cfg: Config): Out {
@@ -384,6 +394,7 @@ interface PlanFlags {
   out?: string
   detailed: boolean
   autoApprove: boolean
+  lock: boolean
   planFile?: string
 }
 const PLAN_VALUE_FLAGS = new Set(['-var', '-var-file', '-replace', '-out', '-lock-timeout', '-parallelism', '-target'])
@@ -392,7 +403,7 @@ const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warni
 const NOT_FOR: Record<Cmd, string[]> = { plan: ['-auto-approve'], apply: ['-out', '-detailed-exitcode'], destroy: ['-out', '-detailed-exitcode', '-replace'] }
 
 function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
-  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false }
+  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false, lock: true }
   for (let i = 0; i < args.length; i++) {
     const raw = args[i]
     if (!raw.startsWith('-') || raw === '-') {
@@ -419,6 +430,7 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
       else if (name === '-target') return notYet(`${cmd} -target`)
     } else if (PLAN_BOOL_FLAGS.has(name)) {
       if (name === '-refresh') f.refresh = value !== 'false'
+      else if (name === '-lock') f.lock = value !== 'false'
       else if (name === '-detailed-exitcode') f.detailed = true
       else if (name === '-auto-approve') f.autoApprove = value !== 'false'
       else if (name === '-destroy' || name === '-refresh-only') return notYet(`${cmd} ${name}`)
@@ -469,6 +481,8 @@ const refreshLines = (state: State, refresh: boolean) =>
 async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boolean): Promise<Planned | Out> {
   const s = await prepare(f.sources, ctx, cfg)
   if (!('vars' in s)) return s
+  const locked = checkLock(ctx, f.lock)
+  if (locked) return locked
   const warning = s.warning
   const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(cfg.tf))
@@ -518,10 +532,7 @@ async function loadSavedPlan(ctx: CliContext, cfg: Config, name: string): Promis
   if (text === undefined) return failLoad(`Error: stat ${name}: no such file or directory`)
   const [marker, id] = text.split('\n')
   const saved = marker === 'TFPLAN1' && id !== undefined ? ctx.lab.savedPlans.get(id) : undefined
-  if (!saved) return failLoad('Error: zip: not a valid zip file')
-  if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage)
-    return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
-  return saved
+  return saved ?? failLoad('Error: zip: not a valid zip file')
 }
 
 async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'apply' | 'destroy'): Promise<Out> {
@@ -536,6 +547,10 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     if (f.sources.length) return boxFail("Can't set variables when applying a saved plan", 'The -var and -var-file options cannot be used when applying a saved plan file, because a saved plan includes the variable values that were set when it was created.')
     const saved = await loadSavedPlan(ctx, cfg, f.planFile)
     if (!('serial' in saved)) return saved
+    const locked = checkLock(ctx, f.lock)
+    if (locked) return locked
+    if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage)
+      return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
     input = { files: saved.files, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
     head = '' // a saved plan was already reviewed: no plan text, no question
   } else {
@@ -572,13 +587,13 @@ const sensitiveAttr = (type: string, attr: string) => {
   return attrs !== undefined && Object.hasOwn(attrs, attr) && attrs[attr].sensitive === true
 }
 
-// Flags for the state-changing commands. Lock and state-path flags are accepted and
-// have no effect: the lab has one local state.
+// Flags for the state-changing commands. -lock=false skips the lock check; -lock-timeout
+// and the state-path flags are accepted and have no effect: the lab has one local state.
 const IGNORED_VALUE_FLAGS = ['-lock-timeout', '-state', '-state-out', '-backup']
 const IGNORED_BOOL_FLAGS = ['-no-color', '-input', '-lock']
-type Parsed = { pos: string[]; set: Set<string>; sources: VarSource[] }
+type Parsed = { pos: string[]; set: Set<string>; sources: VarSource[]; lock: boolean }
 function parseArgs(args: string[], bools: string[], values: string[] = []): Parsed | Out {
-  const p: Parsed = { pos: [], set: new Set(), sources: [] }
+  const p: Parsed = { pos: [], set: new Set(), sources: [], lock: true }
   for (let i = 0; i < args.length; i++) {
     const raw = args[i]
     if (!raw.startsWith('-') || raw === '-') {
@@ -596,6 +611,7 @@ function parseArgs(args: string[], bools: string[], values: string[] = []): Pars
       if (name === '-var') p.sources.push({ kind: 'var', arg: value })
       else if (name === '-var-file') p.sources.push({ kind: 'file', path: value })
     } else if (bools.includes(name) || IGNORED_BOOL_FLAGS.includes(name)) {
+      if (name === '-lock') p.lock = value !== 'false'
       if (value !== 'false') p.set.add(name)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
@@ -613,6 +629,9 @@ function cmdStateMv(args: string[], ctx: CliContext): Out {
   const a = parseArgs(args, ['-dry-run'])
   if (!('pos' in a)) return a
   if (a.pos.length !== 2) return fail('Exactly two arguments expected.')
+  // An unparseable address is an argument error, reported before locking.
+  const locked = a.pos.every((x) => parseAddress(x).ok) && checkLock(ctx, a.lock)
+  if (locked) return locked
   if (!ctx.lab.hasState) return fail(NO_STATE)
   const r = stateMove(ctx.lab.state, a.pos[0], a.pos[1])
   if (!r.ok) return opFail(r)
@@ -627,6 +646,8 @@ function cmdStateRm(args: string[], ctx: CliContext): Out {
   const a = parseArgs(args, ['-dry-run'])
   if (!('pos' in a)) return a
   if (!a.pos.length) return fail('At least one address is required.')
+  const locked = checkLock(ctx, a.lock)
+  if (locked) return locked
   if (!ctx.lab.hasState) return fail(NO_STATE)
   const r = stateRemove(ctx.lab.state, a.pos)
   if (!r.ok) return opFail(r)
@@ -643,6 +664,9 @@ function cmdTaint(args: string[], ctx: CliContext, verb: 'taint' | 'untaint'): O
   if (a.pos.length !== 1) return fail('Exactly one argument expected.')
   const addr = a.pos[0]
   const allowMissing = a.set.has('-allow-missing')
+  const t = parseAddress(addr)
+  const locked = t.ok && t.mode === 'managed' && checkLock(ctx, a.lock)
+  if (locked) return locked
   if (!ctx.lab.hasState) return allowMissing ? ok('') : boxFail(NO_STATE_SUMMARY, NO_STATE_DETAIL)
   const r = verb === 'taint' ? taintInstance(ctx.lab.state, addr) : untaintInstance(ctx.lab.state, addr)
   if (!r.ok) return allowMissing && r.summary === NO_SUCH_INSTANCE ? ok('') : opFail(r)
@@ -661,6 +685,8 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const t = parseAddress(addr)
   // A keyed address needs only its resource block; count and for_each are not checked.
   const declared = t.ok && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  const locked = declared && t.mode === 'managed' && checkLock(ctx, a.lock)
+  if (locked) return locked
   const r = importObject(ctx.lab.state, ctx.lab.reality, addr, id, declared)
   if (!r.ok) return withWarn(s.warning, opFail(r))
   commit(ctx, r)
@@ -680,6 +706,8 @@ async function cmdRefresh(args: string[], ctx: CliContext, cfg: Config): Promise
   const p = await prepare(a.sources, ctx, cfg)
   if (!('vars' in p)) return p
   if (p.graph.diagnostics.length) return withWarn(p.warning, fail(boxes(p.graph.diagnostics, cfg.tf)))
+  const locked = checkLock(ctx, a.lock)
+  if (locked) return locked
   // Refresh-only: no resource changes are planned and no moved blocks apply, so plan errors don't stop it.
   const before = ctx.lab.state
   const lines = refreshLines(before, true)
@@ -739,6 +767,29 @@ function cmdWorkspace(args: string[]): Out {
   return fail('Usage: terraform [global options] workspace <subcommand> [options] [args]\n\nSubcommands: show, list (new, select and delete are not simulated yet).')
 }
 
+const UNLOCK_PROMPT =
+  "Do you really want to force-unlock?\n  Terraform will remove the lock on the remote state.\n  This will allow local Terraform commands to modify this state, even though it\n  may be still be in use. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
+const UNLOCKED =
+  'Terraform state has been successfully unlocked!\n\nThe state has been unlocked, and Terraform commands should now be able to\nobtain a new lock on the remote state.'
+
+// Outside the lab directory ctx.lab is a throwaway copy with no lock.
+async function cmdForceUnlock(args: string[], ctx: CliContext): Promise<Out> {
+  const a = parseArgs(args, ['-force'])
+  if (!('pos' in a)) return a
+  if (a.pos.length !== 1) return fail('Expected a single argument: LOCK_ID.')
+  const held = ctx.lab.lock
+  if (!held) return boxFail('Failed to unlock state', 'no lock is held on this state')
+  if (held.id !== a.pos[0]) return boxFail('Failed to unlock state', `failed to unlock state: lock ID "${a.pos[0]}" does not match existing lock ID "${held.id}"`)
+  let head = ''
+  if (!a.set.has('-force')) {
+    const answer = ctx.stdin !== undefined ? ctx.stdin.split('\n')[0].trim() : ctx.confirm ? await ctx.confirm(UNLOCK_PROMPT) : undefined
+    head = `${UNLOCK_PROMPT}${answer ?? ''}\n\n`
+    if (answer !== 'yes') return { ...ok(`${head}Unlock cancelled.`), exitCode: 1 }
+  }
+  delete ctx.lab.lock
+  return ok(`${head}${UNLOCKED}`)
+}
+
 async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   let dir = ctx.cwd
   let rest = args
@@ -752,7 +803,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   if (Object.hasOwn(HELP, sub) && more.some((a) => a === '-help' || a === '--help')) return ok(`Usage: terraform [global options] ${sub} [options]\n\n${HELP[sub]}`)
   // State lives per directory, on the host the scenario is about: anywhere else there is none.
   const here = ctx.mainHost && dir === resolvePath('/', ctx.lab.dir)
-  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map() } }
+  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), lock: undefined } }
   const cfg = await loadConfig(ctx, dir)
   switch (sub) {
     case 'version':
@@ -784,6 +835,8 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
       return cmdTaint(more, ctx, sub)
     case 'refresh':
       return cmdRefresh(more, ctx, cfg)
+    case 'force-unlock':
+      return cmdForceUnlock(more, ctx)
     default:
       return NOT_YET.has(sub) ? notYet(sub) : fail(`Terraform has no command named "${sub}".\n\nTo see all of Terraform's top-level commands, run:\n  terraform -help`)
   }
