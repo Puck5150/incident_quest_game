@@ -114,11 +114,14 @@ describe('terraform apply', () => {
     expect(r.exitCode).toBe(1)
   })
 
-  it('asks through the confirm hook with the exact prompt', async () => {
+  it('asks through the confirm hook, showing the plan and the exact prompt', async () => {
     const asked: string[] = []
     const yes = world({}, { confirm: async (p) => (asked.push(p), 'yes') })
-    expect((await yes.run('apply')).exitCode).toBe(0)
-    expect(asked).toEqual([APPLY_PROMPT])
+    const r0 = await yes.run('apply')
+    expect(r0.exitCode).toBe(0)
+    // The hook sees what the player must see to decide; stdout keeps the full transcript.
+    expect(asked).toEqual([`${PLAN}\n${APPLY_PROMPT}`])
+    expect(r0.stdout).toBe(`${PLAN}\n${APPLY_PROMPT}yes\n\n${PROGRESS}\n\n${DONE}`)
     expect(yes.lab.hasState).toBe(true)
     const none = world({}, { confirm: async () => undefined })
     const r = await none.run('apply')
@@ -151,6 +154,18 @@ describe('terraform apply', () => {
     expect(again.exitCode).toBe(0)
   })
 
+  it('a cancelled apply consumes no fault attempt', async () => {
+    const error = 'creating EC2 Subnet: api error Throttling'
+    const w = world({ faults: [{ at: 'aws_subnet.a', on: 'create', error, times: 1 }] }, { stdin: 'no\n' })
+    expect((await w.run('apply')).stdout).toContain('Apply cancelled.')
+    expect(w.lab.attempts.size).toBe(0)
+    const hit = await w.run('apply', '-auto-approve')
+    expect(hit.stderr).toContain(`Error: ${error}`)
+    expect(hit.exitCode).toBe(1)
+    expect(w.lab.attempts.get(0)).toBe(1)
+    expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
+  })
+
   it('applies a saved plan with no question, using the saved configuration', async () => {
     const w = world()
     const plan = await w.run('plan', '-out=tfplan')
@@ -181,6 +196,29 @@ describe('terraform apply', () => {
     expect(missing.stderr).toContain('Error: Failed to load "nope" as a plan file')
     expect(missing.stderr).toContain('Error: stat nope: no such file or directory')
     expect(missing.exitCode).toBe(1)
+  })
+
+  it('refuses a saved plan from another state lineage', async () => {
+    const w = world()
+    await w.run('plan', '-out=tfplan')
+    w.lab.state = { ...w.lab.state, lineage: '11111111-0000-4000-8000-000000000000' }
+    const r = await w.run('apply', 'tfplan')
+    expect(r.stderr).toContain('Error: Saved plan is stale')
+    expect(r.exitCode).toBe(1)
+    expect(w.lab.hasState).toBe(false)
+  })
+
+  it('refuses -var and -replace with a saved plan', async () => {
+    const w = world()
+    await w.run('plan', '-out=tfplan')
+    const vars = await w.run('apply', 'tfplan', '-var=x=1')
+    expect(vars.stderr).toContain("Error: Can't set variables when applying a saved plan")
+    expect(vars.exitCode).toBe(1)
+    const replace = await w.run('apply', '-replace=aws_vpc.main', 'tfplan')
+    expect(replace.stderr).toContain("Error: Can't set -replace when applying a saved plan")
+    expect(replace.exitCode).toBe(1)
+    expect(w.lab.hasState).toBe(false)
+    expect((await w.run('apply', 'tfplan')).exitCode).toBe(0)
   })
 
   it('a no-change plan -out writes nothing', async () => {

@@ -507,6 +507,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   let head: string
   let warning = ''
   if (f.planFile !== undefined) {
+    if (f.replace.length) return boxFail("Can't set -replace when applying a saved plan", 'The -replace option cannot be used when applying a saved plan file, because a saved plan already records which objects it replaces. Create a new plan with -replace instead.')
     if (f.sources.length) return boxFail("Can't set variables when applying a saved plan", 'The -var and -var-file options cannot be used when applying a saved plan file, because a saved plan includes the variable values that were set when it was created.')
     const saved = await loadSavedPlan(ctx, cfg, f.planFile)
     if (!('serial' in saved)) return saved
@@ -525,7 +526,9 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     head = p.stdout
     if (!f.autoApprove) {
       const prompt = destroy ? DESTROY_PROMPT : APPLY_PROMPT
-      const answer = ctx.stdin !== undefined ? ctx.stdin.split('\n')[0].trim() : ctx.confirm ? await ctx.confirm(prompt) : undefined
+      // The hook gets everything a player must see to decide; stdout still carries it all for the transcript.
+      const shown = withWarn(warning, ok(`${head}\n${prompt}`)).stdout
+      const answer = ctx.stdin !== undefined ? ctx.stdin.split('\n')[0].trim() : ctx.confirm ? await ctx.confirm(shown) : undefined
       head += `\n${prompt}${answer ?? ''}\n`
       if (answer !== 'yes') return { ...withWarn(warning, ok(`${head}\n${destroy ? 'Destroy' : 'Apply'} cancelled.`)), exitCode: 1 }
     }
