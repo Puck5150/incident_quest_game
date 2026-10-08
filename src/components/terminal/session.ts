@@ -113,8 +113,9 @@ export function useTerminalSession(
   // Fixes the world shows (a file on disk that matches, a done_when that
   // holds): take the action, through the same gate as the buttons (the root
   // cause must be named). Returns a note for the terminal if it doesn't count yet.
+  // A replay passes take = false: it only rebuilds the note, the log already has the rest.
   const warned = useRef(new Set<string>())
-  const checkFixes = async (sh: IncidentShell, now: GameEvent[]): Promise<string> => {
+  const checkFixes = async (sh: IncidentShell, now: GameEvent[], take = true): Promise<string> => {
     const cur = atStage(scenario, stageAt(now))
     const taken = actionsTaken(now)
     const notes: string[] = []
@@ -124,8 +125,9 @@ export function useTerminalSession(
     }
     for (const a of cur.actions) {
       if (!(await detectAction(a, { taken, fileMatches, doneWhen: (p) => sh.doneWhen(p) }))) continue
-      if (namedRootCause(scenario, now)) onTakeAction?.(a.id)
-      else if (!warned.current.has(a.id)) {
+      if (namedRootCause(scenario, now)) {
+        if (take) onTakeAction?.(a.id)
+      } else if (!warned.current.has(a.id)) {
         warned.current.add(a.id)
         notes.push(`(Saved. The game counts this as a fix once you've named the root cause.)`)
       }
@@ -180,6 +182,8 @@ export function useTerminalSession(
             replayEdits.current = undefined
             replayAnswers.current = undefined
           }
+          const note = await checkFixes(sh, snapshot.slice(0, next < 0 ? undefined : next), false)
+          output = [output, note].filter(Boolean).join('\n')
         }
         rebuilt.push({ id: id(), prompt, input: cmd, output })
       }

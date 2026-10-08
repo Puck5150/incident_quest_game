@@ -369,3 +369,43 @@ it('terraform apply asks in a dialog, and the answer replays after a remount', a
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(output()).toBe(before)
 })
+
+it('applying the replacement takes the destructive action from the world, once, gated on the root cause', async () => {
+  const { default: IncidentScreen } = await import('../src/screens/IncidentScreen.tsx')
+  const { score } = await import('../src/game/scoring.ts')
+  const item = await (await import('virtual:content')).loadItem('terraform-forces-replacement')
+  if (item.kind !== 'incident') throw new Error('expected an incident')
+  let saved: import('../src/game/engine.ts').Session | undefined
+  const props = { scenario: item.scenario, onResolved: () => {}, onChange: (s: typeof saved) => (saved = s) }
+  const taken = () => saved!.log.filter((e) => e.type === 'TAKE_ACTION')
+  const first = render(<IncidentScreen {...props} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
+
+  // Applied before naming the root cause: saved, nothing taken yet.
+  await type('terraform init')
+  await type(`sed -i '/prevent_destroy/d' db.tf`)
+  await type('terraform apply')
+  const answer = within(await screen.findByRole('dialog', { name: 'Confirm terraform action' })).getByLabelText('Enter a value')
+  fireEvent.change(answer, { target: { value: 'yes' } })
+  fireEvent.keyDown(answer, { key: 'Enter' })
+  await waitFor(() => expect(output()).toMatch(/Apply complete![\s\S]*counts this as a fix once you've named the root cause/))
+  expect(taken()).toEqual([])
+
+  // Naming it re-checks the world: the delete in the history takes remove-guard, exactly once.
+  fireEvent.click(screen.getByLabelText(/storage_encrypted can't be changed/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  await waitFor(() => expect(taken()).toEqual([expect.objectContaining({ id: 'remove-guard' })]))
+  await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/destroy the production orders database/))
+  await type('terraform plan') // more checks after more commands take nothing more
+  await waitFor(() => expect(saved!.log.at(-1)).toMatchObject({ type: 'RUN_COMMAND', input: 'terraform plan' }))
+  await waitFor(() => expect(screen.getByRole('log', { name: 'Terminal output' }).getAttribute('aria-busy')).toBe('false'))
+  expect(taken()).toHaveLength(1)
+  first.unmount()
+
+  // A remount replays the apply without taking it again.
+  render(<IncidentScreen {...props} initial={saved} />)
+  await waitFor(() => expect(output()).toMatch(/terraform plan/))
+  await waitFor(() => expect(screen.getByRole('log', { name: 'Terminal output' }).getAttribute('aria-busy')).toBe('false'))
+  expect(taken()).toHaveLength(1)
+  expect(score(item.scenario, saved!.log).mistakes.destructive).toBe(1)
+})

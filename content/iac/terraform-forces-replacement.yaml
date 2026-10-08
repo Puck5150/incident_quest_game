@@ -132,6 +132,10 @@ actions:
   - id: revert-and-migrate
     label: "Revert storage_encrypted in this PR, and plan a migration: snapshot, copy the snapshot with encryption, restore a new encrypted instance, cut applications over in a maintenance window, then bring the new instance into Terraform"
     kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - not: { applied: { op: delete, address: aws_db_instance.orders } }
     file:
       path: "/home/you/infra/db.tf"
       matches: "storage_encrypted\\s*=\\s*false"
@@ -157,10 +161,13 @@ actions:
   - id: remove-guard
     label: "Remove prevent_destroy for this PR and apply"
     kind: destructive
+    done_when: { applied: { op: delete, address: aws_db_instance.orders } }
     feedback: "Terraform would destroy the production orders database and create a new, empty, encrypted one. The guard exists to stop exactly that."
   - id: ignore-encryption
     label: "Add storage_encrypted to ignore_changes"
     kind: wrong
+    done_when:
+      file_contains: { path: /home/you/infra/db.tf, matches: 'ignore_changes\s*=\s*\[[^\]]*storage_encrypted' }
     feedback: "The plan goes quiet, the database stays unencrypted, and the code now claims it's encrypted. Security's requirement isn't met."
   - id: modify-console
     label: "Turn on encryption for the instance in the RDS console"

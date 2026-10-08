@@ -13,6 +13,14 @@ const play = async (...lines: string[]) => {
   return { sh, out }
 }
 const db = () => `/home/you/infra/db.tf`
+// Whether the session would take an action now: its file check (if any) and its done_when (if any) both hold.
+const detected = async (sh: IncidentShell, id: string) => {
+  const a = scenario.actions.find((x) => x.id === id)!
+  if (!a.file && !a.done_when) return false
+  if (a.file && !new RegExp(a.file.matches, 'm').test((await sh.read(a.file.path)) ?? '')) return false
+  return !a.done_when || (await sh.doneWhen(a.done_when))
+}
+const detectedAll = async (sh: IncidentShell) => Object.fromEntries(await Promise.all(scenario.actions.map(async (a) => [a.id, await detected(sh, a.id)])))
 
 describe('terraform-forces-replacement on the simulator', () => {
   it('is backed by the simulator, not by scripted terraform output', () => {
@@ -64,6 +72,37 @@ describe('terraform-forces-replacement on the simulator', () => {
     const { sh, out } = await play('cd ~/infra', `sed -i 's/prevent_destroy = true/prevent_destroy = true\\n    ignore_changes = [storage_encrypted]/' db.tf`, 'terraform plan')
     expect(out[2].output).toContain('No changes.')
     expect(new RegExp(fix.file!.matches, 'm').test((await sh.read(db()))!)).toBe(false)
+  })
+
+  it('done_when, ideal path: reverting without ever applying is the fix, and nothing else', async () => {
+    const { sh } = await play('cd ~/infra')
+    expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': false, 'ignore-encryption': false, 'modify-console': false })
+    await sh.run("sed -i 's/storage_encrypted   = true/storage_encrypted   = false/' db.tf", atStage(scenario, 0), new Set())
+    expect((await sh.run('terraform plan', atStage(scenario, 0), new Set())).output).toContain('No changes.')
+    expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': true, 'remove-guard': false, 'ignore-encryption': false, 'modify-console': false })
+  })
+
+  it('done_when, trap path: applying the replacement is the destructive action, and a later revert is no fix', async () => {
+    const { sh, out } = await play('cd ~/infra', `sed -i '/prevent_destroy/d' db.tf`, 'terraform apply -auto-approve')
+    expect(out[2].output).toContain('Apply complete! Resources: 1 added, 0 changed, 1 destroyed.')
+    expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': true, 'ignore-encryption': false, 'modify-console': false })
+
+    const run = (l: string) => sh.run(l, atStage(scenario, 0), new Set())
+    await run("sed -i 's/storage_encrypted   = true/storage_encrypted   = false/' db.tf")
+    expect(new RegExp(fix.file!.matches, 'm').test((await sh.read(db()))!)).toBe(true) // the file looks fixed
+    const plan = (await run('terraform plan')).output
+    expect(plan).toContain('# aws_db_instance.orders must be replaced') // the new instance is encrypted now
+    expect(plan).toMatch(/storage_encrypted\s+= true -> false # forces replacement/)
+    expect(await detected(sh, 'revert-and-migrate')).toBe(false)
+
+    await run(`sed -i 's/^  lifecycle {$/  lifecycle {\\n    prevent_destroy = true/' db.tf`) // the guard back, too
+    expect(await sh.read(db())).toMatch(/lifecycle \{\n\s+prevent_destroy = true\n/)
+    expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': true, 'ignore-encryption': false, 'modify-console': false })
+  })
+
+  it('done_when: ignore_changes on storage_encrypted is detected as that wrong action only', async () => {
+    const { sh } = await play('cd ~/infra', `sed -i 's/prevent_destroy = true/prevent_destroy = true\\n    ignore_changes = [storage_encrypted]/' db.tf`)
+    expect(await detectedAll(sh)).toEqual({ 'revert-and-migrate': false, 'remove-guard': false, 'ignore-encryption': true, 'modify-console': false })
   })
 
   it('the other evidence is findable: the provider docs file, the scripted git diff and AWS command', () => {
