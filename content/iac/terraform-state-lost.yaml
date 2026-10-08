@@ -17,9 +17,7 @@ ticket:
 environment: |
   The API stack (an S3 bucket for app logs, CloudWatch Logs log groups for
   the API and the worker, and the ECS task role) lives in account
-  123456789012, us-east-1.
-  The Terraform code in ~/infra has no backend block, so state was kept in a
-  local terraform.tfstate, which .gitignore keeps out of the repo.
+  123456789012, us-east-1, and is defined by the Terraform code in ~/infra.
   Production services write to the bucket and both log groups around the
   clock.
 
@@ -32,6 +30,69 @@ terminal:
         {
             "BucketRegion": "us-east-1",
             "AccessPointAlias": false
+        }
+    - match: "aws s3api head-bucket --bucket acme-app-logs --region us-east-1"
+      evidence: exists-in-aws
+      output: |
+        {
+            "BucketRegion": "us-east-1",
+            "AccessPointAlias": false
+        }
+    - match: "aws iam get-role --role-name acme-task-role"
+      evidence: exists-in-aws
+      output: |
+        {
+            "Role": {
+                "Path": "/",
+                "RoleName": "acme-task-role",
+                "RoleId": "AROA3XFRBF23TASKROLE",
+                "Arn": "arn:aws:iam::123456789012:role/acme-task-role",
+                "CreateDate": "2024-03-11T14:02:37+00:00",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ecs-tasks.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "MaxSessionDuration": 3600,
+                "RoleLastUsed": {
+                    "LastUsedDate": "2026-10-08T09:41:12+00:00",
+                    "Region": "us-east-1"
+                }
+            }
+        }
+    - match: "aws logs describe-log-groups --log-group-name-prefix /acme"
+      evidence: exists-in-aws
+      output: |
+        {
+            "logGroups": [
+                {
+                    "logGroupName": "/acme/api",
+                    "creationTime": 1710165757000,
+                    "retentionInDays": 30,
+                    "metricFilterCount": 0,
+                    "arn": "arn:aws:logs:us-east-1:123456789012:log-group:/acme/api:*",
+                    "storedBytes": 48213377024,
+                    "logGroupClass": "STANDARD",
+                    "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/acme/api"
+                },
+                {
+                    "logGroupName": "/acme/worker",
+                    "creationTime": 1710165758000,
+                    "retentionInDays": 14,
+                    "metricFilterCount": 0,
+                    "arn": "arn:aws:logs:us-east-1:123456789012:log-group:/acme/worker:*",
+                    "storedBytes": 9127735296,
+                    "logGroupClass": "STANDARD",
+                    "logGroupArn": "arn:aws:logs:us-east-1:123456789012:log-group:/acme/worker"
+                }
+            ]
         }
     - match: "aws sts get-caller-identity"
       evidence: right-account
@@ -101,18 +162,21 @@ terraform:
           bucket: acme-app-logs
           bucket_domain_name: acme-app-logs.s3.amazonaws.com
           force_destroy: false
+          tags_all: {}
       - type: aws_cloudwatch_log_group
         attrs:
           id: /acme/api
           arn: "arn:aws:logs:us-east-1:123456789012:log-group:/acme/api"
           name: /acme/api
           retention_in_days: 30
+          tags_all: {}
       - type: aws_iam_role
         attrs:
           id: acme-task-role
           arn: "arn:aws:iam::123456789012:role/acme-task-role"
           name: acme-task-role
           path: /
+          tags_all: {}
           assume_role_policy: '{"Statement":[{"Action":"sts:AssumeRole","Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"}}],"Version":"2012-10-17"}'
       - type: aws_cloudwatch_log_group
         attrs:
@@ -120,6 +184,7 @@ terraform:
           arn: "arn:aws:logs:us-east-1:123456789012:log-group:/acme/worker"
           name: /acme/worker
           retention_in_days: 14
+          tags_all: {}
   evidence:
     - evidence: no-state
       command: state list
@@ -134,7 +199,7 @@ hypotheses:
     correct: true
   - id: deleted
     text: "Someone deleted the resources in AWS, so Terraform wants to recreate them."
-    feedback: "head-bucket answers for acme-app-logs in this account, and an apply fails with already-exists errors. Terraform plans a create for anything missing from its state, whether or not the object exists in AWS."
+    feedback: "head-bucket, get-role and describe-log-groups all find the objects in this account, and an apply fails with already-exists errors. Terraform plans a create for anything missing from its state, whether or not the object exists in AWS."
   - id: renamed
     text: "The resource names in the code changed, so Terraform sees them as new resources."
     feedback: "A rename in code would show a destroy for the old address next to each create. Here nothing is destroyed because there's nothing in state to destroy: state list finds no state file at all."
@@ -161,7 +226,7 @@ actions:
   - id: apply-anyway
     label: "Run terraform apply and let it create the missing resources"
     kind: wrong
-    feedback: "The creates fail because the names are taken: S3 answers BucketAlreadyOwnedByYou, IAM EntityAlreadyExists, CloudWatch Logs ResourceAlreadyExistsException. State stays empty and nothing is fixed. A type without a unique name, like an EC2 instance, would simply have been created a second time."
+    feedback: "The creates fail because the names are taken: the provider finds acme-app-logs already there (BucketAlreadyExists), IAM answers EntityAlreadyExists and CloudWatch Logs ResourceAlreadyExistsException for both log groups. State stays empty and nothing is fixed. A type without a unique name, like an EC2 instance, would simply have been created a second time."
   - id: delete-and-recreate
     label: "Delete the four live resources (in the console, or import them and run terraform destroy) so apply can create them cleanly"
     kind: destructive
@@ -209,7 +274,7 @@ debrief:
     recovery is to import each live object back into state until the plan
     is empty.
   ideal_path:
-    - "Check state: there's no state file."
+    - "Run terraform init on the fresh clone, then check state: there's no state file."
     - "Read the plan: it wants to create all four resources."
     - "Confirm in AWS that the resources exist, in the right account."
     - "Import each object with terraform import or import blocks, using each type's import ID."
@@ -262,5 +327,8 @@ sources:
     url: "https://docs.aws.amazon.com/cli/latest/reference/s3api/head-bucket.html"
     retrieved: 2026-10-08
 command_notes:
+  "aws s3api head-bucket --bucket acme-app-logs --region us-east-1": "Same answer with the region pinned: the bucket is in us-east-1, where the provider is configured."
+  "aws iam get-role --role-name acme-task-role": "The task role exists, was created in 2024 and was used this morning. Terraform just has no record of it."
+  "aws logs describe-log-groups --log-group-name-prefix /acme": "Both log groups exist with the retention the code sets, and they hold tens of GB of logs. Nothing was deleted."
   "aws s3api head-bucket --bucket acme-app-logs": "head-bucket succeeds only if the bucket exists and you can access it. It does, in this account, even though Terraform has no record of it."
   "aws sts get-caller-identity": "The account is 123456789012, the stack's account, so the CLI is not pointed somewhere else."

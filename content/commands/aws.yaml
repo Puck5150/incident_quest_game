@@ -311,6 +311,16 @@
     - { command: "Lambda console > Configuration", note: "The same settings by tab." }
   docs: { title: "AWS CLI: get-function-configuration", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/get-function-configuration.html" }
 
+- id: aws-logs-describe-log-groups
+  match: "^aws logs describe-log-groups"
+  summary: "Lists CloudWatch Logs log groups with their retention, stored bytes and ARN."
+  parts:
+    - { token: "--log-group-name-prefix PREFIX", meaning: "Only log groups whose names start with PREFIX." }
+  why: "Shows whether a log group exists and what retention it really has, without reading any events."
+  alternatives:
+    - { command: "CloudWatch console > Log groups", note: "The same list, with a search box." }
+  docs: { title: "AWS CLI: logs describe-log-groups", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/describe-log-groups.html" }
+
 - id: aws-logs-tail
   match: "^aws logs tail "
   summary: "Prints recent events from a CloudWatch Logs log group."
@@ -359,6 +369,7 @@
   summary: "Checks that a bucket exists and you can access it, without listing it."
   parts:
     - { token: "--bucket NAME", meaning: "The bucket." }
+    - { token: "--region REGION", meaning: "The Region to send the request to (a global option)." }
   why: "Returns quietly with the bucket's Region if it exists and you have access; 404 means it doesn't exist (any more), 403 that it exists but you're denied."
   alternatives:
     - { command: "aws s3 ls s3://NAME", note: "Also needs list permission." }

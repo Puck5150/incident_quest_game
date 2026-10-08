@@ -232,7 +232,7 @@ describe('executeApply: failures', () => {
     const reality: Reality = { [realityKey('aws_s3_bucket', 'legacy')]: { id: 'legacy', arn: 'arn:aws:s3:::legacy', bucket: 'legacy' } }
     const r = run(tf, { reality })
     expect(ops(r)).toEqual(['!create aws_s3_bucket.b'])
-    expect(r.errors[0].summary).toMatch(/^creating S3 Bucket \(legacy\):.*BucketAlreadyOwnedByYou/)
+    expect(r.errors[0].summary).toBe('creating S3 Bucket (legacy): BucketAlreadyExists')
     expect(r.errors[0]).toMatchObject({ file: 'main.tf', line: 1, context: 'resource "aws_s3_bucket" "b"', address: 'aws_s3_bucket.b' })
     expect(r.state.resources).toEqual([])
     expect(r.reality).toEqual(reality)

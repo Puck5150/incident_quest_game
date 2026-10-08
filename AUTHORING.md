@@ -592,7 +592,7 @@ terraform:
     - { evidence: wrong_ws, command: workspace show, contains: staging }
 ```
 
-The fix is `terraform workspace select default` and a clean plan; applying in `staging` fails with the bucket already owned.
+The fix is `terraform workspace select default` and a clean plan; applying in `staging` fails with `creating S3 Bucket (acme-logs): BucketAlreadyExists` (the provider checks for the bucket first in us-east-1, where CreateBucket would succeed for a bucket you own).
 
 ### `done_when`: actions detected from the world
 

@@ -75,7 +75,7 @@ describe('alreadyExists', () => {
     [realityKey('aws_db_instance', 'db-ORDERS1234')]: { id: 'db-ORDERS1234', identifier: 'orders-db' },
   }
   it('returns the provider error when the natural name is taken', () => {
-    expect(alreadyExists('aws_s3_bucket', { bucket: 'legacy' }, reality, 's')).toMatch(/^creating S3 Bucket \(legacy\): operation error S3: CreateBucket, https response error StatusCode: 409, RequestID: [0-9a-f-]{36}, BucketAlreadyOwnedByYou: /)
+    expect(alreadyExists('aws_s3_bucket', { bucket: 'legacy' }, reality, 's')).toBe('creating S3 Bucket (legacy): BucketAlreadyExists')
     expect(alreadyExists('aws_iam_role', { name: 'app' }, reality, 's')).toContain('EntityAlreadyExists: Role with name app already exists.')
     expect(alreadyExists('aws_sqs_queue', { name: 'jobs' }, reality, 's')).toContain('creating SQS Queue (jobs): QueueNameExists')
   })

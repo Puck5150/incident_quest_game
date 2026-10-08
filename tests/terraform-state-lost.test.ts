@@ -57,7 +57,7 @@ describe('terraform-state-lost on the simulator', () => {
     const { sh, out } = await play('cd ~/infra', 'terraform apply -auto-approve', 'terraform state list')
     const apply = out[1]
     expect(apply.exitCode).toBe(1)
-    expect(apply.output).toContain('BucketAlreadyOwnedByYou')
+    expect(apply.output).toContain('Error: creating S3 Bucket (acme-app-logs): BucketAlreadyExists')
     expect(apply.output).toContain('EntityAlreadyExists: Role with name acme-task-role already exists.')
     expect(apply.output).toContain('creating CloudWatch Logs Log Group (/acme/api)')
     expect(apply.output).toContain('creating CloudWatch Logs Log Group (/acme/worker)')
@@ -118,6 +118,16 @@ describe('terraform-state-lost on the simulator', () => {
     expect(out[6].output).toContain('Apply complete! Resources: 4 added, 0 changed, 0 destroyed.')
     expect(out[7].output).toContain('No changes.')
     expect(await detectedAll(sh)).toEqual({ ...NONE, 'delete-and-recreate': true })
+  })
+
+  it('exists-in-aws can be earned from the bucket, the role or the log groups', () => {
+    const cmds = scenario.terminal!.commands.filter((c) => c.evidence === 'exists-in-aws').map((c) => c.match)
+    expect(cmds).toEqual([
+      'aws s3api head-bucket --bucket acme-app-logs',
+      'aws s3api head-bucket --bucket acme-app-logs --region us-east-1',
+      'aws iam get-role --role-name acme-task-role',
+      'aws logs describe-log-groups --log-group-name-prefix /acme',
+    ])
   })
 
   it('(h) every key evidence tag is awarded on the ideal path', async () => {

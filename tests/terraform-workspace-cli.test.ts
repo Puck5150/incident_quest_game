@@ -107,7 +107,7 @@ describe('terraform workspace new', () => {
     expect(plan.stdout).toContain('Plan: 2 to add, 0 to change, 0 to destroy.')
     const apply = await w.run('apply', '-auto-approve')
     expect(apply.exitCode).toBe(1)
-    expect(apply.stderr).toContain('BucketAlreadyOwnedByYou')
+    expect(apply.stderr).toContain('creating S3 Bucket (legacy): BucketAlreadyExists')
   })
 
   it('refuses an existing name and an invalid one', async () => {

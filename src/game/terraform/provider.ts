@@ -85,7 +85,8 @@ const TYPES: Record<string, TypeInfo> = {
     defaults: (id) => ({ bucket_domain_name: `${id}.s3.amazonaws.com` }),
     natural: {
       key: 'bucket',
-      error: (n, rid) => `creating S3 Bucket (${n}): operation error S3: CreateBucket, https response error StatusCode: 409, RequestID: ${rid}, BucketAlreadyOwnedByYou: Your previous request to create the named bucket succeeded and you already own it.`,
+      // us-east-1 answers CreateBucket for a bucket you own with 200 OK, so the provider checks first (internal/service/s3/bucket.go)
+      error: (n) => `creating S3 Bucket (${n}): BucketAlreadyExists`,
     },
     seconds: [1, 1, 1],
   },

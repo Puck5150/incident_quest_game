@@ -395,8 +395,9 @@ from your own experience and tick them off.
       and restore otherwise); in the AWS provider source, storage_encrypted is
       ForceNew and identifier is NOT (it renames in place), so the
       forces-replacement incident uses encryption, not a rename.
-- [ ] Representative output: the S3 BucketAlreadyOwnedByYou error as the
-      provider prints it, git/grep output. (terraform-forces-replacement's
+- [ ] Representative output: the S3 duplicate-bucket error as the provider
+      prints it (in us-east-1 the simulator now prints
+      `creating S3 Bucket (NAME): BucketAlreadyExists`, see TF4), git/grep output. (terraform-forces-replacement's
       `terraform plan` output is now printed by the simulator, no longer scripted.)
 
 ## Microservices to 8 (2026-10-02): idempotency-double-charge, breaking-api-field, rate-limit-retry-after, trace-context-dropped, transactional-outbox, jwt-clock-skew
@@ -565,7 +566,7 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] (fix wave E) The undeclared-variable warnings print at most two, then a summary of the rest, sorted by name (real order may differ).
 
 ## terraform simulator (apply engine, TF3a)
-- [ ] Provider error texts (`BucketAlreadyOwnedByYou`, `EntityAlreadyExists`, `ResourceAlreadyExistsException`, `QueueNameExists`, `DBInstanceAlreadyExists`, `DependencyViolation` for VPC/subnet/security group): shaped like the AWS SDK v2 errors the provider wraps, with invented request ids; confirm each against real provider output.
+- [ ] Provider error texts (S3 `creating S3 Bucket (NAME): BucketAlreadyExists` since TF4: verified against the provider source, see the TF4 section; `EntityAlreadyExists`, `ResourceAlreadyExistsException`, `QueueNameExists`, `DBInstanceAlreadyExists`, `DependencyViolation` for VPC/subnet/security group): shaped like the AWS SDK v2 errors the provider wraps, with invented request ids; confirm each against real provider output.
 - [ ] Generated ids and ARNs per resource type (formats, `aws_db_instance.id` = identifier, `aws_sqs_queue.id` = URL, `aws_ecs_service.id` = ARN) and the defaults filled on create (engine_version 15.4, allocated_storage 20, availability_zone us-east-1a, private_ip 10.0.x.y): from memory of the provider.
 - [ ] Durations per type (create/update/delete seconds) are plausible, not measured.
 - [ ] Replacements are always destroy-then-create; `create_before_destroy` ordering (two objects at one address, "deposed" objects) is not modeled.
@@ -648,10 +649,14 @@ Workspaces:
 
 Simulator defects found while authoring (fix later in the simulator, not in content):
 - [ ] SIMULATOR defect: `aws_sqs_queue` already-exists should adopt the existing queue when the attributes are identical. Per the SQS CreateQueue API Reference (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html), CreateQueue with an existing name and the same attributes returns the existing queue's URL; `QueueNameExists` is returned only when attribute values differ. The simulator always fails with `QueueNameExists ... different value for attribute VisibilityTimeout`. (terraform-state-lost uses a second log group instead of a queue because of this.)
-- [ ] SIMULATOR defect: `terraform import` leaves `tags_all` out of the imported state; the real provider stores `tags_all = {}`, so `state show` after an import omits it.
+- [ ] SIMULATOR defect: `terraform import` copies the cloud object's attributes verbatim, so a `cloud.add` object without `tags_all` imports without it (the real provider's read stores `tags_all = {}`). terraform-state-lost works around it by authoring `tags_all: {}` on each cloud object; the provider read should fill it instead.
+- [ ] SIMULATOR gap: a fresh clone needs `terraform init` before `plan` works in real Terraform (no `.terraform/`, so plan fails with "Required plugins are not installed" / "Inconsistent dependency lock file"), but the simulator's lab starts initialized unless `initialized: false`; terraform-state-lost leaves it initialized and only mentions init in the debrief's ideal path. Decide whether fresh-clone stories should set `initialized: false`.
+- [x] FIXED in simulator (TF4, authorised): the S3 duplicate-create error. AWS CreateBucket returns BucketAlreadyOwnedByYou in every Region except us-east-1, where it returns 200 OK for a bucket you own; the provider therefore calls findBucket first in us-east-1 and fails with `creating S3 Bucket (NAME): BucketAlreadyExists` (terraform-provider-aws `internal/service/s3/bucket.go`, the us-east-1 special case, read 2026-10-08). The simulator models us-east-1 only, so `src/game/terraform/provider.ts` now prints that text. If other Regions are ever modeled, they need the `BucketAlreadyOwnedByYou` form.
+- [ ] content/iac/terraform-import-existing.yaml (scripted legacy incident, migrates in TF7) still says BucketAlreadyOwnedByYou for a us-east-1 bucket (CI log line, hypothesis feedback, evidence label, debrief, source). Correct it to the us-east-1 behavior (`creating S3 Bucket (NAME): BucketAlreadyExists` from the provider's pre-check) when migrating.
 
 terraform-state-lost:
 - [ ] `aws s3api head-bucket` output (`BucketRegion`, `AccessPointAlias: false`): both are documented output fields, but the CLI reference example says a successful call returns no output. Check what CLI v2 prints today for a general purpose bucket.
 - [ ] `aws sts get-caller-identity` output: the `UserId` (role id + session name) and the `PlatformEngineer` role are invented.
+- [ ] `aws iam get-role` and `aws logs describe-log-groups` outputs: field names follow the CLI references (describe-log-groups fields checked); RoleId, dates, creationTime and storedBytes values are invented.
 - [ ] Story (local state on a wiped laptop, `.gitignore` excluding `*.tfstate`) is illustrative, not from a published incident.
 - [ ] Provider import ID formats (bucket name, role name, log group name) verified on the provider's GitHub docs (`website/docs/r/*.html.markdown`); the registry pages render with JS and could not be opened.
