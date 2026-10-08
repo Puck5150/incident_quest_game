@@ -577,3 +577,17 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] An `update` fault never fires for an item the plan turns into a replace (it runs as delete + create); script `delete`/`create` faults for those.
 - [ ] A dependency knot the ordering cannot untangle is reported as `Cycle: <addresses>` (no source location), or surfaces as the cloud's DependencyViolation; real Terraform reports cycles at plan time with its own wording.
 - [ ] Security groups created without `vpc_id` get an invented default-VPC id (`vpc-0…`); `aws_db_instance.storage_encrypted` defaults to false on create.
+
+## terraform simulator (apply/destroy commands, TF3b)
+- [ ] Confirm prompt wording and layout (`Enter a value:`, blank lines with `-auto-approve`), and `Apply cancelled.` / `Destroy cancelled.` with exit 1: unverified against real Terraform 1.9.
+- [ ] `Still creating...` cadence and the `[id=X, 10s elapsed]` form.
+- [ ] Import progress lines.
+- [ ] Saved-plan marker file (real plan files are zips) and the wording of the stale/load errors.
+- [ ] Wording of `Can't set variables/-replace when applying a saved plan`.
+- [ ] Apply with drift but no changes writes nothing; real Terraform saves the refreshed state and bumps the serial.
+- [ ] A saved plan applies with the apply-time refresh setting and the current reality.
+- [ ] `destroy` on empty state prints the normal No changes block; real is probably `No changes. No objects need to be destroyed.`
+- [ ] Piped empty stdin is treated as declined; real Terraform would error on EOF.
+- [ ] `Outputs:` section after apply: format and which outputs show.
+- [ ] Help one-liners for `apply`/`destroy` (help currently lists just the commands).
+- [ ] The xterm confirm overlay has only been tested in jsdom; check it by hand in a browser.

@@ -459,12 +459,52 @@ Fields:
 - `cloud`: what really exists. By default it is exactly what `state` says. `cloud.patch` changes attributes of an existing object (drift), `cloud.delete` removes one, `cloud.add` creates one Terraform does not manage.
 - `evidence`: awards a tag when the named subcommand's output contains the substring. Check the exact text by running the command in the shell.
 
-Commands that work: `init`, `validate`, `plan`, `show`, `state list|show|pull`, `output`, `workspace show|list`, `version`. Writing commands (`apply`, `import`, …) answer "not simulated yet".
+Commands that work: `init`, `validate`, `plan`, `show`, `state list|show|pull`, `output`, `workspace show|list`, `version`, `apply`, `destroy`. Other writing commands (`import`, `taint`, …) answer "not simulated yet".
 
 Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
+
+### Apply, destroy and faults
+
+`terraform apply` and `terraform destroy` really change the simulated state
+and cloud. They print the plan, ask for confirmation, then one progress line
+per resource (`Creating...`, `Still creating... [10s elapsed]`,
+`Creation complete after 3s [id=...]`) and `Apply complete! Resources: ...`,
+plus an `Outputs:` section.
+
+- Confirmation: the player types `yes` in a dialog, passes `-auto-approve`, or pipes it (`echo yes | terraform apply`). Anything else (or empty piped input) prints `Apply cancelled.` / `Destroy cancelled.` and exits 1.
+- Saved plans: `terraform plan -out=f` then `terraform apply f` applies exactly that plan without asking. If state or the cloud changed since, it fails as stale. Variables and `-replace` cannot be given with a saved plan.
+- A failed apply leaves a half-applied world: what succeeded before the error stays in state and the cloud; the rest does not happen. The player fixes the cause and applies again.
+- `terraform destroy` honours `prevent_destroy` and fails the same way a plan would.
+
+`faults` script provider failures. They are the only way a create/update/delete
+fails besides the simulator's own errors:
+
+```yaml
+terraform:
+  faults:
+    - at: aws_s3_bucket.logs        # instance or resource address
+      on: create                    # create | update | delete
+      error: "creating S3 Bucket (acme-logs): operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied"
+      until_actions: [attach_policy]  # stops failing once the player takes this action
+    - at: aws_sqs_queue.jobs
+      on: create
+      error: "creating SQS Queue (jobs): RequestError: send request failed (timeout)"
+      times: 2                      # fails twice, then succeeds
+```
+
+Fields: `at`, `on`, `error` (the full text shown after `Error:`), `times`
+(default: always), `if: { attr, equals }` (only when the new object's
+attribute has that value; create/update), `until_actions` (list of action ids;
+the fault stops once ALL are taken).
+
+Rules:
+- `times` counts across the whole play session. A reload replays the player's commands, so the counts rebuild the same way.
+- A fault with `on: update` never fires for an item the plan makes a replacement (it runs as delete then create); use `delete`/`create` faults.
+- Faults are checked before the simulator's own already-exists and `DependencyViolation` errors.
+- Without `until_actions` (or with an empty list) a fault is never switched off by an action; limit it with `times` or the player's edit to the `.tf`.
 
 Known gaps to design around:
 - Sensitive values are not tracked through expressions: a secret copied into another attribute prints in the clear.
 - Lists and sets render the way the AWS provider shows its attributes.
-- `terraform apply` is not available, so the fix is always a file edit that makes the plan clean.
+- A fix can be a file edit plus the player running `terraform apply`; `done_when` for apply is not available yet, so verification is still a clean `terraform plan`.
 - The block is top-level only; there are no per-stage `terraform` blocks.
