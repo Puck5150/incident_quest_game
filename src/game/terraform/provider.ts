@@ -57,7 +57,7 @@ const TYPES: Record<string, TypeInfo> = {
   aws_security_group: {
     id: (c) => `sg-0${c.h('sg', 8)}`,
     arn: ec2('security-group'),
-    defaults: (_i, c) => ({ name: `terraform-${c.h('name', 20)}`, ingress: [], egress: [] }),
+    defaults: (_i, c) => ({ name: `terraform-${c.h('name', 20)}`, vpc_id: `vpc-0${c.h('dvpc', 8)}`, ingress: [], egress: [] }),
     seconds: [2, 2, 1],
   },
   aws_instance: {
@@ -72,7 +72,7 @@ const TYPES: Record<string, TypeInfo> = {
   aws_db_instance: {
     id: (c) => str(c.p.identifier) ?? `db-${c.h('db', 8)}`,
     arn: (id) => `arn:aws:rds:${REGION}:${ACCOUNT}:db:${id}`,
-    defaults: (id, c) => ({ endpoint: `${id}.c${c.h('ep', 10)}.${REGION}.rds.amazonaws.com:5432`, engine_version: '15.4', allocated_storage: 20, multi_az: false }),
+    defaults: (id, c) => ({ endpoint: `${id}.c${c.h('ep', 10)}.${REGION}.rds.amazonaws.com:5432`, engine_version: '15.4', allocated_storage: 20, multi_az: false, storage_encrypted: false }),
     natural: {
       key: 'identifier',
       error: (n, rid) => `creating RDS DB Instance (${n}): operation error RDS: CreateDBInstance, https response error StatusCode: 400, RequestID: ${rid}, DBInstanceAlreadyExists: DB instance already exists`,

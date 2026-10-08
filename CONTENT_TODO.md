@@ -572,3 +572,8 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] A failed create after a successful destroy leaves the resource missing from state, as real Terraform does; there is no rollback.
 - [ ] Apply treats the first dependency violation as final (no retries); real providers retry some eventual-consistency errors for minutes before failing.
 - [ ] State `dependencies` for the starting state are derived from ids found in attributes; real state records the configuration's references.
+- [ ] After a partially failed apply, `state.outputs` keep their previous values (they are only recomputed after a clean apply); real Terraform updates the outputs it can evaluate.
+- [ ] The simulated cloud's `referencedBy` treats any attribute that mentions an id (tags included) as a dependency, so a tag holding a subnet or VPC id blocks deleting it; real AWS only blocks on real attachments.
+- [ ] An `update` fault never fires for an item the plan turns into a replace (it runs as delete + create); script `delete`/`create` faults for those.
+- [ ] A dependency knot the ordering cannot untangle is reported as `Cycle: <addresses>` (no source location), or surfaces as the cloud's DependencyViolation; real Terraform reports cycles at plan time with its own wording.
+- [ ] Security groups created without `vpc_id` get an invented default-VPC id (`vpc-0…`); `aws_db_instance.storage_encrypted` defaults to false on create.

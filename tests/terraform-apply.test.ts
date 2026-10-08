@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { executeApply, type ApplyContext, type Fault } from '../src/game/terraform/apply.ts'
 import type { Value } from '../src/game/terraform/eval.ts'
+import { planConfig } from '../src/game/terraform/plan.ts'
 import { realityKey, type Reality } from '../src/game/terraform/refresh.ts'
 import { emptyState, findInstance, listAddresses, type State } from '../src/game/terraform/state.ts'
 
@@ -141,6 +142,63 @@ describe('executeApply: update, replace, destroy', () => {
     expect(ops(r)).toEqual(['delete aws_vpc.main', 'create aws_vpc.main', 'update aws_instance.w'])
     const vpc = findInstance(r.state, 'aws_vpc.main')!.instance.attributes
     expect(findInstance(r.state, 'aws_instance.w')!.instance.attributes.tags).toEqual({ v: vpc.id })
+  })
+
+  it('updates a dependent before shrinking count under it, without stalling', () => {
+    const S = (n: number) => ({ ...SUBNET, id: `subnet-${n}`, arn: `arn:subnet-${n}`, cidr_block: `10.0.${n}.0/24` })
+    const W = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', subnet_id: 'subnet-0' }
+    const state = stateOf(
+      { type: 'aws_subnet', name: 'a', key: 0, attrs: S(0) },
+      { type: 'aws_subnet', name: 'a', key: 1, attrs: S(1) },
+      { type: 'aws_instance', name: 'w', attrs: W, deps: ['aws_subnet.a'] },
+    )
+    const tf = 'resource "aws_subnet" "a" {\n  count = 1\n  vpc_id = "vpc-1"\n  cidr_block = "10.0.${count.index}.0/24"\n}\nresource "aws_instance" "w" {\n  ami = "ami-1"\n  instance_type = "t3.small"\n  subnet_id = aws_subnet.a[0].id\n}\n'
+    const r = run(tf, { state })
+    expect(r.errors).toEqual([])
+    expect(ops(r)).toEqual(['update aws_instance.w', 'delete aws_subnet.a[1]'])
+  })
+
+  it('never ends silently with work left: a dependency knot surfaces as the cloud error', () => {
+    const W = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro', tags: { s: 'subnet-1', v: 'vpc-1' }, tags_all: { s: 'subnet-1', v: 'vpc-1' } }
+    const state = stateOf(
+      { type: 'aws_vpc', name: 'main', attrs: VPC },
+      { type: 'aws_subnet', name: 'a', attrs: SUBNET, deps: ['aws_vpc.main'] },
+      { type: 'aws_instance', name: 'w', attrs: W, deps: ['aws_subnet.a', 'aws_vpc.main'] },
+    )
+    const tf = 'resource "aws_vpc" "main" {\n  cidr_block = "10.1.0.0/16"\n}\nresource "aws_instance" "w" {\n  ami = "ami-1"\n  instance_type = "t3.micro"\n  tags = { v = aws_vpc.main.id }\n}\n'
+    const r = run(tf, { state })
+    expect(ops(r)).toEqual(['!delete aws_subnet.a'])
+    expect(r.errors).toHaveLength(1)
+    expect(r.errors[0].summary).toContain('DependencyViolation')
+  })
+
+  it('reports a cycle rather than ending silently when nothing can ever run', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'x', attrs: VPC, deps: ['aws_vpc.y'] }, { type: 'aws_vpc', name: 'y', attrs: { ...VPC, id: 'vpc-2' }, deps: ['aws_vpc.x'] })
+    const r = run('# none\n', { state })
+    expect(r.steps).toEqual([])
+    expect(r.errors).toEqual([{ severity: 'error', summary: 'Cycle: aws_vpc.x, aws_vpc.y', detail: '', file: '', line: 0, col: 0 }])
+    expect(r.state.serial).toBe(0)
+  })
+
+  it('records the configured dependencies on update and bumps serial for state-only changes', () => {
+    const W = { id: 'i-1', arn: 'arn:i-1', ami: 'ami-1', instance_type: 't3.micro' }
+    const state = stateOf({ type: 'aws_instance', name: 'w', attrs: W, deps: ['aws_vpc.gone'] })
+    const r = run('resource "aws_instance" "w" {\n  ami = "ami-1"\n  instance_type = "t3.small"\n}\n', { state })
+    expect(ops(r)).toEqual(['update aws_instance.w'])
+    expect(findInstance(r.state, 'aws_instance.w')!.instance.dependencies).toBeUndefined()
+    const out = run('output "o" {\n  value = "x"\n}\n')
+    expect(out.steps).toEqual([])
+    expect(out.state.serial).toBe(1)
+    const moved = run('resource "aws_vpc" "new" {\n  cidr_block = "10.0.0.0/16"\n}\nmoved {\n  from = aws_vpc.old\n  to   = aws_vpc.new\n}\n', { state: stateOf({ type: 'aws_vpc', name: 'old', attrs: VPC }) })
+    expect(moved.state.serial).toBe(1)
+  })
+
+  it('stores provider defaults for computed force-new attributes, so stating them later is a no-op', () => {
+    const db = (extra: string) => `resource "aws_db_instance" "d" {\n  identifier = "d"\n  engine = "postgres"\n  instance_class = "db.t3.micro"\n  username = "u"\n  password = "p"\n${extra}}\n`
+    const r = run(db(''))
+    expect(r.errors).toEqual([])
+    const p = planConfig({ files: [{ name: 'main.tf', text: db('  storage_encrypted = false\n') }], state: r.state, reality: r.reality, vars: {} })
+    expect(p.items.map((i) => i.action)).toEqual(['noop'])
   })
 
   it('brings a drifted cloud back to the configuration, persisting the refresh first', () => {

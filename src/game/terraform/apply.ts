@@ -50,31 +50,36 @@ const pending = (i: PlanItem) => destroyPhase(i) || i.action === 'create' || i.a
 const opOf = (i: PlanItem): ApplyStep['op'] =>
   i.importing !== undefined ? 'import' : i.action === 'forget' ? 'forget' : destroyPhase(i) ? 'delete' : i.action === 'create' ? 'create' : 'update'
 
-// failed holds instance addresses (an instance is never retried in this run) and
-// resource addresses (nothing that depends on a failed resource is attempted).
 // done holds `${address}:${op}` for every successful step: an op never runs twice
 // on one address, and a created or updated instance is settled for this run, so
 // a plan that never converges (e.g. a value that stays unknown) cannot loop.
-function pickNext(items: PlanItem[], state: State, failed: Set<string>, done: Set<string>): PlanItem | undefined {
+function todoOf(items: PlanItem[], done: Set<string>): PlanItem[] {
   const settled = (a: string) => done.has(`${a}:create`) || done.has(`${a}:update`)
-  const todo = items.filter((i) => pending(i) && !settled(i.address) && !done.has(`${i.address}:${opOf(i)}`))
-  // A plain destroy waits for updates that move off it; a replace does not (its dependents wait for it instead).
+  return items.filter((i) => pending(i) && !settled(i.address) && !done.has(`${i.address}:${opOf(i)}`))
+}
+
+// failed holds instance addresses (an instance is never retried in this run) and
+// resource addresses (nothing that depends on a failed resource is attempted).
+// strict: a plain destroy also waits for updates that move off it (from their
+// state dependencies); a replace does not (its dependents wait for it instead).
+function pickNext(todo: PlanItem[], state: State, failed: Set<string>, strict: boolean): PlanItem | undefined {
   const priorDeps = (o: PlanItem) => findInstance(state, o.address)?.instance.dependencies ?? []
   const tier1 = todo.find(
     (i) =>
       destroyPhase(i) &&
       i.importing === undefined &&
       !failed.has(i.address) &&
-      !todo.some((o) => o !== i && ((destroyPhase(o) && o.dependsOn.includes(res(i))) || (i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
+      !todo.some((o) => o !== i && ((destroyPhase(o) && o.dependsOn.includes(res(i))) || (strict && i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
   )
   if (tier1) return tier1
   const tier2 = todo.find((i) => i.action === 'forget' || i.importing !== undefined)
   if (tier2) return tier2
+  // Plain destroys never hold up a create/update: the updates they matter to already go first.
   return todo.find(
     (i) =>
       (i.action === 'create' || i.action === 'update') &&
       !failed.has(i.address) &&
-      i.dependsOn.every((d) => !failed.has(d) && !todo.some((o) => o !== i && res(o) === d)),
+      i.dependsOn.every((d) => !failed.has(d) && !todo.some((o) => o !== i && o.action !== 'destroy' && res(o) === d)),
   )
 }
 
@@ -136,8 +141,14 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       break
     }
     state = structuredClone(plan.baseState)
-    const i = pickNext(plan.items, state, failed, done)
-    if (!i) break
+    const todo = todoOf(plan.items, done)
+    // If the ordering rules leave nothing ready, drop the soft wait so the cloud's own error shows.
+    const i = pickNext(todo, state, failed, true) ?? pickNext(todo, state, failed, false)
+    if (!i) {
+      // Never end silently with work left over that no failure explains.
+      if (!errors.length && todo.length) errors.push({ severity: 'error', summary: `Cycle: ${todo.map((t) => t.address).join(', ')}`, detail: '', file: '', line: 0, col: 0 })
+      break
+    }
     const seed = `${ctx.seed}:${steps.length}`
     const inst = findInstance(state, i.address)?.instance
     const prior = inst?.attributes
@@ -190,7 +201,11 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       if (error) fail(i, 'update', secs, error)
       else {
         const id = attrs.id as string
-        if (inst) inst.attributes = attrs
+        if (inst) {
+          inst.attributes = attrs
+          if (i.dependsOn.length) inst.dependencies = [...i.dependsOn]
+          else delete inst.dependencies
+        }
         reality.set(realityKey(i.type, id), structuredClone(attrs))
         steps.push({ address: i.address, op: 'update', id, seconds: secs, ok: true })
         done.add(`${i.address}:update`)
@@ -203,6 +218,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
     const final = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: false, skipImports })
     state.outputs = Object.fromEntries(final.outputs.filter((o) => !hasUnknown(o.value)).map((o) => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }]))
   }
-  if (steps.length) state.serial++
+  const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
+  if (steps.length || content(state) !== content(input.state)) state.serial++
   return { plan: first!, steps, errors, state, reality: Object.fromEntries(reality), counts }
 }
