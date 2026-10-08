@@ -1,0 +1,277 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-state-lost
+track: iac
+difficulty: 2
+title: "Terraform wants to create everything that already exists"
+par_minutes: 10
+
+ticket:
+  from: "Platform team"
+  severity: SEV4
+  body: |
+    Priya used to run Terraform for the API stack from her laptop. She's moved
+    to another team and her laptop was wiped and reissued. I cloned ~/infra
+    to bump the log retention and the plan says it will create all four
+    resources, which are all live in prod. Is it safe to just apply?
+
+environment: |
+  The API stack (an S3 bucket for app logs, a CloudWatch Logs log group, the
+  ECS task role and the jobs queue) lives in account 123456789012, us-east-1.
+  The Terraform code in ~/infra has no backend block, so state was kept in a
+  local terraform.tfstate, which .gitignore keeps out of the repo.
+  Production services write to the bucket, the log group and the queue
+  around the clock.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "aws s3api head-bucket --bucket acme-app-logs"
+      evidence: exists-in-aws
+      output: |
+        {
+            "BucketRegion": "us-east-1",
+            "AccessPointAlias": false
+        }
+    - match: "aws sts get-caller-identity"
+      evidence: right-account
+      output: |
+        {
+            "UserId": "AROA3XFRBF23EXAMPLE:you",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/PlatformEngineer/you"
+        }
+    - match: "aws sqs get-queue-url --queue-name acme-jobs"
+      output: |
+        {
+            "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
+        }
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: .gitignore
+      content: |
+        .terraform/
+        *.tfstate
+        *.tfstate.*
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: logs.tf
+      content: |
+        resource "aws_s3_bucket" "app_logs" {
+          bucket = "acme-app-logs"
+        }
+
+        resource "aws_cloudwatch_log_group" "api" {
+          name              = "/acme/api"
+          retention_in_days = 30
+        }
+    - path: iam.tf
+      content: |
+        resource "aws_iam_role" "task" {
+          name = "acme-task-role"
+          assume_role_policy = jsonencode({
+            Version = "2012-10-17"
+            Statement = [{
+              Effect    = "Allow"
+              Action    = "sts:AssumeRole"
+              Principal = { Service = "ecs-tasks.amazonaws.com" }
+            }]
+          })
+        }
+    - path: queue.tf
+      content: |
+        resource "aws_sqs_queue" "jobs" {
+          name = "acme-jobs"
+        }
+  cloud:
+    add:
+      - type: aws_s3_bucket
+        attrs:
+          id: acme-app-logs
+          arn: "arn:aws:s3:::acme-app-logs"
+          bucket: acme-app-logs
+          bucket_domain_name: acme-app-logs.s3.amazonaws.com
+          force_destroy: false
+      - type: aws_cloudwatch_log_group
+        attrs:
+          id: /acme/api
+          arn: "arn:aws:logs:us-east-1:123456789012:log-group:/acme/api"
+          name: /acme/api
+          retention_in_days: 30
+      - type: aws_iam_role
+        attrs:
+          id: acme-task-role
+          arn: "arn:aws:iam::123456789012:role/acme-task-role"
+          name: acme-task-role
+          path: /
+          assume_role_policy: '{"Statement":[{"Action":"sts:AssumeRole","Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"}}],"Version":"2012-10-17"}'
+      - type: aws_sqs_queue
+        attrs:
+          id: "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
+          arn: "arn:aws:sqs:us-east-1:123456789012:acme-jobs"
+          name: acme-jobs
+          url: "https://sqs.us-east-1.amazonaws.com/123456789012/acme-jobs"
+          fifo_queue: false
+          visibility_timeout_seconds: 30
+          message_retention_seconds: 345600
+  evidence:
+    - evidence: no-state
+      command: state list
+      contains: "No state file was found!"
+    - evidence: wants-to-create
+      command: plan
+      contains: "Plan: 4 to add"
+
+hypotheses:
+  - id: state-lost
+    text: "The state file went with Priya's laptop. Terraform has no record of these objects, so it plans to create them all, even though they exist."
+    correct: true
+  - id: deleted
+    text: "Someone deleted the resources in AWS, so Terraform wants to recreate them."
+    feedback: "head-bucket answers for acme-app-logs in this account, and an apply fails with already-exists errors. Terraform plans a create for anything missing from its state, whether or not the object exists in AWS."
+  - id: renamed
+    text: "The resource names in the code changed, so Terraform sees them as new resources."
+    feedback: "A rename in code would show a destroy for the old address next to each create. Here nothing is destroyed because there's nothing in state to destroy: state list finds no state file at all."
+  - id: wrong-account
+    text: "Your CLI is pointed at another account or region, where these resources don't exist."
+    feedback: "get-caller-identity shows 123456789012 and the provider is pinned to us-east-1, the stack's account and region. And in an empty account the apply would succeed instead of failing with already-exists errors."
+
+actions:
+  - id: import-resources
+    label: "Import the four existing objects into state (the bucket and role by name, the log group by name, the queue by its URL), then confirm terraform plan shows no changes"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_s3_bucket.app_logs
+        - state_has: aws_cloudwatch_log_group.api
+        - state_has: aws_iam_role.task
+        - state_has: aws_sqs_queue.jobs
+        - plan_clean: true
+        - not: { applied: { op: delete, address: aws_s3_bucket.app_logs } }
+        - not: { applied: { op: delete, address: aws_cloudwatch_log_group.api } }
+        - not: { applied: { op: delete, address: aws_iam_role.task } }
+        - not: { applied: { op: delete, address: aws_sqs_queue.jobs } }
+    feedback: "State maps every block to its live object again, and the plan is empty: the code and production agree. Next, move this state into a remote backend so it can't live on one laptop again."
+  - id: apply-anyway
+    label: "Run terraform apply and let it create the missing resources"
+    kind: wrong
+    feedback: "The creates fail because the names are taken: S3 answers BucketAlreadyOwnedByYou, IAM EntityAlreadyExists, CloudWatch Logs ResourceAlreadyExistsException. State stays empty and nothing is fixed. A type without a unique name, like an EC2 instance, would simply have been created a second time."
+  - id: delete-and-recreate
+    label: "Delete the four live resources (in the console, or import them and run terraform destroy) so apply can create them cleanly"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_s3_bucket.app_logs }
+        - applied: { op: delete, address: aws_cloudwatch_log_group.api }
+        - applied: { op: delete, address: aws_iam_role.task }
+        - applied: { op: delete, address: aws_sqs_queue.jobs }
+    feedback: "You destroy the app logs in the bucket and the log group, drop every message waiting in the queue, and break every task that assumes the role until the new one exists. Terraform could have adopted the live objects with import."
+
+solution_paths:
+  - [import-resources]
+
+key_evidence: [no-state, wants-to-create, exists-in-aws, right-account]
+
+evidence_labels:
+  no-state: "There is no state file in ~/infra"
+  wants-to-create: "The plan wants to create all four resources"
+  exists-in-aws: "The bucket exists in this account"
+  right-account: "The CLI is in the stack's account"
+
+hints:
+  nudge: "How does Terraform know that a resource block already has an object in AWS?"
+  direction: "Compare what Terraform's state holds with what AWS holds, then look at how Terraform adopts objects that already exist."
+  answer: "The local state was lost with the laptop. Import each object (bucket and role by name, log group by name, queue by URL) and plan until it says No changes."
+
+analogy:
+  title: "The warehouse lost its inventory ledger"
+  text: |
+    The shelves are full, but the ledger that says which box sits on which
+    shelf went out with the old manager. The new clerk reads the order list,
+    finds nothing in the (empty) ledger, and orders every item again. The
+    supplier says you already have them. Walk the shelves, write each box
+    into a new ledger, and keep that ledger in the office safe this time.
+
+debrief:
+  root_cause: |
+    Terraform only manages objects recorded in its state, which maps each
+    resource address to a real object ID. The state for this stack was a
+    local terraform.tfstate on one engineer's laptop, kept out of git by
+    .gitignore, and it was lost when the laptop was wiped. Losing state
+    deletes nothing in AWS, but with no mapping Terraform plans to create
+    every resource. The creates fail because the names are taken. The
+    recovery is to import each live object back into state until the plan
+    is empty.
+  ideal_path:
+    - "Check state: there's no state file."
+    - "Read the plan: it wants to create all four resources."
+    - "Confirm in AWS that the resources exist, in the right account."
+    - "Import each object with terraform import or import blocks, using each type's import ID."
+    - "Plan until it says No changes, then set up a remote backend."
+  real_world: |
+    Never keep production state only on a laptop. Use a remote backend with
+    locking and versioning, such as the s3 backend with use_lockfile and
+    versioning on the bucket, so state survives people leaving and earlier
+    versions can be restored. When state is lost anyway, import before any apply: each
+    resource type documents its import ID (a bucket name, a role name, a
+    queue URL), and import blocks let the team review the import in a PR.
+
+concepts:
+  - term: "Terraform state"
+    text: "Terraform's record that maps each resource in the configuration to a real object, so it knows what it already manages."
+    url: "https://developer.hashicorp.com/terraform/language/state"
+  - term: "terraform import"
+    text: "Adopts an existing object into state at a resource address, without changing the object."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/import"
+  - term: "import block"
+    text: "Declares an import in configuration, so it shows in the plan and is applied like any other change."
+    url: "https://developer.hashicorp.com/terraform/language/import"
+  - term: "S3 backend"
+    text: "Stores state in an S3 bucket with locking, so the team shares one state that survives any single machine."
+    url: "https://developer.hashicorp.com/terraform/language/backend/s3"
+
+sources:
+  - title: "Terraform: State"
+    url: "https://developer.hashicorp.com/terraform/language/state"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: import"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/import"
+    retrieved: 2026-10-08
+  - title: "Terraform: Import existing resources (import block)"
+    url: "https://developer.hashicorp.com/terraform/language/import"
+    retrieved: 2026-10-08
+  - title: "Terraform: Backend type s3"
+    url: "https://developer.hashicorp.com/terraform/language/backend/s3"
+    retrieved: 2026-10-08
+  - title: "Terraform AWS provider docs: aws_s3_bucket (Import)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/s3_bucket.html.markdown"
+    retrieved: 2026-10-08
+  - title: "Terraform AWS provider docs: aws_sqs_queue (Import)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/sqs_queue.html.markdown"
+    retrieved: 2026-10-08
+  - title: "Terraform AWS provider docs: aws_iam_role (Import)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/iam_role.html.markdown"
+    retrieved: 2026-10-08
+  - title: "Terraform AWS provider docs: aws_cloudwatch_log_group (Import)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/cloudwatch_log_group.html.markdown"
+    retrieved: 2026-10-08
+  - title: "AWS CLI: s3api head-bucket"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/s3api/head-bucket.html"
+    retrieved: 2026-10-08
+command_notes:
+  "aws s3api head-bucket --bucket acme-app-logs": "head-bucket succeeds only if the bucket exists and you can access it. It does, in this account, even though Terraform has no record of it."
+  "aws sts get-caller-identity": "The account is 123456789012, the stack's account, so the CLI is not pointed somewhere else."
+  "aws sqs get-queue-url --queue-name acme-jobs": "An SQS queue is imported by its URL, not its name; this is where to get it."

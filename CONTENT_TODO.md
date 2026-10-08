@@ -643,3 +643,13 @@ Workspaces:
 ## terraform simulator (done_when predicates, TF3d)
 - [ ] `applied` history is not scoped per workspace: an apply in another workspace satisfies it. Scope it if a scenario uses workspaces with `done_when`.
 - [ ] Schema errors for a malformed `done_when` are opaque (the zod union reports every branch); give authors a clearer message.
+
+## terraform incidents batch 1 (TF4)
+
+terraform-state-lost:
+- [ ] Simulator realism: an SQS `CreateQueue` for an existing name with identical attributes returns the existing queue's URL (AWS API Reference, CreateQueue; `QueueNameExists` only when attributes differ), so real Terraform's apply would "create" (silently adopt) `acme-jobs` instead of failing. The simulator always fails with `QueueNameExists ... different value for attribute VisibilityTimeout`. The incident text avoids claiming the queue error; the apply output still shows it.
+- [ ] `aws s3api head-bucket` output (`BucketRegion`, `AccessPointAlias: false`): both are documented output fields, but the CLI reference example says a successful call returns no output. Check what CLI v2 prints today for a general purpose bucket.
+- [ ] `aws sts get-caller-identity` output: the `UserId` (role id + session name) and the `PlatformEngineer` role are invented.
+- [ ] Story (local state on a wiped laptop, `.gitignore` excluding `*.tfstate`) is illustrative, not from a published incident.
+- [ ] After import the simulator's state has no `tags_all` (real provider stores `tags_all = {}`); `state show` therefore omits it.
+- [ ] Provider import ID formats (bucket name, role name, log group name, queue URL) verified on the provider's GitHub docs (`website/docs/r/*.html.markdown`); the registry pages render with JS and could not be opened.
