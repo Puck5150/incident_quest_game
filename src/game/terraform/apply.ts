@@ -127,8 +127,8 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
     }
     return undefined
   }
-  const fail = (i: PlanItem, op: ApplyStep['op'], secs: number, summary: string) => {
-    steps.push({ address: i.address, op, seconds: secs, ok: false })
+  const fail = (i: PlanItem, op: ApplyStep['op'], secs: number, summary: string, id?: string) => {
+    steps.push({ address: i.address, op, ...(id === undefined ? {} : { id }), seconds: secs, ok: false })
     errors.push({ severity: 'error', summary, detail: '', file: i.block?.file ?? '', line: i.block?.line ?? 0, col: i.block?.col ?? 0, context: `resource "${i.type}" "${i.name}"`, address: i.address })
     failed.add(i.address).add(res(i))
   }
@@ -169,7 +169,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       const secs = seconds(i.type, 'delete')
       const ref = referencedBy(Object.fromEntries(reality), i.type, id)
       const error = faultFor(i, 'delete', attrs) ?? (ref ? dependencyViolation(i.type, id, seed) : undefined)
-      if (error) fail(i, 'delete', secs, error)
+      if (error) fail(i, 'delete', secs, error, id)
       else {
         removeInstance(state, i.address)
         reality.delete(realityKey(i.type, id))
@@ -198,7 +198,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       const attrs = fillOnUpdate(before, Object.fromEntries(next))
       const secs = seconds(i.type, 'update')
       const error = faultFor(i, 'update', attrs)
-      if (error) fail(i, 'update', secs, error)
+      if (error) fail(i, 'update', secs, error, typeof attrs.id === 'string' ? attrs.id : undefined)
       else {
         const id = attrs.id as string
         if (inst) {
