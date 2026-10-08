@@ -7,6 +7,7 @@ export interface StateInstance {
   index_key?: string | number
   attributes: Record<string, Value>
   status?: 'tainted'
+  dependencies?: string[] // resource addresses (no instance keys) this instance depends on
 }
 export interface StateResource {
   mode: 'managed' | 'data'
@@ -76,6 +77,7 @@ export function stateJson(state: State): string {
           schema_version: 0,
           attributes: sortedAttributes(i.attributes),
           sensitive_attributes: [],
+          ...(i.dependencies?.length ? { dependencies: [...i.dependencies] } : {}),
         }
       }),
     })),

@@ -36,6 +36,8 @@ export interface PlanItem {
   triggeredBy?: string[]
   createBeforeDestroy?: boolean
   unchanged?: Record<string, Value>
+  dependsOn: string[] // resource addresses (no instance keys) this item's resource depends on
+  block?: { file: string; line: number; col: number } // where the resource is declared
   destroyReason?: 'not-in-config' | 'count-index' | 'for-each-key' | 'wrong-repetition'
 }
 // A still-declared resource whose instance key no longer fits its repetition mode.
@@ -57,6 +59,7 @@ export interface PlanResult {
   items: PlanItem[]
   outputs: PlanOutput[]
   refreshed: State
+  baseState: State // what planning worked from: refreshed, with moves applied
   summary: { add: number; change: number; destroy: number }
   imported: number
 }
@@ -87,7 +90,7 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
 export function planConfig(input: PlanInput): PlanResult {
   const g = buildGraph(input.files)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
-  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
+  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, baseState: refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
   if (g.diagnostics.length) return result
 
   const errors = result.diagnostics
@@ -133,6 +136,7 @@ export function planConfig(input: PlanInput): PlanResult {
   }
   if (errors.length) return result
   const base = applied.state // the state planning works from: refreshed, with moves applied
+  result.baseState = base
 
   const scopeFor = (ctx: { each?: { key: Value; value: Value }; count?: number }): Scope => ({
     ref(path) {
@@ -177,6 +181,22 @@ export function planConfig(input: PlanInput): PlanResult {
   const touched = new Map<string, Set<string>>()
   // Resources that set prevent_destroy, by type.name, with where to point an error.
   const protectedBy = new Map<string, { file: string; pos: Pos; context: string }>()
+  // Resources a node depends on, followed through locals, outputs, variables and data sources.
+  const resourceDeps = (node: GNode): string[] => {
+    const found = new Set<string>()
+    const seen = new Set<string>()
+    for (const todo = [...node.deps]; todo.length; ) {
+      const a = todo.pop()!
+      if (seen.has(a)) continue
+      seen.add(a)
+      const n = g.nodes.get(a)
+      if (!n) continue
+      if (n.kind === 'resource') found.add(a)
+      else todo.push(...n.deps)
+    }
+    found.delete(node.address)
+    return [...found].sort()
+  }
   const planResource = (node: GNode) => {
     const b = node.block!
     const [type, name] = b.labels
@@ -271,6 +291,8 @@ export function planConfig(input: PlanInput): PlanResult {
         key,
         action: p.action,
         changes: p.changes,
+        dependsOn: resourceDeps(node),
+        block: { file: node.file, line: b.pos.line, col: b.pos.col },
         ...(movedFrom ? { movedFrom } : {}),
         ...(importing ? { importing } : {}),
         ...(reason ? { reason } : {}),
@@ -364,7 +386,7 @@ export function planConfig(input: PlanInput): PlanResult {
       const address = instanceAddress(r, inst.index_key)
       if (planned.has(address) || consumed.has(address)) continue
       if (rm.removals.some((x) => x.from.type === r.type && x.from.name === r.name && !x.destroy)) {
-        result.items.push({ address, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
+        result.items.push({ address, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], dependsOn: inst.dependencies ?? [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
         continue
       }
       result.items.push({
@@ -373,6 +395,7 @@ export function planConfig(input: PlanInput): PlanResult {
         name: r.name,
         key: inst.index_key,
         action: 'destroy',
+        dependsOn: inst.dependencies ?? [],
         destroyReason: !g.nodes.has(`${r.type}.${r.name}`) ? 'not-in-config' : wrongRepetition(inst.index_key, shapes.get(`${r.type}.${r.name}`)),
         changes: Object.entries(inst.attributes)
           .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))

@@ -141,3 +141,15 @@ describe('labFromScenario', () => {
     expect(block.state![0].attrs.cidr_block).toBe('10.0.0.0/16')
   })
 })
+
+describe('labFromScenario: dependencies', () => {
+  it('derives dependencies from ids found in attributes', () => {
+    const lab = labFromScenario(
+      { files: [FILE], state: [VPC, { type: 'aws_subnet', name: 's', attrs: { id: 'subnet-1', vpc_id: 'vpc-1', nested: { ids: ['x', 'subnet-9'] } } }, { type: 'aws_instance', name: 'i', attrs: { id: 'i-1', subnet_id: 'subnet-1', vpc_ids: [{ v: 'vpc-1' }] } }] } as TerraformBlock,
+      '/w',
+      '/h',
+    )
+    const deps = Object.fromEntries(lab.state.resources.map((r) => [`${r.type}.${r.name}`, r.instances[0].dependencies]))
+    expect(deps).toEqual({ 'aws_vpc.main': undefined, 'aws_subnet.s': ['aws_vpc.main'], 'aws_instance.i': ['aws_subnet.s', 'aws_vpc.main'] })
+  })
+})

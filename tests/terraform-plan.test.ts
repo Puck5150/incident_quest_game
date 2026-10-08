@@ -728,3 +728,32 @@ describe('planConfig: facts for the renderer', () => {
     expect(reason('# none\n', counted)).toMatchObject({ destroyReason: 'not-in-config' })
   })
 })
+
+describe('planConfig: facts for apply', () => {
+  it('exposes the state it planned from, with moves applied', () => {
+    const state = stateOf({ type: 'aws_db_instance', name: 'orders', attrs: { id: 'db-1', arn: 'a', identifier: 'orders-prod', engine: 'postgres', instance_class: 'db.r6g.large', storage_encrypted: false } })
+    const tf = 'resource "aws_db_instance" "primary" {\n  identifier = "orders-prod"\n  engine = "postgres"\n  instance_class = "db.r6g.large"\n  storage_encrypted = false\n}\nmoved {\n  from = aws_db_instance.orders\n  to   = aws_db_instance.primary\n}\n'
+    const r = plan(tf, { state })
+    expect(r.baseState.resources.map((x) => x.name)).toEqual(['primary'])
+    expect(r.refreshed.resources.map((x) => x.name)).toEqual(['orders'])
+    expect(plan('# nothing\n').baseState.resources).toEqual([])
+    expect(plan('resource "aws_vpc" "a" {\n  cidr_block\n}\n').baseState).toBeDefined()
+  })
+
+  it('lists the resources an item depends on, through locals and variables', () => {
+    const tf = 'locals {\n  vpc = aws_vpc.main.id\n}\nvariable "cidr" {\n  default = "10.0.1.0/24"\n}\nresource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}\nresource "aws_subnet" "a" {\n  vpc_id     = local.vpc\n  cidr_block = var.cidr\n}\n'
+    const r = plan(tf)
+    expect(r.items.find((i) => i.address === 'aws_subnet.a')!.dependsOn).toEqual(['aws_vpc.main'])
+    expect(r.items.find((i) => i.address === 'aws_vpc.main')!.dependsOn).toEqual([])
+  })
+
+  it('takes the dependencies of an orphan destroy from state, and records where a resource is declared', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_subnet', name: 'a', attrs: SUBNET })
+    state.resources[1].instances[0].dependencies = ['aws_vpc.main']
+    const r = plan('# none\n', { state })
+    expect(r.items.find((i) => i.address === 'aws_subnet.a')).toMatchObject({ action: 'destroy', dependsOn: ['aws_vpc.main'] })
+    expect(r.items.find((i) => i.address === 'aws_subnet.a')!.block).toBeUndefined()
+    const c = plan(NETWORK('10.0.0.0/16'))
+    expect(c.items.find((i) => i.address === 'aws_vpc.main')!.block).toEqual({ file: 'main.tf', line: 2, col: 1 })
+  })
+})

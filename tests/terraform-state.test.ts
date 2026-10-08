@@ -101,3 +101,14 @@ describe('refresh', () => {
     expect(findInstance(r.state, 'aws_s3_bucket.b["a"]')).toBeDefined()
   })
 })
+
+describe('state dependencies in JSON', () => {
+  it('writes dependencies after sensitive_attributes only when present', () => {
+    const s = emptyState()
+    s.resources.push({ mode: 'managed', type: 'aws_subnet', name: 's', provider: 'p', instances: [{ attributes: { id: 'subnet-1' }, dependencies: ['aws_vpc.main'] }, { index_key: 1, attributes: { id: 'subnet-2' } }] })
+    const inst = JSON.parse(stateJson(s)).resources[0].instances
+    expect(inst[0]).toMatchObject({ dependencies: ['aws_vpc.main'] })
+    expect(Object.keys(inst[0])).toEqual(['schema_version', 'attributes', 'sensitive_attributes', 'dependencies'])
+    expect(inst[1].dependencies).toBeUndefined()
+  })
+})

@@ -55,6 +55,7 @@ export interface Diagnostic {
   line: number
   col: number
   context?: string // e.g. resource "aws_vpc" "main"
+  address?: string // resource address, printed as a "with" line
 }
 
 export class HclError extends Error {

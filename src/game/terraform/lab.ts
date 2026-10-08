@@ -38,6 +38,24 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
   }
   state.outputs = structuredClone(tf.outputs ?? {}) as State['outputs']
 
+  const ids = new Map<string, string>() // managed id -> type.name
+  for (const r of state.resources) if (r.mode === 'managed') for (const i of r.instances) ids.set(String(i.attributes.id), `${r.type}.${r.name}`)
+  const found = (v: unknown, own: string, into: Set<string>) => {
+    if (typeof v === 'string') {
+      const a = ids.get(v)
+      if (a && a !== own) into.add(a)
+    } else if (Array.isArray(v)) v.forEach((x) => found(x, own, into))
+    else if (typeof v === 'object' && v !== null) Object.values(v).forEach((x) => found(x, own, into))
+  }
+  for (const r of state.resources) {
+    if (r.mode !== 'managed') continue
+    for (const i of r.instances) {
+      const into = new Set<string>()
+      found(i.attributes, `${r.type}.${r.name}`, into)
+      if (into.size) i.dependencies = [...into].sort()
+    }
+  }
+
   const reality: Reality = {}
   for (const r of state.resources) {
     if (r.mode !== 'managed') continue

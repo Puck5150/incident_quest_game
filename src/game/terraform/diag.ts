@@ -19,8 +19,10 @@ export function wrap(text: string, width: number, preserveLines = false): string
 
 export function formatDiagnostic(d: Diagnostic, source = '', opts: { preserveLines?: boolean } = {}): string {
   const out = ['╷', `│ ${d.severity === 'warning' ? 'Warning' : 'Error'}: ${d.summary}`]
+  if (d.address || (d.file && d.line)) out.push('│ ')
+  if (d.address) out.push(`│   with ${d.address},`)
   if (d.file && d.line) {
-    out.push('│ ', `│   on ${d.file} line ${d.line}${d.context ? `, in ${d.context}` : ''}:`)
+    out.push(`│   on ${d.file} line ${d.line}${d.context ? `, in ${d.context}` : ''}:`)
     const src = source.split('\n')[d.line - 1]
     if (src !== undefined) out.push(`│ ${String(d.line).padStart(4)}: ${src.replace(/\r$/, '')}`)
   }

@@ -67,3 +67,13 @@ describe('wrap and formatDiagnostic: preserveLines', () => {
     expect(out).toBe(['╷', '│ Error: S', '│ ', '│ Intro line.', '│   - provider a/b: required', '│ ', '│ To fix this, run:', '│   terraform init', '╵'].join('\n'))
   })
 })
+
+describe('formatDiagnostic: address', () => {
+  it('prints the with-line before the location', () => {
+    const out = formatDiagnostic({ severity: 'error', summary: 'creating X', detail: '', file: 'main.tf', line: 2, col: 1, context: 'resource "a" "b"', address: 'a.b' }, 'x\nresource "a" "b" {\n')
+    expect(out).toBe(['╷', '│ Error: creating X', '│ ', '│   with a.b,', '│   on main.tf line 2, in resource "a" "b":', '│    2: resource "a" "b" {', '╵'].join('\n'))
+  })
+  it('prints only the with-line when there is no source', () => {
+    expect(formatDiagnostic({ severity: 'error', summary: 'destroying X', detail: '', file: '', line: 0, col: 0, address: 'a.old' })).toBe(['╷', '│ Error: destroying X', '│ ', '│   with a.old,', '╵'].join('\n'))
+  })
+})
