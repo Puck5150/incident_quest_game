@@ -12,6 +12,7 @@ import { applyMoves, movesOf } from './moves.ts'
 import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
+import { NO_REMOTE_OBJECT, noRemoteObjectDetail } from './state-ops.ts'
 import type { Diagnostic, Pos } from './types.ts'
 
 export interface PlanInput {
@@ -248,8 +249,8 @@ export function planConfig(input: PlanInput): PlanResult {
             fail(
               decl.file,
               decl.pos,
-              'Cannot import non-existent remote object',
-              `While attempting to import an existing object to "${address}", the provider detected that no object exists with the given id. Only pre-existing objects can be imported; check that the id is correct and that it is associated with the provider's configured region or endpoint, or use "terraform apply" to create a new remote object for this resource.`,
+              NO_REMOTE_OBJECT,
+              noRemoteObjectDetail(address),
               'import',
             )
           }
