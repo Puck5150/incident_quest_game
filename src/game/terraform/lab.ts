@@ -14,6 +14,7 @@ export interface SavedPlan {
   destroy: boolean
   serial: number
   lineage: string
+  workspace: string
 }
 
 export interface Lab {
@@ -25,6 +26,7 @@ export interface Lab {
   state: State
   workspace: string
   workspaces: Map<string, { state: State; hasState: boolean }>
+  workspacesCreated: number // by `workspace new`: numbers their lineages, never reused after a delete
   lock?: { id: string; who: string; operation: string; created: string; path: string; info: string; message: string }
   reality: Reality
   vars: Record<string, Value>
@@ -112,6 +114,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     state,
     workspace,
     workspaces: all,
+    workspacesCreated: 0,
     ...(tf.lock ? { lock: { operation: 'OperationTypeApply', path: 'terraform.tfstate', info: '', message: 'resource temporarily unavailable', ...tf.lock } } : {}),
     reality,
     vars: structuredClone(tf.vars ?? {}) as Record<string, Value>,

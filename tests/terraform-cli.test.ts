@@ -44,7 +44,7 @@ describe('terraform: basics', () => {
   })
 
   it('answers the commands that need a later milestone honestly', async () => {
-    for (const args of [['console'], ['state', 'push', 'x'], ['workspace', 'new', 'x']]) {
+    for (const args of [['console'], ['state', 'push', 'x'], ['state', 'replace-provider', 'a', 'b']]) {
       const r = await world().run(...args)
       expect(r.exitCode, args.join(' ')).toBe(1)
       expect(r.stderr).toContain('Error: Not available in this lab yet')

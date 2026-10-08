@@ -138,7 +138,7 @@ const withWarn = (warn: string, o: Out): Out => (warn ? { ...o, stdout: [warn, o
 const notYet = (sub: string) =>
   boxFail(
     'Not available in this lab yet',
-    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, output, workspace show, workspace list, version.`,
+    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, output, workspace, version.`,
   )
 const sourcesOf = (files: File[]) => Object.fromEntries(files.map((f) => [f.name, f.text]))
 const boxes = (list: Diagnostic[], files: File[]) => {
@@ -485,7 +485,7 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
-  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, replace: f.replace, refresh: f.refresh, destroy })
+  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(cfg.tf))
   if (result.diagnostics.length) return { stdout: warning, stderr: rendered, exitCode: 1 }
 
@@ -512,7 +512,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boole
     const { lineage, serial } = ctx.lab.state
     const path = resolvePath(cfg.dir, f.out)
     const id = planId(lineage, serial, path)
-    ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage })
+    ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage, workspace: ctx.lab.workspace })
     const slash = path.lastIndexOf('/')
     await ctx.write(path.slice(0, slash) || '/', path.slice(slash + 1), `TFPLAN1\n${id}\n`)
   }
@@ -550,7 +550,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     if (!('serial' in saved)) return saved
     const locked = checkLock(ctx, f.lock)
     if (locked) return locked
-    if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage)
+    if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage || saved.workspace !== ctx.lab.workspace)
       return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
     input = { files: saved.files, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
     head = '' // a saved plan was already reviewed: no plan text, no question
@@ -571,7 +571,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     }
   }
   const r: ApplyResult = executeApply(
-    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, refresh: f.refresh },
+    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, refresh: f.refresh },
     { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: String(ctx.lab.state.serial) },
   )
   // Outside the lab directory ctx.lab is a throwaway copy, so this commit is discarded.
@@ -760,12 +760,69 @@ function cmdOutput(args: string[], ctx: CliContext): Out {
   return mode === 'raw' && r.exitCode === 0 ? { ...r, raw: true } : r
 }
 
-function cmdWorkspace(args: string[]): Out {
-  const sub = args[0]
-  if (sub === 'show') return ok('default')
-  if (sub === 'list') return ok('* default\n')
-  if (sub === 'new' || sub === 'select' || sub === 'delete') return notYet(`workspace ${sub}`)
-  return fail('Usage: terraform [global options] workspace <subcommand> [options] [args]\n\nSubcommands: show, list (new, select and delete are not simulated yet).')
+const WORKSPACE_NAME = /^[A-Za-z0-9._-]+$/
+const NEW_WORKSPACE = (name: string) =>
+  `Created and switched to workspace "${name}"!\n\nYou're now on a new, empty workspace. Workspaces isolate their state,\nso if you run "terraform plan" Terraform will not see any existing state\nfor this configuration.`
+
+// Store the current workspace's state under its name and load the target's. The cloud is shared: reality stays.
+function switchWorkspace(lab: Lab, name: string, target: { state: State; hasState: boolean }) {
+  if (name === lab.workspace) return
+  lab.workspaces.set(lab.workspace, { state: lab.state, hasState: lab.hasState })
+  lab.workspaces.delete(name)
+  lab.workspace = name
+  lab.state = target.state
+  lab.hasState = target.hasState
+}
+
+function newWorkspace(lab: Lab, name: string): Out {
+  const n = 10 + lab.workspacesCreated++
+  switchWorkspace(lab, name, { state: emptyState(lab.version, `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`), hasState: false })
+  return ok(NEW_WORKSPACE(name))
+}
+
+// Outside the lab directory ctx.lab is a throwaway copy with only the default workspace.
+function cmdWorkspace(args: string[], ctx: CliContext): Out {
+  const [sub, ...rest] = args
+  const { lab } = ctx
+  if (sub === 'show') return ok(lab.workspace)
+  if (sub === 'list') return ok([...lab.workspaces.keys(), lab.workspace].sort().map((n) => `${n === lab.workspace ? '*' : ' '} ${n}\n`).join(''))
+  if (sub !== 'new' && sub !== 'select' && sub !== 'delete') return fail('Usage: terraform [global options] workspace <subcommand> [options] [args]\n\nSubcommands: delete, list, new, select, show.')
+  const a = parseArgs(rest, sub === 'select' ? ['-or-create'] : sub === 'delete' ? ['-force'] : [])
+  if (!('pos' in a)) return a
+  if (a.pos.length !== 1) return fail('Expected a single argument: NAME.')
+  const name = a.pos[0]
+  if (!WORKSPACE_NAME.test(name)) return boxFail('Invalid workspace name', `The workspace name "${name}" is not allowed. The name must contain only URL safe characters, and no path separators.`)
+  const exists = name === lab.workspace || lab.workspaces.has(name)
+  if (sub === 'new') {
+    if (exists) return fail(`Workspace "${name}" already exists`)
+    return checkLock(ctx, a.lock) || newWorkspace(lab, name)
+  }
+  if (sub === 'select') {
+    if (exists) {
+      switchWorkspace(lab, name, lab.workspaces.get(name) ?? { state: lab.state, hasState: lab.hasState })
+      return ok(`Switched to workspace "${name}".`)
+    }
+    if (a.set.has('-or-create')) return newWorkspace(lab, name)
+    return fail(`Workspace "${name}" doesn't exist.\n\nYou can create this workspace with the "new" subcommand \nor include the "-or-create" flag with the "select" subcommand.`)
+  }
+  if (!exists) return fail(`Workspace "${name}" doesn't exist.`)
+  if (name === lab.workspace) return boxFail('Workspace is your active workspace', 'You cannot delete the currently active workspace. Please switch to another workspace and try again.')
+  if (name === 'default') return boxFail('Failed to delete workspace', "Can't delete default workspace")
+  const locked = checkLock(ctx, a.lock)
+  if (locked) return locked
+  const target = lab.workspaces.get(name)!
+  const tracked = target.hasState ? listAddresses(target.state) : []
+  if (tracked.length && !a.set.has('-force'))
+    return fail(
+      box(
+        'error',
+        'Workspace is not empty',
+      `Workspace "${name}" is currently tracking the following resource instances:\n${tracked.map((t) => `  - ${t}`).join('\n')}\n\nDeleting this workspace would cause Terraform to lose track of any associated remote objects, which would then require you to delete them manually outside of Terraform. You should destroy these objects with Terraform before deleting the workspace.\n\nIf you want to delete this workspace anyway, and have destroyed these objects, use the -force option.`,
+        true,
+      ),
+    )
+  lab.workspaces.delete(name)
+  return ok(`Deleted workspace "${name}"!`)
 }
 
 const UNLOCK_PROMPT =
@@ -814,7 +871,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   if (Object.hasOwn(HELP, sub) && more.some((a) => a === '-help' || a === '--help')) return ok(`Usage: terraform [global options] ${sub} [options]\n\n${HELP[sub]}`)
   // State lives per directory, on the host the scenario is about: anywhere else there is none.
   const here = ctx.mainHost && dir === resolvePath('/', ctx.lab.dir)
-  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), lock: undefined } }
+  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), lock: undefined, workspace: 'default', workspaces: new Map() } }
   const cfg = await loadConfig(ctx, dir)
   switch (sub) {
     case 'version':
@@ -838,7 +895,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
     case 'output':
       return cmdOutput(more, ctx)
     case 'workspace':
-      return cmdWorkspace(more)
+      return cmdWorkspace(more, ctx)
     case 'import':
       return cmdImport(more, ctx, cfg)
     case 'taint':
