@@ -49,7 +49,7 @@ describe('the terraform command in the shell', () => {
   })
 
   it('keeps stderr and exit codes for errors', async () => {
-    const [r] = await run(scenario(), 'terraform import a.b x')
+    const [r] = await run(scenario(), 'terraform console')
     expect(r.exitCode).toBe(1)
     expect(r.output).toContain('Not available in this lab yet')
   })

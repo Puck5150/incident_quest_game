@@ -1,6 +1,6 @@
-// The `terraform` command: init, validate, plan, show, state, output and
-// workspace read the player's working directory and the lab's state; everything
-// else answers honestly that it is not simulated yet. Nothing here throws on
+// The `terraform` command: init, validate, plan, apply, show, state, output,
+// import, taint, refresh and workspace read the player's working directory and
+// the lab's state; everything else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
@@ -13,7 +13,9 @@ import { hex } from './provider.ts'
 import { renderPlan } from './render.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
+import { importObject, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
 import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
+import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
 import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
@@ -93,11 +95,13 @@ Global options (use these before the subcommand, if any):
   -help         Show this help output, or the help for a specified subcommand.
   -version      An alias for the "version" subcommand.`
 
-const NOT_YET = new Set(['import', 'taint', 'untaint', 'refresh', 'force-unlock', 'console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
+const NOT_YET = new Set(['force-unlock', 'console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
 const REGISTRY = 'registry.terraform.io/'
 const RULE = '─'.repeat(77)
-const NO_STATE =
-  'No state file was found!\n\nState management commands require a state file. Run this command in a directory where Terraform has been run or use the -state flag to point the command to a specific state location.'
+const NO_STATE_SUMMARY = 'No state file was found!'
+const NO_STATE_DETAIL =
+  'State management commands require a state file. Run this command in a directory where Terraform has been run or use the -state flag to point the command to a specific state location.'
+const NO_STATE = `${NO_STATE_SUMMARY}\n\n${NO_STATE_DETAIL}`
 
 const NO_CONFIG_DETAIL =
   'Plan requires configuration to be present. Planning without a configuration would mark everything for destruction, which is normally not what is desired. If you would like to destroy everything, run plan with the -destroy option. Otherwise, create a Terraform configuration file (.tf file) and try again.'
@@ -132,7 +136,7 @@ const withWarn = (warn: string, o: Out): Out => (warn ? { ...o, stdout: [warn, o
 const notYet = (sub: string) =>
   boxFail(
     'Not available in this lab yet',
-    `"terraform ${sub}" is not simulated yet in this lab. You can still read the configuration, plan and state with: init, validate, plan, show, state list, state show, state pull, output, workspace show, workspace list, version.`,
+    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, output, workspace show, workspace list, version.`,
   )
 const sourcesOf = (files: File[]) => Object.fromEntries(files.map((f) => [f.name, f.text]))
 const boxes = (list: Diagnostic[], files: File[]) => {
@@ -431,33 +435,46 @@ interface Planned {
   changes: boolean
 }
 
-// What plan, apply and destroy share: setup checks, variables, the plan and its refresh lines.
-async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boolean): Promise<Planned | Out> {
+type Prepared = { warning: string; vars: Record<string, Value>; graph: ReturnType<typeof buildGraph> }
+
+// What plan, apply, destroy, import and refresh share: configuration, lock file and variables.
+async function prepare(sources: VarSource[], ctx: CliContext, cfg: Config): Promise<Prepared | Out> {
   if (!cfg.tf.length) return boxFail('No configuration files', NO_CONFIG_DETAIL)
   const g = buildGraph(cfg.tf)
   if (!g.diagnostics.length) {
     const lock = lockError(cfg)
     if (lock) return lock
   }
-  const v = await resolveVars(ctx, cfg, f.sources, g.diagnostics.length ? undefined : g.blocks.filter((b) => b.type === 'variable'))
+  const v = await resolveVars(ctx, cfg, sources, g.diagnostics.length ? undefined : g.blocks.filter((b) => b.type === 'variable'))
   if ('error' in v) return { stdout: v.warnings, stderr: v.error, exitCode: 1 }
-  const warning = v.warnings
-  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: v.vars, replace: f.replace, refresh: f.refresh, destroy })
-  const rendered = renderPlan(result, sourcesOf(cfg.tf))
-  if (result.diagnostics.length) return { stdout: warning, stderr: rendered, exitCode: 1 }
+  return { warning: v.warnings, vars: v.vars, graph: g }
+}
 
-  const refreshLines = ctx.lab.state.resources
+// The lines a plan prints while it reads the state's objects back from the cloud.
+const refreshLines = (state: State, refresh: boolean) =>
+  state.resources
     .flatMap((r) =>
       r.instances.map((i) => {
         const addr = instanceAddress(r, i.index_key)
         const id = typeof i.attributes.id === 'string' ? ` [id=${i.attributes.id}]` : ''
-        return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : f.refresh ? [`${addr}: Refreshing state...${id}`] : [] }
+        return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : refresh ? [`${addr}: Refreshing state...${id}`] : [] }
       }),
     )
     .sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
     .flatMap((x) => x.lines)
-  const stdout = refreshLines.length ? `${refreshLines.join('\n')}\n\n${rendered}` : rendered
-  return { warning, vars: v.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
+
+// What plan, apply, destroy and refresh share: setup checks, variables, the plan and its refresh lines.
+async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boolean): Promise<Planned | Out> {
+  const s = await prepare(f.sources, ctx, cfg)
+  if (!('vars' in s)) return s
+  const warning = s.warning
+  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, replace: f.replace, refresh: f.refresh, destroy })
+  const rendered = renderPlan(result, sourcesOf(cfg.tf))
+  if (result.diagnostics.length) return { stdout: warning, stderr: rendered, exitCode: 1 }
+
+  const lines = refreshLines(ctx.lab.state, f.refresh)
+  const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
+  return { warning, vars: s.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
 }
 
 const planId = (lineage: string, serial: number, name: string) => `p${hex(`${lineage}:${serial}:${name}`, 8)}`
@@ -553,6 +570,123 @@ const sensitiveAttr = (type: string, attr: string) => {
   return attrs !== undefined && Object.hasOwn(attrs, attr) && attrs[attr].sensitive === true
 }
 
+// Flags for the state-changing commands. Lock and state-path flags are accepted and
+// have no effect: the lab has one local state.
+const IGNORED_VALUE_FLAGS = ['-lock-timeout', '-state', '-state-out', '-backup']
+const IGNORED_BOOL_FLAGS = ['-no-color', '-input', '-lock']
+type Parsed = { pos: string[]; set: Set<string>; sources: VarSource[] }
+function parseArgs(args: string[], bools: string[], values: string[] = []): Parsed | Out {
+  const p: Parsed = { pos: [], set: new Set(), sources: [] }
+  for (let i = 0; i < args.length; i++) {
+    const raw = args[i]
+    if (!raw.startsWith('-') || raw === '-') {
+      p.pos.push(raw)
+      continue
+    }
+    const eq = raw.indexOf('=')
+    const name = (eq < 0 ? raw : raw.slice(0, eq)).replace(/^--/, '-')
+    let value = eq < 0 ? undefined : raw.slice(eq + 1)
+    if (values.includes(name) || IGNORED_VALUE_FLAGS.includes(name)) {
+      if (value === undefined) {
+        value = args[++i]
+        if (value === undefined) return boxFail('Failed to parse command-line flags', `flag needs an argument: ${name}`)
+      }
+      if (name === '-var') p.sources.push({ kind: 'var', arg: value })
+      else if (name === '-var-file') p.sources.push({ kind: 'file', path: value })
+    } else if (bools.includes(name) || IGNORED_BOOL_FLAGS.includes(name)) {
+      if (value !== 'false') p.set.add(name)
+    } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
+  }
+  return p
+}
+const opFail = (r: { summary: string; detail: string }) => (r.detail ? boxFail(r.summary, r.detail) : fail(r.summary))
+// A successful change becomes the lab's state; outside the lab directory ctx.lab is a throwaway copy.
+const commit = (ctx: CliContext, r: OpResult) => {
+  if (!r.ok) return
+  ctx.lab.state = r.state
+  ctx.lab.hasState = true
+}
+
+function cmdStateMv(args: string[], ctx: CliContext): Out {
+  const a = parseArgs(args, ['-dry-run'])
+  if (!('pos' in a)) return a
+  if (a.pos.length !== 2) return fail('Exactly two arguments expected.')
+  if (!ctx.lab.hasState) return fail(NO_STATE)
+  const r = stateMove(ctx.lab.state, a.pos[0], a.pos[1])
+  if (!r.ok) return opFail(r)
+  const dry = a.set.has('-dry-run')
+  const lines = r.moved.map((m) => `${dry ? 'Would move' : 'Move'} "${m.from}" to "${m.to}"`)
+  if (dry) return ok(lines.join('\n'))
+  commit(ctx, r)
+  return ok([...lines, `Successfully moved ${r.moved.length} object(s).`].join('\n'))
+}
+
+function cmdStateRm(args: string[], ctx: CliContext): Out {
+  const a = parseArgs(args, ['-dry-run'])
+  if (!('pos' in a)) return a
+  if (!a.pos.length) return fail('At least one address is required.')
+  if (!ctx.lab.hasState) return fail(NO_STATE)
+  const r = stateRemove(ctx.lab.state, a.pos)
+  if (!r.ok) return opFail(r)
+  const dry = a.set.has('-dry-run')
+  const lines = r.removed.map((x) => `${dry ? 'Would remove' : 'Removed'} ${x}`)
+  if (dry) return ok(lines.join('\n'))
+  commit(ctx, r)
+  return ok([...lines, `Successfully removed ${r.removed.length} resource instance(s).`].join('\n'))
+}
+
+function cmdTaint(args: string[], ctx: CliContext, verb: 'taint' | 'untaint'): Out {
+  const a = parseArgs(args, ['-allow-missing'])
+  if (!('pos' in a)) return a
+  if (a.pos.length !== 1) return fail('Exactly one argument expected.')
+  const addr = a.pos[0]
+  const allowMissing = a.set.has('-allow-missing')
+  if (!ctx.lab.hasState) return allowMissing ? ok('') : boxFail(NO_STATE_SUMMARY, NO_STATE_DETAIL)
+  const r = verb === 'taint' ? taintInstance(ctx.lab.state, addr) : untaintInstance(ctx.lab.state, addr)
+  if (!r.ok) return allowMissing && r.summary === 'No such resource instance' ? ok('') : opFail(r)
+  commit(ctx, r)
+  return ok(verb === 'taint' ? `Resource instance ${addr} has been marked as tainted.` : `Resource instance ${addr} has been successfully untainted.`)
+}
+
+async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
+  const a = parseArgs(args, [], ['-var', '-var-file'])
+  if (!('pos' in a)) return a
+  if (a.pos.length !== 2) return fail('Exactly two arguments expected.')
+  const [addr, id] = a.pos
+  const s = await prepare(a.sources, ctx, cfg)
+  if (!('vars' in s)) return s
+  if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, cfg.tf)))
+  const t = parseAddress(addr)
+  // A keyed address needs only its resource block; count and for_each are not checked.
+  const declared = t.ok && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  const r = importObject(ctx.lab.state, ctx.lab.reality, addr, id, declared)
+  if (!r.ok) return withWarn(s.warning, opFail(r))
+  commit(ctx, r)
+  const type = t.ok ? t.type : ''
+  return withWarn(
+    s.warning,
+    ok(
+      `${addr}: Importing from ID "${id}"...\n${addr}: Import prepared!\n  Prepared ${type} for import\n${addr}: Refreshing state... [id=${id}]\n\nImport successful!\n\nThe resources that were imported are shown above. These resources are now in\nyour Terraform state and will henceforth be managed by Terraform.`,
+    ),
+  )
+}
+
+async function cmdRefresh(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
+  const a = parseArgs(args, [], ['-var', '-var-file'])
+  if (!('pos' in a)) return a
+  if (a.pos.length) return boxFail('Too many command line arguments', 'Expected no positional arguments. Did you mean to use -chdir?')
+  const p = await makePlan({ sources: a.sources, replace: [], refresh: true, detailed: false, autoApprove: false }, ctx, cfg, false)
+  if (!('result' in p)) return p
+  const before = ctx.lab.state
+  const lines = refreshLines(before, true)
+  const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
+  // Like an apply with nothing to do: the refreshed state is saved, with a new serial only if it differs.
+  if (content(p.result.refreshed) !== content(before)) commit(ctx, { ok: true, state: { ...p.result.refreshed, serial: before.serial + 1 } })
+  const outputs = ctx.lab.state.outputs
+  const tail = Object.keys(outputs).length ? `Outputs:\n\n${outputsText(outputs, undefined, 'hcl').stdout}` : ''
+  return withWarn(p.warning, ok([lines.join('\n'), tail].filter(Boolean).join('\n\n')))
+}
+
 function cmdState(args: string[], ctx: CliContext): Out {
   const [sub, ...rest] = args
   const { lab } = ctx
@@ -580,8 +714,10 @@ function cmdState(args: string[], ctx: CliContext): Out {
     return ok(stateShow(found.resource, found.instance, (a) => sensitiveAttr(found.resource.type, a)))
   }
   if (sub === 'pull') return lab.hasState ? ok(stateJson(lab.state)) : fail(NO_STATE)
-  if (sub === 'mv' || sub === 'rm' || sub === 'replace-provider' || sub === 'push') return notYet(`state ${sub}`)
-  return fail('Usage: terraform [global options] state <subcommand> [options] [args]\n\nSubcommands: list, show, pull (mv, rm, replace-provider and push are not simulated yet).')
+  if (sub === 'mv') return cmdStateMv(rest, ctx)
+  if (sub === 'rm') return cmdStateRm(rest, ctx)
+  if (sub === 'replace-provider' || sub === 'push') return notYet(`state ${sub}`)
+  return fail('Usage: terraform [global options] state <subcommand> [options] [args]\n\nSubcommands: list, show, pull, mv, rm (replace-provider and push are not simulated yet).')
 }
 
 function cmdOutput(args: string[], ctx: CliContext): Out {
@@ -636,6 +772,13 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
       return cmdOutput(more, ctx)
     case 'workspace':
       return cmdWorkspace(more)
+    case 'import':
+      return cmdImport(more, ctx, cfg)
+    case 'taint':
+    case 'untaint':
+      return cmdTaint(more, ctx, sub)
+    case 'refresh':
+      return cmdRefresh(more, ctx, cfg)
     default:
       return NOT_YET.has(sub) ? notYet(sub) : fail(`Terraform has no command named "${sub}".\n\nTo see all of Terraform's top-level commands, run:\n  terraform -help`)
   }

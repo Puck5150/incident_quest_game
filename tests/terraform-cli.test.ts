@@ -44,12 +44,12 @@ describe('terraform: basics', () => {
   })
 
   it('answers the commands that need a later milestone honestly', async () => {
-    for (const args of [['import', 'a.b', 'x'], ['taint', 'a.b'], ['state', 'rm', 'a.b'], ['workspace', 'new', 'x']]) {
+    for (const args of [['console'], ['state', 'push', 'x'], ['workspace', 'new', 'x']]) {
       const r = await world().run(...args)
       expect(r.exitCode, args.join(' ')).toBe(1)
       expect(r.stderr).toContain('Error: Not available in this lab yet')
     }
-    expect((await world().run('import', 'a.b', 'x')).stderr).toContain('"terraform import" is not simulated yet')
+    expect((await world().run('console')).stderr).toContain('"terraform console" is not simulated yet')
   })
 
   it('honours -chdir', async () => {
