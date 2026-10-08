@@ -127,6 +127,43 @@ const HypothesesSchema = z
     }),
   )
   .min(2)
+const json = z.json()
+// done_when (TF3d): a check on the Terraform world that takes the action once it holds.
+// One level of all/any over leaves or negated leaves; no deeper nesting.
+const tfAddr = z
+  .string()
+  .regex(/^(data\.)?[a-z][\w]*\.[\w-]+(\[(\d+|"[^"]*")\])?$/, 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]')
+const tfType = z
+  .string()
+  .min(1)
+  .superRefine((t, ctx) => {
+    if (!schemaFor(t)) ctx.addIssue({ code: 'custom', message: `"${t}" is not a resource type the Terraform lab models`, input: t })
+  })
+const regex = z
+  .string()
+  .min(1)
+  .superRefine((r, ctx) => {
+    try {
+      new RegExp(r, 'm')
+    } catch (e) {
+      ctx.addIssue({ code: 'custom', message: `invalid regex: ${(e as Error).message}`, input: r })
+    }
+  })
+const LeafSchema = z.union([
+  z.strictObject({ plan_clean: z.literal(true) }),
+  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddr).min(1) }) }),
+  z.strictObject({ state_has: tfAddr }),
+  z.strictObject({ state_lacks: tfAddr }),
+  z.strictObject({ lock_free: z.literal(true) }),
+  z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
+  z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
+  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr }) }),
+  z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
+])
+const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])
+const PredicateSchema = z.union([LeafOrNot, z.strictObject({ all: z.array(LeafOrNot).min(1) }), z.strictObject({ any: z.array(LeafOrNot).min(1) })])
+export type Leaf = z.infer<typeof LeafSchema>
+export type Predicate = z.infer<typeof PredicateSchema>
 const ActionsSchema = z
   .array(
     z.strictObject({
@@ -141,6 +178,8 @@ const ActionsSchema = z
       file: z
         .strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: z.string().min(1), after: z.string() })
         .optional(),
+      // A Terraform fix (TF3d): taken once this holds of the lab's world. Needs a terraform block.
+      done_when: PredicateSchema.optional(),
     }),
   )
   .min(2)
@@ -172,7 +211,6 @@ const StageSchema = z.strictObject({
 // A Terraform world (docs/superpowers/plans/2026-10-07-terraform-tf2c2-cli-and-shell.md): the
 // files on disk, what state holds, and what the simulated cloud holds. The
 // cloud defaults to exactly what state says; `cloud` lists only the differences.
-const json = z.json()
 const TfAttrs = z.record(z.string(), json)
 const TfState = z.array(
   z.strictObject({
@@ -505,6 +543,13 @@ export const ScenarioSchema = z
       if (!tagged.has(r.evidence)) issue(`no artifact or command is tagged with evidence "${r.evidence}"`, ['red_herrings', i, 'evidence'])
       if (key.has(r.evidence)) issue(`"${r.evidence}" is key evidence, so it can't be a red herring`, ['red_herrings', i, 'evidence'])
     })
+
+    if (!s.terraform)
+      [s, ...stages].forEach((part, k) =>
+        part.actions.forEach((act, i) => {
+          if (act.done_when) issue('done_when needs a terraform block', k === 0 ? ['actions', i, 'done_when'] : ['stages', k - 1, 'actions', i, 'done_when'])
+        }),
+      )
 
     // File fixes: the file must be on disk, start out unfixed, and `after` must count as fixed.
     ;[s, ...stages].forEach((part, k) => {

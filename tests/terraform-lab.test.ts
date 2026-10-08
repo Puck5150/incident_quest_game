@@ -254,3 +254,65 @@ describe('lock, workspace, workspaces', () => {
     expect(lab.workspaces.has('default')).toBe(true)
   })
 })
+
+describe('done_when in the scenario schema', () => {
+  const staged = loadContent(path.resolve(import.meta.dirname, '../content')).scenarios.find((s) => s.stages && s.terminal)!
+  const tf = { files: [FILE], state: [VPC] }
+  // terraform: null means no terraform block
+  const dw = (p: unknown, terraform: unknown = tf) => {
+    const s = structuredClone(base)
+    s.actions[0] = { ...s.actions[0], done_when: p } as (typeof s.actions)[number]
+    const r = ScenarioSchema.safeParse({ ...s, terraform: terraform ?? undefined })
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)
+  }
+
+  it('accepts one action per leaf and an all with a not', () => {
+    const leaves = [
+      { plan_clean: true },
+      { plan_has: { no_destroy: ['aws_vpc.main', 'aws_s3_bucket.b["x"]', 'aws_instance.web[0]'] } },
+      { state_has: 'aws_vpc.main' },
+      { state_lacks: 'data.aws_ami.x' },
+      { lock_free: true },
+      { reality_has: { type: 'aws_vpc', id: 'vpc-1', attr: 'cidr_block', equals: '10.0.0.0/16' } },
+      { reality_has: { type: 'aws_s3_bucket', id: 'b' } },
+      { reality_lacks: { type: 'aws_vpc', id: 'vpc-2' } },
+      { applied: { op: 'import', address: 'aws_vpc.main' } },
+      { file_contains: { path: '/home/ops/infra/main.tf', matches: '^\\s*prevent_destroy\\s*=\\s*true' } },
+      { not: { state_has: 'aws_vpc.old' } },
+      { all: [{ plan_clean: true }, { not: { lock_free: true } }] },
+      { any: [{ state_has: 'aws_vpc.main' }, { applied: { op: 'forget', address: 'aws_vpc.main' } }] },
+    ]
+    for (const p of leaves) expect(dw(p), JSON.stringify(p)).toEqual([])
+  })
+
+  it('needs a terraform block, at the top level and in stages', () => {
+    expect(dw({ plan_clean: true }, null)).toEqual(['actions.0.done_when: done_when needs a terraform block'])
+    const s = structuredClone(staged)
+    s.stages![0].actions[0] = { ...s.stages![0].actions[0], done_when: { plan_clean: true } } as (typeof s.actions)[number]
+    const r = ScenarioSchema.safeParse(s)
+    expect(r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)).toEqual(['stages.0.actions.0.done_when: done_when needs a terraform block'])
+  })
+
+  it('rejects malformed predicates', () => {
+    expect(dw({ plan_clear: true })).not.toEqual([])
+    expect(dw({ plan_clean: true, lock_free: true })).not.toEqual([])
+    expect(dw({ plan_clean: false })).not.toEqual([])
+    expect(dw({ all: [] })).not.toEqual([])
+    expect(dw({ all: [{ all: [{ plan_clean: true }] }] })).not.toEqual([])
+    expect(dw({ not: { not: { plan_clean: true } } })).not.toEqual([])
+    expect(dw({ applied: { op: 'read', address: 'aws_vpc.main' } })).not.toEqual([])
+    expect(dw({ reality_lacks: { type: 'aws_vpc', id: '' } })).not.toEqual([])
+    expect(dw({ file_contains: { path: 'main.tf', matches: 'x' } }).join()).toMatch(/absolute/)
+  })
+
+  it('checks addresses, reality types and regexes, with paths at done_when', () => {
+    expect(dw({ state_has: 'Bad' })).toEqual(['actions.0.done_when.state_has: must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]'])
+    expect(dw({ all: [{ applied: { op: 'create', address: 'aws_vpc' } }] }).join()).toMatch(/^actions\.0\.done_when\.all\.0\.applied\.address: must be a resource/)
+    expect(dw({ plan_has: { no_destroy: ['aws_vpc.main', 'nope'] } }).join()).toMatch(/^actions\.0\.done_when\.plan_has\.no_destroy\.1: /)
+    expect(dw({ reality_has: { type: 'aws_nope', id: 'x' } })).toEqual(['actions.0.done_when.reality_has.type: "aws_nope" is not a resource type the Terraform lab models'])
+    expect(dw({ any: [{ not: { reality_lacks: { type: 'aws_nope', id: 'x' } } }] })).toEqual([
+      'actions.0.done_when.any.0.not.reality_lacks.type: "aws_nope" is not a resource type the Terraform lab models',
+    ])
+    expect(dw({ file_contains: { path: '/x/main.tf', matches: '(' } }).join()).toMatch(/^actions\.0\.done_when\.file_contains\.matches: invalid regex/)
+  })
+})

@@ -1024,6 +1024,1317 @@
               "after"
             ],
             "additionalProperties": false
+          },
+          "done_when": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "plan_clean": {
+                            "type": "boolean",
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "plan_clean"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "plan_has": {
+                            "type": "object",
+                            "properties": {
+                              "no_destroy": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              }
+                            },
+                            "required": [
+                              "no_destroy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "plan_has"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "state_has": {
+                            "type": "string",
+                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                          }
+                        },
+                        "required": [
+                          "state_has"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "state_lacks": {
+                            "type": "string",
+                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                          }
+                        },
+                        "required": [
+                          "state_lacks"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "lock_free": {
+                            "type": "boolean",
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "lock_free"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "reality_has": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "attr": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "equals": {
+                                "allOf": [
+                                  {
+                                    "$ref": "#/definitions/__schema0"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "reality_has"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "reality_lacks": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "reality_lacks"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "applied": {
+                            "type": "object",
+                            "properties": {
+                              "op": {
+                                "type": "string",
+                                "enum": [
+                                  "create",
+                                  "update",
+                                  "delete",
+                                  "import",
+                                  "forget"
+                                ]
+                              },
+                              "address": {
+                                "type": "string",
+                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                              }
+                            },
+                            "required": [
+                              "op",
+                              "address"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "applied"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "file_contains": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "pattern": "^\\/"
+                              },
+                              "matches": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "matches"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "file_contains"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "not": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "plan_clean": {
+                                "type": "boolean",
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "plan_clean"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "plan_has": {
+                                "type": "object",
+                                "properties": {
+                                  "no_destroy": {
+                                    "minItems": 1,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "no_destroy"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "plan_has"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "state_has": {
+                                "type": "string",
+                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                              }
+                            },
+                            "required": [
+                              "state_has"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "state_lacks": {
+                                "type": "string",
+                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                              }
+                            },
+                            "required": [
+                              "state_lacks"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "lock_free": {
+                                "type": "boolean",
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "lock_free"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "reality_has": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "attr": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "equals": {
+                                    "allOf": [
+                                      {
+                                        "$ref": "#/definitions/__schema0"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "reality_has"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "reality_lacks": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "reality_lacks"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "applied": {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "enum": [
+                                      "create",
+                                      "update",
+                                      "delete",
+                                      "import",
+                                      "forget"
+                                    ]
+                                  },
+                                  "address": {
+                                    "type": "string",
+                                    "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "address"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "applied"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "file_contains": {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "pattern": "^\\/"
+                                  },
+                                  "matches": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "path",
+                                  "matches"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "file_contains"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "not"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "all": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "plan_clean": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "plan_clean"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "plan_has": {
+                                  "type": "object",
+                                  "properties": {
+                                    "no_destroy": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "no_destroy"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "plan_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state_has": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              },
+                              "required": [
+                                "state_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state_lacks": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              },
+                              "required": [
+                                "state_lacks"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "lock_free": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "lock_free"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "reality_has": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "attr": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "equals": {
+                                      "allOf": [
+                                        {
+                                          "$ref": "#/definitions/__schema0"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "reality_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "reality_lacks": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "reality_lacks"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "applied": {
+                                  "type": "object",
+                                  "properties": {
+                                    "op": {
+                                      "type": "string",
+                                      "enum": [
+                                        "create",
+                                        "update",
+                                        "delete",
+                                        "import",
+                                        "forget"
+                                      ]
+                                    },
+                                    "address": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "address"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "applied"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "file_contains": {
+                                  "type": "object",
+                                  "properties": {
+                                    "path": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "file_contains"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "not": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "plan_clean": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "plan_clean"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "plan_has": {
+                                      "type": "object",
+                                      "properties": {
+                                        "no_destroy": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "no_destroy"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "plan_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state_has": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "state_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state_lacks": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "state_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "lock_free": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "lock_free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "reality_has": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "attr": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "equals": {
+                                          "allOf": [
+                                            {
+                                              "$ref": "#/definitions/__schema0"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "id"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "reality_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "reality_lacks": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "id"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "reality_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "applied": {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "enum": [
+                                            "create",
+                                            "update",
+                                            "delete",
+                                            "import",
+                                            "forget"
+                                          ]
+                                        },
+                                        "address": {
+                                          "type": "string",
+                                          "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "address"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "applied"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "file_contains": {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "path",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "file_contains"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "not"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "all"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "any": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "plan_clean": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "plan_clean"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "plan_has": {
+                                  "type": "object",
+                                  "properties": {
+                                    "no_destroy": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "no_destroy"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "plan_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state_has": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              },
+                              "required": [
+                                "state_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state_lacks": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              },
+                              "required": [
+                                "state_lacks"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "lock_free": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "lock_free"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "reality_has": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "attr": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "equals": {
+                                      "allOf": [
+                                        {
+                                          "$ref": "#/definitions/__schema0"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "reality_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "reality_lacks": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "reality_lacks"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "applied": {
+                                  "type": "object",
+                                  "properties": {
+                                    "op": {
+                                      "type": "string",
+                                      "enum": [
+                                        "create",
+                                        "update",
+                                        "delete",
+                                        "import",
+                                        "forget"
+                                      ]
+                                    },
+                                    "address": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "address"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "applied"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "file_contains": {
+                                  "type": "object",
+                                  "properties": {
+                                    "path": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "file_contains"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "not": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "plan_clean": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "plan_clean"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "plan_has": {
+                                      "type": "object",
+                                      "properties": {
+                                        "no_destroy": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "no_destroy"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "plan_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state_has": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "state_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state_lacks": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "state_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "lock_free": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "lock_free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "reality_has": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "attr": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "equals": {
+                                          "allOf": [
+                                            {
+                                              "$ref": "#/definitions/__schema0"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "id"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "reality_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "reality_lacks": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "id"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "reality_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "applied": {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "enum": [
+                                            "create",
+                                            "update",
+                                            "delete",
+                                            "import",
+                                            "forget"
+                                          ]
+                                        },
+                                        "address": {
+                                          "type": "string",
+                                          "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "address"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "applied"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "file_contains": {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "path",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "file_contains"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "not"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "any"
+                ],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "required": [
@@ -1551,6 +2862,1317 @@
                     "after"
                   ],
                   "additionalProperties": false
+                },
+                "done_when": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "plan_clean": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "plan_clean"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "plan_has": {
+                                  "type": "object",
+                                  "properties": {
+                                    "no_destroy": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "no_destroy"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "plan_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state_has": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              },
+                              "required": [
+                                "state_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state_lacks": {
+                                  "type": "string",
+                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                }
+                              },
+                              "required": [
+                                "state_lacks"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "lock_free": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "lock_free"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "reality_has": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "attr": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "equals": {
+                                      "allOf": [
+                                        {
+                                          "$ref": "#/definitions/__schema0"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "reality_has"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "reality_lacks": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "reality_lacks"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "applied": {
+                                  "type": "object",
+                                  "properties": {
+                                    "op": {
+                                      "type": "string",
+                                      "enum": [
+                                        "create",
+                                        "update",
+                                        "delete",
+                                        "import",
+                                        "forget"
+                                      ]
+                                    },
+                                    "address": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "address"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "applied"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "file_contains": {
+                                  "type": "object",
+                                  "properties": {
+                                    "path": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "file_contains"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "not": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "plan_clean": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "plan_clean"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "plan_has": {
+                                      "type": "object",
+                                      "properties": {
+                                        "no_destroy": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "no_destroy"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "plan_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state_has": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "state_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state_lacks": {
+                                      "type": "string",
+                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    }
+                                  },
+                                  "required": [
+                                    "state_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "lock_free": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "lock_free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "reality_has": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "attr": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "equals": {
+                                          "allOf": [
+                                            {
+                                              "$ref": "#/definitions/__schema0"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "id"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "reality_has"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "reality_lacks": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "type",
+                                        "id"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "reality_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "applied": {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "enum": [
+                                            "create",
+                                            "update",
+                                            "delete",
+                                            "import",
+                                            "forget"
+                                          ]
+                                        },
+                                        "address": {
+                                          "type": "string",
+                                          "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "address"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "applied"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "file_contains": {
+                                      "type": "object",
+                                      "properties": {
+                                        "path": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "path",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "file_contains"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "not"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "all": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "plan_clean": {
+                                        "type": "boolean",
+                                        "const": true
+                                      }
+                                    },
+                                    "required": [
+                                      "plan_clean"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "plan_has": {
+                                        "type": "object",
+                                        "properties": {
+                                          "no_destroy": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "no_destroy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "plan_has"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "state_has": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    },
+                                    "required": [
+                                      "state_has"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "state_lacks": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    },
+                                    "required": [
+                                      "state_lacks"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "lock_free": {
+                                        "type": "boolean",
+                                        "const": true
+                                      }
+                                    },
+                                    "required": [
+                                      "lock_free"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "reality_has": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "attr": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "equals": {
+                                            "allOf": [
+                                              {
+                                                "$ref": "#/definitions/__schema0"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "type",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "reality_has"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "reality_lacks": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "type",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "reality_lacks"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "applied": {
+                                        "type": "object",
+                                        "properties": {
+                                          "op": {
+                                            "type": "string",
+                                            "enum": [
+                                              "create",
+                                              "update",
+                                              "delete",
+                                              "import",
+                                              "forget"
+                                            ]
+                                          },
+                                          "address": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        },
+                                        "required": [
+                                          "op",
+                                          "address"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "applied"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "file_contains": {
+                                        "type": "object",
+                                        "properties": {
+                                          "path": {
+                                            "type": "string",
+                                            "pattern": "^\\/"
+                                          },
+                                          "matches": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "path",
+                                          "matches"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "file_contains"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "not": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "plan_clean": {
+                                            "type": "boolean",
+                                            "const": true
+                                          }
+                                        },
+                                        "required": [
+                                          "plan_clean"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "plan_has": {
+                                            "type": "object",
+                                            "properties": {
+                                              "no_destroy": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "no_destroy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "plan_has"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state_has": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        },
+                                        "required": [
+                                          "state_has"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state_lacks": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        },
+                                        "required": [
+                                          "state_lacks"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "lock_free": {
+                                            "type": "boolean",
+                                            "const": true
+                                          }
+                                        },
+                                        "required": [
+                                          "lock_free"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "reality_has": {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "attr": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "equals": {
+                                                "allOf": [
+                                                  {
+                                                    "$ref": "#/definitions/__schema0"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "id"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "reality_has"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "reality_lacks": {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "id"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "reality_lacks"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "applied": {
+                                            "type": "object",
+                                            "properties": {
+                                              "op": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "create",
+                                                  "update",
+                                                  "delete",
+                                                  "import",
+                                                  "forget"
+                                                ]
+                                              },
+                                              "address": {
+                                                "type": "string",
+                                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                              }
+                                            },
+                                            "required": [
+                                              "op",
+                                              "address"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "applied"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "file_contains": {
+                                            "type": "object",
+                                            "properties": {
+                                              "path": {
+                                                "type": "string",
+                                                "pattern": "^\\/"
+                                              },
+                                              "matches": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "path",
+                                              "matches"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "file_contains"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "not"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "all"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "any": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "plan_clean": {
+                                        "type": "boolean",
+                                        "const": true
+                                      }
+                                    },
+                                    "required": [
+                                      "plan_clean"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "plan_has": {
+                                        "type": "object",
+                                        "properties": {
+                                          "no_destroy": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "no_destroy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "plan_has"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "state_has": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    },
+                                    "required": [
+                                      "state_has"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "state_lacks": {
+                                        "type": "string",
+                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      }
+                                    },
+                                    "required": [
+                                      "state_lacks"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "lock_free": {
+                                        "type": "boolean",
+                                        "const": true
+                                      }
+                                    },
+                                    "required": [
+                                      "lock_free"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "reality_has": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "attr": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "equals": {
+                                            "allOf": [
+                                              {
+                                                "$ref": "#/definitions/__schema0"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "type",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "reality_has"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "reality_lacks": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "type",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "reality_lacks"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "applied": {
+                                        "type": "object",
+                                        "properties": {
+                                          "op": {
+                                            "type": "string",
+                                            "enum": [
+                                              "create",
+                                              "update",
+                                              "delete",
+                                              "import",
+                                              "forget"
+                                            ]
+                                          },
+                                          "address": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        },
+                                        "required": [
+                                          "op",
+                                          "address"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "applied"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "file_contains": {
+                                        "type": "object",
+                                        "properties": {
+                                          "path": {
+                                            "type": "string",
+                                            "pattern": "^\\/"
+                                          },
+                                          "matches": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "path",
+                                          "matches"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "file_contains"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "not": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "plan_clean": {
+                                            "type": "boolean",
+                                            "const": true
+                                          }
+                                        },
+                                        "required": [
+                                          "plan_clean"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "plan_has": {
+                                            "type": "object",
+                                            "properties": {
+                                              "no_destroy": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "no_destroy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "plan_has"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state_has": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        },
+                                        "required": [
+                                          "state_has"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state_lacks": {
+                                            "type": "string",
+                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          }
+                                        },
+                                        "required": [
+                                          "state_lacks"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "lock_free": {
+                                            "type": "boolean",
+                                            "const": true
+                                          }
+                                        },
+                                        "required": [
+                                          "lock_free"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "reality_has": {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "attr": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "equals": {
+                                                "allOf": [
+                                                  {
+                                                    "$ref": "#/definitions/__schema0"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "id"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "reality_has"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "reality_lacks": {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "id"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "reality_lacks"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "applied": {
+                                            "type": "object",
+                                            "properties": {
+                                              "op": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "create",
+                                                  "update",
+                                                  "delete",
+                                                  "import",
+                                                  "forget"
+                                                ]
+                                              },
+                                              "address": {
+                                                "type": "string",
+                                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                              }
+                                            },
+                                            "required": [
+                                              "op",
+                                              "address"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "applied"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "file_contains": {
+                                            "type": "object",
+                                            "properties": {
+                                              "path": {
+                                                "type": "string",
+                                                "pattern": "^\\/"
+                                              },
+                                              "matches": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "path",
+                                              "matches"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "file_contains"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "not"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "any"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               },
               "required": [

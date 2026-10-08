@@ -1,21 +1,12 @@
 // World predicates: the checks a scenario's done_when is made of, evaluated against a snapshot.
-import { equal, type Value } from './eval.ts'
+import { equal } from './eval.ts'
 import type { PlanResult } from './plan.ts'
 import { hasChanges } from './render.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { listAddresses, type State } from './state.ts'
 
-export type Leaf =
-  | { plan_clean: true }
-  | { plan_has: { no_destroy: string[] } }
-  | { state_has: string }
-  | { state_lacks: string }
-  | { lock_free: true }
-  | { reality_has: { type: string; id: string; attr?: string; equals?: Value } }
-  | { reality_lacks: { type: string; id: string } }
-  | { applied: { op: 'create' | 'update' | 'delete' | 'import' | 'forget'; address: string } }
-  | { file_contains: { path: string; matches: string } }
-export type Predicate = Leaf | { not: Leaf } | { all: (Leaf | { not: Leaf })[] } | { any: (Leaf | { not: Leaf })[] }
+import type { Leaf, Predicate } from '../../schema/scenario.ts'
+export type { Leaf, Predicate }
 
 export interface World {
   state: State
