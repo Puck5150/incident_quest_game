@@ -19,6 +19,7 @@ function world(tf: Partial<TerraformBlock> = {}, o: { files?: Record<string, str
     cwd: o.cwd ?? '/home/you/infra',
     mainHost: o.mainHost ?? true,
     env: o.env ?? {},
+    taken: new Set(),
     listFiles: async (dir) => Object.entries(disk).filter(([p]) => p.slice(0, p.lastIndexOf('/')) === dir).map(([p, text]) => ({ name: p.slice(p.lastIndexOf('/') + 1), text })),
     readFile: async (p) => disk[p],
     write: async (dir, name, text) => void (disk[`${dir}/${name}`] = text),
@@ -43,12 +44,12 @@ describe('terraform: basics', () => {
   })
 
   it('answers the commands that need a later milestone honestly', async () => {
-    for (const args of [['apply'], ['destroy'], ['import', 'a.b', 'x'], ['taint', 'a.b'], ['state', 'rm', 'a.b'], ['workspace', 'new', 'x']]) {
+    for (const args of [['import', 'a.b', 'x'], ['taint', 'a.b'], ['state', 'rm', 'a.b'], ['workspace', 'new', 'x']]) {
       const r = await world().run(...args)
       expect(r.exitCode, args.join(' ')).toBe(1)
       expect(r.stderr).toContain('Error: Not available in this lab yet')
     }
-    expect((await world().run('apply')).stderr).toContain('"terraform apply" is not simulated yet')
+    expect((await world().run('import', 'a.b', 'x')).stderr).toContain('"terraform import" is not simulated yet')
   })
 
   it('honours -chdir', async () => {

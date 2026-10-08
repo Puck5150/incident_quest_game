@@ -2,13 +2,16 @@
 // workspace read the player's working directory and the lab's state; everything
 // else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
+import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
 import { buildGraph } from './graph.ts'
-import type { Lab } from './lab.ts'
+import type { Lab, SavedPlan } from './lab.ts'
 import { parseHcl } from './parse.ts'
-import { planConfig } from './plan.ts'
+import { planConfig, type PlanResult } from './plan.ts'
+import { hex } from './provider.ts'
 import { renderPlan } from './render.ts'
+import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
 import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
@@ -26,6 +29,9 @@ export interface CliContext {
   readFile(path: string): Promise<string | undefined>
   write(dir: string, name: string, text: string): Promise<void>
   env: Record<string, string>
+  taken: Set<string> // actions the player has taken (fault gating)
+  stdin?: string // piped input, if any
+  confirm?: (prompt: string) => Promise<string | undefined> // interactive answer; undefined = no way to ask
 }
 export interface CliResult {
   stdout: string
@@ -87,7 +93,7 @@ Global options (use these before the subcommand, if any):
   -help         Show this help output, or the help for a specified subcommand.
   -version      An alias for the "version" subcommand.`
 
-const NOT_YET = new Set(['apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
+const NOT_YET = new Set(['import', 'taint', 'untaint', 'refresh', 'force-unlock', 'console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
 const REGISTRY = 'registry.terraform.io/'
 const RULE = '─'.repeat(77)
 const NO_STATE =
@@ -104,6 +110,8 @@ const HELP: Record<string, string> = {
   init: 'Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.',
   validate: 'Validate the configuration files in a directory, referring only to the configuration and not accessing any remote services.',
   plan: 'Generates a speculative execution plan, showing what actions Terraform would take to apply the current configuration. This command will not actually perform the planned actions.',
+  apply: 'Creates or updates infrastructure according to Terraform configuration files in the current directory.',
+  destroy: 'Destroy Terraform-managed infrastructure.',
   show: 'Reads and outputs a Terraform state or plan file in a human-readable form.',
   state: 'This command has subcommands for advanced state management.',
   output: 'Reads an output variable from a Terraform state file and prints the value.',
@@ -362,24 +370,37 @@ async function resolveVars(ctx: CliContext, cfg: Config, cmdline: VarSource[], d
   return errors.length ? { warnings, error: errors.join('\n\n') } : { warnings, vars: Object.fromEntries(final) }
 }
 
+type Cmd = 'plan' | 'apply' | 'destroy'
 interface PlanFlags {
   sources: VarSource[]
   replace: string[]
   refresh: boolean
   out?: string
   detailed: boolean
+  autoApprove: boolean
+  planFile?: string
 }
 const PLAN_VALUE_FLAGS = new Set(['-var', '-var-file', '-replace', '-out', '-lock-timeout', '-parallelism', '-target'])
-const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warnings', '-refresh', '-detailed-exitcode', '-destroy', '-refresh-only'])
+const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warnings', '-refresh', '-detailed-exitcode', '-destroy', '-refresh-only', '-auto-approve'])
+// Flags each command does not take, as Terraform's own flag parser rejects them.
+const NOT_FOR: Record<Cmd, string[]> = { plan: ['-auto-approve'], apply: ['-out', '-detailed-exitcode'], destroy: ['-out', '-detailed-exitcode', '-replace'] }
 
-function parsePlanFlags(args: string[]): PlanFlags | Out {
-  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false }
+function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
+  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false }
   for (let i = 0; i < args.length; i++) {
     const raw = args[i]
-    if (!raw.startsWith('-') || raw === '-') return boxFail('Too many command line arguments', 'Expected no positional arguments. Did you mean to use -chdir?')
+    if (!raw.startsWith('-') || raw === '-') {
+      // apply takes one saved plan file; nothing else takes positional arguments.
+      if (cmd === 'apply' && f.planFile === undefined) {
+        f.planFile = raw
+        continue
+      }
+      return boxFail('Too many command line arguments', cmd === 'apply' ? 'Expected at most one positional argument.' : 'Expected no positional arguments. Did you mean to use -chdir?')
+    }
     const eq = raw.indexOf('=')
     const name = (eq < 0 ? raw : raw.slice(0, eq)).replace(/^--/, '-')
     let value = eq < 0 ? undefined : raw.slice(eq + 1)
+    if (NOT_FOR[cmd].includes(name)) return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
     if (PLAN_VALUE_FLAGS.has(name)) {
       if (value === undefined) {
         value = args[++i]
@@ -389,11 +410,12 @@ function parsePlanFlags(args: string[]): PlanFlags | Out {
       else if (name === '-var-file') f.sources.push({ kind: 'file', path: value })
       else if (name === '-replace') f.replace.push(value)
       else if (name === '-out') f.out = value
-      else if (name === '-target') return notYet('plan -target')
+      else if (name === '-target') return notYet(`${cmd} -target`)
     } else if (PLAN_BOOL_FLAGS.has(name)) {
       if (name === '-refresh') f.refresh = value !== 'false'
       else if (name === '-detailed-exitcode') f.detailed = true
-      else if (name === '-destroy' || name === '-refresh-only') return notYet(`plan ${name}`)
+      else if (name === '-auto-approve') f.autoApprove = value !== 'false'
+      else if (name === '-destroy' || name === '-refresh-only') return notYet(`${cmd} ${name}`)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
   const bad = f.replace.find((a) => !ADDRESS.test(a) || a.startsWith('data.'))
@@ -401,9 +423,16 @@ function parsePlanFlags(args: string[]): PlanFlags | Out {
   return f
 }
 
-async function cmdPlan(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
-  const f = parsePlanFlags(args)
-  if (!('sources' in f)) return f
+interface Planned {
+  warning: string
+  vars: Record<string, Value>
+  result: PlanResult
+  stdout: string // refresh lines and the rendered plan
+  changes: boolean
+}
+
+// What plan, apply and destroy share: setup checks, variables, the plan and its refresh lines.
+async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boolean): Promise<Planned | Out> {
   if (!cfg.tf.length) return boxFail('No configuration files', NO_CONFIG_DETAIL)
   const g = buildGraph(cfg.tf)
   if (!g.diagnostics.length) {
@@ -413,7 +442,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config): Promise<Ou
   const v = await resolveVars(ctx, cfg, f.sources, g.diagnostics.length ? undefined : g.blocks.filter((b) => b.type === 'variable'))
   if ('error' in v) return { stdout: v.warnings, stderr: v.error, exitCode: 1 }
   const warning = v.warnings
-  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: v.vars, replace: f.replace, refresh: f.refresh })
+  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: v.vars, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(cfg.tf))
   if (result.diagnostics.length) return { stdout: warning, stderr: rendered, exitCode: 1 }
 
@@ -427,14 +456,91 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config): Promise<Ou
     )
     .sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
     .flatMap((x) => x.lines)
-  let stdout = refreshLines.length ? `${refreshLines.join('\n')}\n\n${rendered}` : rendered
-  const changes = !/(^|\n)No changes\. Your infrastructure matches/.test(rendered)
-  if (changes) {
+  const stdout = refreshLines.length ? `${refreshLines.join('\n')}\n\n${rendered}` : rendered
+  return { warning, vars: v.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
+}
+
+const planId = (lineage: string, serial: number, name: string) => `p${hex(`${lineage}:${serial}:${name}`, 8)}`
+
+async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boolean): Promise<Out> {
+  const f = parsePlanFlags(args)
+  if (!('sources' in f)) return f
+  const p = await makePlan(f, ctx, cfg, false)
+  if (!('result' in p)) return p
+  let stdout = p.stdout
+  if (p.changes) {
     stdout += f.out
       ? `\n\n${RULE}\n\nSaved the plan to: ${f.out}\n\nTo perform exactly these actions, run the following command to apply:\n    terraform apply "${f.out}"`
       : `\n\n${RULE}\n\nNote: You didn't use the -out option to save this plan, so Terraform can't\nguarantee to take exactly these actions if you run "terraform apply" now.`
+    if (f.out !== undefined && here) {
+      const { lineage, serial } = ctx.lab.state
+      const id = planId(lineage, serial, f.out)
+      ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage })
+      await ctx.write(cfg.dir, f.out, `TFPLAN1\n${id}\n`)
+    }
   }
-  return { ...withWarn(warning, ok(stdout)), exitCode: f.detailed && changes ? 2 : 0 }
+  return { ...withWarn(p.warning, ok(stdout)), exitCode: f.detailed && p.changes ? 2 : 0 }
+}
+
+const APPLY_PROMPT = "\nDo you want to perform these actions?\n  Terraform will perform the actions described above.\n  Only 'yes' will be accepted to approve.\n\n  Enter a value: "
+const DESTROY_PROMPT =
+  "\nDo you really want to destroy all resources?\n  Terraform will destroy all your managed infrastructure, as shown above.\n  There is no undo. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
+
+// A saved plan file: its marker line and id, checked against what plan -out stored.
+async function loadSavedPlan(ctx: CliContext, cfg: Config, name: string): Promise<SavedPlan | Out> {
+  const text = await ctx.readFile(resolvePath(cfg.dir, name))
+  const failLoad = (detail: string) => boxFail(`Failed to load "${name}" as a plan file`, detail)
+  if (text === undefined) return failLoad(`Error: stat ${name}: no such file or directory`)
+  const [marker, id] = text.split('\n')
+  const saved = marker === 'TFPLAN1' && id !== undefined ? ctx.lab.savedPlans.get(id) : undefined
+  if (!saved) return failLoad('Error: zip: not a valid zip file')
+  if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage)
+    return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
+  return saved
+}
+
+async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'apply' | 'destroy'): Promise<Out> {
+  const f = parsePlanFlags(args, mode)
+  if (!('sources' in f)) return f
+  const destroy = mode === 'destroy'
+  let input: { files: File[]; vars: Record<string, Value>; replace: string[]; destroy: boolean }
+  let head: string
+  let warning = ''
+  if (f.planFile !== undefined) {
+    if (f.sources.length) return boxFail("Can't set variables when applying a saved plan", 'The -var and -var-file options cannot be used when applying a saved plan file, because a saved plan includes the variable values that were set when it was created.')
+    const saved = await loadSavedPlan(ctx, cfg, f.planFile)
+    if (!('serial' in saved)) return saved
+    input = { files: saved.files, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
+    head = '' // a saved plan was already reviewed: no plan text, no question
+  } else {
+    const p = await makePlan(f, ctx, cfg, destroy)
+    if (!('result' in p)) return p
+    warning = p.warning
+    if (!p.changes) {
+      const none = { imported: 0, added: 0, changed: 0, destroyed: 0 }
+      const end = renderApplyEnd({ plan: p.result, steps: [], errors: [], state: ctx.lab.state, reality: ctx.lab.reality, counts: none }, mode)
+      return withWarn(warning, ok(`${p.stdout}\n${end}`))
+    }
+    input = { files: cfg.tf, vars: p.vars, replace: f.replace, destroy }
+    head = p.stdout
+    if (!f.autoApprove) {
+      const prompt = destroy ? DESTROY_PROMPT : APPLY_PROMPT
+      const answer = ctx.stdin !== undefined ? ctx.stdin.split('\n')[0].trim() : ctx.confirm ? await ctx.confirm(prompt) : undefined
+      head += `\n${prompt}${answer ?? ''}\n`
+      if (answer !== 'yes') return { ...withWarn(warning, ok(`${head}\n${destroy ? 'Destroy' : 'Apply'} cancelled.`)), exitCode: 1 }
+    }
+  }
+  const r: ApplyResult = executeApply(
+    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, refresh: f.refresh },
+    { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: String(ctx.lab.state.serial) },
+  )
+  // Outside the lab directory ctx.lab is a throwaway copy, so this commit is discarded.
+  ctx.lab.state = r.state
+  ctx.lab.reality = r.reality
+  ctx.lab.hasState = true
+  const progress = renderProgress(r)
+  const stdout = [head, progress, renderApplyEnd(r, mode)].filter(Boolean).join('\n')
+  return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(input.files)), exitCode: r.errors.length ? 1 : 0 }
 }
 
 const sensitiveAttr = (type: string, attr: string) => {
@@ -500,7 +606,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   if (Object.hasOwn(HELP, sub) && more.some((a) => a === '-help' || a === '--help')) return ok(`Usage: terraform [global options] ${sub} [options]\n\n${HELP[sub]}`)
   // State lives per directory, on the host the scenario is about: anywhere else there is none.
   const here = ctx.mainHost && dir === resolvePath('/', ctx.lab.dir)
-  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {} } }
+  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map() } }
   const cfg = await loadConfig(ctx, dir)
   switch (sub) {
     case 'version':
@@ -513,7 +619,10 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
     case 'validate':
       return cmdValidate(cfg)
     case 'plan':
-      return cmdPlan(more, ctx, cfg)
+      return cmdPlan(more, ctx, cfg, here)
+    case 'apply':
+    case 'destroy':
+      return cmdApply(more, ctx, cfg, sub)
     case 'show':
       return more.some((a) => !a.startsWith('-')) ? notYet('show <plan file>') : ok(ctx.lab.hasState ? showState(ctx.lab.state, sensitiveAttr) : 'No state.')
     case 'state':
@@ -542,7 +651,7 @@ export async function runTerraform(args: string[], ctx: CliContext): Promise<Cli
   const here = ctx.mainHost && (args[0]?.startsWith('-chdir=') ? resolvePath(ctx.cwd, args[0].slice(7)) : ctx.cwd) === resolvePath('/', ctx.lab.dir)
   const evidence = here ? ctx.lab.evidence.filter((e) => e.command === command && text.includes(e.contains)).map((e) => `evidence:${e.evidence}`) : []
   const helped = first.some((a) => a === '-help' || a === '--help')
-  const verifies = ['init', 'validate', 'plan', 'show', 'output', 'state list', 'state show']
+  const verifies = ['init', 'validate', 'plan', 'apply', 'destroy', 'show', 'output', 'state list', 'state show']
   const ran = here && !helped && verifies.includes(command) ? `terraform ${command}` : ''
   return { ...out, evidence, ran }
 }

@@ -36,6 +36,8 @@ function headerLines(item: PlanItem): string[] {
       break
     case 'destroy':
       out.push(`${a} will be destroyed`)
+      // A destroy-mode plan gives no reason: everything goes.
+      if (item.destroyReason === undefined) break
       out.push(
         `(because ${
           item.destroyReason === 'count-index'

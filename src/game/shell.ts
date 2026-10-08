@@ -278,6 +278,7 @@ export class IncidentShell {
       lab: this.lab!,
       cwd: ctx.cwd,
       mainHost,
+      taken: this.context.taken,
       env: ctx.exportedEnv ?? Object.fromEntries(ctx.env),
       async listFiles(dir) {
         const out: { name: string; text: string }[] = []

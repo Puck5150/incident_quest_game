@@ -478,7 +478,6 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
         action: 'destroy',
         dependsOn: b ? resourceDeps(nodes, node!) : (inst.dependencies ?? []),
         ...(b ? { block: { file: node!.file, line: b.pos.line, col: b.pos.col } } : {}),
-        destroyReason: 'not-in-config',
         changes: destroyChanges(schemaFor(r.type), inst.attributes),
       })
     }
