@@ -38,8 +38,8 @@ describe('renderProgress', () => {
     expect(lines[13]).toBe('aws_db_instance.d: Creation complete after 2m10s [id=orders]')
   })
   it('puts ids on update/delete Still lines and none at exactly 10s', () => {
-    expect(renderProgress(mk([{ address: 'x.a', op: 'update', id: 'i', seconds: 21, ok: true }]))).toContain('x.a: Still modifying... [id=i] [20s elapsed]')
-    expect(renderProgress(mk([{ address: 'x.a', op: 'delete', id: 'i', seconds: 31, ok: true }]))).toContain('x.a: Still destroying... [id=i] [30s elapsed]')
+    expect(renderProgress(mk([{ address: 'x.a', op: 'update', id: 'i', seconds: 21, ok: true }]))).toContain('x.a: Still modifying... [id=i, 20s elapsed]')
+    expect(renderProgress(mk([{ address: 'x.a', op: 'delete', id: 'i', seconds: 31, ok: true }]))).toContain('x.a: Still destroying... [id=i, 30s elapsed]')
     expect(renderProgress(mk([{ address: 'x.a', op: 'create', id: 'i', seconds: 10, ok: true }]))).not.toContain('Still')
   })
   it('failed steps print only the start line', () => {

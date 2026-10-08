@@ -14,8 +14,8 @@ function stepLines(s: ApplyStep): string[] {
   const start = { create: 'Creating...', update: `Modifying...${id}`, delete: `Destroying...${id}` }[s.op]
   const lines = [`${a}: ${start}`]
   if (!s.ok) return lines
-  const still = s.op === 'create' ? '' : id
-  for (let t = 10; t < s.seconds; t += 10) lines.push(`${a}: Still ${WORD[s.op]}...${still} [${formatDuration(t)} elapsed]`)
+  const still = s.op === 'create' ? '' : `${id.trim().slice(1, -1)}, `
+  for (let t = 10; t < s.seconds; t += 10) lines.push(`${a}: Still ${WORD[s.op]}... [${still}${formatDuration(t)} elapsed]`)
   const done = {
     create: `Creation complete after ${formatDuration(s.seconds)}${id}`,
     update: `Modifications complete after ${formatDuration(s.seconds)}${id}`,
