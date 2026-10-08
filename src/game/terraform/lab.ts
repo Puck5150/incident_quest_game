@@ -89,7 +89,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
   all.delete(workspace)
 
   const reality: Reality = {}
-  // The cloud is shared by every workspace.
+  // The cloud is shared by every workspace. Colliding type:id: last wins, in order current, default, then the rest sorted.
   for (const st of [state, ...[...all.values()].map((w) => w.state)])
     for (const r of st.resources) {
       if (r.mode !== 'managed') continue

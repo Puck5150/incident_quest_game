@@ -239,8 +239,13 @@ describe('lock, workspace, workspaces', () => {
     expect(Object.keys(all.reality)).toEqual([realityKey('aws_vpc', 'vpc-1'), realityKey('aws_vpc', 'vpc-9')])
   })
 
+  it('schema: cloud patch/delete may target an object that exists only in a non-default workspace', () => {
+    expect(bad({ state: [VPC], workspaces: WS, cloud: { patch: [{ type: 'aws_vpc', id: 'vpc-9', set: { a: 1 } }], delete: [{ type: 'aws_vpc', id: 'vpc-9' }] } })).toEqual([])
+    expect(bad({ state: [VPC], workspaces: WS, cloud: { patch: [{ type: 'aws_vpc', id: 'vpc-nope', set: {} }] } }).join()).toMatch(/no object with id "vpc-nope"/)
+  })
+
   it('lab: __proto__ is just a workspace name', () => {
-    // zod drops a __proto__ record key (never a prototype write), so the schema rejects it cleanly...
+    // zod silently drops a __proto__ record key (never a prototype write): the key is accepted but gone, so selecting it as the workspace is rejected...
     expect(bad({ workspaces: { ['__proto__']: { state: [VPC] } } })).toEqual([])
     expect(bad({ workspace: '__proto__' }).join()).toMatch(/not a key/)
     // ...and a hand-built block still works through the lab.

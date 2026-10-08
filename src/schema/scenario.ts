@@ -552,7 +552,7 @@ export const ScenarioSchema = z
       }
       const known = new Set<string>()
       checkState(tf.state ?? [], ['terraform', 'state'], known)
-      for (const [name, w] of Object.entries(tf.workspaces ?? {})) checkState(w.state ?? [], ['terraform', 'workspaces', name, 'state'])
+      for (const [name, w] of Object.entries(tf.workspaces ?? {})) checkState(w.state ?? [], ['terraform', 'workspaces', name, 'state'], known)
       if (tf.workspace && tf.workspace !== 'default' && !Object.hasOwn(tf.workspaces ?? {}, tf.workspace))
         issue(`workspace "${tf.workspace}" is not a key of terraform.workspaces`, ['terraform', 'workspace'])
       tf.cloud?.add?.forEach((a, i) => {
