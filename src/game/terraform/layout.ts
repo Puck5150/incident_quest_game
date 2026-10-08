@@ -15,8 +15,9 @@ export const labFiles = (tf: TerraformBlock, startDir: string, home: string) => 
   return tf.files.map((f) => ({ path: join(dir, f.path), content: f.content }))
 }
 
+export const lockBlock = (p: string) => `provider "${p}" {\n  version = "${PROVIDER_VERSION}"\n  hashes = [\n    "h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs=",\n  ]\n}\n`
 export const lockFile = (providers: string[]) => {
-  const blocks = providers.map((p) => `provider "${p}" {\n  version = "${PROVIDER_VERSION}"\n  hashes = [\n    "h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs=",\n  ]\n}\n`)
+  const blocks = providers.map(lockBlock)
   return `# This file is maintained automatically by "terraform init".\n# Manual edits may be lost in future updates.\n\n${blocks.join('\n')}`
 }
 // The text mounted for an initialised lab (an AWS-only lock file).

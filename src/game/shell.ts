@@ -192,7 +192,7 @@ export class IncidentShell {
       commands: getCommandNames().filter((c) => !OFF.includes(c)) as CommandName[],
       customCommands: [
         ...[...programs].map((p) => defineCommand(p, (args) => Promise.resolve(this.program(name, p, args)))),
-        ...(this.lab ? [defineCommand('terraform', (args, ctx) => this.terraform(args, ctx as never))] : []),
+        ...(this.lab ? [defineCommand('terraform', (args, ctx) => this.terraform(args, ctx as never, name === this.mainHost))] : []),
         defineCommand('ssh', (args) => this.ssh(name, args)),
         // Local scripts the incident runs (./order-sync): files that call back here.
         defineCommand('__scripted', (args) => Promise.resolve(this.program(name, args[0], args.slice(1)))),
@@ -271,11 +271,12 @@ export class IncidentShell {
 
   // terraform: the simulator reads and writes the host's real files, so the
   // player's edits are what plan sees.
-  private async terraform(args: string[], ctx: TfCtx): Promise<Out> {
+  private async terraform(args: string[], ctx: TfCtx, mainHost: boolean): Promise<Out> {
     const fs = ctx.fs
     const r = await runTerraform(args, {
       lab: this.lab!,
       cwd: ctx.cwd,
+      mainHost,
       env: ctx.env,
       async listFiles(dir) {
         const out: { name: string; text: string }[] = []

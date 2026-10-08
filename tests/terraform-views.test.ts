@@ -82,24 +82,50 @@ describe('outputsText', () => {
 
   it('lists all outputs sorted, hiding sensitive ones', () => {
     expect(outputsText(outs)).toEqual({
-      stdout: text('a = "x"', 'b = {', '    "k" = "v"', '}', 'n = 3', 'pw = <sensitive>'),
+      stdout: text('a = "x"', 'b = {', '  "k" = "v"', '}', 'n = 3', 'pw = <sensitive>'),
       stderr: '',
       exitCode: 0,
     })
   })
 
-  it('prints one output in hcl, raw and json forms, including a sensitive one', () => {
+  it('prints one output in hcl, raw and compact json forms, including a sensitive one', () => {
     expect(outputsText(outs, 'a').stdout).toBe('"x"')
     expect(outputsText(outs, 'a', 'raw').stdout).toBe('x')
-    expect(outputsText(outs, 'b', 'json').stdout).toBe('{\n  "k": "v"\n}')
+    expect(outputsText(outs, 'n', 'raw').stdout).toBe('3')
+    expect(outputsText(outs, 'b', 'json').stdout).toBe('{"k":"v"}')
     expect(outputsText(outs, 'pw').stdout).toBe('"secret"')
-    expect(outputsText(outs, 'b').stdout).toBe(text('{', '    "k" = "v"', '}'))
+    expect(outputsText(outs, 'b').stdout).toBe(text('{', '  "k" = "v"', '}'))
   })
 
-  it('warns when there are no outputs and errors for a missing name', () => {
+  it('indents two spaces without aligning map keys, lists one element per row, objects in lists unquoted', () => {
+    const o = { tags: { value: { Name: 'x', LongerKey: 'y' } }, ids: { value: ['a', 'b'] }, rules: { value: [{ port: 22, cidrs: ['10.0.0.0/8'] }] } }
+    expect(outputsText(o, 'tags').stdout).toBe(text('{', '  "LongerKey" = "y"', '  "Name" = "x"', '}'))
+    expect(outputsText(o, 'ids').stdout).toBe(text('[', '  "a",', '  "b",', ']'))
+    expect(outputsText(o, 'rules').stdout).toBe(text('[', '  {', '    cidrs = [', '      "10.0.0.0/8",', '    ]', '    port = 22', '  },', ']'))
+    expect(outputsText(o).stdout.split('\n').slice(0, 5)).toEqual(['ids = [', '  "a",', '  "b",', ']', 'rules = ['])
+  })
+
+  it('prints -json for all outputs as one object with sensitive, type and value', () => {
+    const r = outputsText({ a: { value: 'x' }, n: { value: 3, sensitive: true }, l: { value: ['q'] } }, undefined, 'json')
+    expect(JSON.parse(r.stdout)).toEqual({ a: { sensitive: false, type: 'string', value: 'x' }, l: { sensitive: false, type: 'dynamic', value: ['q'] }, n: { sensitive: true, type: 'number', value: 3 } })
+    expect(r.stdout.startsWith('{\n  "a": {\n    "sensitive": false,\n    "type": "string",\n    "value": "x"\n  },')).toBe(true)
+  })
+
+  it('rejects -raw without a name and -raw of a collection', () => {
+    const none = outputsText(outs, undefined, 'raw')
+    expect(none.exitCode).toBe(1)
+    expect(none.stderr).toContain('Error: Raw output format is only supported for single outputs')
+    const coll = outputsText(outs, 'b', 'raw')
+    expect(coll.exitCode).toBe(1)
+    expect(coll.stderr).toContain('Error: Unsupported value for raw output')
+    expect(coll.stderr.replace(/\n│ /g, ' ')).toContain('but output value "b" is not of a type that can be rendered as plain text.')
+  })
+
+  it('warns on stdout when there are no outputs and errors for a missing name', () => {
     const none = outputsText({})
     expect(none.exitCode).toBe(0)
-    expect(none.stderr).toContain('Warning: No outputs found')
+    expect(none.stderr).toBe('')
+    expect(none.stdout).toContain('Warning: No outputs found')
     const missing = outputsText(outs, 'zzz')
     expect(missing.exitCode).toBe(1)
     expect(missing.stderr).toContain('Error: Output "zzz" not found')

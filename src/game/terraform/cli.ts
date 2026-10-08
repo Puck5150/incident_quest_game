@@ -10,16 +10,18 @@ import { parseHcl } from './parse.ts'
 import { planConfig } from './plan.ts'
 import { renderPlan } from './render.ts'
 import { schemaFor } from './resources.ts'
-import { findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
-import type { Diagnostic } from './types.ts'
+import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
+import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
-import { lockFile, PROVIDER_VERSION } from './layout.ts'
+import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
 
 export { LOCK_FILE } from './layout.ts'
 
 export interface CliContext {
   lab: Lab
   cwd: string
+  // True on the scenario's main host; other hosts have no lab state or directory.
+  mainHost: boolean
   listFiles(dir: string): Promise<{ name: string; text: string }[]>
   readFile(path: string): Promise<string | undefined>
   write(dir: string, name: string, text: string): Promise<void>
@@ -38,6 +40,7 @@ interface Config {
   tf: File[]
   tfvars: File[]
   hasLock: boolean
+  lockText: string
 }
 
 const USAGE = `Usage: terraform [global options] <subcommand> [args]
@@ -86,6 +89,24 @@ const RULE = '─'.repeat(77)
 const NO_STATE =
   'No state file was found!\n\nState management commands require a state file. Run this command in a directory where Terraform has been run or use the -state flag to point the command to a specific state location.'
 
+const NO_CONFIG_DETAIL =
+  'Plan requires configuration to be present. Planning without a configuration would mark everything for destruction, which is normally not what is desired. If you would like to destroy everything, run plan with the -destroy option. Otherwise, create a Terraform configuration file (.tf file) and try again.'
+const EMPTY_INIT =
+  '\nTerraform initialized in an empty directory!\n\nThe directory has no Terraform configuration files. You may begin working\nwith Terraform immediately by creating Terraform configuration files.\n'
+const ONE_INSTANCE =
+  'This command requires that the address references one specific instance.\nTo view the available instances, use "terraform state list". Please modify \nthe address to reference a specific instance.'
+const ADDRESS = /^(data\.)?[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*(\[(\d+|"[^"]*")\])?$/
+const HELP: Record<string, string> = {
+  init: 'Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.',
+  validate: 'Validate the configuration files in a directory, referring only to the configuration and not accessing any remote services.',
+  plan: 'Generates a speculative execution plan, showing what actions Terraform would take to apply the current configuration. This command will not actually perform the planned actions.',
+  show: 'Reads and outputs a Terraform state or plan file in a human-readable form.',
+  state: 'This command has subcommands for advanced state management.',
+  output: 'Reads an output variable from a Terraform state file and prints the value.',
+  workspace: 'new, list, show, select and delete Terraform workspaces.',
+  version: 'Displays the version of Terraform and all installed plugins.',
+}
+
 const byName = (a: File, b: File) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 const ok = (stdout: string, stderr = ''): Out => ({ stdout, stderr, exitCode: 0 })
 const fail = (stderr: string, exitCode = 1): Out => ({ stdout: '', stderr, exitCode })
@@ -94,6 +115,8 @@ function box(severity: 'error' | 'warning', summary: string, detail: string, pre
   return formatDiagnostic({ severity, summary, detail, file: '', line: 0, col: 0 }, '', { preserveLines })
 }
 const boxFail = (summary: string, detail: string) => fail(box('error', summary, detail))
+// Warnings go to stdout ahead of the command's own text; errors stay on stderr.
+const withWarn = (warn: string, o: Out): Out => (warn ? { ...o, stdout: [warn, o.stdout].filter(Boolean).join('\n\n') } : o)
 const notYet = (sub: string) =>
   boxFail(
     'Not available in this lab yet',
@@ -122,31 +145,29 @@ async function loadConfig(ctx: CliContext, dir: string): Promise<Config> {
     tf: all.filter((f) => f.name.endsWith('.tf')).sort(byName),
     tfvars: [...all.filter((f) => f.name === 'terraform.tfvars'), ...all.filter((f) => f.name.endsWith('.auto.tfvars')).sort(byName)],
     hasLock: all.some((f) => f.name === '.terraform.lock.hcl'),
+    lockText: all.find((f) => f.name === '.terraform.lock.hcl')?.text ?? '',
   }
 }
 
 // Provider source addresses the configuration's resources and data sources need.
 function providersOf(files: File[]): string[] {
   const out = new Set<string>()
-  for (const n of buildGraph(files).nodes.values()) {
-    if ((n.kind !== 'resource' && n.kind !== 'data') || !n.block) continue
-    const type = n.block.labels[0]
-    out.add(schemaFor(type)?.provider ?? `${REGISTRY}hashicorp/${type.split('_')[0]}`)
+  for (const f of files) {
+    for (const b of parseHcl(f.name, f.text).blocks) {
+      if ((b.type !== 'resource' && b.type !== 'data') || !b.labels[0]) continue
+      const type = b.labels[0]
+      out.add(schemaFor(type)?.provider ?? `${REGISTRY}hashicorp/${type.split('_')[0]}`)
+    }
   }
   return [...out].sort()
 }
 const shortName = (source: string) => (source.startsWith(REGISTRY) ? source.slice(REGISTRY.length) : source)
+const lockedProviders = (cfg: Config) => [...cfg.lockText.matchAll(/^provider\s+"([^"]+)"/gm)].map((m) => m[1])
 
-const noConfig = (verb: string) =>
-  box(
-    'warning',
-    'No configuration files',
-    `${verb} requires configuration to be present. Planning without a configuration would mark everything for destruction, which is normally not what is desired. If you would like to destroy everything, run plan with the -destroy option. Otherwise, create a Terraform configuration file (.tf file) and try again.`,
-  )
-
-// Resources need provider selections; without a lock file `init` has not run.
+// Resources need provider selections in the lock file; without one `init` has not run.
 function lockError(cfg: Config): Out | undefined {
-  const providers = cfg.hasLock ? [] : providersOf(cfg.tf)
+  const locked = lockedProviders(cfg)
+  const providers = providersOf(cfg.tf).filter((p) => !locked.includes(p))
   if (!providers.length) return undefined
   const list = providers.map((p) => `  - provider ${p}: required by this configuration but no version is selected`).join('\n')
   return fail(
@@ -161,21 +182,24 @@ function lockError(cfg: Config): Out | undefined {
 
 function cmdVersion(ctx: CliContext, cfg: Config): Out {
   const lines = [`Terraform v${ctx.lab.version}`, 'on linux_amd64']
-  if (cfg.hasLock) for (const p of providersOf(cfg.tf)) lines.push(`+ provider ${p} v${PROVIDER_VERSION}`)
+  for (const p of lockedProviders(cfg).sort()) lines.push(`+ provider ${p} v${PROVIDER_VERSION}`)
   return ok(lines.join('\n'))
 }
 
 async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
-  const g = buildGraph(cfg.tf)
-  if (g.diagnostics.length) return fail(boxes(g.diagnostics, cfg.tf))
+  if (!cfg.tf.length) return ok(EMPTY_INIT)
+  // Only syntax stops init; undeclared references and cycles are for validate and plan.
+  const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
+  if (syntax.length) return fail(boxes(syntax, cfg.tf))
   const providers = providersOf(cfg.tf)
-  const create = !cfg.hasLock && providers.length > 0
+  const locked = lockedProviders(cfg)
+  const missing = providers.filter((p) => !locked.includes(p))
   const lines = ['', 'Initializing the backend...', '', 'Initializing provider plugins...']
   for (const p of providers) {
     const n = shortName(p)
-    lines.push(...(cfg.hasLock ? [`- Reusing previous version of ${n} from the dependency lock file`, `- Using previously-installed ${n} v${PROVIDER_VERSION}`] : [`- Finding latest version of ${n}...`, `- Installing ${n} v${PROVIDER_VERSION}...`, `- Installed ${n} v${PROVIDER_VERSION} (signed by HashiCorp)`]))
+    lines.push(...(locked.includes(p) ? [`- Reusing previous version of ${n} from the dependency lock file`, `- Using previously-installed ${n} v${PROVIDER_VERSION}`] : [`- Finding latest version of ${n}...`, `- Installing ${n} v${PROVIDER_VERSION}...`, `- Installed ${n} v${PROVIDER_VERSION} (signed by HashiCorp)`]))
   }
-  if (create) {
+  if (missing.length && !cfg.hasLock) {
     lines.push(
       '',
       'Terraform has created a lock file .terraform.lock.hcl to record the provider',
@@ -183,7 +207,15 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
       'so that Terraform can guarantee to make the same selections by default when',
       'you run "terraform init" in the future.',
     )
-    await ctx.write(cfg.dir, '.terraform.lock.hcl', lockFile(providers))
+    await ctx.write(cfg.dir, '.terraform.lock.hcl', lockFile(missing))
+  } else if (missing.length) {
+    lines.push(
+      '',
+      'Terraform has made some changes to the provider dependency selections recorded',
+      'in the .terraform.lock.hcl file. Review those changes and commit them to your',
+      'version control system if they represent changes you intended to make.',
+    )
+    await ctx.write(cfg.dir, '.terraform.lock.hcl', `${cfg.lockText.replace(/\n*$/, '\n')}\n${missing.map(lockBlock).join('\n')}`)
   }
   lines.push(
     '',
@@ -197,12 +229,11 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
     'rerun this command to reinitialize your working directory. If you forget, other',
     'commands will detect it and remind you to do so if necessary.',
   )
-  const warn = cfg.tf.length ? '' : box('warning', 'No configuration files', 'The directory has no Terraform configuration files. You may begin working with Terraform immediately by creating Terraform configuration files.')
-  return ok(lines.join('\n'), warn)
+  return ok(lines.join('\n'))
 }
 
 function cmdValidate(cfg: Config): Out {
-  if (!cfg.tf.length) return ok('Success! The configuration is valid, but there were some validation warnings as shown above.\n', noConfig('Validate'))
+  if (!cfg.tf.length) return ok('Success! The configuration is valid.\n')
   const g = buildGraph(cfg.tf)
   const diags = [...g.diagnostics]
   if (!diags.length) {
@@ -244,23 +275,34 @@ function parseVarsFile(name: string, text: string): { values: [string, Value][] 
 }
 
 type VarSource = { kind: 'var'; arg: string } | { kind: 'file'; path: string }
+type Origin = 'cli' | 'env' | { file: string }
+type Resolved = { warnings: string } & ({ vars: Record<string, Value> } | { error: string })
+
+// Convert a string, number or bool to a declared primitive type, as Terraform does.
+function convertTo(v: Value, type: string): { v: Value } | undefined {
+  if (type === 'string') return typeof v === 'string' ? { v } : typeof v === 'number' || typeof v === 'boolean' ? { v: String(v) } : undefined
+  if (type === 'number') return typeof v === 'number' ? { v } : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? { v: Number(v) } : undefined
+  return typeof v === 'boolean' ? { v } : v === 'true' || v === 'false' ? { v: v === 'true' } : undefined
+}
 
 // Variables in Terraform's precedence, lowest first; later sources override earlier ones.
-async function resolveVars(ctx: CliContext, cfg: Config, cmdline: VarSource[]): Promise<{ vars: Record<string, Value> } | { error: string }> {
-  const vars = new Map<string, Value>(Object.entries(ctx.lab.vars))
-  for (const [k, v] of Object.entries(ctx.env)) if (k.startsWith('TF_VAR_') && k.length > 7) vars.set(k.slice(7), v)
+// `declared` (the root module's variable blocks) is absent when the configuration does not parse.
+async function resolveVars(ctx: CliContext, cfg: Config, cmdline: VarSource[], declared: Block[] | undefined): Promise<Resolved> {
+  const vars = new Map<string, { v: Value; from: Origin }>()
+  for (const [k, v] of Object.entries(ctx.lab.vars)) vars.set(k, { v, from: 'env' })
+  for (const [k, v] of Object.entries(ctx.env)) if (k.startsWith('TF_VAR_') && k.length > 7) vars.set(k.slice(7), { v, from: 'env' })
   const errors: string[] = []
   const load = (file: File) => {
     const r = parseVarsFile(file.name, file.text)
     if ('diags' in r) errors.push(boxes(r.diags, [file]))
-    else for (const [k, v] of r.values) vars.set(k, v)
+    else for (const [k, v] of r.values) vars.set(k, { v, from: { file: file.name } })
   }
   cfg.tfvars.forEach(load)
   for (const s of cmdline) {
     if (s.kind === 'var') {
       const eq = s.arg.indexOf('=')
       if (eq < 1) errors.push(box('error', 'Invalid -var option', `Given variable option "${s.arg}" is not correctly specified. Must be a variable name and value separated by an equals sign, like -var="key=value".`))
-      else vars.set(s.arg.slice(0, eq), s.arg.slice(eq + 1))
+      else vars.set(s.arg.slice(0, eq), { v: s.arg.slice(eq + 1), from: 'cli' })
       continue
     }
     const path = resolvePath(cfg.dir, s.path)
@@ -268,7 +310,32 @@ async function resolveVars(ctx: CliContext, cfg: Config, cmdline: VarSource[]): 
     if (text === undefined) errors.push(box('error', 'Failed to read variables file', `Given variables file ${s.path} does not exist.`))
     else load({ name: s.path, text })
   }
-  return errors.length ? { error: errors.join('\n\n') } : { vars: Object.fromEntries(vars) }
+  const final = new Map<string, Value>()
+  const undeclared: { name: string; file: string }[] = []
+  for (const [name, { v, from }] of vars) {
+    if (!declared) {
+      final.set(name, v)
+      continue
+    }
+    const decl = declared.find((b) => b.labels[0] === name)
+    if (!decl) {
+      if (from === 'cli') errors.push(box('error', 'Value for undeclared variable', `A variable named "${name}" was assigned on the command line, but the root module does not declare a variable of that name. To use this value, add a "variable" block to the configuration.`))
+      else if (from !== 'env') undeclared.push({ name, file: from.file })
+      continue
+    }
+    const t = decl.attrs.find((a) => a.name === 'type')?.value
+    const type = t?.kind === 'ref' && t.path.length === 1 && ['bool', 'number', 'string'].includes(t.path[0]) ? t.path[0] : undefined
+    const c = type ? convertTo(v, type) : { v }
+    if (!c) errors.push(box('error', 'Invalid value for input variable', `The given value is not suitable for var.${name} declared at ${decl.file}:${decl.pos.line}: ${type} required.`))
+    else final.set(name, c.v)
+  }
+  undeclared.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const warns = undeclared.slice(0, 2).map((w) =>
+    box('warning', 'Value for undeclared variable', `The root module does not declare a variable named "${w.name}" but a value was found in file "${w.file}". If you meant to use this value, add a "variable" block to the configuration.\n\nTo silence these warnings, use TF_VAR_... environment variables to provide certain "undeclared" variables to Terraform.`, true),
+  )
+  if (undeclared.length > 2) warns.push(box('warning', 'Values for undeclared variables', `In addition to the other similar warnings shown, ${undeclared.length - 2} other variable(s) defined without being declared.`))
+  const warnings = warns.join('\n\n')
+  return errors.length ? { warnings, error: errors.join('\n\n') } : { warnings, vars: Object.fromEntries(final) }
 }
 
 interface PlanFlags {
@@ -305,25 +372,26 @@ function parsePlanFlags(args: string[]): PlanFlags | Out {
       else if (name === '-destroy' || name === '-refresh-only') return notYet(`plan ${name}`)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
+  const bad = f.replace.find((a) => !ADDRESS.test(a) || a.startsWith('data.'))
+  if (bad !== undefined) return boxFail(`Invalid force-replace address "${bad}"`, `The force-replace address "${bad}" is not a valid resource instance address.`)
   return f
 }
 
 async function cmdPlan(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
   const f = parsePlanFlags(args)
   if (!('sources' in f)) return f
-  const warning = cfg.tf.length ? '' : noConfig('Plan')
-  if (cfg.tf.length) {
-    const g = buildGraph(cfg.tf)
-    if (!g.diagnostics.length) {
-      const lock = lockError(cfg)
-      if (lock) return lock
-    }
+  if (!cfg.tf.length) return boxFail('No configuration files', NO_CONFIG_DETAIL)
+  const g = buildGraph(cfg.tf)
+  if (!g.diagnostics.length) {
+    const lock = lockError(cfg)
+    if (lock) return lock
   }
-  const v = await resolveVars(ctx, cfg, f.sources)
-  if ('error' in v) return fail(v.error)
+  const v = await resolveVars(ctx, cfg, f.sources, g.diagnostics.length ? undefined : g.blocks.filter((b) => b.type === 'variable'))
+  if ('error' in v) return { stdout: v.warnings, stderr: v.error, exitCode: 1 }
+  const warning = v.warnings
   const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: v.vars, replace: f.replace, refresh: f.refresh })
   const rendered = renderPlan(result, sourcesOf(cfg.tf))
-  if (result.diagnostics.length) return fail([warning, rendered].filter(Boolean).join('\n\n'))
+  if (result.diagnostics.length) return { stdout: warning, stderr: rendered, exitCode: 1 }
 
   const refreshLines = ctx.lab.state.resources
     .flatMap((r) =>
@@ -342,7 +410,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config): Promise<Ou
       ? `\n\n${RULE}\n\nSaved the plan to: ${f.out}\n\nTo perform exactly these actions, run the following command to apply:\n    terraform apply "${f.out}"`
       : `\n\n${RULE}\n\nNote: You didn't use the -out option to save this plan, so Terraform can't\nguarantee to take exactly these actions if you run "terraform apply" now.`
   }
-  return { stdout, stderr: warning, exitCode: f.detailed && changes ? 2 : 0 }
+  return { ...withWarn(warning, ok(stdout)), exitCode: f.detailed && changes ? 2 : 0 }
 }
 
 const sensitiveAttr = (type: string, attr: string) => {
@@ -357,17 +425,22 @@ function cmdState(args: string[], ctx: CliContext): Out {
     if (!lab.hasState) return fail(NO_STATE)
     const wanted = rest.filter((a) => !a.startsWith('-'))
     const all = listAddresses(lab.state)
-    const hit = wanted.length ? all.filter((a) => wanted.some((w) => a === w || a.startsWith(`${w}.`) || a.startsWith(`${w}[`))) : all
-    return wanted.length && !hit.length ? fail('No matching objects found.') : ok(hit.join('\n'))
+    const matches = (a: string, w: string) => a === w || a.startsWith(`${w}.`) || a.startsWith(`${w}[`)
+    for (const w of wanted) {
+      if (!ADDRESS.test(w)) return fail(`Error parsing instance address: ${w}\n\n${ONE_INSTANCE}`)
+      if (!all.some((a) => matches(a, w))) {
+        const what = w.endsWith(']') ? 'resource instance' : 'resource'
+        return boxFail(`Unknown ${what}`, `The current state contains no ${what} ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
+      }
+    }
+    return ok((wanted.length ? all.filter((a) => wanted.some((w) => matches(a, w))) : all).join('\n'))
   }
   if (sub === 'show') {
     if (!lab.hasState) return fail(NO_STATE)
     const addrs = rest.filter((a) => !a.startsWith('-'))
     if (addrs.length !== 1) return fail('Exactly one argument expected.')
     const found = findInstance(lab.state, addrs[0])
-    if (!found) {
-      return boxFail('No instance found for the given address!', 'This command requires that the address references one specific instance. To view the available instances, use "terraform state list". Please modify the address to reference a specific instance.')
-    }
+    if (!found) return fail(`No instance found for the given address!\n\n${ONE_INSTANCE}`)
     return ok(stateShow(found.resource, found.instance, (a) => sensitiveAttr(found.resource.type, a)))
   }
   if (sub === 'pull') return lab.hasState ? ok(stateJson(lab.state)) : fail(NO_STATE)
@@ -397,12 +470,17 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   }
   const sub = rest[0]
   if (sub === undefined || sub === '-help' || sub === '--help' || sub === 'help') return ok(USAGE)
-  const cfg = await loadConfig(ctx, dir)
   const more = rest.slice(1)
+  if (Object.hasOwn(HELP, sub) && more.some((a) => a === '-help' || a === '--help')) return ok(`Usage: terraform [global options] ${sub} [options]\n\n${HELP[sub]}`)
+  // State lives per directory, on the host the scenario is about: anywhere else there is none.
+  const here = ctx.mainHost && dir === resolvePath('/', ctx.lab.dir)
+  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {} } }
+  const cfg = await loadConfig(ctx, dir)
   switch (sub) {
     case 'version':
     case '-version':
     case '--version':
+    case '-v':
       return cmdVersion(ctx, cfg)
     case 'init':
       return cmdInit(ctx, cfg)

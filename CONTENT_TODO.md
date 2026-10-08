@@ -554,3 +554,7 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Variable type conversion for `-var` values is not done (all values are strings).
 - [ ] `-chdir` and the working-directory rule.
 - [ ] Scripted `terraform` commands are ignored for incidents with a terraform block.
+- [ ] (fix wave E) Invented or unverified: `terraform <sub> -help` usage lines (one-line descriptions for init, validate, show, state, output, workspace, version are paraphrased; `plan` is the real sentence); the message `init` prints when it appends to an existing lock file ("Terraform has made some changes to the provider dependency selections..."); the `Inconsistent dependency lock file` text is reused for a provider missing from an existing lock file.
+- [ ] (fix wave E) `Invalid value for input variable` detail prints `FILE:LINE` where real Terraform prints `FILE:LINE,COL-COL`; `list(...)`/`map(...)` typed variables are not converted.
+- [ ] (fix wave E) `terraform output -json` types are `string`/`number`/`bool` or `dynamic` (real prints structural types such as `["list","string"]`); `-raw` collection error detail is a lab paraphrase; the `Raw output format is only supported for single outputs` error has no detail here.
+- [ ] (fix wave E) The undeclared-variable warnings print at most two, then a summary of the rest, sorted by name (real order may differ).

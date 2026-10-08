@@ -1,5 +1,6 @@
 // How `terraform state show`, `show` and `output` print values: attributes at
-// four spaces, `=` aligned, maps with quoted keys, lists one element per row.
+// four spaces, `=` aligned, maps with quoted keys, lists one element per row
+// (and, separately, `output`).
 import { formatDiagnostic } from './diag.ts'
 import { isUnknown, type Value } from './eval.ts'
 import { instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
@@ -50,30 +51,50 @@ export function showState(state: State, sensitive: (type: string, attr: string) 
   return blocks.length ? blocks.map((b) => b.text).join('\n\n') : 'The state file is empty. No resources are represented.'
 }
 
-function valueText(v: Value): string {
-  if (Array.isArray(v) && v.length) return ['[', ...v.flatMap((x) => element(4, x)), ']'].join('\n')
-  if (isObj(v) && Object.keys(v).length) return ['{', ...body(v, 4, true), '}'].join('\n')
+// `terraform output` values: two-space indent, map keys quoted and not aligned,
+// object attributes inside a list unquoted. Not the aligned state-show body.
+function outValue(v: Value, ind: number, quote: boolean): string {
+  const pad = sp(ind)
+  const inner = sp(ind + 2)
+  if (Array.isArray(v) && v.length) return `[\n${v.map((x) => `${inner}${outValue(x, ind + 2, false)},\n`).join('')}${pad}]`
+  if (isObj(v) && Object.keys(v).length) {
+    const o = v as Obj
+    return `{\n${Object.keys(o).sort().map((k) => `${inner}${quote ? JSON.stringify(k) : k} = ${outValue(o[k], ind + 2, true)}\n`).join('')}${pad}}`
+  }
   return scalar(v)
 }
 
-export function outputsText(outputs: State['outputs'], name?: string, mode: 'hcl' | 'raw' | 'json' = 'hcl'): { stdout: string; stderr: string; exitCode: number } {
+type OutResult = { stdout: string; stderr: string; exitCode: number }
+// Go's JSON encoder orders object keys; so does this.
+const sortedJson = (v: Value): Value => (Array.isArray(v) ? v.map(sortedJson) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedJson((v as Obj)[k])])) : v)
+const jsonType = (v: Value) => (typeof v === 'string' ? 'string' : typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'bool' : 'dynamic')
+
+export function outputsText(outputs: State['outputs'], name?: string, mode: 'hcl' | 'raw' | 'json' = 'hcl'): OutResult {
   const names = Object.keys(outputs).sort()
   const box = (severity: 'error' | 'warning', summary: string, detail: string) => formatDiagnostic({ severity, summary, detail, file: '', line: 0, col: 0 })
+  const err = (summary: string, detail: string): OutResult => ({ stdout: '', stderr: box('error', summary, detail), exitCode: 1 })
   if (name !== undefined) {
     if (!Object.hasOwn(outputs, name)) {
-      return { stdout: '', stderr: box('error', `Output "${name}" not found`, 'The output variable requested could not be found in the state file. If you recently added this to your configuration, be sure to run `terraform apply`, since the state won\'t be updated with new output variables until that command is run.'), exitCode: 1 }
+      return err(`Output "${name}" not found`, 'The output variable requested could not be found in the state file. If you recently added this to your configuration, be sure to run `terraform apply`, since the state won\'t be updated with new output variables until that command is run.')
     }
     const v = outputs[name].value
-    const out = mode === 'json' ? JSON.stringify(v, null, 2) : mode === 'raw' ? (typeof v === 'string' ? v : String(JSON.stringify(v))) : valueText(v)
+    if (mode === 'raw' && (typeof v === 'object' || v === undefined)) {
+      return err('Unsupported value for raw output', `The -raw option only supports strings, numbers, and boolean values, but output value "${name}" is not of a type that can be rendered as plain text.`)
+    }
+    const out = mode === 'json' ? JSON.stringify(sortedJson(v)) : mode === 'raw' ? String(v) : outValue(v, 0, true)
     return { stdout: out, stderr: '', exitCode: 0 }
+  }
+  if (mode === 'raw') return err('Raw output format is only supported for single outputs', '')
+  if (mode === 'json') {
+    const doc = names.map((n) => `  ${JSON.stringify(n)}: ${JSON.stringify({ sensitive: outputs[n].sensitive === true, type: jsonType(outputs[n].value), value: sortedJson(outputs[n].value) }, null, 2).replace(/\n/g, '\n  ')}`)
+    return { stdout: names.length ? `{\n${doc.join(',\n')}\n}` : '{}', stderr: '', exitCode: 0 }
   }
   if (!names.length) {
     return {
-      stdout: '',
-      stderr: box('warning', 'No outputs found', 'The state file either has no outputs defined, or all the defined outputs are empty. Please define an output in your configuration with the `output` keyword and run `terraform refresh` for it to become available. If you are using interpolation, please verify the interpolated value is not empty. You can use the `terraform console` command to assist.'),
+      stdout: box('warning', 'No outputs found', 'The state file either has no outputs defined, or all the defined outputs are empty. Please define an output in your configuration with the `output` keyword and run `terraform refresh` for it to become available. If you are using interpolation, please verify the interpolated value is not empty. You can use the `terraform console` command to assist.'),
+      stderr: '',
       exitCode: 0,
     }
   }
-  const out = names.flatMap((n) => (outputs[n].sensitive ? [`${n} = <sensitive>`] : entry(0, n, n.length, outputs[n].value)))
-  return { stdout: out.join('\n'), stderr: '', exitCode: 0 }
+  return { stdout: names.map((n) => `${n} = ${outputs[n].sensitive ? '<sensitive>' : outValue(outputs[n].value, 0, true)}`).join('\n'), stderr: '', exitCode: 0 }
 }

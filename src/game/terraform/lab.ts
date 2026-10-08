@@ -43,12 +43,13 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     if (r.mode !== 'managed') continue
     for (const i of r.instances) reality[realityKey(r.type, i.attributes.id as string)] = structuredClone(i.attributes)
   }
+  // add, then patch (a patch may aim at an added object), then delete.
+  for (const a of tf.cloud?.add ?? []) reality[realityKey(a.type, a.attrs.id as string)] = structuredClone(a.attrs) as Record<string, Value>
   for (const p of tf.cloud?.patch ?? []) {
     const key = realityKey(p.type, p.id)
     if (Object.hasOwn(reality, key)) reality[key] = { ...reality[key], ...(structuredClone(p.set) as Record<string, Value>) }
   }
   for (const d of tf.cloud?.delete ?? []) delete reality[realityKey(d.type, d.id)]
-  for (const a of tf.cloud?.add ?? []) reality[realityKey(a.type, a.attrs.id as string)] = structuredClone(a.attrs) as Record<string, Value>
 
   return {
     dir,

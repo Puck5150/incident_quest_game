@@ -56,6 +56,15 @@ describe('the terraform command in the shell', () => {
     expect(again.output).toContain('No changes.')
   })
 
+  it('plans nothing outside the lab directory or on another host', async () => {
+    const [away, , chdir, back] = await run(scenario(), 'cd /tmp && terraform plan', 'cd ~/infra', 'terraform -chdir=../../etc plan', 'terraform state list')
+    expect(away.exitCode).toBe(1)
+    expect(away.output).toContain('No configuration files')
+    expect(away.output).not.toContain('Plan:')
+    expect(chdir.output).toContain('No configuration files')
+    expect(back.output).toContain('aws_vpc.main')
+  })
+
   it('reports simulator evidence as hits', async () => {
     const s = scenario({ evidence: [{ evidence: 'listed', command: 'state list', contains: 'aws_vpc.main' }] })
     const [r] = await run(s, 'terraform state list')

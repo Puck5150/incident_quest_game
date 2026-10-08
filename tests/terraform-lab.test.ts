@@ -117,6 +117,23 @@ describe('labFromScenario', () => {
     expect(lab.state.resources.map((r) => r.name)).toEqual(['main', 's'])
   })
 
+  it('applies add first, so a patch or delete can aim at an added object', () => {
+    const lab = labFromScenario(
+      tf({
+        state: [VPC],
+        cloud: {
+          add: [{ type: 'aws_s3_bucket', attrs: { id: 'legacy', bucket: 'legacy' } }, { type: 'aws_s3_bucket', attrs: { id: 'gone', bucket: 'gone' } }],
+          patch: [{ type: 'aws_s3_bucket', id: 'legacy', set: { acl: 'private' } }],
+          delete: [{ type: 'aws_s3_bucket', id: 'gone' }],
+        },
+      }),
+      '/w',
+      '/h',
+    )
+    expect(lab.reality[realityKey('aws_s3_bucket', 'legacy')]).toEqual({ id: 'legacy', bucket: 'legacy', acl: 'private' })
+    expect(Object.keys(lab.reality)).not.toContain(realityKey('aws_s3_bucket', 'gone'))
+  })
+
   it('does not alias the scenario data', () => {
     const block = tf({ state: [VPC] })
     const lab = labFromScenario(block, '/w', '/h')
