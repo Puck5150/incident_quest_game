@@ -104,6 +104,7 @@ type TfCtx = {
   cwd: string
   env: Map<string, string>
   exportedEnv?: Record<string, string>
+  stdin?: string
   fs: {
     resolvePath(b: string, p: string): string
     readdir(p: string): Promise<string[]>
@@ -259,6 +260,9 @@ export class IncidentShell {
   // content (or null if the player quit without saving).
   onEdit?: (path: string, content: string) => Promise<string | null>
 
+  // Set by the terminal: ask the player a question (terraform apply's prompt).
+  onConfirm?: (shown: string) => Promise<string | undefined>
+
   private async edit(args: string[], ctx: { cwd: string; fs: { resolvePath(b: string, p: string): string; exists(p: string): Promise<boolean>; readFile(p: string): Promise<string>; writeFile(p: string, c: string): Promise<void> } }, name: string): Promise<Out> {
     const target = args.find((a) => !a.startsWith('-') && !a.startsWith('+'))
     if (!target) return { stdout: '', stderr: `${name}: give a file to edit, e.g. ${name} /etc/fstab\n`, exitCode: 1 }
@@ -279,6 +283,8 @@ export class IncidentShell {
       cwd: ctx.cwd,
       mainHost,
       taken: this.context.taken,
+      stdin: ctx.stdin ? ctx.stdin : undefined,
+      confirm: this.onConfirm,
       env: ctx.exportedEnv ?? Object.fromEntries(ctx.env),
       async listFiles(dir) {
         const out: { name: string; text: string }[] = []
