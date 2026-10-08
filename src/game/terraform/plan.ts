@@ -23,6 +23,7 @@ export interface PlanInput {
   refresh?: boolean
   replace?: string[]
   skipImports?: Set<string> // instance addresses whose import blocks are already spent (apply imported or deleted them)
+  destroy?: boolean // plan -destroy: every managed instance in state is destroyed; arguments are not evaluated
 }
 export interface PlanItem {
   address: string
@@ -118,10 +119,10 @@ export function planConfig(input: PlanInput): PlanResult {
   const declared = (a: { type: string; name: string }) => g.nodes.has(`${a.type}.${a.name}`)
   const show = (a: { type: string; name: string; key?: string | number }) => instanceAddress({ mode: 'managed', type: a.type, name: a.name }, a.key)
   const imports = im.imports.filter((i) => !input.skipImports?.has(show(i.to)))
-  for (const r of rm.removals) {
+  for (const r of input.destroy ? [] : rm.removals) {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
   }
-  for (const i of imports) {
+  for (const i of input.destroy ? [] : imports) {
     if (!declared(i.to)) fail(i.file, i.pos, 'Configuration for import target does not exist', `The configuration for the given import target ${show(i.to)} does not exist. All target instances must have an associated configuration to be imported.`)
   }
   const applied = applyMoves(refreshed, mv.moves)
@@ -139,6 +140,7 @@ export function planConfig(input: PlanInput): PlanResult {
   if (errors.length) return result
   const base = applied.state // the state planning works from: refreshed, with moves applied
   result.baseState = base
+  if (input.destroy) return planDestroy(g.nodes, result, fail)
 
   const scopeFor = (ctx: { each?: { key: Value; value: Value }; count?: number }): Scope => ({
     ref(path) {
@@ -183,22 +185,6 @@ export function planConfig(input: PlanInput): PlanResult {
   const touched = new Map<string, Set<string>>()
   // Resources that set prevent_destroy, by type.name, with where to point an error.
   const protectedBy = new Map<string, { file: string; pos: Pos; context: string }>()
-  // Resources a node depends on, followed through locals, outputs, variables and data sources.
-  const resourceDeps = (node: GNode): string[] => {
-    const found = new Set<string>()
-    const seen = new Set<string>()
-    for (const todo = [...node.deps]; todo.length; ) {
-      const a = todo.pop()!
-      if (seen.has(a)) continue
-      seen.add(a)
-      const n = g.nodes.get(a)
-      if (!n) continue
-      if (n.kind === 'resource') found.add(a)
-      else todo.push(...n.deps)
-    }
-    found.delete(node.address)
-    return [...found].sort()
-  }
   const planResource = (node: GNode) => {
     const b = node.block!
     const [type, name] = b.labels
@@ -293,7 +279,7 @@ export function planConfig(input: PlanInput): PlanResult {
         key,
         action: p.action,
         changes: p.changes,
-        dependsOn: resourceDeps(node),
+        dependsOn: resourceDeps(g.nodes, node),
         block: { file: node.file, line: b.pos.line, col: b.pos.col },
         ...(movedFrom ? { movedFrom } : {}),
         ...(importing ? { importing } : {}),
@@ -399,9 +385,7 @@ export function planConfig(input: PlanInput): PlanResult {
         action: 'destroy',
         dependsOn: inst.dependencies ?? [],
         destroyReason: !g.nodes.has(`${r.type}.${r.name}`) ? 'not-in-config' : wrongRepetition(inst.index_key, shapes.get(`${r.type}.${r.name}`)),
-        changes: Object.entries(inst.attributes)
-          .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))
-          .sort(byName),
+        changes: destroyChanges(schema, inst.attributes),
       })
     }
   }
@@ -426,15 +410,7 @@ export function planConfig(input: PlanInput): PlanResult {
   }
   for (const i of result.items) {
     const guard = protectedBy.get(`${i.type}.${i.name}`)
-    if (guard && (i.action === 'destroy' || i.action === 'replace')) {
-      fail(
-        guard.file,
-        guard.pos,
-        'Instance cannot be destroyed',
-        `Resource ${i.address} has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed. To avoid this error and continue with the plan, either disable lifecycle.prevent_destroy or reduce the scope of the plan using the -target option.`,
-        guard.context,
-      )
-    }
+    if (guard && (i.action === 'destroy' || i.action === 'replace')) fail(guard.file, guard.pos, ...preventDestroyError(i.address), guard.context)
   }
   if (errors.length) {
     result.items = []
@@ -450,6 +426,70 @@ export function planConfig(input: PlanInput): PlanResult {
     if (i.action === 'destroy' || i.action === 'replace') result.summary.destroy++
   }
   result.driftShown = relevantDrift(g.nodes, result, drift)
+  return result
+}
+
+// Resources a node depends on, followed through locals, outputs, variables and data sources.
+function resourceDeps(nodes: Map<string, GNode>, node: GNode): string[] {
+  const found = new Set<string>()
+  const seen = new Set<string>()
+  for (const todo = [...node.deps]; todo.length; ) {
+    const a = todo.pop()!
+    if (seen.has(a)) continue
+    seen.add(a)
+    const n = nodes.get(a)
+    if (!n) continue
+    if (n.kind === 'resource') found.add(a)
+    else todo.push(...n.deps)
+  }
+  found.delete(node.address)
+  return [...found].sort()
+}
+const destroyChanges = (schema: ResourceSchema | undefined, attrs: Record<string, Value>): AttrChange[] =>
+  Object.entries(attrs)
+    .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))
+    .sort(byName)
+const preventDestroyError = (address: string): [string, string] => [
+  'Instance cannot be destroyed',
+  `Resource ${address} has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed. To avoid this error and continue with the plan, either disable lifecycle.prevent_destroy or reduce the scope of the plan using the -target option.`,
+]
+
+// plan -destroy: every managed instance in the (refreshed, moved) state goes,
+// data sources are dropped from state, and every output is removed. The
+// configuration is consulted only for dependencies, block positions and
+// prevent_destroy; no argument is evaluated, so unset variables don't matter.
+function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file: string, pos: Pos, summary: string, detail: string, context?: string) => void): PlanResult {
+  const base = { ...result.baseState, resources: result.baseState.resources.filter((r) => r.mode === 'managed') }
+  result.baseState = base
+  for (const r of base.resources) {
+    const node = nodes.get(`${r.type}.${r.name}`)
+    const b = node?.kind === 'resource' ? node.block : undefined
+    const lc = b && lifecycleOf(b)
+    const context = `resource "${r.type}" "${r.name}"`
+    if (lc && !lc.ok) fail(node!.file, lc.pos, lc.summary, lc.detail, context)
+    for (const inst of r.instances) {
+      const address = instanceAddress(r, inst.index_key)
+      if (lc?.ok && lc.lifecycle.preventDestroy) fail(node!.file, b!.pos, ...preventDestroyError(address), context)
+      result.items.push({
+        address,
+        type: r.type,
+        name: r.name,
+        key: inst.index_key,
+        action: 'destroy',
+        dependsOn: b ? resourceDeps(nodes, node!) : (inst.dependencies ?? []),
+        ...(b ? { block: { file: node!.file, line: b.pos.line, col: b.pos.col } } : {}),
+        destroyReason: 'not-in-config',
+        changes: destroyChanges(schemaFor(r.type), inst.attributes),
+      })
+    }
+  }
+  if (result.diagnostics.length) {
+    result.items = []
+    return result
+  }
+  result.items.sort(byInstance)
+  result.summary.destroy = result.items.length
+  result.driftShown = relevantDrift(nodes, result, result.drift)
   return result
 }
 

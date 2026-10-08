@@ -324,3 +324,16 @@ describe('executeApply: scripted faults', () => {
     expect(r.errors[0].summary).toBe('Argument or block definition required')
   })
 })
+
+describe('executeApply: destroy mode', () => {
+  it('destroys every instance in state, dependents first, and empties outputs', () => {
+    const state = both()
+    state.outputs = { vpc: { value: 'vpc-1' } }
+    const r = executeApply({ files: [{ name: 'main.tf', text: NETWORK('10.0.0.0/16') + 'output "vpc" {\n  value = aws_vpc.main.id\n}\n' }], state, reality: cloudOf(state), vars: {}, destroy: true }, ctx())
+    expect(r.errors).toEqual([])
+    expect(ops(r)).toEqual(['delete aws_subnet.a', 'delete aws_vpc.main'])
+    expect(r.state.resources).toEqual([])
+    expect(r.state.outputs).toEqual({})
+    expect(r.reality).toEqual({})
+  })
+})

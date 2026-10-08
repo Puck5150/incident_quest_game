@@ -23,9 +23,9 @@ const stateOf = (...seeds: Seed[]): State => {
 const cloudOf = (state: State): Reality =>
   Object.fromEntries(state.resources.filter((r) => r.mode === 'managed').flatMap((r) => r.instances.map((i) => [realityKey(r.type, i.attributes.id as string), i.attributes] as const)))
 
-const plan = (tf: string, o: { state?: State; reality?: Reality; vars?: Record<string, Value>; replace?: string[] } = {}): PlanResult => {
+const plan = (tf: string, o: { state?: State; reality?: Reality; vars?: Record<string, Value>; replace?: string[]; destroy?: boolean } = {}): PlanResult => {
   const state = o.state ?? emptyState()
-  return planConfig({ files: [{ name: 'main.tf', text: tf }], state, reality: o.reality ?? cloudOf(state), vars: o.vars ?? {}, ...(o.replace ? { replace: o.replace } : {}) })
+  return planConfig({ files: [{ name: 'main.tf', text: tf }], state, reality: o.reality ?? cloudOf(state), vars: o.vars ?? {}, ...(o.replace ? { replace: o.replace } : {}), ...(o.destroy ? { destroy: true } : {}) })
 }
 const actions = (r: PlanResult) => r.items.filter((i) => i.action !== 'noop').map((i) => `${i.action} ${i.address}`)
 
@@ -755,5 +755,42 @@ describe('planConfig: facts for apply', () => {
     expect(r.items.find((i) => i.address === 'aws_subnet.a')!.block).toBeUndefined()
     const c = plan(NETWORK('10.0.0.0/16'))
     expect(c.items.find((i) => i.address === 'aws_vpc.main')!.block).toEqual({ file: 'main.tf', line: 2, col: 1 })
+  })
+})
+
+describe('planConfig: destroy mode', () => {
+  it('destroys everything in state, dependents first by dependsOn, ignoring the configuration values', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_subnet', name: 'a', attrs: SUBNET })
+    const r = plan(NETWORK('10.9.9.0/24'), { state, destroy: true })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items.map((i) => `${i.action} ${i.address}`).sort()).toEqual(['destroy aws_subnet.a', 'destroy aws_vpc.main'])
+    expect(r.items.find((i) => i.address === 'aws_subnet.a')!.dependsOn).toEqual(['aws_vpc.main'])
+  })
+  it('works with an empty configuration and drops outputs', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC })
+    state.outputs = { id: { value: 'vpc-1', sensitive: false } }
+    const r = plan('# none\n', { state, destroy: true })
+    expect(r.items.map((i) => i.action)).toEqual(['destroy'])
+    expect(r.outputs.find((o) => o.name === 'id')).toBeUndefined()
+  })
+  it('refuses prevent_destroy resources', () => {
+    const state = stateOf({ type: 'aws_db_instance', name: 'orders', attrs: { id: 'orders', arn: 'a', identifier: 'orders', engine: 'postgres', instance_class: 'db.t3.micro', storage_encrypted: false } })
+    const tf = 'resource "aws_db_instance" "orders" {\n  identifier = "orders"\n  engine = "postgres"\n  instance_class = "db.t3.micro"\n  storage_encrypted = false\n  lifecycle {\n    prevent_destroy = true\n  }\n}\n'
+    const r = plan(tf, { state, destroy: true })
+    expect(r.diagnostics[0].summary).toBe('Instance cannot be destroyed')
+  })
+  it('ignores moved/import/removed blocks and -replace', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC })
+    const r = plan(NETWORK('10.0.0.0/16') + 'moved {\n  from = aws_vpc.old\n  to = aws_vpc.main\n}\n', { state, destroy: true, replace: ['aws_vpc.main'] })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['destroy aws_vpc.main'])
+  })
+  it('does not evaluate arguments: unset variables are fine, and data sources leave state', () => {
+    const state = stateOf({ type: 'aws_vpc', name: 'main', attrs: VPC }, { type: 'aws_ami', name: 'x', mode: 'data', attrs: { id: 'ami-1' } })
+    const r = plan('variable "cidr" {}\nresource "aws_vpc" "main" {\n  cidr_block = var.cidr\n}\n', { state, destroy: true })
+    expect(r.diagnostics).toEqual([])
+    expect(r.items.map((i) => `${i.action} ${i.address}`)).toEqual(['destroy aws_vpc.main'])
+    expect(r.baseState.resources.map((x) => x.mode)).toEqual(['managed'])
+    expect(r.summary).toEqual({ add: 0, change: 0, destroy: 1 })
   })
 })
