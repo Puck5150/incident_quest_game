@@ -69,13 +69,18 @@ export async function evalPredicate(p: Predicate, w: World): Promise<boolean> {
     return memo.r
   }
   const one = async (x: Leaf | { not: Leaf }): Promise<boolean> => (has(x, 'not') ? !(await leaf(x.not, w, plan)) : leaf(x, w, plan))
-  if (has(p, 'all')) {
-    for (const x of p.all) if (!(await one(x))) return false
-    return true
-  }
-  if (has(p, 'any')) {
-    for (const x of p.any) if (await one(x)) return true
+  // Malformed input (not schema-checked) is simply not satisfied.
+  try {
+    if (has(p, 'all')) {
+      for (const x of p.all) if (!(await one(x))) return false
+      return true
+    }
+    if (has(p, 'any')) {
+      for (const x of p.any) if (await one(x)) return true
+      return false
+    }
+    return await one(p)
+  } catch {
     return false
   }
-  return one(p)
 }

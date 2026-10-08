@@ -123,4 +123,9 @@ describe('predicates', () => {
     await ev({ all: [{ plan_clean: true }, { applied: { op: 'create', address: 'aws_vpc.main' } }] }, w)
     expect({ s: w.state, r: w.reality, h: w.history }).toEqual(before)
   })
+  it('is false, not a rejection, for malformed input', async () => {
+    expect(await ev({ all: null } as never)).toBe(false)
+    expect(await ev({ any: [{ applied: null }] } as never)).toBe(false)
+    expect(await ev({} as never)).toBe(false)
+  })
 })

@@ -10,7 +10,8 @@ import { Bash, defineCommand, getCommandNames, type CommandName } from 'just-bas
 import type { Scenario } from '../schema/scenario.ts'
 import { normalize } from './engine.ts'
 import { diskPath, filesOnDisk, homeOf, impliedFile, resolveFrom, startDir } from './paths.ts'
-import { runTerraform } from './terraform/cli.ts'
+import { runTerraform, worldPlan, type CliContext } from './terraform/cli.ts'
+import { evalPredicate, type Leaf, type Predicate } from './terraform/predicates.ts'
 import { labFromScenario, type Lab } from './terraform/lab.ts'
 
 export { diskPath }
@@ -274,11 +275,10 @@ export class IncidentShell {
     return { stdout: '', stderr: '', exitCode: 0 }
   }
 
-  // terraform: the simulator reads and writes the host's real files, so the
-  // player's edits are what plan sees.
-  private async terraform(args: string[], ctx: TfCtx, mainHost: boolean): Promise<Out> {
+  // What the terraform simulator sees of a host: its files, environment and the lab.
+  private cliContext(ctx: TfCtx, mainHost: boolean): CliContext {
     const fs = ctx.fs
-    const r = await runTerraform(args, {
+    return {
       lab: this.lab!,
       cwd: ctx.cwd,
       mainHost,
@@ -303,7 +303,13 @@ export class IncidentShell {
         await fs.mkdir(dir, { recursive: true })
         await fs.writeFile(`${dir}/${name}`, text)
       },
-    })
+    }
+  }
+
+  // terraform: the simulator reads and writes the host's real files, so the
+  // player's edits are what plan sees.
+  private async terraform(args: string[], ctx: TfCtx, mainHost: boolean): Promise<Out> {
+    const r = await runTerraform(args, this.cliContext(ctx, mainHost))
     if (r.ran) this.hits.push(r.ran)
     this.hits.push(...r.evidence)
     return { stdout: r.raw ? r.stdout : withNewline(r.stdout), stderr: withNewline(r.stderr), exitCode: r.exitCode }
@@ -429,6 +435,29 @@ export class IncidentShell {
       return await this.hosts.get(this.mainHost)!.fs.readFile(path)
     } catch {
       return undefined
+    }
+  }
+
+  // Whether a scenario's done_when holds in the lab as it stands, judged on the
+  // main host whichever host the player is on. Read-only; false on any problem.
+  async doneWhen(pred: Predicate): Promise<boolean> {
+    if (!this.lab) return false
+    try {
+      await this.ready
+      const lab = this.lab
+      const bash = this.hosts.get(this.mainHost)!
+      const env = this.envs.get(this.mainHost) ?? {}
+      const ctx = this.cliContext({ cwd: lab.dir, env: new Map(Object.entries(env)), exportedEnv: env, fs: bash.fs }, true)
+      // World.plan is synchronous; the plan reads files, so it is made up front, and only when asked for.
+      const leaves = (Object.hasOwn(pred, 'all') ? (pred as { all: Leaf[] }).all : Object.hasOwn(pred, 'any') ? (pred as { any: Leaf[] }).any : [pred]) as (Leaf | { not: Leaf })[]
+      const wantsPlan = leaves.some((x) => {
+        const l = Object.hasOwn(x, 'not') ? (x as { not: Leaf }).not : x
+        return Object.hasOwn(l, 'plan_clean') || Object.hasOwn(l, 'plan_has')
+      })
+      const plan = wantsPlan ? await worldPlan(ctx) : undefined
+      return await evalPredicate(pred, { state: lab.state, reality: lab.reality, lock: lab.lock, history: lab.history, plan: () => plan, readFile: (p) => this.read(p) })
+    } catch {
+      return false
     }
   }
 }

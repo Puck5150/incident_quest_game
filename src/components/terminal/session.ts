@@ -3,6 +3,7 @@ import type { Scenario } from '../../schema/scenario.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
 import { actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
+import { detectAction } from './detect.ts'
 
 export type Line = { id: number; prompt: string; input: string; output: string; completions?: boolean; pending?: boolean }
 
@@ -109,18 +110,20 @@ export function useTerminalSession(
       return sh
     }))
 
-  // Fixes made by editing a file: once the file on disk matches, take the
-  // action, through the same gate as the buttons (the root cause must be
-  // named). Returns a note for the terminal if the edit doesn't count yet.
+  // Fixes the world shows (a file on disk that matches, a done_when that
+  // holds): take the action, through the same gate as the buttons (the root
+  // cause must be named). Returns a note for the terminal if it doesn't count yet.
   const warned = useRef(new Set<string>())
-  const checkFileFixes = async (sh: IncidentShell, now: GameEvent[]): Promise<string> => {
+  const checkFixes = async (sh: IncidentShell, now: GameEvent[]): Promise<string> => {
     const cur = atStage(scenario, stageAt(now))
     const taken = actionsTaken(now)
     const notes: string[] = []
+    const fileMatches = async (f: { path: string; matches: string }) => {
+      const text = await sh.read(f.path)
+      return text !== undefined && new RegExp(f.matches, 'm').test(text)
+    }
     for (const a of cur.actions) {
-      if (!a.file || taken.has(a.id)) continue
-      const text = await sh.read(a.file.path)
-      if (text === undefined || !new RegExp(a.file.matches, 'm').test(text)) continue
+      if (!(await detectAction(a, { taken, fileMatches, doneWhen: (p) => sh.doneWhen(p) }))) continue
       if (namedRootCause(scenario, now)) onTakeAction?.(a.id)
       else if (!warned.current.has(a.id)) {
         warned.current.add(a.id)
@@ -138,7 +141,7 @@ export function useTerminalSession(
     queue.current = queue.current.then(async () => {
       const sh = await getShell()
       await sh.update(atStage(scenario, stageAt(now)), actionsTaken(now))
-      await checkFileFixes(sh, now)
+      await checkFixes(sh, now)
     })
   }, [log]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -209,7 +212,7 @@ export function useTerminalSession(
         setCwd(sh.cwd)
         setHost(sh.currentHost)
         if (r.hits.length) onShellRan?.(r.hits)
-        const note = await checkFileFixes(sh, latest.current)
+        const note = await checkFixes(sh, latest.current)
         return { ...line, output: [r.output, note].filter(Boolean).join('\n') }
       })) as Promise<Line>
       return { line: { ...line, pending: true }, done }

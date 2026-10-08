@@ -464,6 +464,15 @@ async function prepare(sources: VarSource[], ctx: CliContext, cfg: Config): Prom
   return { warning: v.warnings, vars: v.vars, graph: g }
 }
 
+// The plan `terraform plan` would make in the lab directory, for done_when predicates: no lock
+// check, nothing committed. Undefined when there is no configuration, no lock file or bad variables.
+export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined> {
+  const cfg = await loadConfig(ctx, resolvePath('/', ctx.lab.dir))
+  const s = await prepare([], ctx, cfg)
+  if (!('vars' in s)) return undefined
+  return planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
+}
+
 // The lines a plan prints while it reads the state's objects back from the cloud.
 const refreshLines = (state: State, refresh: boolean) =>
   state.resources
