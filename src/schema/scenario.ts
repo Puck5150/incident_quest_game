@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { filesOnDisk } from '../game/paths.ts'
+import { schemaFor } from '../game/terraform/resources.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
 
@@ -168,6 +169,56 @@ const StageSchema = z.strictObject({
   debrief: z.strictObject({ root_cause: z.string().min(1), ideal_path: z.array(z.string().min(1)).min(1) }),
 })
 
+// A Terraform world (docs/superpowers/plans/2026-10-07-terraform-tf2c2-cli-and-shell.md): the
+// files on disk, what state holds, and what the simulated cloud holds. The
+// cloud defaults to exactly what state says; `cloud` lists only the differences.
+const json = z.json()
+const TfAttrs = z.record(z.string(), json)
+export const TerraformSchema = z.strictObject({
+  dir: z.string().min(1).optional(),
+  version: z.string().regex(/^\d+\.\d+\.\d+$/, 'must look like 1.9.8').optional(),
+  initialized: z.boolean().optional(),
+  files: z
+    .array(
+      z.strictObject({
+        path: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory'),
+        content: z.string(),
+      }),
+    )
+    .min(1),
+  vars: TfAttrs.optional(),
+  state: z
+    .array(
+      z.strictObject({
+        type: z.string().min(1),
+        name: z.string().min(1),
+        key: z.union([z.string(), z.int()]).optional(),
+        mode: z.enum(['managed', 'data']).optional(),
+        status: z.literal('tainted').optional(),
+        attrs: TfAttrs,
+      }),
+    )
+    .optional(),
+  outputs: z.record(z.string(), z.strictObject({ value: json, sensitive: z.boolean().optional() })).optional(),
+  cloud: z
+    .strictObject({
+      patch: z.array(z.strictObject({ type: z.string().min(1), id: z.string().min(1), set: TfAttrs })).optional(),
+      delete: z.array(z.strictObject({ type: z.string().min(1), id: z.string().min(1) })).optional(),
+      add: z.array(z.strictObject({ type: z.string().min(1), attrs: TfAttrs })).optional(),
+    })
+    .optional(),
+  evidence: z
+    .array(
+      z.strictObject({
+        evidence: id,
+        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list']),
+        contains: z.string().min(1),
+      }),
+    )
+    .optional(),
+})
+export type TerraformBlock = z.infer<typeof TerraformSchema>
+
 export const ScenarioSchema = z
   .strictObject({
     type: z.literal('incident').optional(), // the default; challenges say `type: challenge`
@@ -204,6 +255,7 @@ export const ScenarioSchema = z
           .optional(),
       })
       .optional(),
+    terraform: TerraformSchema.optional(),
     logs: LogsSchema.optional(),
     files: FilesSchema.optional(),
     diagram: z
@@ -378,11 +430,14 @@ export const ScenarioSchema = z
       // Key evidence must be findable after the earlier stages' fixes and
       // BEFORE this stage's own, or the methodical bonus (evidence before
       // hypothesis) would be impossible to earn.
-      const evidence = new Set([...(v.terminal?.commands ?? []), ...artifacts(v)].map((a) => a.evidence).filter(Boolean))
+      // Terraform evidence is visible from the start, at every stage.
+      const tfTags = (s.terraform?.evidence ?? []).map((e) => e.evidence)
+      const evidence = new Set([...[...(v.terminal?.commands ?? []), ...artifacts(v)].map((a) => a.evidence).filter(Boolean), ...tfTags])
       const beforeFix = new Set(
         [...(v.terminal?.commands ?? []).filter((c) => (c.when_actions ?? []).every((a) => earlier.has(a))), ...artifacts(v)]
           .map((a) => a.evidence)
-          .filter(Boolean),
+          .filter(Boolean)
+          .concat(tfTags),
       )
       Object.keys(v.evidence_labels).forEach((e) => {
         if (!v.key_evidence.includes(e)) issue(`"${e}" is labelled but not in key_evidence`, at('evidence_labels', e))
@@ -411,7 +466,7 @@ export const ScenarioSchema = z
       })
     })
 
-    const tagged = new Set([...allCommands, ...[s, ...stages].flatMap((x) => artifacts(x))].map((a) => a.evidence).filter(Boolean))
+    const tagged = new Set([...[...allCommands, ...[s, ...stages].flatMap((x) => artifacts(x))].map((a) => a.evidence).filter(Boolean), ...(s.terraform?.evidence ?? []).map((e) => e.evidence)])
     const key = new Set([s, ...stages].flatMap((x) => x.key_evidence))
     dupes((s.red_herrings ?? []).map((r) => r.evidence)).forEach((d) => issue(`duplicate red herring "${d}"`, ['red_herrings']))
     s.red_herrings?.forEach((r, i) => {
@@ -444,6 +499,34 @@ export const ScenarioSchema = z
       if (!s.red_herrings) issue('difficulty 5 needs at least one red herring', ['difficulty'])
       if (s.par_minutes < 25) issue('difficulty 5 needs par_minutes of at least 25', ['par_minutes'])
       if (s.ticket.severity !== 'SEV1') issue('difficulty 5 is a major incident: ticket severity must be SEV1', ['ticket', 'severity'])
+    }
+
+    if (s.terraform) {
+      const tf = s.terraform
+      if (!s.terminal) issue('terraform needs a terminal to type into', ['terraform'])
+      const seen = new Set<string>()
+      const known = new Set<string>()
+      tf.state?.forEach((e, i) => {
+        const mode = e.mode ?? 'managed'
+        if (mode === 'managed' && !schemaFor(e.type)) issue(`"${e.type}" is not a resource type the Terraform lab models`, ['terraform', 'state', i, 'type'])
+        if (mode === 'managed') {
+          if (typeof e.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'state', i, 'attrs'])
+          else known.add(`${e.type}:${e.attrs.id}`)
+        }
+        const k = `${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
+        if (seen.has(k)) issue(`duplicate state entry ${e.type}.${e.name}[${e.key ?? ''}]`, ['terraform', 'state', i])
+        seen.add(k)
+      })
+      tf.cloud?.add?.forEach((a, i) => {
+        if (typeof a.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'cloud', 'add', i, 'attrs'])
+        else known.add(`${a.type}:${a.attrs.id}`)
+      })
+      ;(['patch', 'delete'] as const).forEach((w) =>
+        tf.cloud?.[w]?.forEach((c, i) => {
+          if (!known.has(`${c.type}:${c.id}`)) issue(`no object with id "${c.id}" in state or cloud.add`, ['terraform', 'cloud', w, i, 'id'])
+        }),
+      )
+      dupes((tf.evidence ?? []).map((e) => e.evidence)).forEach((d) => issue(`duplicate terraform evidence tag "${d}"`, ['terraform', 'evidence']))
     }
 
     if (s.diagram) {
