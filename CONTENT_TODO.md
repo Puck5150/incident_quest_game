@@ -592,9 +592,21 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] Help one-liners for `apply`/`destroy` (help currently lists just the commands).
 - [ ] The xterm confirm overlay has only been tested in jsdom; check it by hand in a browser.
 
-## terraform incidents: world-changing outcomes need detection (found in TF3b final review)
-- [ ] `terraform-forces-replacement`: a player can remove `prevent_destroy` and `terraform apply`, destroying and recreating the prod DB with exit 0. The `remove-guard` destructive action is a button only, so there is no penalty, and reverting `storage_encrypted` afterwards still credits `revert-and-migrate` ("The plan is clean again") while `terraform plan` shows a new replace. Needs TF3d: world-state predicates that take a `destructive` action when the apply actually destroys a protected resource, and fix predicates (`done_when`) that look at the world rather than only file text. Same applies to every future incident with a destructive apply.
-- [ ] Evidence tags earned from `state show`/scripted AWS output (`unencrypted`) can no longer be earned once an apply has changed the world; revisit with TF3d.
+## terraform done_when predicates (TF3d)
+- [ ] The "(Saved. The game counts this as a fix once you've named the root cause.)" note shown for a world-detected action before the root cause is named: wording unreviewed.
+- [ ] `plan_clean` / `plan_has` ignore `-target` and `-refresh-only`; they always do a full refresh and plan.
+- [ ] No scoring bonus yet for good practice (plan before apply, `-out`, checking the workspace).
+- [ ] Stage-aware evidence is still open (evidence is visible from the start at every stage; see AUTHORING.md). Evidence tags earned from `state show`/scripted AWS output (`unencrypted`) can no longer be earned once an apply has changed the world.
+- [ ] `doneWhen` reads `TF_VAR_*` from the saved shell env of the main host, not from a live shell.
+- [ ] `schemas/incident.json` grew about 2.6k lines because zod inlines the predicate union twice; consider `reused: 'ref'` in `scripts/schemas.ts` (rewrites all schemas).
+- [ ] Semantics chosen where the plan was ambiguous (Tasks 1 to 5):
+  - A key-less address covers `ADDR[...]`; an address ending in `]` matches exactly; `plan_has.no_destroy` follows the same rule.
+  - `reality_has` with `attr` but no `equals` means the attribute key exists; `equals: null` on a missing attribute is false.
+  - `applied` matches the op before the address, so `create x` never matches `update x`; history records only ok apply steps.
+  - A plan that throws, cannot be loaded, or has diagnostics is "not satisfied" for `plan_clean` and `plan_has`; any evaluation error is false.
+  - `done_when` is judged on the main host whichever host the player is on, cwd the lab dir.
+  - `file:` and `done_when` together require both; `done_when` is checked only after `file:` passes.
+  - Replay after a remount rebuilds the "(Saved…)" note but never sends TAKE_ACTION again (found in Task 5).
 
 ## terraform simulator (state commands, locks, workspaces, TF3c)
 State commands:
