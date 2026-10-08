@@ -150,6 +150,9 @@ function outputChanges(r: PlanResult): string[] {
   return rows.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0)).flatMap((x) => x.text(w))
 }
 
+// Anything for a plan to show: a visible item or an output change.
+export const hasChanges = (r: PlanResult): boolean => r.items.some((i) => i.action !== 'noop' || i.movedFrom || i.importing) || outputChanges(r).length > 0
+
 export function renderPlan(r: PlanResult, sources: Record<string, string> = {}): string {
   const boxed = (list: PlanResult['diagnostics']) => list.map((d) => formatDiagnostic(d, sources[d.file] ?? ''))
   if (r.diagnostics.length) return [...boxed(r.warnings), ...boxed(r.diagnostics)].join('\n\n')
@@ -179,7 +182,7 @@ export function renderPlan(r: PlanResult, sources: Record<string, string> = {}):
     )
   }
 
-  if (!visible.length && !outputs.length) {
+  if (!hasChanges(r)) {
     out.push('No changes. Your infrastructure matches the configuration.\n\nTerraform has compared your real infrastructure against your configuration\nand found no differences, so no changes are needed.')
   } else {
     const legend: string[] = []
