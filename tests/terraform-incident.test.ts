@@ -1,26 +1,11 @@
-import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { loadContent } from '../vite-plugin-content.ts'
-import { IncidentShell } from '../src/game/shell.ts'
 import { atStage } from '../src/schema/stages.ts'
+import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
-const scenario = loadContent(path.resolve(import.meta.dirname, '../content')).scenarios.find((s) => s.id === 'terraform-forces-replacement')!
+const scenario = loadIncident('terraform-forces-replacement')
 const fix = scenario.actions.find((a) => a.id === 'revert-and-migrate')!
-const play = async (...lines: string[]) => {
-  const sh = new IncidentShell(scenario)
-  const out = []
-  for (const l of lines) out.push(await sh.run(l, atStage(scenario, 0), new Set()))
-  return { sh, out }
-}
+const { play, detected, detectedAll } = playbook(scenario)
 const db = () => `/home/you/infra/db.tf`
-// Whether the session would take an action now: its file check (if any) and its done_when (if any) both hold.
-const detected = async (sh: IncidentShell, id: string) => {
-  const a = scenario.actions.find((x) => x.id === id)!
-  if (!a.file && !a.done_when) return false
-  if (a.file && !new RegExp(a.file.matches, 'm').test((await sh.read(a.file.path)) ?? '')) return false
-  return !a.done_when || (await sh.doneWhen(a.done_when))
-}
-const detectedAll = async (sh: IncidentShell) => Object.fromEntries(await Promise.all(scenario.actions.map(async (a) => [a.id, await detected(sh, a.id)])))
 
 describe('terraform-forces-replacement on the simulator', () => {
   it('is backed by the simulator, not by scripted terraform output', () => {
