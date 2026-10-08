@@ -472,7 +472,7 @@ per resource (`Creating...`, `Still creating... [10s elapsed]`,
 plus an `Outputs:` section.
 
 - Confirmation: the player types `yes` in a dialog, passes `-auto-approve`, or pipes it (`echo yes | terraform apply`). Anything else (or empty piped input) prints `Apply cancelled.` / `Destroy cancelled.` and exits 1.
-- Saved plans: `terraform plan -out=f` then `terraform apply f` applies exactly that plan without asking. If state or the cloud changed since, it fails as stale. Variables and `-replace` cannot be given with a saved plan.
+- Saved plans: `terraform plan -out=f` then `terraform apply f` applies exactly that plan without asking. If the state has changed since (another apply, for example), it fails as stale. Variables and `-replace` cannot be given with a saved plan.
 - A failed apply leaves a half-applied world: what succeeded before the error stays in state and the cloud; the rest does not happen. The player fixes the cause and applies again.
 - `terraform destroy` honours `prevent_destroy` and fails the same way a plan would.
 
