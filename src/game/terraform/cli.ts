@@ -481,7 +481,8 @@ const refreshLines = (state: State, refresh: boolean) =>
 async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boolean): Promise<Planned | Out> {
   const s = await prepare(f.sources, ctx, cfg)
   if (!('vars' in s)) return s
-  const locked = checkLock(ctx, f.lock)
+  // Graph diagnostics are configuration errors: they come before the lock, and the plan below reports them.
+  const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
   const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, replace: f.replace, refresh: f.refresh, destroy })

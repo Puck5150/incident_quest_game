@@ -158,6 +158,19 @@ describe('a held state lock', () => {
     expect(w.lab.lock?.id).toBe(LOCK_ID)
   })
 
+  it('configuration (graph) errors come before the lock error for plan, apply and destroy', async () => {
+    const w = world()
+    w.disk[`${DIR}/main.tf`] = `${VPC_TF}${BUCKET_TF}output "x" {\n  value = var.missing\n}\n`
+    const before = snapshot(w)
+    for (const args of [['plan'], ['apply', '-auto-approve'], ['destroy', '-auto-approve']]) {
+      const r = await w.run(...args)
+      expect(r.exitCode, args[0]).toBe(1)
+      expect(r.stderr, args[0]).toContain('Error: Reference to undeclared input variable')
+      expect(r.stderr, args[0]).not.toContain('state lock')
+    }
+    expect(snapshot(w)).toBe(before)
+  })
+
   it('is not held outside the lab directory', async () => {
     const w = world()
     w.disk['/tmp/main.tf'] = VPC_TF
