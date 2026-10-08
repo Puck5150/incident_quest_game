@@ -459,7 +459,11 @@ Fields:
 - `cloud`: what really exists. By default it is exactly what `state` says. `cloud.patch` changes attributes of an existing object (drift), `cloud.delete` removes one, `cloud.add` creates one Terraform does not manage.
 - `evidence`: awards a tag when the named subcommand's output contains the substring. Check the exact text by running the command in the shell.
 
-Commands that work: `init`, `validate`, `plan`, `show`, `state list|show|pull`, `output`, `workspace show|list`, `version`, `apply`, `destroy`. Other writing commands (`import`, `taint`, …) answer "not simulated yet".
+- `lock`: a state lock someone else holds (see "State locks" below). `workspace`, `workspaces`: extra workspaces (see "Workspaces" below).
+
+Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `state list|show|pull|mv|rm`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `output`, `workspace show|list|new|select|delete`, `version`. The rest (`console`, `state push`, `state replace-provider`, …) answer "not simulated yet".
+
+`evidence[].command` is one of: `plan`, `validate`, `init`, `show`, `output`, `version`, `state list`, `state show`, `state pull`, `state mv`, `state rm`, `apply`, `destroy`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `workspace show`, `workspace list`, `workspace new`, `workspace select`, `workspace delete`.
 
 Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
 
@@ -503,6 +507,92 @@ Rules:
 - A fault with `on: update` never fires for an item the plan makes a replacement (it runs as delete then create); use `delete`/`create` faults.
 - Faults are checked before the simulator's own already-exists and `DependencyViolation` errors.
 - Without `until_actions` (or with an empty list) a fault is never switched off by an action; limit it with `times` or the player's edit to the `.tf`.
+
+### State commands
+
+These change the current workspace's state only, never the cloud:
+- `terraform state mv SRC DST`: renames an address in state (whole resources or single instances). `-dry-run` prints what would move without changing anything.
+- `terraform state rm ADDR...`: forgets objects; they stay in the cloud, so the next plan wants to create them again. `-dry-run` works here too.
+- `terraform import ADDR ID`: adopts a cloud object into state. The resource block must be declared in the configuration (a keyed address only needs its block) and the object must exist in the cloud: put it in `cloud.add`, or in another workspace's state. Importing an address already in state fails. Works without a state file.
+- `terraform taint ADDR` / `untaint ADDR`: marks or clears an instance as tainted; a tainted instance plans as `-/+` replace. `-allow-missing` turns a missing address into a silent success.
+- `terraform refresh`: saves cloud drift into state (serial + 1 only when something changed) and prints the outputs. It plans no resource changes, so plan errors such as `prevent_destroy` do not stop it.
+
+`state mv`, `state rm`, `taint` and `untaint` need a state file; `import` and `refresh` do not. Each successful change bumps the state serial.
+
+### State locks
+
+`lock` makes the state look locked by someone else, the way a cancelled CI run leaves it. Locks are authored only: a failed or cancelled apply in the game never leaves one behind.
+
+```yaml
+terraform:
+  lock:
+    id: 9db590f1-b6fe-c5f2-2678-8804f089deba    # required; what force-unlock needs
+    who: ci@runner-7                            # required
+    created: "2026-10-08 09:14:02.123456789 +0000 UTC"   # required
+    operation: OperationTypeApply               # default OperationTypeApply
+    path: terraform.tfstate                     # default terraform.tfstate
+    info: ""                                    # default empty
+    message: resource temporarily unavailable   # the "Error message:" line; this is the default
+```
+
+- A held lock stops `plan`, `apply` (including a saved plan), `destroy`, `refresh`, `import`, `taint`, `untaint`, `state mv`, `state rm`, `workspace new` and `workspace delete` with `Error acquiring the state lock` and the Lock Info (ID, path, operation, who, version, created, info). Argument and configuration errors still come first.
+- Read-only commands ignore it: `init`, `validate`, `show`, `output`, `state list|show|pull`, `workspace show|list|select`, `version`, `fmt`.
+- `-lock=false` on a blocked command runs it anyway (the lock stays). `-lock-timeout` is accepted but never waits.
+- `terraform force-unlock LOCK_ID` asks for `yes` (dialog, or `echo yes | terraform force-unlock ID`) and clears the lock; `-force` skips the question. A wrong ID or no lock fails with `Failed to unlock state`. Declining prints `force-unlock cancelled.`.
+- There is one lock for the lab, shared by all workspaces. Runs outside the lab directory never see it.
+
+Example, a stuck lock after a cancelled CI run: the pipeline was cancelled mid-apply, and now every `terraform plan` fails.
+
+```yaml
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        resource "aws_s3_bucket" "logs" { bucket = "acme-logs" }
+  state:
+    - type: aws_s3_bucket
+      name: logs
+      attrs: { id: acme-logs, bucket: acme-logs }
+  lock:
+    id: 9db590f1-b6fe-c5f2-2678-8804f089deba
+    who: runner@ci-build-4411
+    created: "2026-10-08 09:14:02.123456789 +0000 UTC"
+  evidence:
+    - { evidence: stuck_lock, command: plan, contains: "runner@ci-build-4411" }
+```
+
+The player reads the Who/Created lines, confirms in the CI logs (scripted commands) that the run is dead, then runs `terraform force-unlock 9db590f1-…` and a clean `terraform plan`. A trap worth a `destructive` action: force-unlocking a lock that a live run still holds.
+
+### Workspaces
+
+The top-level `state` and `outputs` are the `default` workspace. `workspaces` adds others by name; `workspace` picks the one the player starts in (default `default`). Names use letters, digits, `.`, `_` and `-`.
+
+- Each workspace has its own state; a workspace without `state:` has no state file yet. The cloud is shared: every workspace's objects exist in it, and `cloud.add|patch|delete` apply on top.
+- `terraform.workspace` evaluates to the current name. A saved plan made in another workspace is refused as stale.
+- `workspace new NAME` creates an empty workspace and switches to it, so `plan` wants to create everything (and `apply` then collides with the objects the other workspace owns). `workspace select NAME` switches (`-or-create` creates a missing one). `workspace delete NAME` refuses the current workspace, `default` and (without `-force`) one that still tracks objects; deleting never touches the cloud.
+
+Example, the wrong workspace: the player starts in `staging` and plan offers to create prod's resources.
+
+```yaml
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        resource "aws_s3_bucket" "logs" { bucket = "acme-logs" }
+  workspace: staging         # where the player starts
+  state:                     # the default workspace (prod)
+    - type: aws_s3_bucket
+      name: logs
+      attrs: { id: acme-logs, bucket: acme-logs }
+  workspaces:
+    staging: {}              # exists, no state file yet
+  evidence:
+    - { evidence: wrong_ws, command: workspace show, contains: staging }
+```
+
+The fix is `terraform workspace select default` and a clean plan; applying in `staging` fails with the bucket already owned.
 
 Known gaps to design around:
 - Sensitive values are not tracked through expressions: a secret copied into another attribute prints in the clear.

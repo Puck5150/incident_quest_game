@@ -160,7 +160,29 @@ export function runCommand(
     // Every investigation command is listed: exact ones as written, pattern
     // ones by their example. (Typed fixes aren't: they're action buttons.)
     const known = [...new Set(t.commands.flatMap((c) => (c.match ? [c.match] : c.example ? [c.example] : [])))]
-    const tf = scenario.terraform ? ['init', 'validate', 'plan', 'apply', 'destroy', 'show', 'state list', 'state show ADDRESS', 'output', 'version'].map((c) => `terraform ${c}`) : []
+    const tf = scenario.terraform ? [
+          'init',
+          'validate',
+          'plan',
+          'apply',
+          'destroy',
+          'show',
+          'state list',
+          'state show ADDRESS',
+          'state mv SOURCE DESTINATION',
+          'state rm ADDRESS',
+          'import ADDRESS ID',
+          'taint ADDRESS',
+          'untaint ADDRESS',
+          'refresh',
+          'force-unlock LOCK_ID',
+          'output',
+          'workspace list',
+          'workspace new NAME',
+          'workspace select NAME',
+          'workspace delete NAME',
+          'version',
+        ].map((c) => `terraform ${c}`) : []
     return { output: ['Commands you might try here:', ...[...known, ...tf].map((k) => `  ${k}`), '  clear, history'].join('\n') }
   }
 

@@ -595,3 +595,32 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 ## terraform incidents: world-changing outcomes need detection (found in TF3b final review)
 - [ ] `terraform-forces-replacement`: a player can remove `prevent_destroy` and `terraform apply`, destroying and recreating the prod DB with exit 0. The `remove-guard` destructive action is a button only, so there is no penalty, and reverting `storage_encrypted` afterwards still credits `revert-and-migrate` ("The plan is clean again") while `terraform plan` shows a new replace. Needs TF3d: world-state predicates that take a `destructive` action when the apply actually destroys a protected resource, and fix predicates (`done_when`) that look at the world rather than only file text. Same applies to every future incident with a destructive apply.
 - [ ] Evidence tags earned from `state show`/scripted AWS output (`unencrypted`) can no longer be earned once an apply has changed the world; revisit with TF3d.
+
+## terraform simulator (state commands, locks, workspaces, TF3c)
+State commands:
+- [ ] `state mv` error texts: `Invalid source address` / `Invalid target address` details, and the invented "already has instances with keys, so it has no unkeyed instance" check (real Terraform has none). Success lines (`Move "A" to "B"`, `Successfully moved N object(s).`) unverified.
+- [ ] `state mv` rewrites `dependencies` when the source resource is emptied; real Terraform does not.
+- [ ] `state rm` texts: `Removed ADDR`, `Would remove`, `Successfully removed N resource instance(s).`, `No matching objects found.`.
+- [ ] `state mv`/`state rm` write no `terraform.tfstate.backup`.
+- [ ] taint/untaint texts: `No such resource instance`, `Resource instance is not tainted`, `Data sources cannot be untainted.` (by analogy with taint), and the success lines.
+- [ ] import: the error family (`Invalid address` is invented; undeclared, already managed, no remote object) and the progress/success output.
+- [ ] import and refresh work without a state file; the other state commands require one (NO_STATE plain for mv/rm, boxed for taint/untaint).
+- [ ] refresh: output layout, and real Terraform may print a deprecation warning pointing at `apply -refresh-only`. Outputs are printed from state, not re-evaluated from the configuration.
+- [ ] Unknown flags on the new commands use the boxed `Failed to parse command-line flags` form; the generic ignored flags (`-state`, `-backup`, …) are accepted silently.
+
+Locks:
+- [ ] Lock error box layout, Lock Info field order, default `Error message:` (`resource temporarily unavailable`); the real message differs per backend (S3+DynamoDB `ConditionalCheckFailedException`, azurerm blob lease, gcs). Long messages wrap at 76 columns.
+- [ ] No "Acquiring state lock" / "Releasing state lock" lines are printed (real remote backends print them).
+- [ ] `-lock-timeout` is accepted but never waits.
+- [ ] Locks are authored only: an interrupted or failed apply never leaves one. One lock per lab, not per workspace.
+- [ ] force-unlock texts: prompt, success, `force-unlock cancelled.` (from memory), `Expected a single argument: LOCK_ID.`, `no lock is held on this state`, the ID-mismatch text; the blank line between the echoed answer and the result; asking before the lock/ID checks (recalled order).
+- [ ] The notYet box's "You can still use" list (our UI text) now includes `force-unlock` and `workspace`.
+
+Workspaces:
+- [ ] `Workspace "NAME" already exists` (plain form), `Expected a single argument: NAME.`, the unknown-workspace text for `select`, the unknown-subcommand usage line, `Switched to workspace` when already on it.
+- [ ] Delete texts: `Workspace is not empty` box, `Workspace is your active workspace`, `Can't delete default workspace` and its place in the check order; `-force` on a non-empty workspace prints no warning line.
+- [ ] A saved plan from another workspace reuses the generic `Saved plan is stale` text.
+- [ ] `workspace select -or-create` creates without taking the lock (`workspace new` does take it).
+- [ ] Names `.` and `..` are accepted by the name rule; real Terraform likely refuses them.
+- [ ] Lineages: scenario workspaces use `…0000000000NN` from 02, `workspace new` uses 10 + counter; they collide with 9+ authored workspaces.
+- [ ] `terraform.tfstate.d/NAME/terraform.tfstate` files are not on the simulated disk.
