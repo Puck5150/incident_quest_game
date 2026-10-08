@@ -18,28 +18,11 @@ environment: |
   The orders database is an RDS for PostgreSQL instance managed by
   Terraform, created years ago without encryption, with
   lifecycle { prevent_destroy = true }. Applications connect through its
-  endpoint.
+  endpoint. The Terraform for it lives in ~/infra.
 
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "terraform plan"
-      when_actions: [revert-and-migrate]
-      output: |
-        aws_db_instance.orders: Refreshing state... [id=db-ORDERS1234]
-
-        No changes. Your infrastructure matches the configuration.
-    - match: "terraform plan"
-      evidence: prevent-destroy
-      output: |
-        aws_db_instance.orders: Refreshing state... [id=db-ORDERS1234]
-
-        Error: Instance cannot be destroyed
-
-          on db.tf line 1:
-           1: resource "aws_db_instance" "orders" {
-
-        Resource aws_db_instance.orders has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed.
     - match: "git diff main -- db.tf"
       evidence: encryption-change
       output: |2
@@ -54,6 +37,75 @@ terminal:
       evidence: unencrypted
       output: |
         false
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        variable "db_password" {
+          type      = string
+          sensitive = true
+        }
+    - path: db.tf
+      content: |
+        resource "aws_db_instance" "orders" {
+          identifier          = "orders-db"
+          engine              = "postgres"
+          engine_version      = "15.4"
+          instance_class      = "db.r6g.large"
+          allocated_storage   = 100
+          db_name             = "orders"
+          username            = "orders_admin"
+          password            = var.db_password
+          multi_az            = true
+          storage_encrypted   = true
+          skip_final_snapshot = false
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
+  vars:
+    db_password: "orders-admin-secret"
+  state:
+    - type: aws_db_instance
+      name: orders
+      attrs:
+        id: db-ORDERS1234
+        arn: "arn:aws:rds:us-east-1:123456789012:db:orders-db"
+        identifier: orders-db
+        engine: postgres
+        engine_version: "15.4"
+        instance_class: db.r6g.large
+        allocated_storage: 100
+        db_name: orders
+        username: orders_admin
+        password: orders-admin-secret
+        multi_az: true
+        skip_final_snapshot: false
+        storage_encrypted: false
+        endpoint: "orders-db.cxyz.us-east-1.rds.amazonaws.com:5432"
+  evidence:
+    - evidence: prevent-destroy
+      command: plan
+      contains: "Instance cannot be destroyed"
+    - evidence: unencrypted
+      command: state show
+      contains: "storage_encrypted   = false"
 
 files:
   - path: "AWS provider docs: aws_db_instance (excerpt, from the provider's schema)"
@@ -80,6 +132,27 @@ actions:
   - id: revert-and-migrate
     label: "Revert storage_encrypted in this PR, and plan a migration: snapshot, copy the snapshot with encryption, restore a new encrypted instance, cut applications over in a maintenance window, then bring the new instance into Terraform"
     kind: fix
+    file:
+      path: "/home/you/infra/db.tf"
+      matches: "storage_encrypted\\s*=\\s*false"
+      after: |
+        resource "aws_db_instance" "orders" {
+          identifier          = "orders-db"
+          engine              = "postgres"
+          engine_version      = "15.4"
+          instance_class      = "db.r6g.large"
+          allocated_storage   = 100
+          db_name             = "orders"
+          username            = "orders_admin"
+          password            = var.db_password
+          multi_az            = true
+          storage_encrypted   = false
+          skip_final_snapshot = false
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
     feedback: "The plan is clean again. The supported route to encryption (an encrypted snapshot copy restored to a new instance) moves the data, and the cutover is planned instead of an accidental delete."
   - id: remove-guard
     label: "Remove prevent_destroy for this PR and apply"

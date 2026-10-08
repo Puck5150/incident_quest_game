@@ -395,9 +395,9 @@ from your own experience and tick them off.
       and restore otherwise); in the AWS provider source, storage_encrypted is
       ForceNew and identifier is NOT (it renames in place), so the
       forces-replacement incident uses encryption, not a rename.
-- [ ] Representative output: terraform plan/apply formatting, the S3
-      BucketAlreadyOwnedByYou error as the provider prints it, git/grep
-      output. The prevent_destroy error wording follows Terraform's message.
+- [ ] Representative output: the S3 BucketAlreadyOwnedByYou error as the
+      provider prints it, git/grep output. (terraform-forces-replacement's
+      `terraform plan` output is now printed by the simulator, no longer scripted.)
 
 ## Microservices to 8 (2026-10-02): idempotency-double-charge, breaking-api-field, rate-limit-retry-after, trace-context-dropped, transactional-outbox, jwt-clock-skew
 - [x] Checked on 2026-10-02: Stripe idempotency keys (first result saved and
