@@ -18,10 +18,16 @@ const openIncident = async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Accept mission' }))
 }
 
-const type = (cmd: string) => {
+// Types a line and presses Enter, once the previous command has finished
+// (Enter waits while one runs).
+const press = (cmd: string) => {
   const input = screen.getByLabelText('Terminal command')
   fireEvent.change(input, { target: { value: cmd } })
   fireEvent.keyDown(input, { key: 'Enter' })
+}
+const type = async (cmd: string) => {
+  await waitFor(() => expect(screen.getByRole('log', { name: 'Terminal output' }).getAttribute('aria-busy')).toBe('false'))
+  press(cmd)
 }
 const output = () => screen.getByRole('log', { name: 'Terminal output' }).textContent
 
@@ -29,11 +35,11 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
   const { unmount } = render(<App />)
   await openIncident()
 
-  type('df -h')
+  await type('df -h')
   expect(output()).toMatch(/100%/)
-  type('nope')
+  await type('nope')
   await waitFor(() => expect(output()).toMatch(/bash: nope: command not found/))
-  type('df -h | grep -c dev')
+  await type('df -h | grep -c dev')
   await waitFor(() => expect(output()).toMatch(/df -h \| grep -c dev\s*\d/))
 
   fireEvent.click(screen.getByRole('tab', { name: 'Logs' }))
@@ -54,7 +60,7 @@ it('queue -> investigate -> hypothesis -> fix -> verify -> close -> debrief, and
 
   // Terminal kept its transcript across tab switches, and now shows the fixed state.
   fireEvent.click(screen.getByRole('tab', { name: 'Terminal' }))
-  type('df -h')
+  await type('df -h')
   expect(output()).toMatch(/28%/)
 
   fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
@@ -115,11 +121,11 @@ it('hints reveal one tier at a time, analogy with the second', async () => {
 it('typed fix commands wait for the hypothesis, then take the action', async () => {
   render(<App />)
   await openIncident()
-  type('sudo reboot')
+  await type('sudo reboot')
   expect(output()).toMatch(/Declare a root cause first/)
   fireEvent.click(screen.getByLabelText(/filesystem is full/))
   fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
-  type(': > /var/log/app/app.log')
+  await type(': > /var/log/app/app.log')
   expect(output()).toMatch(/space comes back immediately/) // the action's feedback, inline
   expect(screen.getByRole('button', { name: /Truncate app\.log/ })).toHaveProperty('disabled', true) // done, like a click
 })
@@ -255,7 +261,7 @@ it('an incident resumes where it left off: transcript, order, phase', async () =
 
   const first = render(<IncidentScreen {...props} />)
   fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
-  type('df -h')
+  await type('df -h')
   const order = () => screen.getAllByRole('radio').map((r) => (r as HTMLInputElement).value)
   const before = order()
   first.unmount()
@@ -278,18 +284,18 @@ it('editing a config file is the fix: sed -i before naming the cause counts once
   render(<IncidentScreen scenario={item.scenario} onResolved={() => {}} />)
   fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
 
-  type(`sed -i 's#/var/log/ap/#/var/log/app/#' /etc/logrotate.d/app`)
+  await type(`sed -i 's#/var/log/ap/#/var/log/app/#' /etc/logrotate.d/app`)
   await waitFor(() => expect(output()).toMatch(/counts this as a fix once you've named the root cause/))
 
   fireEvent.click(screen.getByLabelText(/filesystem is full/))
   fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
   await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/logrotate will now find and rotate app\.log/))
 
-  type('nano /tmp/notes')
+  await type('nano /tmp/notes')
   const editor = await screen.findByRole('dialog', { name: 'Editing /tmp/notes' })
   fireEvent.change(within(editor).getByLabelText('Contents of /tmp/notes'), { target: { value: 'checked logrotate\n' } })
   fireEvent.click(within(editor).getByRole('button', { name: 'Save and exit' }))
-  type('cat /tmp/notes /etc/logrotate.d/app')
+  await type('cat /tmp/notes /etc/logrotate.d/app')
   await waitFor(() => expect(output()).toMatch(/checked logrotate\s*\/var\/log\/app\/\*\.log/))
 })
 
@@ -302,18 +308,18 @@ it('a file saved in the editor is still there after the terminal remounts', asyn
   const first = render(<IncidentScreen {...props} />)
   fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
 
-  type('nano /tmp/notes')
+  await type('nano /tmp/notes')
   const editor = await screen.findByRole('dialog', { name: 'Editing /tmp/notes' })
   fireEvent.change(within(editor).getByLabelText('Contents of /tmp/notes'), { target: { value: 'checked logrotate\n' } })
   fireEvent.click(within(editor).getByRole('button', { name: 'Save and exit' }))
   await waitFor(() => expect(saved?.log.some((e) => e.type === 'EDITED' && e.path === '/tmp/notes')).toBe(true))
-  type('nano /tmp/other') // quit without saving: nothing is logged
+  await type('nano /tmp/other') // quit without saving: nothing is logged
   const quit = await screen.findByRole('dialog', { name: 'Editing /tmp/other' })
   fireEvent.click(within(quit).getByRole('button', { name: 'Exit without saving' }))
-  type('cat /tmp/notes')
+  await type('cat /tmp/notes')
   await waitFor(() => expect(output()).toMatch(/checked logrotate/))
   expect(saved!.log.filter((e) => e.type === 'EDITED')).toHaveLength(1)
-  type('nano /tmp/notes; nano /tmp/notes') // two saves inside one command replay in order
+  await type('nano /tmp/notes; nano /tmp/notes') // two saves inside one command replay in order
   for (const text of ['pass one\n', 'pass two\n']) {
     const d = await screen.findByRole('dialog', { name: 'Editing /tmp/notes' })
     fireEvent.change(within(d).getByLabelText('Contents of /tmp/notes'), { target: { value: text } })
@@ -325,7 +331,7 @@ it('a file saved in the editor is still there after the terminal remounts', asyn
 
   render(<IncidentScreen {...props} initial={saved} />)
   await waitFor(() => expect(output()).toMatch(/cat \/tmp\/notes[\s\S]*checked logrotate/))
-  type('cat /tmp/notes')
+  await type('cat /tmp/notes')
   await waitFor(() => expect(output()).toMatch(/cat \/tmp\/notes\s*pass two/))
 })
 
@@ -338,16 +344,23 @@ it('terraform apply asks in a dialog, and the answer replays after a remount', a
   const first = render(<IncidentScreen {...props} />)
   fireEvent.click(screen.getByRole('button', { name: 'Accept mission' }))
 
-  type('terraform init')
-  type(`sed -i '/prevent_destroy/d' db.tf`)
-  type('terraform apply')
+  await type('terraform init')
+  await type(`sed -i '/prevent_destroy/d' db.tf`)
+  await type('terraform apply')
   const dialog = await screen.findByRole('dialog', { name: 'Confirm terraform action' })
+  press('ls') // type-ahead while apply waits: not run, the line stays in the input
+  expect(saved!.log.filter((e) => e.type === 'RUN_COMMAND').at(-1)).toMatchObject({ input: 'terraform apply' })
+  expect(screen.getByLabelText<HTMLInputElement>('Terminal command').value).toBe('ls')
   expect(dialog.textContent).toMatch(/must be replaced[\s\S]*Enter a value:/)
   const answer = within(dialog).getByLabelText('Enter a value')
   fireEvent.change(answer, { target: { value: 'yes' } })
   fireEvent.keyDown(answer, { key: 'Enter' })
   await waitFor(() => expect(output()).toMatch(/Apply complete!/))
   await waitFor(() => expect(saved!.log.filter((e) => e.type === 'ANSWERED')).toEqual([expect.objectContaining({ value: 'yes' })]))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Terminal command'))) // focus back at the prompt
+  await type('ls')
+  await waitFor(() => expect(saved!.log.at(-1)).toMatchObject({ type: 'RUN_COMMAND', input: 'ls' }))
+  await waitFor(() => expect(output()).toMatch(/\$ ls\s*db\.tf/))
   const before = output()
   first.unmount()
 

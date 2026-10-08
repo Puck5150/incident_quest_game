@@ -58,7 +58,16 @@ function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction, onEdit
     if (out.current) out.current.scrollTop = out.current.scrollHeight
   }, [lines])
 
+  // Back to the prompt when the editor or a confirm prompt closes.
+  useEffect(() => {
+    if (!session.editing && !session.prompting) field.current?.focus()
+  }, [session.editing, session.prompting])
+
   function submit() {
+    // One command at a time, as in the full terminal: Enter waits (the typed
+    // line stays) until the running one finishes, so nothing is logged
+    // between a command and the answers it asks for.
+    if (lines.some((l) => l.pending)) return
     const r = session.run(input)
     setInput('')
     setCursor(undefined)
@@ -117,7 +126,7 @@ function SimpleTerminal({ scenario, log, onRun, onShellRan, onTakeAction, onEdit
     >
       {session.editing && <FileEditor key={session.editing.path} editing={session.editing} />}
       {session.prompting && <ConfirmPrompt prompting={session.prompting} />}
-      <div ref={out} role="log" aria-label="Terminal output" className="flex-1 overflow-auto p-3">
+      <div ref={out} role="log" aria-label="Terminal output" aria-busy={lines.some((l) => l.pending)} className="flex-1 overflow-auto p-3">
         <p className="text-muted">{hint(scenario)}</p>
         {lines.map((l) =>
           l.completions ? (
