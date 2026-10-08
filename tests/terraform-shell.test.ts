@@ -95,6 +95,19 @@ describe('the terraform command in the shell', () => {
     expect(unknown.hits).toEqual([])
   })
 
+  it('awards no verification or evidence for a run outside the lab directory, or for version', async () => {
+    const s = scenario({ evidence: [{ evidence: 'planned', command: 'plan', contains: 'No changes' }] })
+    const [, tmp, , ver] = await run(s, 'cd /tmp', 'printf \'resource "aws_vpc" "x" {\\n  cidr_block = "10.0.0.0/16"\\n}\\n\' > main.tf; terraform plan', 'cd ~/infra', 'terraform version')
+    expect(tmp.hits).toEqual([])
+    expect(ver.hits).toEqual([])
+  })
+
+  it('prints output -raw without a trailing newline', async () => {
+    const [raw, shown] = await run(scenario({ outputs: { id: { value: 'vpc-1' } } }), 'terraform output -raw id | wc -c', 'terraform output id | wc -c')
+    expect(raw.output.trim()).toBe('5')
+    expect(shown.output.trim()).toBe('8')
+  })
+
   it('leaves incidents without a terraform block on the scripted tool', async () => {
     const plain = { ...structuredClone(base), terraform: undefined } as Scenario
     const sh = new IncidentShell(plain)

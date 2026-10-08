@@ -97,11 +97,11 @@ describe('outputsText', () => {
     expect(outputsText(outs, 'b').stdout).toBe(text('{', '  "k" = "v"', '}'))
   })
 
-  it('indents two spaces without aligning map keys, lists one element per row, objects in lists unquoted', () => {
+  it('indents two spaces without aligning map keys, lists one element per row, object attributes in lists quoted too', () => {
     const o = { tags: { value: { Name: 'x', LongerKey: 'y' } }, ids: { value: ['a', 'b'] }, rules: { value: [{ port: 22, cidrs: ['10.0.0.0/8'] }] } }
     expect(outputsText(o, 'tags').stdout).toBe(text('{', '  "LongerKey" = "y"', '  "Name" = "x"', '}'))
     expect(outputsText(o, 'ids').stdout).toBe(text('[', '  "a",', '  "b",', ']'))
-    expect(outputsText(o, 'rules').stdout).toBe(text('[', '  {', '    cidrs = [', '      "10.0.0.0/8",', '    ]', '    port = 22', '  },', ']'))
+    expect(outputsText(o, 'rules').stdout).toBe(text('[', '  {', '    "cidrs" = [', '      "10.0.0.0/8",', '    ]', '    "port" = 22', '  },', ']'))
     expect(outputsText(o).stdout.split('\n').slice(0, 5)).toEqual(['ids = [', '  "a",', '  "b",', ']', 'rules = ['])
   })
 

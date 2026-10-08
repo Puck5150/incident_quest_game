@@ -313,10 +313,18 @@ it('a file saved in the editor is still there after the terminal remounts', asyn
   type('cat /tmp/notes')
   await waitFor(() => expect(output()).toMatch(/checked logrotate/))
   expect(saved!.log.filter((e) => e.type === 'EDITED')).toHaveLength(1)
+  type('nano /tmp/notes; nano /tmp/notes') // two saves inside one command replay in order
+  for (const text of ['pass one\n', 'pass two\n']) {
+    const d = await screen.findByRole('dialog', { name: 'Editing /tmp/notes' })
+    fireEvent.change(within(d).getByLabelText('Contents of /tmp/notes'), { target: { value: text } })
+    fireEvent.click(within(d).getByRole('button', { name: 'Save and exit' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Editing /tmp/notes' })).toBeNull())
+  }
+  await waitFor(() => expect(saved!.log.filter((e) => e.type === 'EDITED')).toHaveLength(3))
   first.unmount()
 
   render(<IncidentScreen {...props} initial={saved} />)
   await waitFor(() => expect(output()).toMatch(/cat \/tmp\/notes[\s\S]*checked logrotate/))
   type('cat /tmp/notes')
-  await waitFor(() => expect(output().match(/checked logrotate/g)!.length).toBeGreaterThanOrEqual(2))
+  await waitFor(() => expect(output()).toMatch(/cat \/tmp\/notes\s*pass two/))
 })

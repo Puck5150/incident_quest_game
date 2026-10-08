@@ -242,12 +242,26 @@ describe('terraform state, show and output', () => {
     const inst = await tf().run('state', 'list', 'aws_s3_bucket.b["z"]')
     expect(inst.exitCode).toBe(1)
     expect(inst.stderr).toContain('Error: Unknown resource instance')
-    expect(inst.stderr.replace(/\n│ /g, ' ')).toContain(detail('resource instance', 'aws_s3_bucket.b["z"]'))
+    expect(inst.stderr.replace(/\n│ /g, ' ')).toContain(
+      'The current state contains no resource instance aws_s3_bucket.b["z"]. If you\'ve just added its resource to the configuration or have changed the count or for_each arguments, you must run "terraform apply" first to update the resource\'s entry in the state.',
+    )
     const typeOnly = await tf().run('state', 'list', 'aws_vpc')
+    expect(typeOnly.exitCode).toBe(1)
+    expect(typeOnly.stderr).toContain('Error: Invalid address')
+    expect(typeOnly.stderr.replace(/\n│ /g, ' ')).toContain('Resource specification must include a resource type and name.')
+    const mod = await tf().run('state', 'list', 'module.m.aws_vpc.a')
+    expect(mod.stderr).toContain('Error: Unknown resource\n')
+  })
+
+  it('state show: a type-only address is a plain parse error, a missing instance a plain not-found', async () => {
+    const typeOnly = await tf().run('state', 'show', 'aws_vpc')
     expect(typeOnly.exitCode).toBe(1)
     expect(typeOnly.stderr).toBe(
       'Error parsing instance address: aws_vpc\n\nThis command requires that the address references one specific instance.\nTo view the available instances, use "terraform state list". Please modify \nthe address to reference a specific instance.',
     )
+    const gone = await tf().run('state', 'show', 'aws_vpc.nope')
+    expect(gone.exitCode).toBe(1)
+    expect(gone.stderr).toContain('No instance found for the given address!')
   })
 
   it('pulls state as JSON, shows it, and has the default workspace', async () => {
@@ -279,6 +293,14 @@ describe('terraform state, show and output', () => {
     expect(JSON.parse((await w.run('output', '-json')).stdout).id).toEqual({ sensitive: false, type: 'string', value: 'vpc-1' })
     expect((await w.run('output', '-raw')).stderr).toContain('Error: Raw output format is only supported for single outputs')
     expect((await w.run('output', '-raw', 'tags')).stderr).toContain('Error: Unsupported value for raw output')
+    const empty = await world({ outputs: {} }).run('output', 'x')
+    expect(empty.exitCode).toBe(0)
+    expect(empty.stdout).toContain('Warning: No outputs found')
+    const nul = await world({ outputs: { n: { value: null } } }).run('output', '-raw', 'n')
+    expect(nul.exitCode).toBe(1)
+    expect(nul.stderr).toContain('Error: Unsupported value for raw output')
+    expect(nul.stderr.replace(/\n│ /g, ' ')).toContain('The value for output value "n" is null, so -raw mode cannot print it.')
+    expect((await world({ outputs: { id: { value: 'v' } } }).run('output', '-raw', 'id')).raw).toBe(true)
     const none = await world({ outputs: {} }).run('output')
     expect(none.exitCode).toBe(0)
     expect(none.stderr).toBe('')
@@ -307,8 +329,68 @@ describe('terraform variables', () => {
       expect(r.exitCode).toBe(1)
       expect(r.stdout).toBe('')
       expect(r.stderr).toContain('Error: Invalid value for input variable')
-      expect(r.stderr.replace(/\n│ /g, ' ')).toContain(`The given value is not suitable for var.v declared at main.tf:1: ${type} required.`)
+      expect(r.stderr.replace(/\n│ /g, ' ')).toContain(`Unsuitable value for var.v set using -var="v=${val}": a ${type} is required.`)
     }
+  })
+
+  it('words the conversion error by origin, and accepts 1 and 0 for bool', async () => {
+    const err = (r: { stderr: string }) => r.stderr.replace(/\n│ /g, ' ')
+    const env = await varWorld('type = number', 'true', { env: { TF_VAR_v: 'abc' } }).run('plan')
+    expect(err(env)).toContain('Unsuitable value for var.v set using the TF_VAR_v environment variable: a number is required.')
+    const file = await varWorld('type = number', 'true', { files: { '/home/you/infra/terraform.tfvars': 'v = "abc"\n' } }).run('plan')
+    expect(err(file)).toContain('The given value is not suitable for var.v declared at main.tf:1: a number is required.')
+    const str = await varWorld('type = string', 'true', { files: { '/home/you/infra/terraform.tfvars': 'v = [1]\n' } }).run('plan')
+    expect(err(str)).toContain('declared at main.tf:1: a string is required.')
+    const cap = await varWorld('type = bool', 'true').run('plan', '-var', 'v=True')
+    expect(err(cap)).toContain('a bool is required; to convert from string, use lowercase "true".')
+    expect(err(await varWorld('type = bool', 'true').run('plan', '-var', 'v=False'))).toContain('use lowercase "false".')
+    const eq = (v: string) => varWorld('type = bool', 'var.v == false').run('plan', '-var', `v=${v}`)
+    expect((await eq('0')).stdout).toContain('No changes.')
+    expect((await eq('1')).stdout).toContain('true -> false')
+  })
+
+  it('parses collection-typed values from -var and TF_VAR_ as expressions', async () => {
+    const tf = (type: string, expr: string) => ({ files: [{ path: 'main.tf', content: `variable "v" {\n  type = ${type}\n}\noutput "o" {\n  value = ${expr}\n}\n` }] })
+    const out = async (type: string, expr: string, val: string, how: 'var' | 'env') => {
+      const w = how === 'var' ? world(tf(type, expr)) : world(tf(type, expr), { env: { TF_VAR_v: val } })
+      const r = how === 'var' ? await w.run('plan', '-var', `v=${val}`) : await w.run('plan')
+      return r.stdout
+    }
+    for (const how of ['var', 'env'] as const) {
+      expect(await out('list(string)', 'length(var.v)', '["a","b"]', how)).toContain('o = 2')
+      expect(await out('list(string)', 'toset(var.v)', '["a","b","a"]', how)).toMatch(/o = \[\s+\+ "a",\s+\+ "b",\s+\]/)
+      expect(await out('map(string)', 'var.v.k', '{ k = "x" }', how)).toContain('o = "x"')
+      expect(await out('object({ a = number })', 'var.v.a', '{ a = 3 }', how)).toContain('o = 3')
+    }
+    const bad = await world(tf('list(string)', 'var.v')).run('plan', '-var', 'v=[')
+    expect(bad.exitCode).toBe(1)
+    expect(bad.stderr).toContain('Error: Invalid value for input variable')
+    expect(bad.stderr.replace(/\n│ /g, ' ')).toContain('Unsuitable value for var.v set using -var="v=["')
+  })
+
+  it('null passes conversion; a non-nullable variable drops it so the default applies or the variable is unset', async () => {
+    const f = { '/home/you/infra/terraform.tfvars': 'v = null\n' }
+    const use = 'var.v == null ? false : var.v'
+    const nullable = await varWorld('type = bool\n  default = true', use, { files: f }).run('plan')
+    expect(nullable.stdout).toContain('true -> false')
+    const dropped = await varWorld('type = bool\n  default = true\n  nullable = false', use, { files: f }).run('plan')
+    expect(dropped.stdout).toContain('No changes.')
+    const unset = await varWorld('type = bool\n  nullable = false', 'var.v', { files: f }).run('plan')
+    expect(unset.stderr).toContain('No value for required variable')
+  })
+
+  it('verifies and matches evidence only for runs in the lab directory on the main host', async () => {
+    const ev = { evidence: [{ evidence: 'listed', command: 'plan' as const, contains: 'No changes' }] }
+    const here = await world(ev).run('plan')
+    expect(here.ran).toBe('terraform plan')
+    expect(here.evidence).toEqual(['evidence:listed'])
+    const tmp = world(ev, { cwd: '/tmp', files: { '/tmp/main.tf': VPC_TF } })
+    const away = await tmp.run('plan')
+    expect(away.ran).toBe('')
+    expect(away.evidence).toEqual([])
+    expect((await world(ev, { mainHost: false }).run('plan')).ran).toBe('')
+    for (const a of [['version'], ['workspace', 'show'], ['state', 'pull'], ['plan', '-help'], ['state', 'list', '-help']]) expect((await world().run(...a)).ran).toBe('')
+    expect((await world().run('state', 'list')).ran).toBe('terraform state list')
   })
 
   it('errors for an undeclared -var, warns on stdout for an undeclared tfvars value, ignores TF_VAR_', async () => {
@@ -324,7 +406,7 @@ describe('terraform variables', () => {
     expect(file.stderr).toBe('')
     expect(file.stdout.startsWith('╷\n│ Warning: Value for undeclared variable')).toBe(true)
     expect(file.stdout.replace(/\n│ /g, ' ')).toContain(
-      'The root module does not declare a variable named "foo" but a value was found in file "terraform.tfvars". If you meant to use this value, add a "variable" block to the configuration.  To silence these warnings, use TF_VAR_... environment variables to provide certain "undeclared" variables to Terraform.',
+      'The root module does not declare a variable named "foo" but a value was found in file "terraform.tfvars". If you meant to use this value, add a "variable" block to the configuration.  To silence these warnings, use TF_VAR_... environment variables to provide certain "global" settings to all configurations in your organization. To reduce the verbosity of these warnings, use the -compact-warnings option.',
     )
     expect(file.stdout).toContain('No changes.')
     const env = await world({ vars: { lab: 'x' } }, { env: { TF_VAR_foo: '1' } }).run('plan')

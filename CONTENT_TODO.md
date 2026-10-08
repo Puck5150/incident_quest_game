@@ -551,6 +551,11 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] `workspace list` format.
 - [ ] The not-simulated message for apply and friends (to be replaced by TF3).
 - [ ] tfvars parsing wraps the file in a `locals` block: error line numbers are shifted by one and corrected.
+- [ ] SECURITY / teaching correctness (do before any incident that handles secrets): sensitive variables are not tracked. `variable "pw" { sensitive = true }` with `-var pw=hunter2` plans `+ cidr_block = "hunter2"` and outputs show the raw value; real Terraform prints `(sensitive value)` and refuses an output that refers to sensitive values without `sensitive = true`. Needs value-level sensitivity tracking in the evaluator (same task as the cross-resource sensitive-propagation gap already logged).
+- [ ] Conversion: `Number('0x10')` is accepted (cty rejects it), and typed `default` values are not converted.
+- [ ] tfvars parse errors show `in locals:` in the box header (leaks the wrapping).
+- [ ] The `<sub> -help` texts are paraphrased on one line; copy the real Help() bodies from command_*.go (`state list -help` prints the `state` help).
+- [ ] IncidentScreen keys the feedback paragraph on `log.length`, so every editor save re-animates the old feedback and screen readers announce it again (pre-existing, more visible now).
 - [ ] Variable type conversion for `-var` values is not done (all values are strings).
 - [ ] `-chdir` and the working-directory rule.
 - [ ] Scripted `terraform` commands are ignored for incidents with a terraform block.

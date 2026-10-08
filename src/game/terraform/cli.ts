@@ -34,6 +34,8 @@ export interface CliResult {
   evidence: string[]
   // The command as typed ("terraform plan"), empty when it is not one the simulator runs.
   ran: string
+  // Print stdout exactly: no newline is added (`output -raw`).
+  raw?: boolean
 }
 type Out = Omit<CliResult, 'evidence' | 'ran'>
 type File = { name: string; text: string }
@@ -284,7 +286,7 @@ type Resolved = { warnings: string } & ({ vars: Record<string, Value> } | { erro
 function convertTo(v: Value, type: string): { v: Value } | undefined {
   if (type === 'string') return typeof v === 'string' ? { v } : typeof v === 'number' || typeof v === 'boolean' ? { v: String(v) } : undefined
   if (type === 'number') return typeof v === 'number' ? { v } : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? { v: Number(v) } : undefined
-  return typeof v === 'boolean' ? { v } : v === 'true' || v === 'false' ? { v: v === 'true' } : undefined
+  return typeof v === 'boolean' ? { v } : v === 'true' || v === '1' ? { v: true } : v === 'false' || v === '0' ? { v: false } : undefined
 }
 
 // Variables in Terraform's precedence, lowest first; later sources override earlier ones.
@@ -326,14 +328,34 @@ async function resolveVars(ctx: CliContext, cfg: Config, cmdline: VarSource[], d
       continue
     }
     const t = decl.attrs.find((a) => a.name === 'type')?.value
-    const type = t?.kind === 'ref' && t.path.length === 1 && ['bool', 'number', 'string'].includes(t.path[0]) ? t.path[0] : undefined
-    const c = type ? convertTo(v, type) : { v }
-    if (!c) errors.push(box('error', 'Invalid value for input variable', `The given value is not suitable for var.${name} declared at ${decl.file}:${decl.pos.line}: ${type} required.`))
+    const word = t?.kind === 'ref' && t.path.length === 1 ? t.path[0] : undefined
+    const type = word !== undefined && ['bool', 'number', 'string'].includes(word) ? word : undefined
+    const where =
+      from === 'cli' ? `Unsuitable value for var.${name} set using -var="${name}=${String(v)}"` : from === 'env' ? `Unsuitable value for var.${name} set using the TF_VAR_${name} environment variable` : `The given value is not suitable for var.${name} declared at ${decl.file}:${decl.pos.line}`
+    const invalid = (reason: string) => errors.push(box('error', 'Invalid value for input variable', `${where}: ${reason}`))
+    // Null passes conversion; a non-nullable variable drops it so the default applies.
+    if (v === null) {
+      const n = decl.attrs.find((a) => a.name === 'nullable')?.value
+      if (!(n?.kind === 'lit' && n.value === false)) final.set(name, v)
+      continue
+    }
+    // Command-line and environment values are text; a collection type parses them as an expression.
+    let val: Value = v
+    if (t && !type && word !== 'any' && (from === 'cli' || from === 'env') && typeof v === 'string') {
+      const r = parseVarsFile(name, `${name} = ${v}`)
+      if ('diags' in r) {
+        invalid(r.diags[0].detail || r.diags[0].summary)
+        continue
+      }
+      val = r.values[0][1]
+    }
+    const c = type ? convertTo(val, type) : { v: val }
+    if (!c) invalid(`a ${type} is required${type === 'bool' && (v === 'True' || v === 'False') ? `; to convert from string, use lowercase "${v.toLowerCase()}"` : ''}.`)
     else final.set(name, c.v)
   }
   undeclared.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const warns = undeclared.slice(0, 2).map((w) =>
-    box('warning', 'Value for undeclared variable', `The root module does not declare a variable named "${w.name}" but a value was found in file "${w.file}". If you meant to use this value, add a "variable" block to the configuration.\n\nTo silence these warnings, use TF_VAR_... environment variables to provide certain "undeclared" variables to Terraform.`, true),
+    box('warning', 'Value for undeclared variable', `The root module does not declare a variable named "${w.name}" but a value was found in file "${w.file}". If you meant to use this value, add a "variable" block to the configuration.\n\nTo silence these warnings, use TF_VAR_... environment variables to provide certain "global" settings to all configurations in your organization. To reduce the verbosity of these warnings, use the -compact-warnings option.`, true),
   )
   if (undeclared.length > 2) warns.push(box('warning', 'Values for undeclared variables', `In addition to the other similar warnings shown, ${undeclared.length - 2} other variable(s) defined without being declared.`))
   const warnings = warns.join('\n\n')
@@ -429,10 +451,10 @@ function cmdState(args: string[], ctx: CliContext): Out {
     const all = listAddresses(lab.state)
     const matches = (a: string, w: string) => a === w || a.startsWith(`${w}.`) || a.startsWith(`${w}[`)
     for (const w of wanted) {
-      if (!ADDRESS.test(w)) return fail(`Error parsing instance address: ${w}\n\n${ONE_INSTANCE}`)
+      if (!w.startsWith('module.') && !ADDRESS.test(w)) return boxFail('Invalid address', 'Resource specification must include a resource type and name.')
       if (!all.some((a) => matches(a, w))) {
-        const what = w.endsWith(']') ? 'resource instance' : 'resource'
-        return boxFail(`Unknown ${what}`, `The current state contains no ${what} ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
+        if (w.endsWith(']')) return boxFail('Unknown resource instance', `The current state contains no resource instance ${w}. If you've just added its resource to the configuration or have changed the count or for_each arguments, you must run "terraform apply" first to update the resource's entry in the state.`)
+        return boxFail('Unknown resource', `The current state contains no resource ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
       }
     }
     return ok((wanted.length ? all.filter((a) => wanted.some((w) => matches(a, w))) : all).join('\n'))
@@ -441,6 +463,7 @@ function cmdState(args: string[], ctx: CliContext): Out {
     if (!lab.hasState) return fail(NO_STATE)
     const addrs = rest.filter((a) => !a.startsWith('-'))
     if (addrs.length !== 1) return fail('Exactly one argument expected.')
+    if (!ADDRESS.test(addrs[0])) return fail(`Error parsing instance address: ${addrs[0]}\n\n${ONE_INSTANCE}`)
     const found = findInstance(lab.state, addrs[0])
     if (!found) return fail(`No instance found for the given address!\n\n${ONE_INSTANCE}`)
     return ok(stateShow(found.resource, found.instance, (a) => sensitiveAttr(found.resource.type, a)))
@@ -452,7 +475,8 @@ function cmdState(args: string[], ctx: CliContext): Out {
 
 function cmdOutput(args: string[], ctx: CliContext): Out {
   const mode = args.includes('-json') || args.includes('--json') ? 'json' : args.includes('-raw') || args.includes('--raw') ? 'raw' : 'hcl'
-  return outputsText(ctx.lab.state.outputs, args.find((a) => !a.startsWith('-')), mode)
+  const r = outputsText(ctx.lab.state.outputs, args.find((a) => !a.startsWith('-')), mode)
+  return mode === 'raw' && r.exitCode === 0 ? { ...r, raw: true } : r
 }
 
 function cmdWorkspace(args: string[]): Out {
@@ -514,8 +538,11 @@ export async function runTerraform(args: string[], ctx: CliContext): Promise<Cli
   const second = first[1]
   const command = (first[0] === 'state' || first[0] === 'workspace') && second !== undefined && !second.startsWith('-') ? `${first[0]} ${second}` : (first[0] ?? '')
   const text = out.stdout + out.stderr
-  const evidence = ctx.lab.evidence.filter((e) => e.command === command && text.includes(e.contains)).map((e) => `evidence:${e.evidence}`)
-  const known = ['version', '-version', '--version', '-v', 'init', 'validate', 'plan', 'show', 'state', 'output', 'workspace']
-  const ran = first[0] !== undefined && known.includes(first[0]) ? `terraform ${command.replace(/^(-version|--version|-v)$/, 'version')}` : ''
+  // Only a run in the lab directory on the main host can verify a fix or match evidence.
+  const here = ctx.mainHost && (args[0]?.startsWith('-chdir=') ? resolvePath(ctx.cwd, args[0].slice(7)) : ctx.cwd) === resolvePath('/', ctx.lab.dir)
+  const evidence = here ? ctx.lab.evidence.filter((e) => e.command === command && text.includes(e.contains)).map((e) => `evidence:${e.evidence}`) : []
+  const helped = first.some((a) => a === '-help' || a === '--help')
+  const verifies = ['init', 'validate', 'plan', 'show', 'output', 'state list', 'state show']
+  const ran = here && !helped && verifies.includes(command) ? `terraform ${command}` : ''
   return { ...out, evidence, ran }
 }

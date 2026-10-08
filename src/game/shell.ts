@@ -299,7 +299,7 @@ export class IncidentShell {
     })
     if (r.ran) this.hits.push(r.ran)
     this.hits.push(...r.evidence)
-    return { stdout: withNewline(r.stdout), stderr: withNewline(r.stderr), exitCode: r.exitCode }
+    return { stdout: r.raw ? r.stdout : withNewline(r.stdout), stderr: withNewline(r.stderr), exitCode: r.exitCode }
   }
 
   // A tool invocation inside the shell: the scripted output whose command

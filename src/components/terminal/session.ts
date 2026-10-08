@@ -63,7 +63,10 @@ export function useTerminalSession(
     (shell.current ??= import('../../game/shell.ts').then((m) => {
       const sh = new m.IncidentShell(scenario)
       sh.onEdit = (path, content) => {
-        if (replayEdits.current) return Promise.resolve(replayEdits.current.find((x) => x.path === path)?.content ?? null)
+        if (replayEdits.current) {
+          const k = replayEdits.current.findIndex((x) => x.path === path)
+          return Promise.resolve(k < 0 ? null : replayEdits.current.splice(k, 1)[0].content)
+        }
         return new Promise((done) =>
           setEditing({
             path,
