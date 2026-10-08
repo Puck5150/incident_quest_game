@@ -1,0 +1,231 @@
+import { describe, expect, it } from 'vitest'
+import { runTerraform, type CliContext } from '../src/game/terraform/cli.ts'
+import { labFromScenario } from '../src/game/terraform/lab.ts'
+import type { TerraformBlock } from '../src/schema/scenario.ts'
+
+const VPC_TF = 'resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n}\n'
+const VPC = { type: 'aws_vpc', name: 'main', attrs: { id: 'vpc-1', arn: 'arn:vpc-1', cidr_block: '10.0.0.0/16', enable_dns_support: true, enable_dns_hostnames: false, default_security_group_id: 'sg-1' } }
+
+// An in-memory directory standing in for the simulated disk.
+function world(tf: Partial<TerraformBlock> = {}, o: { files?: Record<string, string>; cwd?: string; env?: Record<string, string>; skipLock?: boolean } = {}) {
+  const lab = labFromScenario({ files: [{ path: 'main.tf', content: VPC_TF }], state: [VPC], ...tf } as TerraformBlock, '/home/you/infra', '/home/you')
+  const disk: Record<string, string> = {}
+  for (const f of lab.files) disk[f.path] = f.content
+  if (lab.initialized && !o.skipLock) disk['/home/you/infra/.terraform.lock.hcl'] = '# lock\n'
+  Object.assign(disk, o.files ?? {})
+  const ctx: CliContext = {
+    lab,
+    cwd: o.cwd ?? '/home/you/infra',
+    env: o.env ?? {},
+    listFiles: async (dir) => Object.entries(disk).filter(([p]) => p.slice(0, p.lastIndexOf('/')) === dir).map(([p, text]) => ({ name: p.slice(p.lastIndexOf('/') + 1), text })),
+    readFile: async (p) => disk[p],
+    write: async (dir, name, text) => void (disk[`${dir}/${name}`] = text),
+  }
+  return { ctx, disk, run: (...args: string[]) => runTerraform(args, ctx) }
+}
+
+describe('terraform: basics', () => {
+  it('prints the version, with providers once initialised', async () => {
+    expect((await world().run('version')).stdout).toBe('Terraform v1.9.8\non linux_amd64\n+ provider registry.terraform.io/hashicorp/aws v5.67.0')
+    expect((await world({}, { skipLock: true }).run('-version')).stdout).toBe('Terraform v1.9.8\non linux_amd64')
+  })
+
+  it('prints usage with no arguments and for -help, and rejects an unknown command', async () => {
+    const usage = (await world().run()).stdout
+    expect(usage).toContain('Usage: terraform [global options] <subcommand> [args]')
+    expect(usage).toContain('  plan          Show changes required by the current configuration')
+    expect((await world().run('-help')).stdout).toBe(usage)
+    const bad = await world().run('frobnicate')
+    expect(bad.exitCode).toBe(1)
+    expect(bad.stderr).toBe('Terraform has no command named "frobnicate".\n\nTo see all of Terraform\'s top-level commands, run:\n  terraform -help')
+  })
+
+  it('answers the commands that need a later milestone honestly', async () => {
+    for (const args of [['apply'], ['destroy'], ['import', 'a.b', 'x'], ['taint', 'a.b'], ['state', 'rm', 'a.b'], ['workspace', 'new', 'x']]) {
+      const r = await world().run(...args)
+      expect(r.exitCode, args.join(' ')).toBe(1)
+      expect(r.stderr).toContain('Error: Not available in this lab yet')
+    }
+    expect((await world().run('apply')).stderr).toContain('"terraform apply" is not simulated yet')
+  })
+
+  it('honours -chdir', async () => {
+    const w = world({}, { cwd: '/home/you' })
+    expect((await w.run('plan')).stderr + (await w.run('plan')).stdout).toContain('No configuration files')
+    expect((await w.run('-chdir=infra', 'plan')).stdout).toContain('No changes.')
+  })
+})
+
+describe('terraform init and validate', () => {
+  it('initialises, writing the lock file, and is quieter the second time', async () => {
+    const w = world({ initialized: false }, { skipLock: true })
+    const first = await w.run('init')
+    expect(first.exitCode).toBe(0)
+    expect(first.stdout).toContain('Initializing the backend...')
+    expect(first.stdout).toContain('- Installing hashicorp/aws v5.67.0...')
+    expect(first.stdout).toContain('Terraform has created a lock file .terraform.lock.hcl')
+    expect(first.stdout).toContain('Terraform has been successfully initialized!')
+    expect(w.disk['/home/you/infra/.terraform.lock.hcl']).toContain('provider "registry.terraform.io/hashicorp/aws"')
+    const second = await w.run('init')
+    expect(second.stdout).toContain('- Reusing previous version of hashicorp/aws from the dependency lock file')
+    expect(second.stdout).not.toContain('has created a lock file')
+  })
+
+  it('validates a good configuration and reports bad ones', async () => {
+    expect((await world().run('validate')).stdout).toBe('Success! The configuration is valid.\n')
+    const syntax = await world({ files: [{ path: 'main.tf', content: 'resource "aws_vpc" "main" {\n  cidr_block\n}\n' }] }).run('validate')
+    expect(syntax.exitCode).toBe(1)
+    expect(syntax.stderr).toContain('Error: Argument or block definition required')
+    expect(syntax.stderr).toContain('on main.tf line 2')
+    const unknown = await world({ files: [{ path: 'main.tf', content: 'resource "aws_nope" "x" {}\n' }] }).run('validate')
+    expect(unknown.stderr).toContain('Error: Invalid resource type')
+    const ref = await world({ files: [{ path: 'main.tf', content: 'resource "aws_subnet" "s" {\n  vpc_id = aws_vpc.nope.id\n}\n' }] }).run('validate')
+    expect(ref.stderr).toContain('Reference to undeclared resource')
+  })
+
+  it('needs initialisation to validate or plan', async () => {
+    const w = world({ initialized: false }, { skipLock: true })
+    for (const sub of ['validate', 'plan']) {
+      const r = await w.run(sub)
+      expect(r.exitCode).toBe(1)
+      expect(r.stderr).toContain('Error: Inconsistent dependency lock file')
+      expect(r.stderr).toContain('provider registry.terraform.io/hashicorp/aws: required by this configuration but no version is selected')
+      expect(r.stderr).toContain('terraform init')
+    }
+  })
+})
+
+describe('terraform plan', () => {
+  it('prints refresh lines, then no changes', async () => {
+    const r = await world().run('plan')
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toBe(
+      ['aws_vpc.main: Refreshing state... [id=vpc-1]', '', 'No changes. Your infrastructure matches the configuration.', '', 'Terraform has compared your real infrastructure against your configuration', 'and found no differences, so no changes are needed.'].join('\n'),
+    )
+  })
+
+  it('plans the edit the player made, with the -out note when not saving', async () => {
+    const w = world({}, { files: { '/home/you/infra/main.tf': 'resource "aws_vpc" "main" {\n  cidr_block = "10.1.0.0/16"\n}\n' } })
+    const r = await w.run('plan')
+    expect(r.stdout).toContain('# aws_vpc.main must be replaced')
+    expect(r.stdout).toContain('~ cidr_block                = "10.0.0.0/16" -> "10.1.0.0/16" # forces replacement')
+    expect(r.stdout).toContain('Plan: 1 to add, 0 to change, 1 to destroy.')
+    expect(r.stdout.endsWith('Note: You didn\'t use the -out option to save this plan, so Terraform can\'t\nguarantee to take exactly these actions if you run "terraform apply" now.')).toBe(true)
+    expect(r.stdout).toContain('─'.repeat(77))
+    const saved = await w.run('plan', '-out=tfplan')
+    expect(saved.stdout).toContain('Saved the plan to: tfplan')
+    expect(saved.stdout).not.toContain("You didn't use the -out option")
+    expect((await w.run('plan', '-detailed-exitcode')).exitCode).toBe(2)
+  })
+
+  it('prints configuration errors to stderr with exit 1 and no refresh lines', async () => {
+    const r = await world({}, { files: { '/home/you/infra/main.tf': 'resource "aws_vpc" "main" {\n  cidr_block\n}\n' } }).run('plan')
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toBe('')
+    expect(r.stderr).toContain('Error: Argument or block definition required')
+  })
+
+  it('applies variables in Terraform precedence', async () => {
+    const tf = 'variable "cidr" {\n  default = "10.0.0.0/16"\n}\nresource "aws_vpc" "main" {\n  cidr_block = var.cidr\n}\n'
+    const w = (extra: Record<string, string>, tfv: Partial<TerraformBlock> = {}, env: Record<string, string> = {}) =>
+      world({ files: [{ path: 'main.tf', content: tf }], ...tfv }, { files: extra, env })
+    const out = async (r: Promise<{ stdout: string }>) => (await r).stdout
+    const dir = '/home/you/infra'
+    // The plan prints `cidr_block = "old" -> "new"`, so the winning value is the one after the arrow.
+    expect(await out(w({}).run('plan'))).not.toContain('->')
+    expect(await out(w({}, { vars: { cidr: '10.2.0.0/16' } }).run('plan'))).toContain('-> "10.2.0.0/16"')
+    expect(await out(w({}, { vars: { cidr: '10.2.0.0/16' } }, { TF_VAR_cidr: '10.3.0.0/16' }).run('plan'))).toContain('-> "10.3.0.0/16"')
+    expect(await out(w({ [`${dir}/terraform.tfvars`]: 'cidr = "10.4.0.0/16"\n' }, {}, { TF_VAR_cidr: '10.3.0.0/16' }).run('plan'))).toContain('-> "10.4.0.0/16"')
+    expect(await out(w({ [`${dir}/terraform.tfvars`]: 'cidr = "10.4.0.0/16"\n', [`${dir}/z.auto.tfvars`]: 'cidr = "10.5.0.0/16"\n' }).run('plan'))).toContain('-> "10.5.0.0/16"')
+    expect(await out(w({ [`${dir}/prod.tfvars`]: 'cidr = "10.6.0.0/16"\n', [`${dir}/z.auto.tfvars`]: 'cidr = "10.5.0.0/16"\n' }).run('plan', '-var-file=prod.tfvars'))).toContain('-> "10.6.0.0/16"')
+    expect(await out(w({ [`${dir}/prod.tfvars`]: 'cidr = "10.6.0.0/16"\n' }).run('plan', '-var-file=prod.tfvars', '-var', 'cidr=10.7.0.0/16'))).toContain('-> "10.7.0.0/16"')
+    expect(await out(w({}).run('plan', '-var=cidr=10.8.0.0/16'))).toContain('-> "10.8.0.0/16"')
+  })
+
+  it('reports a bad tfvars file, a missing var file and an unsupported option', async () => {
+    const dir = '/home/you/infra'
+    const bad = await world({}, { files: { [`${dir}/terraform.tfvars`]: 'cidr = \n' } }).run('plan')
+    expect(bad.exitCode).toBe(1)
+    expect(bad.stderr).toContain('terraform.tfvars')
+    const missing = await world().run('plan', '-var-file=nope.tfvars')
+    expect(missing.exitCode).toBe(1)
+    expect(missing.stderr).toContain('nope.tfvars')
+    for (const flag of ['-target=aws_vpc.main', '-refresh-only', '-destroy']) {
+      const r = await world().run('plan', flag)
+      expect(r.exitCode, flag).toBe(1)
+      expect(r.stderr).toContain('Not available in this lab yet')
+    }
+  })
+
+  it('passes -replace and -refresh=false through to the planner', async () => {
+    const r = await world().run('plan', '-replace=aws_vpc.main')
+    expect(r.stdout).toContain('# aws_vpc.main will be replaced, as requested')
+    expect((await world().run('plan', '-refresh=false')).stdout).not.toContain('Refreshing state')
+  })
+
+  it('with no configuration warns the way Terraform does and then plans destroying everything', async () => {
+    const w = world({}, { cwd: '/home/you' })
+    const r = await w.run('plan')
+    expect(r.stdout + r.stderr).toContain('Warning: No configuration files')
+    // The warning box wraps its detail at 76 columns, so compare with the box margins folded away.
+    expect((r.stdout + r.stderr).replace(/\n│ /g, ' ')).toContain('Planning without a configuration would mark everything for destruction')
+  })
+
+  it('shows drift only when the plan uses it, and reads data sources', async () => {
+    const tf = 'data "aws_ami" "x" {}\nresource "aws_instance" "i" {\n  ami = data.aws_ami.x.id\n  instance_type = "t3.micro"\n}\n'
+    const r = await world({ files: [{ path: 'main.tf', content: tf }], state: [{ mode: 'data', type: 'aws_ami', name: 'x', attrs: { id: 'ami-1' } }] }).run('plan')
+    expect(r.stdout).toContain('data.aws_ami.x: Reading...')
+    expect(r.stdout).toContain('data.aws_ami.x: Read complete after 0s [id=ami-1]')
+    expect(r.stdout).toContain('# aws_instance.i will be created')
+  })
+})
+
+describe('terraform state, show and output', () => {
+  const tf = (extra: Partial<TerraformBlock> = {}) => world({ state: [VPC, { type: 'aws_s3_bucket', name: 'b', key: 'a', attrs: { id: 'b-a', bucket: 'b-a' } }], ...extra })
+
+  it('lists, filters and shows state', async () => {
+    expect((await tf().run('state', 'list')).stdout).toBe('aws_s3_bucket.b["a"]\naws_vpc.main')
+    expect((await tf().run('state', 'list', 'aws_vpc')).stdout).toBe('aws_vpc.main')
+    const show = await tf().run('state', 'show', 'aws_vpc.main')
+    expect(show.stdout).toContain('# aws_vpc.main:\nresource "aws_vpc" "main" {')
+    expect(show.stdout).toContain('    cidr_block                = "10.0.0.0/16"')
+    expect((await tf().run('state', 'show', 'aws_s3_bucket.b["a"]')).stdout).toContain('# aws_s3_bucket.b["a"]:')
+    const missing = await tf().run('state', 'show', 'aws_vpc.nope')
+    expect(missing.exitCode).toBe(1)
+    expect(missing.stderr).toContain('Error: No instance found for the given address!')
+  })
+
+  it('pulls state as JSON, shows it, and has the default workspace', async () => {
+    const pull = JSON.parse((await tf().run('state', 'pull')).stdout)
+    expect(pull).toMatchObject({ version: 4, serial: 12, terraform_version: '1.9.8' })
+    expect((await tf().run('show')).stdout).toContain('# aws_vpc.main:')
+    expect((await tf().run('workspace', 'show')).stdout).toBe('default')
+    expect((await tf().run('workspace', 'list')).stdout).toBe('* default\n')
+  })
+
+  it('says so when there is no state file at all', async () => {
+    const w = world({ state: undefined })
+    const r = await w.run('state', 'list')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('No state file was found!')
+  })
+
+  it('prints outputs', async () => {
+    const w = world({ outputs: { id: { value: 'vpc-1' }, pw: { value: 'x', sensitive: true } } })
+    expect((await w.run('output')).stdout).toBe('id = "vpc-1"\npw = <sensitive>')
+    expect((await w.run('output', '-raw', 'id')).stdout).toBe('vpc-1')
+    expect((await w.run('output', 'nope')).exitCode).toBe(1)
+  })
+})
+
+describe('terraform: evidence', () => {
+  it('awards evidence when the output contains the text', async () => {
+    const w = world(
+      { evidence: [{ evidence: 'plan-forces', command: 'plan', contains: 'forces replacement' }, { evidence: 'listed', command: 'state list', contains: 'aws_vpc.main' }] },
+      { files: { '/home/you/infra/main.tf': 'resource "aws_vpc" "main" {\n  cidr_block = "10.1.0.0/16"\n}\n' } },
+    )
+    expect((await w.run('plan')).evidence).toEqual(['evidence:plan-forces'])
+    expect((await w.run('state', 'list')).evidence).toEqual(['evidence:listed'])
+    expect((await w.run('version')).evidence).toEqual([])
+  })
+})

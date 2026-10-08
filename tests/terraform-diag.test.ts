@@ -56,3 +56,14 @@ describe('formatDiagnostic: warnings', () => {
     expect(out).toBe(['╷', '│ Warning: Careful', '│ ', '│ short detail', '╵'].join('\n'))
   })
 })
+
+describe('wrap and formatDiagnostic: preserveLines', () => {
+  it('keeps indented lines and blank lines as written and wraps the rest', () => {
+    const text = 'Intro line.\n  - provider a/b: required\n\nTo fix this, run:\n  terraform init'
+    expect(wrap(text, 76, true)).toEqual(['Intro line.', '  - provider a/b: required', '', 'To fix this, run:', '  terraform init'])
+    const long = `${'word '.repeat(30)}end`
+    expect(wrap(long, 76, true).length).toBeGreaterThan(1)
+    const out = formatDiagnostic({ severity: 'error', summary: 'S', detail: text, file: '', line: 0, col: 0 }, '', { preserveLines: true })
+    expect(out).toBe(['╷', '│ Error: S', '│ ', '│ Intro line.', '│   - provider a/b: required', '│ ', '│ To fix this, run:', '│   terraform init', '╵'].join('\n'))
+  })
+})
