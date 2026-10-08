@@ -563,3 +563,12 @@ Layout reproduced from memory of Terraform 1.x CLI output; check each against a 
 - [ ] (fix wave E) `Invalid value for input variable` detail prints `FILE:LINE` where real Terraform prints `FILE:LINE,COL-COL`; `list(...)`/`map(...)` typed variables are not converted.
 - [ ] (fix wave E) `terraform output -json` types are `string`/`number`/`bool` or `dynamic` (real prints structural types such as `["list","string"]`); `-raw` collection error detail is a lab paraphrase; the `Raw output format is only supported for single outputs` error has no detail here.
 - [ ] (fix wave E) The undeclared-variable warnings print at most two, then a summary of the rest, sorted by name (real order may differ).
+
+## terraform simulator (apply engine, TF3a)
+- [ ] Provider error texts (`BucketAlreadyOwnedByYou`, `EntityAlreadyExists`, `ResourceAlreadyExistsException`, `QueueNameExists`, `DBInstanceAlreadyExists`, `DependencyViolation` for VPC/subnet/security group): shaped like the AWS SDK v2 errors the provider wraps, with invented request ids; confirm each against real provider output.
+- [ ] Generated ids and ARNs per resource type (formats, `aws_db_instance.id` = identifier, `aws_sqs_queue.id` = URL, `aws_ecs_service.id` = ARN) and the defaults filled on create (engine_version 15.4, allocated_storage 20, availability_zone us-east-1a, private_ip 10.0.x.y): from memory of the provider.
+- [ ] Durations per type (create/update/delete seconds) are plausible, not measured.
+- [ ] Replacements are always destroy-then-create; `create_before_destroy` ordering (two objects at one address, "deposed" objects) is not modeled.
+- [ ] A failed create after a successful destroy leaves the resource missing from state, as real Terraform does; there is no rollback.
+- [ ] Apply treats the first dependency violation as final (no retries); real providers retry some eventual-consistency errors for minutes before failing.
+- [ ] State `dependencies` for the starting state are derived from ids found in attributes; real state records the configuration's references.
