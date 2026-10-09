@@ -105,11 +105,12 @@ function scenarioFiles(dir: string): string[] {
 
 // What the queue, skill tree and unlocks need, without the full content.
 function indexOf(c: Content) {
-  const base = (x: { id: string; track: string; title: string; difficulty: number }) => ({
+  const base = (x: { id: string; track: string; title: string; difficulty: number; published?: boolean }) => ({
     id: x.id,
     track: x.track,
     title: x.title,
     difficulty: x.difficulty,
+    published: x.published !== false,
   })
   return {
     tracks: c.tracks,
