@@ -2,7 +2,7 @@
 // Pure: nothing here touches a disk. Provider versions never change what a resource does in this lab; they only
 // decide what the lock file says and which constraint errors the player sees.
 import type { TerraformBlock } from '../../schema/scenario.ts'
-import { AWS_SOURCE, isRegistrySource, lockBlock, lockFile, normalizeRegistry, PROVIDER_VERSION, type LockEntry } from './layout.ts'
+import { AWS_SOURCE, isRegistrySource, lockBlock, lockFile, normalizeRegistry, PROVIDER_VERSION, providerHash, type LockEntry } from './layout.ts'
 import type { ModuleTree } from './modules.ts'
 import { parseHcl } from './parse.ts'
 import type { Block, Diagnostic, Expr } from './types.ts'
@@ -114,7 +114,7 @@ export function updateLock(text: string, entries: LockEntry[]): string {
   for (const e of entries) {
     const cur = old.get(e.source)
     if (!cur) out = `${out.replace(/\n*$/, '\n')}\n${lockBlock(e)}`
-    else if (cur.version !== e.version || cur.constraints !== (e.constraints ?? '')) {
+    else if (cur.version !== e.version || cur.constraints !== (e.constraints ?? '') || (e.hashes !== undefined && e.hashes.join() !== cur.hashes.join())) {
       out = out
         .split(/^(?=provider\s+")/m)
         .map((chunk) => (/^provider\s+"([^"]+)"/.exec(chunk)?.[1] === e.source ? lockBlock(e) + (/\n\n$/.test(chunk) ? '\n' : '') : chunk))
@@ -142,4 +142,13 @@ export function mountedLock(tf: TerraformBlock, files: { path: string; content: 
   const avail = availableOf(info, AWS_SOURCE)
   const version = info.get('aws')?.lock ?? newestSatisfying(avail, constraints || '>= 0.0.0') ?? avail[avail.length - 1] ?? PROVIDER_VERSION
   return lockFile([{ source: AWS_SOURCE, version, ...(constraints ? { constraints } : {}) }])
+}
+
+// The provider cache: source -> version -> package hash (the h1: hash the lock file must list for it to be accepted).
+export type ProviderCache = Map<string, Map<string, string>>
+// What an initialised lab's cache holds: the package of every provider version its lock file selects.
+export function cacheFromLock(lockText: string): ProviderCache {
+  const out: ProviderCache = new Map()
+  for (const [source, e] of parseLock(lockText)) if (e.version !== undefined) out.set(source, new Map([[e.version, e.hashes.find((h) => h.startsWith('h1:')) ?? providerHash(source, e.version)]]))
+  return out
 }
