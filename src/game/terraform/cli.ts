@@ -383,7 +383,7 @@ async function cmdInit(args: string[], ctx: CliContext, cfg: Config): Promise<Ou
     lines.push(`- Installing ${name} v${version}...`)
     const hash = providerHash(source, version)
     if (prior.length && !prior.includes(hash)) {
-      errs.push({ summary: 'Failed to install provider', msg: `Error while installing ${name} v${version}: the local package for ${source} ${version} doesn't match any of the checksums previously recorded in the dependency lock file (this might be because the available checksums are for packages targeting different platforms); for more information: https://www.terraform.io/language/provider-checksum-verification` })
+      errs.push({ summary: 'Failed to install provider', msg: `Error while installing ${name} v${version}: the current package for ${source} ${version} doesn't match any of the checksums previously recorded in the dependency lock file; for more information: https://www.terraform.io/language/provider-checksum-verification` })
       return false
     }
     lines.push(`- Installed ${name} v${version} (signed by HashiCorp)`)

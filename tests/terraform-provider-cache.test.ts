@@ -156,7 +156,7 @@ describe('a hand-edited lock file', () => {
     const r = await w.run('init')
     expect(r.exitCode).toBe(1)
     expect(r.stdout).toContain(`- Reusing previous version of hashicorp/aws from the dependency lock file\n- Installing hashicorp/aws v5.50.0...`)
-    expect(flat(r.stderr)).toContain(`Error: Failed to install provider Error while installing hashicorp/aws v5.50.0: the local package for ${AWS} 5.50.0 doesn't match any of the checksums previously recorded in the dependency lock file (this might be because the available checksums are for packages targeting different platforms); for more information: https://www.terraform.io/language/provider-checksum-verification`)
+    expect(flat(r.stderr)).toContain(`Error: Failed to install provider Error while installing hashicorp/aws v5.50.0: the current package for ${AWS} 5.50.0 doesn't match any of the checksums previously recorded in the dependency lock file; for more information: https://www.terraform.io/language/provider-checksum-verification`)
     expect(w.lockOf()).toBe(before)
     expect(w.lab.providerCache!.get(AWS)!.has('5.50.0')).toBe(false)
     expect((await w.run('plan')).stderr).toContain('Required plugins are not installed')
