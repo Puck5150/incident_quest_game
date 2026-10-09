@@ -133,7 +133,7 @@ const HypothesesSchema = z
 const json = z.json()
 // done_when (TF3d): a check on the Terraform world that takes the action once it holds.
 // One level of all/any over leaves or negated leaves; no deeper nesting.
-const ADDR_HINT = 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]' // module-qualified and module-only forms are accepted too
+const ADDR_HINT = 'must be a resource or instance address like aws_s3_bucket.b, aws_s3_bucket.b["x"], module.net.aws_x.y, module.net["a"].aws_x.y or a bare module.net' // module-qualified and module-only forms are accepted too
 const resAddr = (s: string) => /^(?:module\.|data\.)?[a-z]/.test(s) && parseResAddr(s) !== undefined
 // A module path (module.net, module.net["a"].module.sub) also names everything under it.
 const tfAddrOrModule = z.string().refine((s) => resAddr(s) || parseModuleAddr(s) !== undefined, ADDR_HINT)
@@ -336,7 +336,7 @@ export const TerraformSchema = z.strictObject({
     .array(
       z.strictObject({
         evidence: id,
-        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete']),
+        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete', 'get']),
         contains: z.string().min(1),
       }),
     )

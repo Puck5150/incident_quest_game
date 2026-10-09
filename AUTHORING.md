@@ -462,9 +462,9 @@ Fields:
 
 - `lock`: a state lock someone else holds (see "State locks" below). `workspace`, `workspaces`: extra workspaces (see "Workspaces" below).
 
-Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `state list|show|pull|mv|rm`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `output`, `workspace show|list|new|select|delete`, `version`. The rest (`console`, `state push`, `state replace-provider`, …) answer "not simulated yet".
+Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `state list|show|pull|mv|rm`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `get`, `output`, `workspace show|list|new|select|delete`, `version`. The rest (`console`, `state push`, `state replace-provider`, …) answer "not simulated yet".
 
-`evidence[].command` is one of: `plan`, `validate`, `init`, `show`, `output`, `version`, `state list`, `state show`, `state pull`, `state mv`, `state rm`, `apply`, `destroy`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `workspace show`, `workspace list`, `workspace new`, `workspace select`, `workspace delete`.
+`evidence[].command` is one of: `plan`, `validate`, `init`, `show`, `output`, `version`, `state list`, `state show`, `state pull`, `state mv`, `state rm`, `apply`, `destroy`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `get`, `workspace show`, `workspace list`, `workspace new`, `workspace select`, `workspace delete`.
 
 Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
 
@@ -561,43 +561,94 @@ Limits and deferred (modules): local and authored registry sources only (no git/
 
 **Reference summary (modules).** Sources: local (`./`, `../` inside the lab), authored registry. Calls: single, `count`, `for_each`, nested to 8 levels. Scenario fields: `files` (module dirs), `modules.registry`, `modules.installed`. Commands: `init` (installs; plain `init` keeps a registry version that still satisfies), `init -upgrade` and `get -update` (re-resolve registry modules to the newest satisfying version), `get`, `-replace`, `taint`, `import`, `state list|show|mv|rm`, all with module addresses at any depth. Predicates (`state_has`, `state_lacks`, `applied`, `plan_has.no_destroy`) and `faults[].at` accept keyed and nested addresses (`module.net["a"].module.inner[0].aws_vpc.main`); a step without a key covers every instance. Limits and deferred: see the end of this section.
 
-Worked sketches (YAML-ish, the fields are real; contents shortened).
+Worked sketches. Each shows only the parts of the scenario you write for the incident (`terraform:` plus the action that detects the fix); the rest (title, stages, text) is as usual. Content strings are shortened to the minimum that is valid; replace the quoted `.tf` text with your real files.
 
 Module upgrade changes the plan: v2.1.0 of a registry module changed an availability zone, so `init -upgrade` plans a replacement.
 
 ```yaml
 terraform:
   initialized: true
-  files: [{ path: main.tf, content: 'module "network" { source = "acme/network/aws"  version = "~> 2.0" ... }' }]
+  files:
+    - path: main.tf
+      content: |
+        module "network" {
+          source  = "acme/network/aws"
+          version = "~> 2.0"
+        }
   modules:
     registry:
       - source: acme/network/aws
-        versions: [{ version: 2.0.1, files: [...] }, { version: 2.1.0, files: [...] }]
+        versions:
+          - { version: 2.0.1, files: [{ path: main.tf, content: 'resource "aws_subnet" "a" {\n  vpc_id = "vpc-1"\n  cidr_block = "10.0.1.0/24"\n  availability_zone = "us-east-1a"\n}\n' }] }
+          - { version: 2.1.0, files: [{ path: main.tf, content: 'resource "aws_subnet" "a" {\n  vpc_id = "vpc-1"\n  cidr_block = "10.0.1.0/24"\n  availability_zone = "us-east-1b"\n}\n' }] }
     installed: [{ key: network, source: acme/network/aws, version: 2.0.1 }]
-  state: [{ module: module.network, type: aws_subnet, name: a, attrs: { id: subnet-1, ... } }]
-done_when: { all: [{ plan_has: { no_destroy: [module.network.aws_subnet.a] } }, { not: { applied: { op: delete, address: module.network } } }] }
+  state:
+    - { module: module.network, type: aws_subnet, name: a, attrs: { id: subnet-1, vpc_id: vpc-1, cidr_block: 10.0.1.0/24, availability_zone: us-east-1a } }
+actions:
+  - id: pin-version
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - not: { applied: { op: delete, address: module.network } }
 ```
 
-Lock-file drift: the lock selects 5.31.0 but the configuration now needs `~> 5.50`. Author the stale lock yourself (see the note under Provider versions).
+Lock-file drift: the lock selects 5.31.0 but the configuration now needs `~> 5.50`. The stale lock is your own mounted file (the generated one would already carry the new constraints).
 
 ```yaml
 terraform:
   files:
-    - { path: main.tf, content: 'terraform { required_providers { aws = { source = "hashicorp/aws", version = "~> 5.50" } } } ...' }
-    - { path: .terraform.lock.hcl, content: '<a lock selecting 5.31.0 with constraints "~> 5.31">' }
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = { source = "hashicorp/aws", version = "~> 5.50" }
+          }
+        }
+        resource "aws_s3_bucket" "logs" { bucket = "acme-logs" }
+    - path: .terraform.lock.hcl
+      content: |
+        provider "registry.terraform.io/hashicorp/aws" {
+          version     = "5.31.0"
+          constraints = "~> 5.31"
+          hashes      = ["h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]
+        }
   providers: { aws: { lock: 5.31.0, available: [5.31.0, 5.67.0] } }
-evidence: [{ evidence: lock, command: plan, contains: Inconsistent dependency lock file }]
-# fix: terraform init -upgrade, then plan is clean
+  evidence:
+    - { evidence: lock-error, command: plan, contains: Inconsistent dependency lock file }
+# fix: terraform init -upgrade, then terraform plan is clean
 ```
 
 Remote-state coupling: the upstream no longer has the `vpc_id` output this config reads.
 
 ```yaml
 terraform:
-  files: [{ path: main.tf, content: 'data "terraform_remote_state" "net" { backend = "s3" config = {...} }  resource "aws_subnet" "a" { vpc_id = data.terraform_remote_state.net.outputs.vpc_id ... }' }]
-  remote_states: [{ backend: s3, config: { bucket: acme-tf-state, key: network/terraform.tfstate }, outputs: { network_vpc_id: vpc-0abc } }]
-# plan fails with Unsupported attribute at the reference; the fix edits the reference to outputs.network_vpc_id
+  files:
+    - path: main.tf
+      content: |
+        data "terraform_remote_state" "net" {
+          backend = "s3"
+          config  = { bucket = "acme-tf-state", key = "network/terraform.tfstate", region = "us-east-1" }
+        }
+        resource "aws_subnet" "a" {
+          vpc_id     = data.terraform_remote_state.net.outputs.vpc_id
+          cidr_block = "10.0.1.0/24"
+        }
+  remote_states:
+    - { backend: s3, config: { bucket: acme-tf-state, key: network/terraform.tfstate }, outputs: { network_vpc_id: vpc-0abc } }
+actions:
+  - id: use-new-output
+    kind: fix
+    done_when: { file_contains: { path: /home/you/infra/main.tf, matches: 'outputs\.network_vpc_id' } }
+# plan fails with Unsupported attribute at the reference until the reference uses outputs.network_vpc_id
 ```
+
+Pitfalls when writing the starting state and detecting fixes:
+- A state entry with `tags: {}` while the configuration has no `tags` shows `- tags = {} -> null` noise, so `plan_clean` never holds. Omit `tags` and `tags_all` from `state` attrs when the config sets none.
+- `terraform state mv module.x 'module.x["a"]'` is rejected (whole-module target rule), so adding `count`/`for_each` to a module call needs a `moved` block (`from = module.x  to = module.x["a"]`) or per-resource `state mv`.
+- An unkeyed module step in `done_when` (`state_has: module.x.aws_vpc.main`) covers every keyed instance. To express "the old unkeyed instance is gone", use `plan_clean: true` plus `state_has` of the keyed address.
+- A hand-edited `.terraform.lock.hcl` is indistinguishable from `init -upgrade` for `done_when` (the provider cache is not modelled). Author a wrong action for that with `file_contains` on `main.tf` instead.
+- `terraform plan -target` and `terraform providers` are not simulated yet.
 
 #### Provider versions, the lock file and `required_version`
 

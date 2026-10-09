@@ -702,7 +702,8 @@
                   "state rm",
                   "workspace new",
                   "workspace select",
-                  "workspace delete"
+                  "workspace delete",
+                  "get"
                 ]
               },
               "contains": {

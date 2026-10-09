@@ -310,7 +310,7 @@ describe('done_when in the scenario schema', () => {
   })
 
   it('checks addresses, reality types and regexes, with paths at done_when', () => {
-    expect(dw({ state_has: 'Bad' })).toEqual(['actions.0.done_when.state_has: must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]'])
+    expect(dw({ state_has: 'Bad' })).toEqual(['actions.0.done_when.state_has: must be a resource or instance address like aws_s3_bucket.b, aws_s3_bucket.b["x"], module.net.aws_x.y, module.net["a"].aws_x.y or a bare module.net'])
     expect(dw({ all: [{ applied: { op: 'create', address: 'aws_vpc' } }] }).join()).toMatch(/^actions\.0\.done_when\.all\.0\.applied\.address: must be a resource/)
     expect(dw({ plan_has: { no_destroy: ['aws_vpc.main', 'nope'] } }).join()).toMatch(/^actions\.0\.done_when\.plan_has\.no_destroy\.1: /)
     expect(dw({ reality_has: { type: 'aws_nope', id: 'x' } })).toEqual(['actions.0.done_when.reality_has.type: "aws_nope" is not a resource type the Terraform lab models'])

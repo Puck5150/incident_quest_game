@@ -816,3 +816,9 @@ terraform-sg-cycle:
 - `terraform_remote_state` with authored upstream outputs (`terraform.remote_states`), orphan data entries dropped on removal.
 - Not available: mutable upstream state, git/S3 module sources, module `providers`, per-instance dependency tracking, `removed` of a whole module.
 - Verified texts are the `[x]` entries above; every `[ ]` text is unverified or invented and must not be quoted as real Terraform output in explanations.
+
+### TF6b final-review items
+
+- [ ] Low confidence: `removed { from = module.x["k"].aws_... }` is accepted and then reports `Removed resource still exists`; real Terraform 1.9 may reject instance keys in `from`.
+- [ ] Simplification: a hand-edited `.terraform.lock.hcl` is indistinguishable from `init -upgrade` for `done_when` (no provider cache model); author wrong actions for it with `file_contains` on `main.tf`.
+- [ ] Not simulated: `-target`, `terraform providers`, `providers lock`, `show <planfile>`, `console`, `fmt`.

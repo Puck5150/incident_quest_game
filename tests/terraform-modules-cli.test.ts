@@ -105,6 +105,11 @@ describe('terraform modules: init, get and install checks', () => {
     expect((await w.run('validate')).stderr).not.toContain('Module not installed')
   })
 
+  it('evidence can match terraform get output', async () => {
+    const w = fresh({ evidence: [{ evidence: 'got', command: 'get', contains: '- net in modules/net' }] })
+    expect((await w.run('get')).evidence).toEqual(['evidence:got'])
+  })
+
   it('init reports a missing module directory with the real Unreadable module directory texts', async () => {
     const w = fresh({ files: [{ path: 'main.tf', content: ROOT_TF }] })
     const r = await w.run('init')

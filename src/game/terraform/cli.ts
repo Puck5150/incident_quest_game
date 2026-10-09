@@ -143,7 +143,7 @@ const withWarn = (warn: string, o: Out): Out => (warn ? { ...o, stdout: [warn, o
 const notYet = (sub: string) =>
   boxFail(
     'Not available in this lab yet',
-    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, output, workspace, version.`,
+    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, get, output, workspace, version.`,
   )
 const sourcesOf = (files: File[]) => Object.fromEntries(files.map((f) => [f.name, f.text]))
 const boxes = (list: Diagnostic[], files: File[]) => {
