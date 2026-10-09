@@ -11,6 +11,7 @@ export type QueueItem = {
   track: string
   title: string
   difficulty: number
+  published: boolean // false: hidden from players unless preview is on
   kind: 'incident' | 'challenge'
   tag: string // incident severity (SEV1..SEV5) or "Design"
   providers?: string[] // "pick your cloud": the clouds it can be played on
@@ -119,6 +120,7 @@ export default function HomeScreen({
                         <span className="flex gap-2 font-mono">
                           <span>{missionId(s.id, s.kind)}</span>
                           <span className={s.kind === 'challenge' ? 'text-accent' : ''}>{s.tag}</span>
+                          {!s.published && <span className="text-warn uppercase">Unpublished</span>}
                           {s.kind === 'incident' && s.difficulty === 5 && <span className="text-crit">MAJOR INCIDENT</span>}
                         </span>
                         <span className="flex gap-1" role="img" aria-label={`Difficulty ${s.difficulty} of 5`}>

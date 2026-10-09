@@ -362,6 +362,7 @@ export const ScenarioSchema = z
     id,
     track: id,
     difficulty: z.int().min(1).max(5),
+    published: z.boolean().optional(), // false: validated and tested, but not offered to players (see AUTHORING.md, Shipping dark)
     title: z.string().min(1),
     par_minutes: z.number().positive(),
 

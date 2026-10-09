@@ -420,6 +420,16 @@ player chooses the cloud before starting. Start from
   for real, sourced differences in behavior. If one cloud needs its own
   reference design, that's a sign the difference belongs in the debrief too.
 
+## Shipping dark (`published: false`)
+
+Add `published: false` at the top level of any incident or design challenge (canvas and pick-your-cloud included) to merge it without offering it to players. It still has to validate, and `npm test` still runs all of its checks. Leaving the field out means published.
+
+While hidden it is left out of everything a player sees: the ops board, sector counts and map badges, unlock and clear checks, on-call shifts, and `#/play/<id>` links (a hidden id behaves like an unknown id and lands on the board). Its file is still in the built site's JavaScript, so never put anything in a hidden item that should stay secret.
+
+To try it on the live site, open the site with `?preview=1` (for example `https://puck5150.github.io/incident_quest_game/?preview=1`). Preview stays on for that browser tab session, and is always on under `npm run dev`. In preview a hidden item appears like any other, labelled "Unpublished" on its board card and in a banner on the mission, so nobody mistakes it for released content. Progress you make in preview is saved like normal.
+
+To release it, delete the `published: false` line (or set it to `true`) in a small PR.
+
 ## Accuracy rules (non-negotiable)
 
 - Commands, flags, output formats, and error messages must come from **official**
