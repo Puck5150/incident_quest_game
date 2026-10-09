@@ -100,25 +100,25 @@ export function applyMoves(
   const moved = new Map<string, string>()
   const blocked: { from: string; to: string; claimed?: true }[] = []
   const place = (r: StateResource, inst: StateInstance, dest: Address) => {
-    const gk = `${r.mode}:${dest.type}.${dest.name}`
+    const gk = `${r.module ?? ''}|${r.mode}:${dest.type}.${dest.name}`
     let group = groups.get(gk)
     if (!group) {
-      group = { mode: r.mode, type: dest.type, name: dest.name, provider: r.provider, instances: [] }
+      group = { ...(r.module ? { module: r.module } : {}), mode: r.mode, type: dest.type, name: dest.name, provider: r.provider, instances: [] }
       groups.set(gk, group)
     }
     const copy: StateInstance = structuredClone(inst)
     if (dest.key === undefined) delete copy.index_key
     else copy.index_key = dest.key
     group.instances.push(copy)
-    placed.add(instanceAddress({ mode: r.mode, type: dest.type, name: dest.name }, dest.key))
+    placed.add(instanceAddress({ module: r.module, mode: r.mode, type: dest.type, name: dest.name }, dest.key))
   }
   const todo: { r: StateResource; inst: StateInstance; from: Address; dest: Address; len: number; oldAddr: string; newAddr: string }[] = []
   for (const r of state.resources) {
     for (const inst of r.instances) {
       const from = { type: r.type, name: r.name, key: inst.index_key }
-      const { dest, len } = r.mode === 'data' ? { dest: from, len: 0 } : final(from)
+      const { dest, len } = r.mode === 'data' || r.module ? { dest: from, len: 0 } : final(from)
       const oldAddr = instanceAddress(r, inst.index_key)
-      const newAddr = instanceAddress({ mode: r.mode, type: dest.type, name: dest.name }, dest.key)
+      const newAddr = instanceAddress({ module: r.module, mode: r.mode, type: dest.type, name: dest.name }, dest.key)
       todo.push({ r, inst, from, dest, len, oldAddr, newAddr })
     }
   }

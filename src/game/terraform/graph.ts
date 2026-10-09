@@ -175,13 +175,19 @@ export function buildGraph(input: File[] | ModuleTree): Graph {
 
   // Parse the root, then the child modules its calls (transitively) name, in call order.
   const mods: Mod[] = []
+  const parsed = new Set<string>()
   const queue: Mod[] = [{ path: '', key: '', files: tree.root.files, blocks: [] }]
   for (let i = 0; i < queue.length; i++) {
     const m = queue[i]
     for (const f of m.files) {
       const r = parseHcl(f.name, f.text)
       m.blocks.push(...r.blocks)
-      diagnostics.push(...r.diagnostics)
+      // The same directory called twice parses twice: report each syntax error once.
+      for (const d of r.diagnostics) {
+        const k = `${d.file}:${d.line}:${d.col}:${d.summary}`
+        if (!parsed.has(k)) diagnostics.push(d)
+        parsed.add(k)
+      }
     }
     blocks.push(...m.blocks)
     mods.push(m)
