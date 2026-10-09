@@ -73,7 +73,7 @@ describe('satisfies', () => {
     ['1.2.4-beta', '>= 1.2.3-alpha', false],
     ['1.2.3', '>= 1.2.3-alpha', true],
     ['1.2.3-rc.1', '~> 1.2.3-rc.0', true],
-    ['1.2.3', '~> 1.2.3-rc.0', true],
+    ['1.2.3', '~> 1.2.3-rc.0', false], // go-version: ~> with a prerelease only matches prereleases
   ]
   it.each(table)('%s against "%s" is %s', (v, c, want) => {
     expect(ok(v, c)).toEqual({ ok: want })
