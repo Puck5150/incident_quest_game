@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or PR supersedes a running build. Deploys
+# are protected separately by the `pages` concurrency group below.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,6 +27,17 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      # Serve the built site and check it answers with the app shell, so a
+      # build that compiles but ships a broken page never reaches deploy.
+      - name: Smoke test the build
+        run: |
+          npx vite preview --port 4173 --strictPort &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:4173/ -o /tmp/index.html && break
+            sleep 1
+          done
+          grep -q 'id="root"' /tmp/index.html
+          grep -q '<title>Incident Quest</title>' /tmp/index.html
       - if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v5
         with:
@@ -42,3 +59,11 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+      # The live site answers after the deploy.
+      - name: Check the live site
+        run: |
+          for i in $(seq 1 12); do
+            curl -fsS "${{ steps.deployment.outputs.page_url }}" -o /tmp/live.html && break
+            sleep 5
+          done
+          grep -q 'id="root"' /tmp/live.html
