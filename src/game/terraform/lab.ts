@@ -1,14 +1,16 @@
 // A scenario's Terraform world, turned into the engine's State and Reality.
 import type { TerraformBlock } from '../../schema/scenario.ts'
+import { staticKey, stepsOf } from './address.ts'
 import type { Fault } from './apply.ts'
 import type { Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { labDir, labFiles } from './layout.ts'
+import type { ModuleTree } from './modules.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
 export interface SavedPlan {
-  files: { name: string; text: string }[]
+  tree: ModuleTree // the root and installed module files the plan was made from
   vars: Record<string, Value>
   replace: string[]
   destroy: boolean
@@ -37,15 +39,17 @@ export interface Lab {
   history: string[] // "OP ADDRESS" per step that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
 }
 
+const depKey = (r: StateResource) => staticKey({ module: stepsOf(r.module), mode: r.mode, type: r.type, name: r.name })
+
 // One workspace's state: expand the entries and derive each instance's dependencies.
 function buildState(version: string, lineage: string, entries: NonNullable<TerraformBlock['state']>, outputs: TerraformBlock['outputs']): State {
   const state = { ...emptyState(version, lineage), serial: 12 }
   for (const s of entries) {
     const mode = s.mode ?? 'managed'
-    let r = state.resources.find((x) => x.mode === mode && x.type === s.type && x.name === s.name)
+    let r = state.resources.find((x) => x.mode === mode && x.type === s.type && x.name === s.name && x.module === s.module)
     if (!r) {
       const source = schemaFor(s.type)?.provider ?? `registry.terraform.io/hashicorp/${s.type.split('_')[0]}`
-      r = { mode, type: s.type, name: s.name, provider: `provider["${source}"]`, instances: [] } satisfies StateResource
+      r = { ...(s.module ? { module: s.module } : {}), mode, type: s.type, name: s.name, provider: `provider["${source}"]`, instances: [] } satisfies StateResource
       state.resources.push(r)
     }
     r.instances.push({
@@ -56,8 +60,8 @@ function buildState(version: string, lineage: string, entries: NonNullable<Terra
   }
   state.outputs = structuredClone(outputs ?? {}) as State['outputs']
 
-  const ids = new Map<string, string>() // managed id -> type.name
-  for (const r of state.resources) if (r.mode === 'managed') for (const i of r.instances) ids.set(String(i.attributes.id), `${r.type}.${r.name}`)
+  const ids = new Map<string, string>() // managed id -> static resource address
+  for (const r of state.resources) if (r.mode === 'managed') for (const i of r.instances) ids.set(String(i.attributes.id), depKey(r))
   const found = (v: unknown, own: string, into: Set<string>) => {
     if (typeof v === 'string') {
       const a = ids.get(v)
@@ -69,7 +73,7 @@ function buildState(version: string, lineage: string, entries: NonNullable<Terra
     if (r.mode !== 'managed') continue
     for (const i of r.instances) {
       const into = new Set<string>()
-      found(i.attributes, `${r.type}.${r.name}`, into)
+      found(i.attributes, depKey(r), into)
       if (into.size) i.dependencies = [...into].sort()
     }
   }

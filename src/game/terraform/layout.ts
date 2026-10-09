@@ -10,9 +10,25 @@ export const join = (a: string, b: string) => `${a.replace(/\/+$/, '')}/${b.repl
 export const labDir = (tf: TerraformBlock, startDir: string, home: string) =>
   !tf.dir ? startDir : tf.dir.startsWith('/') ? tf.dir : tf.dir.startsWith('~/') ? join(home, tf.dir.slice(2)) : join(startDir, tf.dir)
 
+// .terraform/modules/modules.json (modsdir/manifest.go): one record per module call, the root first.
+export const MANIFEST_PATH = '.terraform/modules/modules.json'
+export interface ManifestEntry {
+  key: string
+  source: string
+  dir: string
+  version?: string
+}
+export const formatManifest = (entries: ManifestEntry[]) =>
+  JSON.stringify({
+    Modules: [{ Key: '', Source: '', Dir: '.' }, ...entries.map((e) => ({ Key: e.key, Source: e.source, ...(e.version === undefined ? {} : { Version: e.version }), Dir: e.dir }))],
+  })
+
 export const labFiles = (tf: TerraformBlock, startDir: string, home: string) => {
   const dir = labDir(tf, startDir, home)
-  return tf.files.map((f) => ({ path: join(dir, f.path), content: f.content }))
+  const files = tf.files.map((f) => ({ path: join(dir, f.path), content: f.content }))
+  // A scenario that starts with its modules installed has the manifest on disk.
+  const installed = tf.modules?.installed
+  return installed ? [...files, { path: join(dir, MANIFEST_PATH), content: formatManifest(installed) }] : files
 }
 
 export const lockBlock = (p: string) => `provider "${p}" {\n  version = "${PROVIDER_VERSION}"\n  hashes = [\n    "h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs=",\n  ]\n}\n`

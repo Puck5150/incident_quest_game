@@ -4,12 +4,15 @@
 // instances that are no longer configured. Any configuration error stops the
 // plan: nothing is half-planned. prevent_destroy is the exception: it fails
 // after planning, and the result keeps the partial plan (`partial`).
+import { compareAddresses, formatModule, parseResAddr, resourceKey, staticKey, stepsOf } from './address.ts'
+import { formatAddress, isModuleAddress, type Address } from './addresses.ts'
 import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
 import { equal, evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
 import { expandInstances, type Key } from './expand.ts'
 import { buildGraph, type GNode } from './graph.ts'
 import { applyMoves, movesOf } from './moves.ts'
+import type { ModuleTree } from './modules.ts'
 import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
@@ -17,7 +20,8 @@ import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjec
 import type { Diagnostic, Pos } from './types.ts'
 
 export interface PlanInput {
-  files: { name: string; text: string }[]
+  files?: { name: string; text: string }[] // compat: the root module's files alone (no child modules); ignored when tree is given
+  tree?: ModuleTree // the root and its loaded child modules; wins over files
   state: State
   reality: Reality
   vars: Record<string, Value>
@@ -28,7 +32,9 @@ export interface PlanInput {
   destroy?: boolean // plan -destroy: every managed instance in state is destroyed; arguments are not evaluated
 }
 export interface PlanItem {
-  address: string
+  address: string // the full qualified instance address: module.net.aws_vpc.main[0]
+  module?: string // module instance path as in state (absent or '' root; equals the static path while module calls are single-instance)
+  resource?: string // unqualified type.name (always set by planConfig)
   type: string
   name: string
   key?: string | number
@@ -40,9 +46,9 @@ export interface PlanItem {
   triggeredBy?: string[]
   createBeforeDestroy?: boolean
   unchanged?: Record<string, Value>
-  dependsOn: string[] // resource addresses (no instance keys) this item's resource depends on
+  dependsOn: string[] // module-qualified resource addresses (no instance keys) this item's resource depends on
   block?: { file: string; line: number; col: number } // where the resource is declared
-  destroyReason?: 'not-in-config' | 'count-index' | 'for-each-key' | 'wrong-repetition'
+  destroyReason?: 'not-in-config' | 'module-gone' | 'count-index' | 'for-each-key' | 'wrong-repetition'
 }
 // A still-declared resource whose instance key no longer fits its repetition mode.
 function wrongRepetition(key: string | number | undefined, shape: 'count' | 'for_each' | undefined): NonNullable<PlanItem['destroyReason']> {
@@ -72,8 +78,13 @@ export interface PlanResult {
 const cmp = <T extends string | number>(a: T, b: T) => (a < b ? -1 : a > b ? 1 : 0)
 // Terraform's order: type, then name, then key (none first, numbers numerically, strings lexically).
 const keyRank = (k: Key) => (k === undefined ? 0 : typeof k === 'number' ? 1 : 2)
+const modOf = (i: PlanItem) => (i.module ? `${i.module}.x.x` : 'x.x')
+const staticModule = (module: string) => stepsOf(module).map((x) => `module.${x.name}`).join('.')
+// The qualified resource address (no instance key) of an item: how dependencies and lifecycle checks name it.
+// item.module is the instance path from state (module.net["a"]); this strips instance keys to the static form the graph uses.
+export const resKey = (i: Pick<PlanItem, 'module' | 'resource' | 'type' | 'name'>) => `${i.module ? `${staticModule(i.module)}.` : ''}${i.resource ?? `${i.type}.${i.name}`}`
 const byInstance = (a: PlanItem, b: PlanItem) =>
-  cmp(a.type, b.type) || cmp(a.name, b.name) || cmp(keyRank(a.key), keyRank(b.key)) || (a.key === undefined || b.key === undefined ? 0 : cmp(a.key, b.key))
+  compareAddresses(modOf(a), modOf(b)) || cmp(a.type, b.type) || cmp(a.name, b.name) || cmp(keyRank(a.key), keyRank(b.key)) || (a.key === undefined || b.key === undefined ? 0 : cmp(a.key, b.key))
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 
 // Follow attribute names into a value, as `a.b.c` does.
@@ -93,7 +104,8 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
   Object.fromEntries([...Object.keys(schema.attrs).map((n): [string, Value] => [n, null]), ...Object.entries(planned)])
 
 export function planConfig(input: PlanInput): PlanResult {
-  const g = buildGraph(input.files)
+  const tree: ModuleTree = input.tree ?? { root: { dir: '', files: input.files ?? [] }, children: new Map() }
+  const g = buildGraph(tree)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
   const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, baseState: refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
   if (g.diagnostics.length) return result
@@ -104,23 +116,32 @@ export function planConfig(input: PlanInput): PlanResult {
   const val = (k: string): Value => (values.has(k) ? values.get(k)! : UNKNOWN)
   const fail = (file: string, pos: Pos, summary: string, detail: string, context?: string) =>
     errors.push({ severity: 'error', summary, detail, file, line: pos.line, col: pos.col, context })
-  const evalAt = (node: GNode, pos: Pos, fn: () => Value, context?: string): Value => {
+  const evalAt = (node: GNode, pos: Pos, fn: () => Value, context?: string, file = node.file): Value => {
     try {
       return fn()
     } catch (e) {
       if (!(e instanceof EvalError)) throw e
-      fail(node.file, pos, e.summary, e.detail, context)
+      fail(file, pos, e.summary, e.detail, context)
       return UNKNOWN
     }
   }
 
   // moved / removed / import: statements about state.
-  const mv = movesOf(g.blocks)
-  const rm = removedOf(g.blocks)
-  const im = importsOf(g.blocks)
+  const rootFiles = new Set(tree.root.files.map((f) => f.name))
+  const rootBlocks = g.blocks.filter((b) => rootFiles.has(b.file)) // moved/removed blocks inside child modules are ignored (TF6b); import blocks there are an error, as in Terraform
+  const mv = movesOf(rootBlocks)
+  const rm = removedOf(rootBlocks)
+  const im = importsOf(rootBlocks)
   errors.push(...mv.diagnostics, ...rm.diagnostics, ...im.diagnostics)
-  const declared = (a: { type: string; name: string }) => g.nodes.has(`${a.type}.${a.name}`)
-  const show = (a: { type: string; name: string; key?: string | number }) => instanceAddress({ mode: 'managed', type: a.type, name: a.name }, a.key)
+  for (const b of g.blocks) {
+    if (b.type !== 'import' || rootFiles.has(b.file)) continue
+    const owner = [...tree.children].find(([, c]) => c.files.files.some((f) => f.name === b.file))
+    fail(b.file, b.pos, 'Invalid import configuration', `An import block was detected in "module.${owner?.[0] ?? '?'}". Import blocks are only allowed in the root module.`)
+  }
+  // A resource address is declared when the graph has its (module-qualified, key-less) node; a module address when its call is loaded.
+  const declared = (a: Address) =>
+    isModuleAddress(a) ? !!g.nodes.get(formatModule((a.module ?? []).map((x) => ({ name: x.name }))))?.child : g.nodes.has(staticKey({ module: a.module ?? [], mode: 'managed', type: a.type, name: a.name }))
+  const show = formatAddress
   const imports = im.imports.filter((i) => !input.skipImports?.has(show(i.to)))
   for (const r of input.destroy ? [] : rm.removals) {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
@@ -145,7 +166,8 @@ export function planConfig(input: PlanInput): PlanResult {
   result.baseState = base
   if (input.destroy) return planDestroy(g.nodes, result, fail)
 
-  const scopeFor = (ctx: { each?: { key: Value; value: Value }; count?: number }): Scope => ({
+  // mod is the module prefix the expression is written in: '' (root) or 'module.net.'.
+  const scopeFor = (ctx: { each?: { key: Value; value: Value }; count?: number }, mod = ''): Scope => ({
     ref(path) {
       const [root, a, b] = path
       switch (root) {
@@ -158,23 +180,28 @@ export function planConfig(input: PlanInput): PlanResult {
         case 'self':
           throw new EvalError('Invalid "self" reference', 'The "self" object is not available in this context.')
         case 'path':
-          return walk({ module: '.', root: '.', cwd: '.' }, path.slice(1))
+          return walk({ module: mod ? (tree.children.get(g.nodes.get(mod.slice(0, -1))?.block?.labels[0] ?? '')?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
         case 'terraform':
           return walk({ workspace: input.workspace ?? 'default' }, path.slice(1))
         case 'var':
         case 'local':
-          return walk(val(`${root}.${a}`), path.slice(2))
+          return walk(val(`${mod}${root}.${a}`), path.slice(2))
         case 'data':
-          return walk(val(`data.${a}.${b}`), path.slice(3))
-        case 'module':
-          return UNKNOWN
+          return walk(val(`${mod}data.${a}.${b}`), path.slice(3))
+        case 'module': {
+          // The call's outputs as one object; unknown until each output has been evaluated.
+          const call = g.nodes.get(`${mod}module.${a}`)
+          if (!call?.child) return UNKNOWN
+          const outs = [...g.nodes.values()].filter((n) => n.kind === 'output' && n.module === call.address)
+          return walk(Object.fromEntries(outs.map((n): [string, Value] => [n.local.slice('output.'.length), val(n.address)])), path.slice(2))
+        }
         default: {
-          const addr = `${root}.${a}`
+          const addr = `${mod}${root}.${a}`
           const shape = shapes.get(addr)
           if (shape && path.length > 2) {
             throw new EvalError(
               'Missing resource instance key',
-              `Because ${addr} has "${shape}" set, its attributes must be accessed on specific instances.\n\nFor example, to correlate with indices of a referring resource, use:\n    ${addr}[${shape === 'count' ? 'count.index' : 'each.key'}]`,
+              `Because ${root}.${a} has "${shape}" set, its attributes must be accessed on specific instances.\n\nFor example, to correlate with indices of a referring resource, use:\n    ${root}.${a}[${shape === 'count' ? 'count.index' : 'each.key'}]`,
             )
           }
           return walk(val(addr), path.slice(2))
@@ -199,7 +226,8 @@ export function planConfig(input: PlanInput): PlanResult {
       fail(node.file, b.pos, u.summary, u.detail, context)
       return
     }
-    const ex = expandInstances(b, scopeFor({}))
+    const mod = node.module ? `${node.module}.` : ''
+    const ex = expandInstances(b, scopeFor({}, mod))
     if (!ex.ok) {
       fail(node.file, ex.pos, ex.summary, ex.detail, context)
       return
@@ -210,23 +238,24 @@ export function planConfig(input: PlanInput): PlanResult {
       return
     }
     if (ex.kind !== 'single') shapes.set(node.address, ex.kind)
-    if (lc.lifecycle.preventDestroy) protectedBy.set(`${type}.${name}`, { file: node.file, pos: b.pos, context })
+    if (lc.lifecycle.preventDestroy) protectedBy.set(node.address, { file: node.file, pos: b.pos, context })
     const planned = new Map<Key, Value>()
     let failed = false
     for (const key of ex.keys) {
       const ctx = ex.kind === 'count' ? { count: key as number } : ex.kind === 'for_each' ? { each: ex.each(key as string) } : {}
-      const ar = resourceArguments(b, scopeFor(ctx))
+      const ar = resourceArguments(b, scopeFor(ctx, mod))
       if (!ar.ok) {
         fail(node.file, ar.pos, ar.summary, ar.detail, context)
         failed = true
         continue
       }
-      const address = instanceAddress({ mode: 'managed', type, name }, key)
+      const at = { mode: 'managed' as const, type, name, module: node.module || undefined }
+      const address = instanceAddress(at, key)
       let priorInst = findInstance(base, address)?.instance
       let movedFrom: string | undefined = applied.moved.get(address)
       // Adding or removing `count = 1` moves the lone instance between `x` and `x[0]` (Terraform 1.1+).
       if (!priorInst && ex.kind !== 'for_each' && (key === 0 || key === undefined)) {
-        const old = instanceAddress({ mode: 'managed', type, name }, key === 0 ? undefined : 0)
+        const old = instanceAddress(at, key === 0 ? undefined : 0)
         const found = findInstance(base, old)
         if (found) {
           priorInst = found.instance
@@ -235,7 +264,7 @@ export function planConfig(input: PlanInput): PlanResult {
         }
       }
       let importing: string | undefined
-      const decl = imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key)
+      const decl = imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key && formatModule(d.to.module ?? []) === node.module)
       if (!priorInst && decl) {
         const before = errors.length
         let id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor({})), 'import')
@@ -264,7 +293,7 @@ export function planConfig(input: PlanInput): PlanResult {
       }
       const prior = priorInst?.attributes
       // Why an existing instance might be replaced even though its arguments did not force it.
-      const triggers = prior ? lc.lifecycle.replaceTriggeredBy.filter((a) => touched.get(a)?.has('update') || touched.get(a)?.has('replace')) : []
+      const triggers = prior ? lc.lifecycle.replaceTriggeredBy.filter((a) => touched.get(mod + a)?.has('update') || touched.get(mod + a)?.has('replace')) : []
       const tainted = priorInst?.status === 'tainted'
       const requested = !!prior && !!input.replace?.includes(address)
       const forced = tainted || requested || triggers.length > 0
@@ -277,6 +306,8 @@ export function planConfig(input: PlanInput): PlanResult {
       const unchanged = prior ? Object.fromEntries(Object.entries(prior).filter(([n, v]) => v !== null && !changed.has(n))) : undefined
       result.items.push({
         address,
+        module: node.module,
+        resource: `${type}.${name}`,
         type,
         name,
         key,
@@ -288,11 +319,11 @@ export function planConfig(input: PlanInput): PlanResult {
         ...(importing ? { importing } : {}),
         ...(reason ? { reason } : {}),
         ...(unchanged ? { unchanged } : {}),
-        ...(reason === 'triggered' ? { triggeredBy: [triggers[0]] } : {}),
+        ...(reason === 'triggered' ? { triggeredBy: [mod + triggers[0]] } : {}),
         ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
       })
-      const seen = touched.get(`${type}.${name}`) ?? new Set<string>()
-      touched.set(`${type}.${name}`, seen.add(p.action))
+      const seen = touched.get(node.address) ?? new Set<string>()
+      touched.set(node.address, seen.add(p.action))
       planned.set(key, complete(p.planned, schema))
     }
     if (failed) return
@@ -318,8 +349,14 @@ export function planConfig(input: PlanInput): PlanResult {
         const name = b!.labels[0]
         const context = `variable "${name}"`
         const def = b!.attrs.find((a) => a.name === 'default')
-        if (Object.hasOwn(input.vars, name)) values.set(addr, input.vars[name])
-        else if (def) values.set(addr, evalAt(node, def.pos, () => evalExpr(def.value, scopeFor({})), context))
+        const mod = node.module ? `${node.module}.` : ''
+        if (node.module && node.arg) {
+          // A module input is the call's argument, evaluated where the call is written.
+          const call = g.nodes.get(node.module)!
+          const { value, pos, file } = node.arg
+          values.set(addr, evalAt(node, pos, () => evalExpr(value, scopeFor({}, call.module ? `${call.module}.` : '')), `module "${call.local.slice('module.'.length)}"`, file))
+        } else if (!node.module && Object.hasOwn(input.vars, name)) values.set(addr, input.vars[name])
+        else if (def) values.set(addr, evalAt(node, def.pos, () => evalExpr(def.value, scopeFor({}, mod)), context))
         else {
           fail(node.file, node.pos, 'No value for required variable', `The root module input variable "${name}" is not set, and has no default value. Use a -var or -var-file command line argument to provide a value for this variable.`, context)
           values.set(addr, UNKNOWN)
@@ -327,24 +364,29 @@ export function planConfig(input: PlanInput): PlanResult {
         break
       }
       case 'local':
-        values.set(addr, evalAt(node, node.pos, () => evalExpr(node.value!, scopeFor({})), 'locals'))
+        values.set(addr, evalAt(node, node.pos, () => evalExpr(node.value!, scopeFor({}, node.module ? `${node.module}.` : '')), 'locals'))
         break
       case 'data': {
         const [type, name] = b!.labels
-        values.set(addr, base.resources.find((r) => r.mode === 'data' && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
+        values.set(addr, base.resources.find((r) => r.mode === 'data' && (r.module ?? '') === node.module && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
         break
       }
-      case 'module':
-        fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', `module "${b!.labels[0]}"`)
+      case 'module': {
+        const context = `module "${b!.labels[0]}"`
+        if (node.module) fail(node.file, node.pos, 'Unsupported nested module', 'Nested modules are not supported by this lab yet.', context)
+        else if (!node.child) fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', context)
+        else for (const a of b!.attrs) if (a.name === 'count' || a.name === 'for_each') fail(node.file, a.pos, 'Unsupported module argument', 'Module count and for_each are not supported by this lab yet.', context)
         values.set(addr, UNKNOWN)
         break
+      }
       case 'output': {
         const value = b!.attrs.find((a) => a.name === 'value')
         const sensitive = b!.attrs.find((a) => a.name === 'sensitive')
         const octx = `output "${b!.labels[0]}"`
         if (!value) fail(node.file, node.pos, 'Missing required argument', 'The argument "value" is required, but no definition was found.', octx)
-        const v = value ? evalAt(node, value.pos, () => evalExpr(value.value, scopeFor({})), octx) : null
-        result.outputs.push({ name: b!.labels[0], value: v, sensitive: sensitive?.value.kind === 'lit' && sensitive.value.value === true })
+        const v = value ? evalAt(node, value.pos, () => evalExpr(value.value, scopeFor({}, node.module ? `${node.module}.` : '')), octx) : null
+        values.set(addr, v)
+        if (!node.module) result.outputs.push({ name: b!.labels[0], value: v, sensitive: sensitive?.value.kind === 'lit' && sensitive.value.value === true })
         break
       }
       case 'resource':
@@ -364,7 +406,7 @@ export function planConfig(input: PlanInput): PlanResult {
   const planned = new Set(result.items.map((i) => i.address))
   // Instance-level checks need the expansion, so they run after the walk.
   for (const m of mv.moves) {
-    const still = m.from.key === undefined && m.to.key === undefined ? declared(m.from) : planned.has(show(m.from))
+    const still = (m.from.key === undefined && m.to.key === undefined) || isModuleAddress(m.from) ? declared(m.from) : planned.has(show(m.from))
     if (still) fail(m.file, m.pos, 'Moved object still exists', `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`)
   }
   for (const i of imports) {
@@ -376,18 +418,24 @@ export function planConfig(input: PlanInput): PlanResult {
     for (const inst of r.instances) {
       const address = instanceAddress(r, inst.index_key)
       if (planned.has(address) || consumed.has(address)) continue
-      if (rm.removals.some((x) => x.from.type === r.type && x.from.name === r.name && !x.destroy)) {
-        result.items.push({ address, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], dependsOn: inst.dependencies ?? [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
+      if (rm.removals.some((x) => !x.destroy && resourceKey({ module: x.from.module ?? [], mode: 'managed', type: x.from.type, name: x.from.name }) === resourceKey({ module: stepsOf(r.module), mode: 'managed', type: r.type, name: r.name }))) {
+        result.items.push({ address, module: r.module ?? '', resource: `${r.type}.${r.name}`, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], dependsOn: inst.dependencies ?? [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
         continue
       }
+      const rk = resKey({ module: r.module, type: r.type, name: r.name })
+      // The module instance itself is gone: no such call, or a keyed instance of a call that is not repeated.
+      const steps = stepsOf(r.module)
+      const moduleGone = steps.length > 0 && (steps.some((x) => x.key !== undefined) || !g.nodes.get(staticModule(r.module!))?.child)
       result.items.push({
         address,
+        module: r.module ?? '',
+        resource: `${r.type}.${r.name}`,
         type: r.type,
         name: r.name,
         key: inst.index_key,
         action: 'destroy',
         dependsOn: inst.dependencies ?? [],
-        destroyReason: !g.nodes.has(`${r.type}.${r.name}`) ? 'not-in-config' : wrongRepetition(inst.index_key, shapes.get(`${r.type}.${r.name}`)),
+        destroyReason: moduleGone ? 'module-gone' : !g.nodes.has(rk) ? 'not-in-config' : wrongRepetition(inst.index_key, shapes.get(rk)),
         changes: destroyChanges(schema, inst.attributes),
       })
     }
@@ -395,7 +443,7 @@ export function planConfig(input: PlanInput): PlanResult {
   // Real Terraform only warns when a keyless address names a count/for_each resource.
   for (const a of new Set(input.replace ?? [])) {
     if (a.includes('[') || !shapes.has(a)) continue
-    const addrs = result.items.filter((i) => i.action !== 'destroy' && `${i.type}.${i.name}` === a).map((i) => i.address)
+    const addrs = result.items.filter((i) => i.action !== 'destroy' && resKey(i) === a).map((i) => i.address)
     const P = `Your force-replace request for ${a} doesn't match any resource instances`
     const detail = !addrs.length
       ? `${P} because this resource doesn't have any instances.`
@@ -416,7 +464,7 @@ export function planConfig(input: PlanInput): PlanResult {
   // and shows the rest as a partial plan ahead of the errors.
   // ponytail: moved/import check errors above keep the old errors-only output; real Terraform would show a partial plan there too.
   const checked = errors.length > 0
-  const res = (i: PlanItem) => `${i.type}.${i.name}`
+  const res = resKey
   const guarded = (i: PlanItem) => protectedBy.has(res(i)) && (i.action === 'destroy' || i.action === 'replace')
   const failing = new Set(result.items.filter(guarded).map(res))
   const skipped = new Set<string>()
@@ -482,15 +530,15 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
   // Destroying a resource waits for the destroys of what state says depends on
   // it, so when a protected resource fails, Terraform never plans the
   // resources it depends on (directly or not): no changes, no errors.
-  const res = (r: { type: string; name: string }) => `${r.type}.${r.name}`
+  const res = (r: { type: string; name: string; module?: string }) => staticKey({ module: stepsOf(r.module), mode: 'managed', type: r.type, name: r.name })
   const deps = new Map(base.resources.map((r) => [res(r), r.instances.flatMap((i) => i.dependencies ?? [])]))
-  const lifecycle = (r: { type: string; name: string }) => {
+  const lifecycle = (r: { type: string; name: string; module?: string }) => {
     const node = nodes.get(res(r))
     return node?.kind === 'resource' && node.block ? lifecycleOf(node.block) : undefined
   }
   const configError = base.resources.some((r) => lifecycle(r)?.ok === false)
   const skipped = new Set<string>()
-  const protects = (r: { type: string; name: string }) => {
+  const protects = (r: { type: string; name: string; module?: string }) => {
     const lc = lifecycle(r)
     return lc?.ok === true && lc.lifecycle.preventDestroy
   }
@@ -501,7 +549,7 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
     skipped.add(a)
   }
   for (const r of base.resources) {
-    const node = nodes.get(`${r.type}.${r.name}`)
+    const node = nodes.get(res(r))
     const b = node?.kind === 'resource' ? node.block : undefined
     const lc = b && lifecycleOf(b)
     const context = `resource "${r.type}" "${r.name}"`
@@ -512,6 +560,8 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
       if (lc?.ok && lc.lifecycle.preventDestroy) fail(node!.file, b!.pos, ...preventDestroyError(address), context)
       result.items.push({
         address,
+        module: r.module ?? '',
+        resource: `${r.type}.${r.name}`,
         type: r.type,
         name: r.name,
         key: inst.index_key,
@@ -540,7 +590,7 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
 function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Drift[]): Drift[] {
   const before = result.refreshed.outputs
   const start = [
-    ...result.items.filter((i) => i.action !== 'noop').map((i) => `${i.type}.${i.name}`),
+    ...result.items.filter((i) => i.action !== 'noop').map(resKey),
     ...result.outputs.filter((o) => !(Object.hasOwn(before, o.name) && equal(before[o.name].value, o.value))).map((o) => `output.${o.name}`),
   ]
   const seen = new Set<string>()
@@ -550,8 +600,8 @@ function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Dri
     if (!node || seen.has(node.address)) continue
     seen.add(node.address)
     todo.push(...node.deps)
-    for (const { path } of node.refs) {
-      const key = `${path[0]}.${path[1]}`
+    for (const { path, scope } of node.refs) {
+      const key = `${scope ?? (node.module ? `${node.module}.` : '')}${path[0]}.${path[1]}`
       if (nodes.get(key)?.kind !== 'resource') continue
       const have = refd.get(key)
       if (path.length < 3) refd.set(key, 'all')
@@ -559,7 +609,8 @@ function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Dri
     }
   }
   return drift.flatMap((d): Drift[] => {
-    const want = refd.get(d.address.replace(/\[.*$/, ''))
+    const a = parseResAddr(d.address)
+    const want = a && refd.get(staticKey(a))
     if (d.kind === 'deleted') return want === undefined ? [] : [{ ...d, relevant: want === 'all' ? 'all' : [...want] }]
     if (want === undefined) return []
     const changes = want === 'all' ? d.changes : d.changes.filter((c) => want.has(c.name))

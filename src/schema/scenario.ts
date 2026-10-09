@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { filesOnDisk } from '../game/paths.ts'
+import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
@@ -130,9 +131,10 @@ const HypothesesSchema = z
 const json = z.json()
 // done_when (TF3d): a check on the Terraform world that takes the action once it holds.
 // One level of all/any over leaves or negated leaves; no deeper nesting.
-const tfAddr = z
-  .string()
-  .regex(/^(data\.)?[a-z][\w]*\.[\w-]+(\[(\d+|"[^"]*")\])?$/, 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]')
+const ADDR_HINT = 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]' // module-qualified and module-only forms are accepted too
+const resAddr = (s: string) => /^(?:module\.|data\.)?[a-z]/.test(s) && parseResAddr(s) !== undefined
+// A module path (module.net, module.net["a"].module.sub) also names everything under it.
+const tfAddrOrModule = z.string().refine((s) => resAddr(s) || parseModuleAddr(s) !== undefined, ADDR_HINT)
 const tfType = z
   .string()
   .min(1)
@@ -151,13 +153,13 @@ const regex = z
   })
 const LeafSchema = z.union([
   z.strictObject({ plan_clean: z.literal(true) }),
-  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddr).min(1) }) }),
-  z.strictObject({ state_has: tfAddr }),
-  z.strictObject({ state_lacks: tfAddr }),
+  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddrOrModule).min(1) }) }),
+  z.strictObject({ state_has: tfAddrOrModule }),
+  z.strictObject({ state_lacks: tfAddrOrModule }),
   z.strictObject({ lock_free: z.literal(true) }),
   z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
   z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
-  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr, lock_bypassed: z.literal(true).optional() }) }),
+  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
 const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])
@@ -216,6 +218,7 @@ const TfState = z.array(
   z.strictObject({
     type: z.string().min(1),
     name: z.string().min(1),
+    module: z.string().refine((m) => parseModuleAddr(m) !== undefined, 'must be a module path like module.net, module.net["a"] or module.a.module.b').optional(),
     key: z.union([z.string(), z.int()]).optional(),
     mode: z.enum(['managed', 'data']).optional(),
     status: z.literal('tainted').optional(),
@@ -237,6 +240,20 @@ export const TerraformSchema = z.strictObject({
     )
     .min(1),
   vars: TfAttrs.optional(),
+  // What .terraform/modules/modules.json holds when the scenario starts: local modules `init` already installed.
+  modules: z
+    .strictObject({
+      installed: z
+        .array(
+          z.strictObject({
+            key: z.string().min(1),
+            source: z.string().min(1),
+            dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory'),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   state: TfState.optional(),
   outputs: TfOutputs.optional(),
   lock: z
@@ -276,7 +293,7 @@ export const TerraformSchema = z.strictObject({
   faults: z
     .array(
       z.strictObject({
-        at: z.string().regex(/^[a-z][\w]*\.[\w-]+(\[(\d+|"[^"]*")\])?$/, 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]'),
+        at: z.string().regex(new RegExp(`^${MODULE_PATH_SOURCE}[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|"[^"]*")\\])?$`), 'must be a resource or instance address like aws_s3_bucket.b, aws_s3_bucket.b["x"] or module.net.aws_s3_bucket.b'),
         on: z.enum(['create', 'update', 'delete']),
         error: z.string().min(1),
         times: z.int().min(1).optional(),
@@ -590,11 +607,18 @@ export const ScenarioSchema = z
             if (typeof e.attrs.id !== 'string') issue('needs a string id attribute', [...path, i, 'attrs'])
             else into?.add(`${e.type}:${e.attrs.id}`)
           }
-          const k = `${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
-          if (seen.has(k)) issue(`duplicate state entry ${e.type}.${e.name}[${e.key ?? ''}]`, [...path, i])
+          const k = `${e.module ?? ''}|${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
+          if (seen.has(k)) issue(`duplicate state entry ${e.module ? `${e.module}.` : ''}${e.type}.${e.name}[${e.key ?? ''}]`, [...path, i])
           seen.add(k)
         })
       }
+      const installed = tf.modules?.installed ?? []
+      if (installed.length && tf.initialized === false) issue('modules.installed needs the lab to start initialised', ['terraform', 'modules', 'installed'])
+      dupes(installed.map((m) => m.key)).forEach((d) => issue(`duplicate installed module key "${d}"`, ['terraform', 'modules', 'installed']))
+      installed.forEach((m, i) => {
+        const dir = m.dir.replace(/^\.\//, '').replace(/\/+$/, '')
+        if (!tf.files.some((f) => f.path.endsWith('.tf') && f.path.slice(0, Math.max(0, f.path.lastIndexOf('/'))) === (dir === '.' ? '' : dir))) issue(`no .tf file in terraform.files under "${m.dir}"`, ['terraform', 'modules', 'installed', i, 'dir'])
+      })
       const known = new Set<string>()
       checkState(tf.state ?? [], ['terraform', 'state'], known)
       for (const [name, w] of Object.entries(tf.workspaces ?? {})) checkState(w.state ?? [], ['terraform', 'workspaces', name, 'state'], known)

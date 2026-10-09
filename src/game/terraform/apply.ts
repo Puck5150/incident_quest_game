@@ -5,7 +5,7 @@
 // everything that depends on it; independent work carries on, leaving a
 // half-applied world exactly as real Terraform does.
 import { equal, hasUnknown, type Value } from './eval.ts'
-import { planConfig, type PlanInput, type PlanItem, type PlanResult } from './plan.ts'
+import { planConfig, resKey, type PlanInput, type PlanItem, type PlanResult } from './plan.ts'
 import { alreadyExists, dependencyViolation, fillOnCreate, fillOnUpdate, referencedBy, seconds } from './provider.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
@@ -44,7 +44,7 @@ export interface ApplyResult {
 }
 
 type Attrs = Record<string, Value>
-const res = (i: { type: string; name: string }) => `${i.type}.${i.name}`
+const res = resKey
 const destroyPhase = (i: PlanItem) => i.action === 'destroy' || i.action === 'replace'
 const pending = (i: PlanItem) => destroyPhase(i) || i.action === 'create' || i.action === 'update' || i.action === 'forget' || i.importing !== undefined
 
@@ -91,10 +91,11 @@ function removeInstance(state: State, address: string): void {
 }
 
 function addInstance(state: State, item: PlanItem, attributes: Attrs): void {
-  let r = state.resources.find((x) => x.mode === 'managed' && x.type === item.type && x.name === item.name)
+  const module = item.module ?? ''
+  let r = state.resources.find((x) => x.mode === 'managed' && x.type === item.type && x.name === item.name && (x.module ?? '') === module)
   if (!r) {
     const prefix = item.type.split('_')[0]
-    r = { mode: 'managed', type: item.type, name: item.name, provider: `provider["${schemaFor(item.type)?.provider ?? `registry.terraform.io/hashicorp/${prefix}`}"]`, instances: [] }
+    r = { ...(module ? { module } : {}), mode: 'managed', type: item.type, name: item.name, provider: `provider["${schemaFor(item.type)?.provider ?? `registry.terraform.io/hashicorp/${prefix}`}"]`, instances: [] }
     state.resources.push(r)
   }
   r.instances.push({

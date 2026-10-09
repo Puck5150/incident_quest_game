@@ -1,6 +1,5 @@
 // `removed` and `import` blocks: statements about state rather than resources.
-import { parseAddress, type Address } from './addresses.ts'
-import { instanceAddress } from './state.ts'
+import { formatAddress, isModuleAddress, parseAddress, type Address } from './addresses.ts'
 import type { Block, Diagnostic, Expr, Pos } from './types.ts'
 
 const diag = (file: string, pos: Pos, summary: string, detail: string): Diagnostic => ({ severity: 'error', summary, detail, file, line: pos.line, col: pos.col })
@@ -33,8 +32,8 @@ export function removedOf(blocks: Block[]): { removals: Removal[]; diagnostics: 
       continue
     }
     const from = parseAddress(fromAttr.value)
-    if (!from || from.key !== undefined) {
-      diagnostics.push(diag(b.file, fromAttr.pos, 'Invalid "from" address', 'Removed block addresses must be resource addresses such as aws_instance.web.'))
+    if (!from || from.key !== undefined || isModuleAddress(from)) {
+      diagnostics.push(diag(b.file, fromAttr.pos, 'Invalid "from" address', 'Removed block addresses must be resource addresses such as aws_instance.web or module.net.aws_instance.web.'))
       continue
     }
     let destroy = true
@@ -76,12 +75,12 @@ export function importsOf(blocks: Block[]): { imports: ImportDecl[]; diagnostics
     if (!idAttr) diagnostics.push(missing(b, 'id'))
     if (!toAttr || !idAttr) continue
     const to = parseAddress(toAttr.value)
-    if (!to) {
+    if (!to || isModuleAddress(to)) {
       diagnostics.push(diag(b.file, toAttr.pos, 'Invalid "to" address', 'Import block addresses must be resource instance addresses such as aws_instance.web or aws_instance.web[0].'))
       continue
     }
-    const key = instanceAddress({ mode: 'managed', type: to.type, name: to.name }, to.key)
-    if (imports.some((x) => x.to.type === to.type && x.to.name === to.name && x.to.key === to.key)) {
+    const key = formatAddress(to)
+    if (imports.some((x) => formatAddress(x.to) === key)) {
       diagnostics.push(diag(b.file, b.pos, `Duplicate import configuration for "${key}"`, `An import block for ${key} was already declared. A resource instance can have only one import block.`))
       continue
     }

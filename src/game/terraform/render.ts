@@ -1,5 +1,6 @@
 // `terraform plan` output. resourceBlock renders one plan item; renderPlan
 // renders the whole plan.
+import { parseResAddr } from './address.ts'
 import { formatDiagnostic } from './diag.ts'
 import { equal, type Value } from './eval.ts'
 import type { PlanItem, PlanResult } from './plan.ts'
@@ -40,7 +41,9 @@ function headerLines(item: PlanItem): string[] {
       if (item.destroyReason === undefined) break
       out.push(
         `(because ${
-          item.destroyReason === 'count-index'
+          item.destroyReason === 'module-gone'
+            ? `${item.module} is not in configuration`
+            : item.destroyReason === 'count-index'
             ? `index [${item.key}] is out of range for count`
             : item.destroyReason === 'for-each-key'
               ? `key [${JSON.stringify(item.key)}] is not in for_each map`
@@ -102,7 +105,7 @@ const RULE = '─'.repeat(77)
 const symbolOf = (a: string) => (a === 'create' ? '+' : a === 'update' ? '~' : a === 'destroy' ? '-' : '')
 
 function driftBlock(r: PlanResult, d: PlanResult['drift'][number]): string {
-  const [type, name] = d.address.replace(/\[.*$/, '').split('.')
+  const { type = '', name = '' } = parseResAddr(d.address) ?? {}
   const open = `resource "${type}" "${name}" {`
   const secret = (n: string) => specOf(type, n)?.sensitive === true
   if (d.kind === 'deleted') {

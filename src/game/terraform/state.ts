@@ -1,6 +1,7 @@
 // Terraform's recorded view of the world: the tfstate (version 4) shape, the
 // addresses of its resources, and its JSON rendering for `terraform state pull`
 // and `cat terraform.tfstate`.
+import { compareAddresses, formatKey } from './address.ts'
 import { hasUnknown, type Value } from './eval.ts'
 
 export interface StateInstance {
@@ -10,6 +11,7 @@ export interface StateInstance {
   dependencies?: string[] // resource addresses (no instance keys) this instance depends on
 }
 export interface StateResource {
+  module?: string // instance-qualified module path, as in tfstate v4: module.net or module.net["a"]; absent = root
   mode: 'managed' | 'data'
   type: string
   name: string
@@ -34,14 +36,13 @@ export const emptyState = (terraformVersion = '1.9.8', lineage = '00000000-0000-
   resources: [],
 })
 
-export function instanceAddress(r: Pick<StateResource, 'mode' | 'type' | 'name'>, key?: string | number): string {
-  const base = `${r.mode === 'data' ? 'data.' : ''}${r.type}.${r.name}`
-  if (key === undefined) return base
-  return typeof key === 'number' ? `${base}[${key}]` : `${base}[${JSON.stringify(key)}]`
+export function instanceAddress(r: Pick<StateResource, 'mode' | 'type' | 'name' | 'module'>, key?: string | number): string {
+  const base = `${r.module ? `${r.module}.` : ''}${r.mode === 'data' ? 'data.' : ''}${r.type}.${r.name}`
+  return key === undefined ? base : `${base}${formatKey(key)}`
 }
 
 export function listAddresses(state: State): string[] {
-  return state.resources.flatMap((r) => r.instances.map((i) => instanceAddress(r, i.index_key))).sort()
+  return state.resources.flatMap((r) => r.instances.map((i) => instanceAddress(r, i.index_key))).sort(compareAddresses)
 }
 
 export function findInstance(state: State, address: string): { resource: StateResource; instance: StateInstance } | undefined {
@@ -65,6 +66,7 @@ export function stateJson(state: State): string {
     lineage: state.lineage,
     outputs: state.outputs,
     resources: state.resources.map((r) => ({
+      ...(r.module ? { module: r.module } : {}),
       mode: r.mode,
       type: r.type,
       name: r.name,

@@ -3,6 +3,7 @@
 // force-unlock and version read the player's working directory and the lab's
 // state; everything else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
+import { compareAddresses, parseResAddr, staticKey } from './address.ts'
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
@@ -15,12 +16,13 @@ import { refresh as refreshState } from './refresh.ts'
 import { renderPlan, renderPlanErrors } from './render.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
-import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
+import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, parseTarget, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
 import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
 import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
 import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
+import { formatManifest, loadModuleTree, MANIFEST_PATH, parseManifest, type LoadedModules, type ModuleTree } from './modules.ts'
 import { LOCK_BYPASSED } from './predicates.ts'
 
 export { LOCK_FILE } from './layout.ts'
@@ -56,6 +58,7 @@ interface Config {
   tfvars: File[]
   hasLock: boolean
   lockText: string
+  modules: LoadedModules // the module calls of tf, checked against the installed manifest
 }
 
 const USAGE = `Usage: terraform [global options] <subcommand> [args]
@@ -98,7 +101,7 @@ Global options (use these before the subcommand, if any):
   -help         Show this help output, or the help for a specified subcommand.
   -version      An alias for the "version" subcommand.`
 
-const NOT_YET = new Set(['console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
+const NOT_YET = new Set(['console', 'fmt', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
 const REGISTRY = 'registry.terraform.io/'
 const RULE = '─'.repeat(77)
 const NO_STATE_SUMMARY = 'No state file was found!'
@@ -112,7 +115,6 @@ const EMPTY_INIT =
   '\nTerraform initialized in an empty directory!\n\nThe directory has no Terraform configuration files. You may begin working\nwith Terraform immediately by creating Terraform configuration files.\n'
 const ONE_INSTANCE =
   'This command requires that the address references one specific instance.\nTo view the available instances, use "terraform state list". Please modify \nthe address to reference a specific instance.'
-const ADDRESS = /^(data\.)?[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*(\[(\d+|"[^"]*")\])?$/
 const HELP: Record<string, string> = {
   init: 'Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.',
   validate: 'Validate the configuration files in a directory, referring only to the configuration and not accessing any remote services.',
@@ -157,11 +159,21 @@ function resolvePath(base: string, p: string): string {
   return `/${parts.join('/')}`
 }
 
+const moduleReader = (ctx: CliContext, dir: string) => (rel: string) => ctx.listFiles(resolvePath(dir, rel))
+// Every file the configuration is made of, for snippets in diagnostics: root files and installed module files.
+const treeFiles = (t: ModuleTree): File[] => [...t.root.files, ...[...t.children.values()].flatMap((c) => c.files.files)]
+const allFiles = (cfg: Config): File[] => treeFiles(cfg.modules.tree)
+// Module problems stop every command that loads the configuration (a root syntax error is reported by the usual path).
+// Syntax errors in child files are reported once, by the graph.
+const moduleErrors = (cfg: Config): Diagnostic[] => (cfg.modules.rootBad ? [] : cfg.modules.install)
+
 async function loadConfig(ctx: CliContext, dir: string): Promise<Config> {
   const all = await ctx.listFiles(dir)
+  const tf = all.filter((f) => f.name.endsWith('.tf')).sort(byName)
   return {
     dir,
-    tf: all.filter((f) => f.name.endsWith('.tf')).sort(byName),
+    tf,
+    modules: await loadModuleTree(tf, moduleReader(ctx, dir), parseManifest(await ctx.readFile(resolvePath(dir, MANIFEST_PATH))), false),
     tfvars: [...all.filter((f) => f.name === 'terraform.tfvars'), ...all.filter((f) => f.name.endsWith('.auto.tfvars')).sort(byName)],
     hasLock: all.some((f) => f.name === '.terraform.lock.hcl'),
     lockText: all.find((f) => f.name === '.terraform.lock.hcl')?.text ?? '',
@@ -186,7 +198,7 @@ const lockedProviders = (cfg: Config) => [...cfg.lockText.matchAll(/^provider\s+
 // Resources need provider selections in the lock file; without one `init` has not run.
 function lockError(cfg: Config): Out | undefined {
   const locked = lockedProviders(cfg)
-  const providers = providersOf(cfg.tf).filter((p) => !locked.includes(p))
+  const providers = providersOf(allFiles(cfg)).filter((p) => !locked.includes(p))
   if (!providers.length) return undefined
   const list = providers.map((p) => `  - provider ${p}: required by this configuration but no version is selected`).join('\n')
   return fail(
@@ -221,15 +233,34 @@ function cmdVersion(ctx: CliContext, cfg: Config): Out {
   return ok(lines.join('\n'))
 }
 
+// What init and get share: read each local module from its source and record it in the manifest.
+async function installModules(ctx: CliContext, cfg: Config): Promise<{ lines: string[]; files: File[] } | Out> {
+  const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), undefined, true)
+  if (!m.calls.length) return { lines: [], files: cfg.tf }
+  const errors = [...m.install, ...m.syntax]
+  if (errors.length) return { stdout: '', stderr: boxes(errors, [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]), exitCode: 1 }
+  await ctx.write(resolvePath(cfg.dir, '.terraform/modules'), 'modules.json', formatManifest(m.entries))
+  return { lines: m.entries.map((e) => `- ${e.key} in ${e.dir}`), files: [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)] }
+}
+
+async function cmdGet(ctx: CliContext, cfg: Config): Promise<Out> {
+  const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
+  if (syntax.length) return fail(boxes(syntax, cfg.tf))
+  const r = await installModules(ctx, cfg)
+  return 'lines' in r ? ok(r.lines.join('\n')) : r
+}
+
 async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
   if (!cfg.tf.length) return ok(EMPTY_INIT)
   // Only syntax stops init; undeclared references and cycles are for validate and plan.
   const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
-  const providers = providersOf(cfg.tf)
+  const mods = await installModules(ctx, cfg)
+  if (!('lines' in mods)) return { ...mods, stdout: 'Initializing modules...' }
+  const providers = providersOf(mods.files)
   const locked = lockedProviders(cfg)
   const missing = providers.filter((p) => !locked.includes(p))
-  const lines = ['', 'Initializing the backend...', '', 'Initializing provider plugins...']
+  const lines = [...(mods.lines.length ? ['Initializing modules...', ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
   for (const p of providers) {
     const n = shortName(p)
     lines.push(...(locked.includes(p) ? [`- Reusing previous version of ${n} from the dependency lock file`, `- Using previously-installed ${n} v${PROVIDER_VERSION}`] : [`- Finding latest version of ${n}...`, `- Installing ${n} v${PROVIDER_VERSION}...`, `- Installed ${n} v${PROVIDER_VERSION} (signed by HashiCorp)`]))
@@ -269,7 +300,9 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
 
 function cmdValidate(cfg: Config): Out {
   if (!cfg.tf.length) return ok('Success! The configuration is valid.\n')
-  const g = buildGraph(cfg.tf)
+  const mod = moduleErrors(cfg)
+  if (mod.length) return fail(boxes(mod, allFiles(cfg)))
+  const g = buildGraph(cfg.modules.tree)
   const diags = [...g.diagnostics]
   if (!diags.length) {
     for (const n of g.nodes.values()) {
@@ -286,7 +319,7 @@ function cmdValidate(cfg: Config): Out {
       })
     }
   }
-  if (diags.length) return fail(boxes(diags, cfg.tf))
+  if (diags.length) return fail(boxes(diags, allFiles(cfg)))
   return lockError(cfg) ?? ok('Success! The configuration is valid.\n')
 }
 
@@ -443,7 +476,7 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
       else if (name === '-destroy' || name === '-refresh-only') return notYet(`${cmd} ${name}`)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
-  const bad = f.replace.find((a) => !ADDRESS.test(a) || a.startsWith('data.'))
+  const bad = f.replace.find((a) => parseResAddr(a)?.mode !== 'managed')
   if (bad !== undefined) return boxFail(`Invalid force-replace address "${bad}"`, `The force-replace address "${bad}" is not a valid resource instance address.`)
   return f
 }
@@ -461,7 +494,9 @@ type Prepared = { warning: string; vars: Record<string, Value>; graph: ReturnTyp
 // What plan, apply, destroy, import and refresh share: configuration, lock file and variables.
 async function prepare(sources: VarSource[], ctx: CliContext, cfg: Config): Promise<Prepared | Out> {
   if (!cfg.tf.length) return boxFail('No configuration files', NO_CONFIG_DETAIL)
-  const g = buildGraph(cfg.tf)
+  const mod = moduleErrors(cfg)
+  if (mod.length) return fail(boxes(mod, allFiles(cfg)))
+  const g = buildGraph(cfg.modules.tree)
   if (!g.diagnostics.length) {
     const lock = lockError(cfg)
     if (lock) return lock
@@ -477,7 +512,7 @@ export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined
   const cfg = await loadConfig(ctx, resolvePath('/', ctx.lab.dir))
   const s = await prepare([], ctx, cfg)
   if (!('vars' in s)) return undefined
-  return planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
+  return planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
 }
 
 // The lines a plan prints while it reads the state's objects back from the cloud.
@@ -490,7 +525,7 @@ const refreshLines = (state: State, refresh: boolean) =>
         return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : refresh ? [`${addr}: Refreshing state...${id}`] : [] }
       }),
     )
-    .sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
+    .sort((a, b) => compareAddresses(a.addr, b.addr))
     .flatMap((x) => x.lines)
 
 // What plan, apply, destroy and refresh share: setup checks, variables, the plan and its refresh lines.
@@ -501,12 +536,12 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
-  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
-  const rendered = renderPlan(result, sourcesOf(cfg.tf))
+  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
+  const rendered = renderPlan(result, sourcesOf(allFiles(cfg)))
   const lines = refreshLines(ctx.lab.state, f.refresh)
   const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
   // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
-  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(cfg.tf)), exitCode: 1 })
+  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
   return { warning, vars: s.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
 }
 
@@ -528,7 +563,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boole
     const { lineage, serial } = ctx.lab.state
     const path = resolvePath(cfg.dir, f.out)
     const id = planId(lineage, serial, path)
-    ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage, workspace: ctx.lab.workspace })
+    ctx.lab.savedPlans.set(id, { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy: false, serial, lineage, workspace: ctx.lab.workspace })
     const slash = path.lastIndexOf('/')
     await ctx.write(path.slice(0, slash) || '/', path.slice(slash + 1), `TFPLAN1\n${id}\n`)
   }
@@ -556,7 +591,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   const f = parsePlanFlags(args, mode)
   if (!('sources' in f)) return f
   const destroy = mode === 'destroy'
-  let input: { files: File[]; vars: Record<string, Value>; replace: string[]; destroy: boolean }
+  let input: { tree: ModuleTree; vars: Record<string, Value>; replace: string[]; destroy: boolean }
   let head: string
   let warning = ''
   if (f.planFile !== undefined) {
@@ -568,13 +603,13 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     if (locked) return locked
     if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage || saved.workspace !== ctx.lab.workspace)
       return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
-    input = { files: saved.files, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
+    input = { tree: saved.tree, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
     head = '' // a saved plan was already reviewed: no plan text, no question
   } else {
     const p = await makePlan(f, ctx, cfg, destroy)
     if (!('result' in p)) return p
     warning = p.warning
-    input = { files: cfg.tf, vars: p.vars, replace: f.replace, destroy }
+    input = { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy }
     // No changes: nothing to ask, but the apply still runs so the refreshed state is saved.
     head = p.changes || !destroy ? p.stdout : p.stdout.replace(NO_CHANGES, NO_DESTROY)
     if (p.changes && !f.autoApprove) {
@@ -599,7 +634,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}${bypassed}`)
   const progress = renderProgress(r)
   const stdout = [head, progress, renderApplyEnd(r, mode)].filter(Boolean).join('\n')
-  return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(input.files)), exitCode: r.errors.length ? 1 : 0 }
+  return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(treeFiles(input.tree))), exitCode: r.errors.length ? 1 : 0 }
 }
 
 const sensitiveAttr = (type: string, attr: string) => {
@@ -650,7 +685,7 @@ function cmdStateMv(args: string[], ctx: CliContext): Out {
   if (!('pos' in a)) return a
   if (a.pos.length !== 2) return fail('Exactly two arguments expected.')
   // An unparseable address is an argument error, reported before locking.
-  const locked = a.pos.every((x) => parseAddress(x).ok) && checkLock(ctx, a.lock)
+  const locked = a.pos.every((x) => parseTarget(x).ok) && checkLock(ctx, a.lock)
   if (locked) return locked
   if (!ctx.lab.hasState) return fail(NO_STATE)
   const r = stateMove(ctx.lab.state, a.pos[0], a.pos[1])
@@ -666,7 +701,7 @@ function cmdStateRm(args: string[], ctx: CliContext): Out {
   const a = parseArgs(args, ['-dry-run'])
   if (!('pos' in a)) return a
   if (!a.pos.length) return fail('At least one address is required.')
-  const bad = a.pos.find((x) => !parseAddress(x).ok)
+  const bad = a.pos.find((x) => !parseTarget(x).ok)
   if (bad !== undefined) return boxFail(INVALID_ADDRESS, invalidAddressDetail(bad))
   const locked = checkLock(ctx, a.lock)
   if (locked) return locked
@@ -704,14 +739,16 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const [addr, id] = a.pos
   const s = await prepare(a.sources, ctx, cfg)
   if (!('vars' in s)) return s
-  if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, cfg.tf)))
+  if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, allFiles(cfg))))
   const t = parseAddress(addr)
   // A keyed address needs only its resource block; count and for_each are not checked.
-  const declared = t.ok && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  // Module resources are declared when the module call is loaded and its configuration has the block (single-instance calls only).
+  const ra = parseResAddr(addr)
+  const declared = t.ok && !!ra && !ra.module.some((x) => x.key !== undefined) && s.graph.nodes.has(staticKey(ra))
   // A keyed address must be an instance the configuration produces; if count/for_each can't be evaluated, accept it.
   if (declared && t.mode === 'managed' && t.key !== undefined) {
     const target = instanceAddress(t, t.key)
-    const p = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
+    const p = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
     if (!p.diagnostics.length && !p.items.some((i) => i.address === target && i.action !== 'destroy' && i.action !== 'forget')) return withWarn(s.warning, boxFail(NO_IMPORT_CONFIG, noImportConfigDetail(target)))
   }
   const locked = declared && t.mode === 'managed' && checkLock(ctx, a.lock)
@@ -734,7 +771,7 @@ async function cmdRefresh(args: string[], ctx: CliContext, cfg: Config): Promise
   if (a.pos.length) return boxFail('Too many command line arguments', 'Expected no positional arguments. Did you mean to use -chdir?')
   const p = await prepare(a.sources, ctx, cfg)
   if (!('vars' in p)) return p
-  if (p.graph.diagnostics.length) return withWarn(p.warning, fail(boxes(p.graph.diagnostics, cfg.tf)))
+  if (p.graph.diagnostics.length) return withWarn(p.warning, fail(boxes(p.graph.diagnostics, allFiles(cfg))))
   const locked = checkLock(ctx, a.lock)
   if (locked) return locked
   // Refresh-only: no resource changes are planned and no moved blocks apply, so plan errors don't stop it.
@@ -758,7 +795,7 @@ function cmdState(args: string[], ctx: CliContext): Out {
     const all = listAddresses(lab.state)
     const matches = (a: string, w: string) => a === w || a.startsWith(`${w}.`) || a.startsWith(`${w}[`)
     for (const w of wanted) {
-      if (!w.startsWith('module.') && !ADDRESS.test(w)) return boxFail('Invalid address', 'Resource specification must include a resource type and name.')
+      if (!w.startsWith('module.') && !parseResAddr(w)) return boxFail('Invalid address', 'Resource specification must include a resource type and name.')
       if (!all.some((a) => matches(a, w))) {
         if (w.endsWith(']')) return boxFail('Unknown resource instance', `The current state contains no resource instance ${w}. If you've just added its resource to the configuration or have changed the count or for_each arguments, you must run "terraform apply" first to update the resource's entry in the state.`)
         return boxFail('Unknown resource', `The current state contains no resource ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
@@ -770,7 +807,7 @@ function cmdState(args: string[], ctx: CliContext): Out {
     if (!lab.hasState) return fail(NO_STATE)
     const addrs = rest.filter((a) => !a.startsWith('-'))
     if (addrs.length !== 1) return fail('Exactly one argument expected.')
-    if (!ADDRESS.test(addrs[0])) return fail(`Error parsing instance address: ${addrs[0]}\n\n${ONE_INSTANCE}`)
+    if (!parseResAddr(addrs[0])) return fail(`Error parsing instance address: ${addrs[0]}\n\n${ONE_INSTANCE}`)
     const found = findInstance(lab.state, addrs[0])
     if (!found) return fail(`No instance found for the given address!\n\n${ONE_INSTANCE}`)
     return ok(stateShow(found.resource, found.instance, (a) => sensitiveAttr(found.resource.type, a)))
@@ -910,6 +947,8 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
       return cmdVersion(ctx, cfg)
     case 'init':
       return cmdInit(ctx, cfg)
+    case 'get':
+      return cmdGet(ctx, cfg)
     case 'validate':
       return cmdValidate(cfg)
     case 'plan':
