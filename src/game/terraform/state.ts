@@ -1,7 +1,7 @@
 // Terraform's recorded view of the world: the tfstate (version 4) shape, the
 // addresses of its resources, and its JSON rendering for `terraform state pull`
 // and `cat terraform.tfstate`.
-import { compareAddresses, formatKey } from './address.ts'
+import { compareAddresses, formatKey, staticKey, stepsOf } from './address.ts'
 import { hasUnknown, type Value } from './eval.ts'
 
 export interface StateInstance {
@@ -39,6 +39,20 @@ export const emptyState = (terraformVersion = '1.9.8', lineage = '00000000-0000-
 export function instanceAddress(r: Pick<StateResource, 'mode' | 'type' | 'name' | 'module'>, key?: string | number): string {
   const base = `${r.module ? `${r.module}.` : ''}${r.mode === 'data' ? 'data.' : ''}${r.type}.${r.name}`
   return key === undefined ? base : `${base}${formatKey(key)}`
+}
+
+// Dependencies name resources without instance keys. After a rename, a dependency on the old name becomes one on the new name;
+// when some instance of the old resource is still there (only some keys of a module were moved), it keeps both, so nothing
+// that depends on the instances that stayed loses its ordering.
+export function renameDependencies(resources: StateResource[], renamed: Map<string, string>): void {
+  if (renamed.size === 0) return
+  const live = new Set(resources.map((r) => staticKey({ mode: r.mode, type: r.type, name: r.name, module: stepsOf(r.module) })))
+  for (const r of resources) {
+    for (const i of r.instances) {
+      if (!i.dependencies) continue
+      i.dependencies = [...new Set(i.dependencies.flatMap((d) => (renamed.has(d) ? (live.has(d) ? [d, renamed.get(d)!] : [renamed.get(d)!]) : [d])))]
+    }
+  }
 }
 
 export function listAddresses(state: State): string[] {

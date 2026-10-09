@@ -131,7 +131,8 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
 
   const faultFor = (i: PlanItem, on: Fault['on'], attrs: Attrs): string | undefined => {
     for (const [n, f] of ctx.faults.entries()) {
-      if (f.on !== on || (f.at !== i.address && f.at !== res(i))) continue
+      // module.net.aws_x.y (every module instance), module.net["a"].aws_x.y (that instance, every key) or the instance address
+      if (f.on !== on || (f.at !== i.address && f.at !== res(i) && f.at !== instanceAddress({ mode: 'managed', type: i.type, name: i.name, module: i.module || undefined }))) continue
       // until_actions: [] (or absent) never deactivates the fault.
       if (f.until_actions?.length && f.until_actions.every((a) => ctx.taken.has(a))) continue
       if (f.if && !ifHolds(f.if, attrs)) continue

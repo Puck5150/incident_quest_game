@@ -470,7 +470,7 @@ Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute
 
 ### Modules (local) and module refactors
 
-`module` blocks work in `terraform.files` like any other block. Only local sources (`./modules/net`) are supported, each call is a single instance (no `count`/`for_each` on a module call), and modules cannot call other modules. The module directory must be among `files` and be listed in `modules.installed` (or the player runs `terraform init` first).
+`module` blocks work in `terraform.files` like any other block. Only local sources (`./modules/net`) are supported, a call may use `count` or `for_each` (see Keyed module instances below), and modules cannot call other modules yet. The module directory must be among `files` and be listed in `modules.installed` (or the player runs `terraform init` first).
 
 ```yaml
 terraform:
@@ -512,7 +512,16 @@ done_when:
 
 The trap is `destructive` with `done_when: { applied: { op: delete, address: aws_vpc.main } }`. Remember `done_when` sees the files only after the player's first shell command (the lab mounts then), so tests run `ls` first.
 
-Limits until TF6b: local sources only, single-instance module calls, no nested modules, `moved`/`import`/`removed` blocks only in the root module, no registry versions.
+#### Keyed module instances (`count` / `for_each` on a module call)
+
+A `module` call with `count` or `for_each` expands like a resource: instances `module.net[0]` / `module.net["a"]`, each with its own resources, locals and outputs. `count.index` / `each.key` / `each.value` are available in the call's arguments only. The parent reads `module.net["a"].vpc_id`, `module.net[0].vpc_id`, or the whole call (`module.net` is an object keyed by instance for `for_each`, a tuple for `count`; `keys(module.net)`, `length(module.net)` and `for_each = module.net` work, `module.net.vpc_id` on a repeated call is an error).
+
+- State, `done_when` and `faults` use the instance-qualified address: `state: [{ module: 'module.net["a"]', type: aws_vpc, name: main, ... }]`, `faults: [{ at: 'module.net["a"].aws_vpc.main', ... }]` (that instance only; `module.net.aws_vpc.main` fires for every instance), `state_has: 'module.net["a"].aws_vpc.main'` (an unkeyed module step such as `module.net.aws_vpc.main` covers every instance).
+- Removing a key (or shrinking `count`) destroys that instance with `(because module.net["b"] is not in configuration)`; switching a call between `count` and `for_each`, or adding/removing either, destroys and recreates every instance unless `moved` blocks map them (`from = module.net  to = module.net["a"]`, `from = module.net[0]  to = module.net["a"]`; `from = module.net  to = module.network` renames every key at once).
+- `terraform import 'module.net["a"].aws_s3_bucket.b' id` needs the key to be in the call's current expansion (accepted when the expansion cannot be evaluated yet).
+- Dependencies are per resource, not per instance (as `dependencies` in real state files are): a resource that uses any instance of `module.net.aws_vpc.main` is created after, and destroyed before, ALL instances of it, and a failure of one instance holds back the dependents of every instance. Real Terraform tracks instances individually; design incidents so that this difference does not matter.
+
+Limits: local sources only, no nested modules, `moved`/`import`/`removed` blocks only in the root module, no registry versions.
 
 ### Apply, destroy and faults
 

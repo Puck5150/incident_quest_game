@@ -4,7 +4,7 @@
 // instances that are no longer configured. Any configuration error stops the
 // plan: nothing is half-planned. prevent_destroy is the exception: it fails
 // after planning, and the result keeps the partial plan (`partial`).
-import { compareAddresses, formatModule, parseResAddr, resourceKey, staticKey, stepsOf } from './address.ts'
+import { compareAddresses, formatKey, formatModule, parseResAddr, resourceKey, staticKey, stepsOf } from './address.ts'
 import { formatAddress, isModuleAddress, type Address } from './addresses.ts'
 import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
@@ -33,7 +33,7 @@ export interface PlanInput {
 }
 export interface PlanItem {
   address: string // the full qualified instance address: module.net.aws_vpc.main[0]
-  module?: string // module instance path as in state (absent or '' root; equals the static path while module calls are single-instance)
+  module?: string // module instance path as in state (absent or '' root): module.net or module.net["a"]
   resource?: string // unqualified type.name (always set by planConfig)
   type: string
   name: string
@@ -72,6 +72,7 @@ export interface PlanResult {
   baseState: State // what planning worked from: refreshed, with moves applied
   summary: { add: number; change: number; destroy: number }
   imported: number
+  instances?: string[] // every module instance path the configuration expands to (module.net["a"]); the root is not listed
   partial?: boolean // diagnostics came from prevent_destroy after planning: items and outputs hold what was planned
 }
 
@@ -107,7 +108,7 @@ export function planConfig(input: PlanInput): PlanResult {
   const tree: ModuleTree = input.tree ?? { root: { dir: '', files: input.files ?? [] }, children: new Map() }
   const g = buildGraph(tree)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
-  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, baseState: refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
+  const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, baseState: refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0, instances: [] }
   if (g.diagnostics.length) return result
 
   const errors = result.diagnostics
@@ -166,7 +167,20 @@ export function planConfig(input: PlanInput): PlanResult {
   result.baseState = base
   if (input.destroy) return planDestroy(g.nodes, result, fail)
 
-  // mod is the module prefix the expression is written in: '' (root) or 'module.net.'.
+  // Module instances. A module call expands like a resource: one instance, `count` of them or one per `for_each`
+  // key. Values are keyed by the instance-qualified path ('module.net["a"].var.cidr'); graph nodes stay static.
+  interface ModInst {
+    static: string // module.net
+    parent: string // instance path of the declaring module ('' = root)
+    ctx: { each?: { key: Value; value: Value }; count?: number } // count.index / each.key of this instance, for the call's arguments
+  }
+  const insts = new Map<string, ModInst>([['', { static: '', parent: '', ctx: {} }]])
+  const instsOf = new Map<string, string[]>() // static module path -> its instance paths
+  const calls = new Map<string, { kind: 'single' | 'count' | 'for_each'; paths: { key: Key; path: string }[] }>() // `${parent instance prefix}module.net`
+  const pre = (instance: string) => (instance ? `${instance}.` : '')
+  const staticPre = (mod: string) => (mod ? `${insts.get(mod.slice(0, -1))?.static ?? ''}.` : '')
+
+  // mod is the module instance prefix the expression is written in: '' (root) or 'module.net["a"].'.
   const scopeFor = (ctx: { each?: { key: Value; value: Value }; count?: number }, mod = ''): Scope => ({
     ref(path) {
       const [root, a, b] = path
@@ -180,7 +194,7 @@ export function planConfig(input: PlanInput): PlanResult {
         case 'self':
           throw new EvalError('Invalid "self" reference', 'The "self" object is not available in this context.')
         case 'path':
-          return walk({ module: mod ? (tree.children.get(g.nodes.get(mod.slice(0, -1))?.block?.labels[0] ?? '')?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
+          return walk({ module: mod ? (tree.children.get(g.nodes.get(insts.get(mod.slice(0, -1))?.static ?? '')?.block?.labels[0] ?? '')?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
         case 'terraform':
           return walk({ workspace: input.workspace ?? 'default' }, path.slice(1))
         case 'var':
@@ -190,14 +204,26 @@ export function planConfig(input: PlanInput): PlanResult {
           return walk(val(`${mod}data.${a}.${b}`), path.slice(3))
         case 'module': {
           // The call's outputs as one object; unknown until each output has been evaluated.
-          const call = g.nodes.get(`${mod}module.${a}`)
-          if (!call?.child) return UNKNOWN
+          const call = g.nodes.get(`${staticPre(mod)}module.${a}`)
+          const expansion = calls.get(`${mod}module.${a}`)
+          if (!call?.child || !expansion) return UNKNOWN
           const outs = [...g.nodes.values()].filter((n) => n.kind === 'output' && n.module === call.address)
-          return walk(Object.fromEntries(outs.map((n): [string, Value] => [n.local.slice('output.'.length), val(n.address)])), path.slice(2))
+          const of = (p: string): Value => Object.fromEntries(outs.map((n): [string, Value] => [n.local.slice('output.'.length), val(`${p}.${n.local}`)]))
+          // A repeated call is a tuple (count) or an object keyed by instance (for_each), as for resources.
+          const whole: Value =
+            expansion.kind === 'count' ? expansion.paths.map((x) => of(x.path)) : expansion.kind === 'for_each' ? Object.fromEntries(expansion.paths.map((x): [string, Value] => [x.key as string, of(x.path)])) : of(expansion.paths[0].path)
+          let cur = whole
+          for (const n of path.slice(2)) {
+            if (isUnknown(cur)) return UNKNOWN
+            if (typeof cur === 'object' && cur !== null && !Array.isArray(cur) && Object.hasOwn(cur, n)) cur = cur[n]
+            else if (typeof cur === 'object' && cur !== null && !Array.isArray(cur)) throw new EvalError('Unsupported attribute', `This object does not have an attribute named "${n}".`)
+            else throw new EvalError('Unsupported attribute', 'This value does not have any attributes.')
+          }
+          return cur
         }
         default: {
           const addr = `${mod}${root}.${a}`
-          const shape = shapes.get(addr)
+          const shape = shapes.get(`${staticPre(mod)}${root}.${a}`)
           if (shape && path.length > 2) {
             throw new EvalError(
               'Missing resource instance key',
@@ -215,18 +241,18 @@ export function planConfig(input: PlanInput): PlanResult {
   const touched = new Map<string, Set<string>>()
   // Resources that set prevent_destroy, by type.name, with where to point an error.
   const protectedBy = new Map<string, { file: string; pos: Pos; context: string }>()
-  const planResource = (node: GNode) => {
+  const planResource = (node: GNode, instance: string) => {
     const b = node.block!
     const [type, name] = b.labels
     const context = `resource "${type}" "${name}"`
-    values.set(node.address, UNKNOWN)
+    const mod = pre(instance)
+    values.set(mod + node.local, UNKNOWN)
     const schema = schemaFor(type)
     if (!schema) {
       const u = unsupportedType(type)
       fail(node.file, b.pos, u.summary, u.detail, context)
       return
     }
-    const mod = node.module ? `${node.module}.` : ''
     const ex = expandInstances(b, scopeFor({}, mod))
     if (!ex.ok) {
       fail(node.file, ex.pos, ex.summary, ex.detail, context)
@@ -249,7 +275,7 @@ export function planConfig(input: PlanInput): PlanResult {
         failed = true
         continue
       }
-      const at = { mode: 'managed' as const, type, name, module: node.module || undefined }
+      const at = { mode: 'managed' as const, type, name, module: instance || undefined }
       const address = instanceAddress(at, key)
       let priorInst = findInstance(base, address)?.instance
       let movedFrom: string | undefined = applied.moved.get(address)
@@ -264,7 +290,7 @@ export function planConfig(input: PlanInput): PlanResult {
         }
       }
       let importing: string | undefined
-      const decl = imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key && formatModule(d.to.module ?? []) === node.module)
+      const decl = imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key && formatModule(d.to.module ?? []) === instance)
       if (!priorInst && decl) {
         const before = errors.length
         let id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor({})), 'import')
@@ -306,7 +332,7 @@ export function planConfig(input: PlanInput): PlanResult {
       const unchanged = prior ? Object.fromEntries(Object.entries(prior).filter(([n, v]) => v !== null && !changed.has(n))) : undefined
       result.items.push({
         address,
-        module: node.module,
+        module: instance,
         resource: `${type}.${name}`,
         type,
         name,
@@ -322,61 +348,68 @@ export function planConfig(input: PlanInput): PlanResult {
         ...(reason === 'triggered' ? { triggeredBy: [mod + triggers[0]] } : {}),
         ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
       })
-      const seen = touched.get(node.address) ?? new Set<string>()
-      touched.set(node.address, seen.add(p.action))
+      const seen = touched.get(mod + node.local) ?? new Set<string>()
+      touched.set(mod + node.local, seen.add(p.action))
       planned.set(key, complete(p.planned, schema))
     }
     if (failed) return
     values.set(
-      node.address,
+      mod + node.local,
       ex.kind === 'count' ? ex.keys.map((k) => planned.get(k)!) : ex.kind === 'for_each' ? Object.fromEntries(ex.keys.map((k): [string, Value] => [k as string, planned.get(k)!])) : planned.get(undefined)!,
     )
   }
 
   const broken = new Set<string>()
-  for (const addr of g.order) {
-    const node = g.nodes.get(addr)!
+  // One node in one instance of its declaring module.
+  const visit = (node: GNode, instance: string, first: boolean) => {
     const b = node.block
-    // A failed node's dependents are not visited; their errors would only mislead.
-    if (node.deps.some((d) => broken.has(d))) {
-      broken.add(addr)
-      values.set(addr, UNKNOWN)
-      continue
-    }
-    const errorsBefore = errors.length
+    const mod = pre(instance)
+    const key = mod + node.local
     switch (node.kind) {
       case 'variable': {
         const name = b!.labels[0]
         const context = `variable "${name}"`
         const def = b!.attrs.find((a) => a.name === 'default')
-        const mod = node.module ? `${node.module}.` : ''
         if (node.module && node.arg) {
-          // A module input is the call's argument, evaluated where the call is written.
+          // A module input is the call's argument, evaluated where the call is written (with this instance's count.index / each.key).
           const call = g.nodes.get(node.module)!
+          const info = insts.get(instance)!
           const { value, pos, file } = node.arg
-          values.set(addr, evalAt(node, pos, () => evalExpr(value, scopeFor({}, call.module ? `${call.module}.` : '')), `module "${call.local.slice('module.'.length)}"`, file))
-        } else if (!node.module && Object.hasOwn(input.vars, name)) values.set(addr, input.vars[name])
-        else if (def) values.set(addr, evalAt(node, def.pos, () => evalExpr(def.value, scopeFor({}, mod)), context))
+          values.set(key, evalAt(node, pos, () => evalExpr(value, scopeFor(info.ctx, pre(info.parent))), `module "${call.local.slice('module.'.length)}"`, file))
+        } else if (!node.module && Object.hasOwn(input.vars, name)) values.set(key, input.vars[name])
+        else if (def) values.set(key, evalAt(node, def.pos, () => evalExpr(def.value, scopeFor({}, mod)), context))
         else {
           fail(node.file, node.pos, 'No value for required variable', `The root module input variable "${name}" is not set, and has no default value. Use a -var or -var-file command line argument to provide a value for this variable.`, context)
-          values.set(addr, UNKNOWN)
+          values.set(key, UNKNOWN)
         }
         break
       }
       case 'local':
-        values.set(addr, evalAt(node, node.pos, () => evalExpr(node.value!, scopeFor({}, node.module ? `${node.module}.` : '')), 'locals'))
+        values.set(key, evalAt(node, node.pos, () => evalExpr(node.value!, scopeFor({}, mod)), 'locals'))
         break
       case 'data': {
         const [type, name] = b!.labels
-        values.set(addr, base.resources.find((r) => r.mode === 'data' && (r.module ?? '') === node.module && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
+        values.set(key, base.resources.find((r) => r.mode === 'data' && (r.module ?? '') === instance && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
         break
       }
       case 'module': {
         const context = `module "${b!.labels[0]}"`
-        if (node.module) fail(node.file, node.pos, 'Unsupported nested module', 'Nested modules are not supported by this lab yet.', context)
-        else if (!node.child) fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', context)
-        else for (const a of b!.attrs) if (a.name === 'count' || a.name === 'for_each') fail(node.file, a.pos, 'Unsupported module argument', 'Module count and for_each are not supported by this lab yet.', context)
-        values.set(addr, UNKNOWN)
+        if (node.module) {
+          if (first) fail(node.file, node.pos, 'Unsupported nested module', 'Nested modules are not supported by this lab yet.', context)
+        } else if (!node.child) fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', context)
+        else {
+          const ex = expandInstances(b!, scopeFor({}, mod))
+          if (!ex.ok) fail(node.file, ex.pos, ex.summary, ex.detail, context)
+          else {
+            const paths = ex.keys.map((k) => {
+              const path = `${mod}module.${b!.labels[0]}${k === undefined ? '' : formatKey(k)}`
+              insts.set(path, { static: node.address, parent: instance, ctx: ex.kind === 'count' ? { count: k as number } : ex.kind === 'for_each' ? { each: ex.each(k as string) } : {} })
+              instsOf.get(node.address)!.push(path)
+              return { key: k, path }
+            })
+            calls.set(`${mod}module.${b!.labels[0]}`, { kind: ex.kind, paths })
+          }
+        }
         break
       }
       case 'output': {
@@ -384,15 +417,27 @@ export function planConfig(input: PlanInput): PlanResult {
         const sensitive = b!.attrs.find((a) => a.name === 'sensitive')
         const octx = `output "${b!.labels[0]}"`
         if (!value) fail(node.file, node.pos, 'Missing required argument', 'The argument "value" is required, but no definition was found.', octx)
-        const v = value ? evalAt(node, value.pos, () => evalExpr(value.value, scopeFor({}, node.module ? `${node.module}.` : '')), octx) : null
-        values.set(addr, v)
+        const v = value ? evalAt(node, value.pos, () => evalExpr(value.value, scopeFor({}, mod)), octx) : null
+        values.set(key, v)
         if (!node.module) result.outputs.push({ name: b!.labels[0], value: v, sensitive: sensitive?.value.kind === 'lit' && sensitive.value.value === true })
         break
       }
       case 'resource':
-        planResource(node)
+        planResource(node, instance)
         break
     }
+  }
+  for (const addr of g.order) {
+    const node = g.nodes.get(addr)!
+    // A failed node's dependents are not visited; their errors would only mislead.
+    if (node.deps.some((d) => broken.has(d))) {
+      broken.add(addr)
+      continue
+    }
+    const errorsBefore = errors.length
+    if (node.kind === 'module') instsOf.set(addr, [])
+    const where = node.module ? (instsOf.get(node.module) ?? []) : ['']
+    where.forEach((instance, n) => visit(node, instance, n === 0))
     if (errors.length > errorsBefore) broken.add(addr)
   }
 
@@ -404,9 +449,13 @@ export function planConfig(input: PlanInput): PlanResult {
 
   // In state but no longer configured (or a count/for_each instance that went away).
   const planned = new Set(result.items.map((i) => i.address))
+  const instancePaths = new Set(insts.keys())
+  result.instances = [...instancePaths].filter(Boolean).sort(compareAddresses)
+  // Still declared, now that module calls have expanded: the module instance must exist as well as the block.
+  const stillDeclared = (a: Address) => declared(a) && (!a.module?.length || instancePaths.has(formatModule(a.module)))
   // Instance-level checks need the expansion, so they run after the walk.
   for (const m of mv.moves) {
-    const still = (m.from.key === undefined && m.to.key === undefined) || isModuleAddress(m.from) ? declared(m.from) : planned.has(show(m.from))
+    const still = isModuleAddress(m.from) ? instancePaths.has(formatModule(m.from.module ?? [])) : m.from.key === undefined && m.to.key === undefined ? stillDeclared(m.from) : planned.has(show(m.from))
     if (still) fail(m.file, m.pos, 'Moved object still exists', `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`)
   }
   for (const i of imports) {
@@ -423,9 +472,11 @@ export function planConfig(input: PlanInput): PlanResult {
         continue
       }
       const rk = resKey({ module: r.module, type: r.type, name: r.name })
-      // The module instance itself is gone: no such call, or a keyed instance of a call that is not repeated.
+      // The module instance itself is gone: no such call, or the call no longer expands to this instance (a removed key or index,
+      // or a count/for_each switch). Terraform checks the resource's own configuration first (NoResourceConfig), then the module instance.
       const steps = stepsOf(r.module)
-      const moduleGone = steps.length > 0 && (steps.some((x) => x.key !== undefined) || !g.nodes.get(staticModule(r.module!))?.child)
+      const callGone = steps.length > 0 && !g.nodes.get(staticModule(r.module!))?.child
+      const moduleGone = callGone || (g.nodes.has(rk) && steps.length > 0 && !instancePaths.has(r.module!))
       result.items.push({
         address,
         module: r.module ?? '',
@@ -442,8 +493,9 @@ export function planConfig(input: PlanInput): PlanResult {
   }
   // Real Terraform only warns when a keyless address names a count/for_each resource.
   for (const a of new Set(input.replace ?? [])) {
-    if (a.includes('[') || !shapes.has(a)) continue
+    if (a.includes('[')) continue
     const addrs = result.items.filter((i) => i.action !== 'destroy' && resKey(i) === a).map((i) => i.address)
+    if (!shapes.has(a) && !addrs.some((x) => x !== a)) continue
     const P = `Your force-replace request for ${a} doesn't match any resource instances`
     const detail = !addrs.length
       ? `${P} because this resource doesn't have any instances.`
@@ -531,7 +583,9 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
   // it, so when a protected resource fails, Terraform never plans the
   // resources it depends on (directly or not): no changes, no errors.
   const res = (r: { type: string; name: string; module?: string }) => staticKey({ module: stepsOf(r.module), mode: 'managed', type: r.type, name: r.name })
-  const deps = new Map(base.resources.map((r) => [res(r), r.instances.flatMap((i) => i.dependencies ?? [])]))
+  // Instances of one module call share a static name: merge, never overwrite.
+  const deps = new Map<string, string[]>()
+  for (const r of base.resources) deps.set(res(r), [...(deps.get(res(r)) ?? []), ...r.instances.flatMap((i) => i.dependencies ?? [])])
   const lifecycle = (r: { type: string; name: string; module?: string }) => {
     const node = nodes.get(res(r))
     return node?.kind === 'resource' && node.block ? lifecycleOf(node.block) : undefined
