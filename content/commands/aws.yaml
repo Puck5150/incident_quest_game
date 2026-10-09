@@ -237,6 +237,32 @@
     - { command: "aws iam simulate-principal-policy ...", note: "Ask IAM whether a specific action would be allowed." }
   docs: { title: "AWS CLI: iam get-role-policy", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/get-role-policy.html" }
 
+- id: aws-iam-list-role-policies
+  match: "^aws iam list-role-policies"
+  summary: "Lists the names of the inline policies embedded in a role."
+  parts:
+    - { token: "--role-name orders-ci-deploy", meaning: "The role." }
+  why: "Inline policies live inside the role and don't show up in the attached-policy list; with list-attached-role-policies this is everything the role's identity-based permissions come from."
+  alternatives:
+    - { command: "aws iam list-attached-role-policies --role-name NAME", note: "Managed policies attached to the role." }
+    - { command: "aws iam get-role-policy --role-name NAME --policy-name POLICY", note: "One inline policy's document." }
+  docs: { title: "AWS CLI: iam list-role-policies", url: "https://docs.aws.amazon.com/cli/latest/reference/iam/list-role-policies.html" }
+
+- id: aws-iam-put-role-policy
+  match: "^(AWS_PROFILE=\\S+ )?aws iam put-role-policy"
+  summary: "Adds an inline policy to a role, or replaces the document of the inline policy with that name. Prints nothing on success."
+  parts:
+    - { token: "AWS_PROFILE=platform-admin", meaning: "(If given) run this one command with another named profile from ~/.aws/config." }
+    - { token: "--profile platform-admin", meaning: "Use this named profile's credentials instead of the default (here, an admin who may change IAM)." }
+    - { token: "--role-name orders-ci-deploy", meaning: "The role to change." }
+    - { token: "--policy-name orders-rds", meaning: "The inline policy's name; an existing policy with this name is overwritten." }
+    - { token: "--policy-document file://orders-rds.json", meaning: "The policy JSON, read from a local file with file://." }
+  why: "The direct way to grant a role an action it's missing. In a team, the same change normally goes through the code that manages the role, or it drifts."
+  alternatives:
+    - { command: "aws iam attach-role-policy --role-name NAME --policy-arn ARN", note: "Attach a managed policy instead of an inline one." }
+    - { command: "aws iam simulate-principal-policy --policy-source-arn ARN --action-names rds:CreateDBInstance", note: "Check afterwards that the action is now allowed." }
+  docs: { title: "AWS CLI: iam put-role-policy", url: "https://docs.aws.amazon.com/cli/latest/reference/iam/put-role-policy.html" }
+
 - id: aws-iam-list-access-keys
   match: "^aws iam list-access-keys"
   summary: "Lists a user's access keys and whether each is active."
@@ -524,10 +550,11 @@
   docs: { title: "AWS CLI: get-queue-attributes", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-attributes.html" }
 
 - id: aws-sts-caller-identity
-  match: "^aws sts get-caller-identity$"
+  match: "^aws sts get-caller-identity( --profile \\S+)?$"
   summary: "Shows which account and identity (user or role) your credentials belong to."
   parts:
     - { token: "get-caller-identity", meaning: "No options; works even with no permissions granted." }
+    - { token: "--profile platform-admin", meaning: "(If given) ask about this named profile's credentials instead of the default." }
   why: "Before debugging access, confirm who you actually are; many \"denied\" problems are the wrong identity."
   alternatives:
     - { command: "aws configure list", note: "Which credential source and profile the CLI is using." }
