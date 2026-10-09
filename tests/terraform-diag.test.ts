@@ -22,8 +22,9 @@ describe('formatDiagnostic', () => {
     )
   })
 
-  it('omits the location for diagnostics without a file, such as a cycle', () => {
-    expect(formatDiagnostic({ severity: 'error', summary: 'Cycle: a, b', detail: '', file: '', line: 0, col: 0 })).toBe('╷\n│ Error: Cycle: a, b\n╵')
+  it('omits the location for diagnostics without a file, such as a cycle, but keeps the blank line after the summary', () => {
+    // format.Diagnostic writes the summary then "\n\n" whatever follows (internal/command/format/diagnostic.go, v1.9.8).
+    expect(formatDiagnostic({ severity: 'error', summary: 'Cycle: a, b', detail: '', file: '', line: 0, col: 0 })).toBe('╷\n│ Error: Cycle: a, b\n│ \n╵')
   })
 
   it('omits ", in ..." when there is no context', () => {
@@ -71,9 +72,13 @@ describe('wrap and formatDiagnostic: preserveLines', () => {
 describe('formatDiagnostic: address', () => {
   it('prints the with-line before the location', () => {
     const out = formatDiagnostic({ severity: 'error', summary: 'creating X', detail: '', file: 'main.tf', line: 2, col: 1, context: 'resource "a" "b"', address: 'a.b' }, 'x\nresource "a" "b" {\n')
-    expect(out).toBe(['╷', '│ Error: creating X', '│ ', '│   with a.b,', '│   on main.tf line 2, in resource "a" "b":', '│    2: resource "a" "b" {', '╵'].join('\n'))
+    expect(out).toBe(['╷', '│ Error: creating X', '│ ', '│   with a.b,', '│   on main.tf line 2, in resource "a" "b":', '│    2: resource "a" "b" {', '│ ', '╵'].join('\n'))
   })
   it('prints only the with-line when there is no source', () => {
     expect(formatDiagnostic({ severity: 'error', summary: 'destroying X', detail: '', file: '', line: 0, col: 0, address: 'a.old' })).toBe(['╷', '│ Error: destroying X', '│ ', '│   with a.old,', '╵'].join('\n'))
+  })
+  // appendSourceSnippets returns before its closing blank line when there is no range (v1.9.8 format/diagnostic.go).
+  it('puts the detail straight under the with-line when there is no source range', () => {
+    expect(formatDiagnostic({ severity: 'error', summary: 'destroying X', detail: 'why', file: '', line: 0, col: 0, address: 'a.old' })).toBe(['╷', '│ Error: destroying X', '│ ', '│   with a.old,', '│ why', '╵'].join('\n'))
   })
 })

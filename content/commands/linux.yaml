@@ -357,6 +357,17 @@
     - { command: "less +10 FILE", note: "Open at line 10 to read around it." }
   docs: { title: "sed(1)", url: "https://man7.org/linux/man-pages/man1/sed.1.html" }
 
+- id: less-file
+  match: "^(sudo )?(less|more) \\S+$"
+  summary: "Pages through a file a screen at a time."
+  parts:
+    - { token: "less FILE", meaning: "Show FILE one screen at a time (more is the older pager); q quits, / searches, G jumps to the end." }
+  why: "Long logs don't fit on a screen; a pager lets you scroll and search without flooding the terminal."
+  alternatives:
+    - { command: "tail -n 50 FILE", note: "Only the last 50 lines, where a job's ending is." }
+    - { command: "less +G FILE", note: "Open at the end and scroll back." }
+  docs: { title: "less(1)", url: "https://man7.org/linux/man-pages/man1/less.1.html" }
+
 - id: cat-file
   match: "^(sudo )?cat "
   summary: "Prints a file's contents."
@@ -379,6 +390,19 @@
     - { command: "ssh HOST 'sudo -iu backup'", note: "An interactive login shell as that user." }
     - { command: "ssh HOST journalctl -u backup.service", note: "Read the job's last run instead of running it again." }
   docs: { title: "sudo manual", url: "https://www.sudo.ws/docs/man/sudo.man/" }
+
+- id: grep-ignore-case
+  match: "^grep -i "
+  summary: "Prints the lines of a file that contain a pattern, ignoring upper and lower case."
+  parts:
+    - { token: "grep", meaning: "Print lines that match a pattern." }
+    - { token: "-i", meaning: "Ignore case: interrupt also matches Interrupt and INTERRUPT." }
+    - { token: "PATTERN FILE", meaning: "What to look for, and where." }
+  why: "Log messages capitalise words unpredictably; -i finds them all with one search."
+  alternatives:
+    - { command: "grep -in PATTERN FILE", note: "With line numbers, to see where in the log each hit is." }
+    - { command: "grep -i -A3 PATTERN FILE", note: "Also print the 3 lines after each hit." }
+  docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
 
 - id: grep-file
   match: "^grep [^-]"

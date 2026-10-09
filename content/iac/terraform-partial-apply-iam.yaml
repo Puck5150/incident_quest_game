@@ -1,0 +1,558 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-partial-apply-iam
+track: iac
+difficulty: 2
+title: "The orders environment's first apply failed halfway"
+par_minutes: 10
+
+ticket:
+  from: "Orders team"
+  severity: SEV4
+  body: |
+    The new orders environment ran its first terraform apply from the
+    pipeline this morning and the job went red. The log is saved in the
+    repo as ci-apply.log. Some of it seems to exist in AWS now and some of
+    it doesn't, and nobody is sure what state it's in. Dmitri suggested we
+    terraform destroy whatever got made and run the pipeline again from a
+    clean slate. Can you sort it out so we have a database by this
+    afternoon? Repo is checked out in ~/orders-infra.
+
+environment: |
+  The orders environment (a VPC with two data subnets, a database security
+  group and a PostgreSQL instance) is new: nothing uses it yet. Account
+  123456789012, us-east-1. The pipeline applies ~/orders-infra with the
+  IAM role orders-ci-deploy. On your laptop the default AWS profile
+  assumes the same role (see ~/.aws/config), so you run exactly what the
+  pipeline runs; your own platform admin access is the platform-admin
+  profile (--profile platform-admin).
+
+terminal:
+  prompt: "you@laptop:~/orders-infra$"
+  files:
+    - path: ~/.bashrc
+      content: |
+        # ~/.bashrc
+        alias ll="ls -alF"
+    - path: ~/.aws/config
+      content: |
+        [profile platform-admin]
+        sso_session = acme
+        sso_account_id = 123456789012
+        sso_role_name = PlatformAdmin
+        region = us-east-1
+
+        # Default: the pipeline's own role, to reproduce pipeline runs.
+        [default]
+        role_arn = arn:aws:iam::123456789012:role/orders-ci-deploy
+        source_profile = platform-admin
+        role_session_name = you-laptop
+        region = us-east-1
+
+        [sso-session acme]
+        sso_start_url = https://acme.awsapps.com/start
+        sso_region = us-east-1
+        sso_registration_scopes = sso:account:access
+  commands:
+    - match: "cat ci-apply.log"
+      evidence: access-denied
+      output: |
+        Run terraform apply -auto-approve -input=false
+        Terraform used the selected providers to generate the following execution
+        plan. Resource actions are indicated with the following symbols:
+          + create
+
+        Terraform will perform the following actions:
+
+          # aws_db_instance.orders will be created
+          + resource "aws_db_instance" "orders" {
+              + allocated_storage   = 20
+              + arn                 = (known after apply)
+              + db_name             = "orders"
+              + endpoint            = (known after apply)
+              + engine              = "postgres"
+              + engine_version      = "15.4"
+              + id                  = (known after apply)
+              + identifier          = "orders-db"
+              + instance_class      = "db.t3.medium"
+              + kms_key_id          = (known after apply)
+              + multi_az            = (known after apply)
+              + password            = (sensitive value)
+              + skip_final_snapshot = false
+              + storage_encrypted   = true
+              + username            = "orders_admin"
+            }
+
+          # aws_security_group.db will be created
+          + resource "aws_security_group" "db" {
+              + arn         = (known after apply)
+              + description = "orders PostgreSQL"
+              + egress      = (known after apply)
+              + id          = (known after apply)
+              + ingress     = (known after apply)
+              + name        = "orders-db"
+              + name_prefix = (known after apply)
+              + tags        = {
+                  + "Name" = "orders-db"
+                }
+              + tags_all    = {
+                  + "Name" = "orders-db"
+                }
+              + vpc_id      = (known after apply)
+            }
+
+          # aws_subnet.data_a will be created
+          + resource "aws_subnet" "data_a" {
+              + arn                     = (known after apply)
+              + availability_zone       = "us-east-1a"
+              + cidr_block              = "10.60.10.0/24"
+              + id                      = (known after apply)
+              + map_public_ip_on_launch = false
+              + tags                    = {
+                  + "Name" = "orders-data-a"
+                }
+              + tags_all                = {
+                  + "Name" = "orders-data-a"
+                }
+              + vpc_id                  = (known after apply)
+            }
+
+          # aws_subnet.data_b will be created
+          + resource "aws_subnet" "data_b" {
+              + arn                     = (known after apply)
+              + availability_zone       = "us-east-1b"
+              + cidr_block              = "10.60.11.0/24"
+              + id                      = (known after apply)
+              + map_public_ip_on_launch = false
+              + tags                    = {
+                  + "Name" = "orders-data-b"
+                }
+              + tags_all                = {
+                  + "Name" = "orders-data-b"
+                }
+              + vpc_id                  = (known after apply)
+            }
+
+          # aws_vpc.main will be created
+          + resource "aws_vpc" "main" {
+              + arn                       = (known after apply)
+              + cidr_block                = "10.60.0.0/16"
+              + default_security_group_id = (known after apply)
+              + enable_dns_hostnames      = true
+              + enable_dns_support        = true
+              + id                        = (known after apply)
+              + tags                      = {
+                  + "Name" = "orders"
+                }
+              + tags_all                  = {
+                  + "Name" = "orders"
+                }
+            }
+
+        Plan: 5 to add, 0 to change, 0 to destroy.
+        aws_db_instance.orders: Creating...
+        aws_vpc.main: Creating...
+        aws_vpc.main: Creation complete after 1s [id=vpc-0a4c7e2f91b3d5068]
+        aws_security_group.db: Creating...
+        aws_security_group.db: Creation complete after 2s [id=sg-05d1f3b7a9c2e4681]
+        aws_subnet.data_a: Creating...
+        aws_subnet.data_a: Creation complete after 1s [id=subnet-03e9b1d7a5c2f4806]
+        aws_subnet.data_b: Creating...
+        aws_subnet.data_b: Creation complete after 1s [id=subnet-07f2a8c4e6b1d3950]
+        ╷
+        │ Error: creating RDS DB Instance (orders-db): operation error RDS: CreateDBInstance, https response error StatusCode: 403, RequestID: 6b1f0c2e-8d4a-4e7b-9c35-2a8f1d7e4b90, api error AccessDenied: User: arn:aws:sts::123456789012:assumed-role/orders-ci-deploy/GitHubActions is not authorized to perform: rds:CreateDBInstance on resource: arn:aws:rds:us-east-1:123456789012:db:orders-db because no identity-based policy allows the rds:CreateDBInstance action
+        │ 
+        │   with aws_db_instance.orders,
+        │   on db.tf line 6, in resource "aws_db_instance" "orders":
+        │    6: resource "aws_db_instance" "orders" {
+        ╵
+        Error: Process completed with exit code 1.
+    - match: "aws sts get-caller-identity"
+      evidence: ci-role
+      output: |
+        {
+            "UserId": "AROA3X7KQ2HZ9DMRT5WEP:you-laptop",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/orders-ci-deploy/you-laptop"
+        }
+    - match: "aws sts get-caller-identity --profile platform-admin"
+      output: |
+        {
+            "UserId": "AROA3X7KQ2HZ4PLATFMAD:you@acme.example",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example"
+        }
+    - match: "aws --profile platform-admin sts get-caller-identity"
+      output: |
+        {
+            "UserId": "AROA3X7KQ2HZ4PLATFMAD:you@acme.example",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example"
+        }
+    - match: "AWS_PROFILE=platform-admin aws sts get-caller-identity"
+      output: |
+        {
+            "UserId": "AROA3X7KQ2HZ4PLATFMAD:you@acme.example",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example"
+        }
+    - match: "aws iam list-role-policies --role-name orders-ci-deploy"
+      output: |
+        {
+            "PolicyNames": [
+                "terraform-deploy"
+            ]
+        }
+    - match: "aws iam list-attached-role-policies --role-name orders-ci-deploy"
+      output: |
+        {
+            "AttachedPolicies": []
+        }
+    - match: "aws iam get-role-policy --role-name orders-ci-deploy --policy-name terraform-deploy"
+      evidence: no-rds-create
+      output: |
+        {
+            "RoleName": "orders-ci-deploy",
+            "PolicyName": "terraform-deploy",
+            "PolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "TerraformState",
+                        "Effect": "Allow",
+                        "Action": [
+                            "s3:GetObject",
+                            "s3:PutObject",
+                            "s3:ListBucket"
+                        ],
+                        "Resource": [
+                            "arn:aws:s3:::acme-terraform-state",
+                            "arn:aws:s3:::acme-terraform-state/orders/*"
+                        ]
+                    },
+                    {
+                        "Sid": "Network",
+                        "Effect": "Allow",
+                        "Action": [
+                            "ec2:CreateVpc",
+                            "ec2:CreateSubnet",
+                            "ec2:CreateSecurityGroup",
+                            "ec2:CreateTags",
+                            "ec2:ModifyVpcAttribute",
+                            "ec2:RevokeSecurityGroupEgress",
+                            "ec2:DeleteVpc",
+                            "ec2:DeleteSubnet",
+                            "ec2:DeleteSecurityGroup",
+                            "ec2:Describe*"
+                        ],
+                        "Resource": "*"
+                    },
+                    {
+                        "Sid": "ReadOnlyRds",
+                        "Effect": "Allow",
+                        "Action": [
+                            "rds:Describe*",
+                            "rds:ListTagsForResource"
+                        ],
+                        "Resource": "*"
+                    }
+                ]
+            }
+        }
+    - match_regex: "^aws (?!.*--profile[ =]platform-admin(\\s|$))(--profile[ =]\\S+ )?iam put-role-policy "
+      example: "aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json"
+      output: |
+
+        An error occurred (AccessDenied) when calling the PutRolePolicy operation: User: arn:aws:sts::123456789012:assumed-role/orders-ci-deploy/you-laptop is not authorized to perform: iam:PutRolePolicy on resource: role orders-ci-deploy because no identity-based policy allows the iam:PutRolePolicy action
+
+terraform:
+  dir: "~/orders-infra"
+  vars:
+    db_password: "s3cret-orders-Pa55"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          backend "s3" {
+            bucket = "acme-terraform-state"
+            key    = "orders/terraform.tfstate"
+            region = "us-east-1"
+          }
+
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: network.tf
+      content: |
+        resource "aws_vpc" "main" {
+          cidr_block           = "10.60.0.0/16"
+          enable_dns_hostnames = true
+
+          tags = {
+            Name = "orders"
+          }
+        }
+
+        resource "aws_subnet" "data_a" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.60.10.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "orders-data-a"
+          }
+        }
+
+        resource "aws_subnet" "data_b" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.60.11.0/24"
+          availability_zone = "us-east-1b"
+
+          tags = {
+            Name = "orders-data-b"
+          }
+        }
+
+        resource "aws_security_group" "db" {
+          name        = "orders-db"
+          description = "orders PostgreSQL"
+          vpc_id      = aws_vpc.main.id
+
+          tags = {
+            Name = "orders-db"
+          }
+        }
+    - path: db.tf
+      content: |
+        variable "db_password" {
+          type      = string
+          sensitive = true
+        }
+
+        resource "aws_db_instance" "orders" {
+          identifier        = "orders-db"
+          engine            = "postgres"
+          engine_version    = "15.4"
+          instance_class    = "db.t3.medium"
+          allocated_storage = 20
+          storage_encrypted = true
+          db_name           = "orders"
+          username          = "orders_admin"
+          password          = var.db_password
+        }
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-0a4c7e2f91b3d5068
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a4c7e2f91b3d5068"
+        cidr_block: 10.60.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: true
+        default_security_group_id: sg-0b8e2d4f6a1c3e579
+        tags: { Name: orders }
+        tags_all: { Name: orders }
+    - type: aws_security_group
+      name: db
+      attrs:
+        id: sg-05d1f3b7a9c2e4681
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-05d1f3b7a9c2e4681"
+        name: orders-db
+        name_prefix: ""
+        description: orders PostgreSQL
+        vpc_id: vpc-0a4c7e2f91b3d5068
+        ingress: []
+        egress: []
+        tags: { Name: orders-db }
+        tags_all: { Name: orders-db }
+    - type: aws_subnet
+      name: data_a
+      attrs:
+        id: subnet-03e9b1d7a5c2f4806
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-03e9b1d7a5c2f4806"
+        vpc_id: vpc-0a4c7e2f91b3d5068
+        cidr_block: 10.60.10.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: orders-data-a }
+        tags_all: { Name: orders-data-a }
+    - type: aws_subnet
+      name: data_b
+      attrs:
+        id: subnet-07f2a8c4e6b1d3950
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-07f2a8c4e6b1d3950"
+        vpc_id: vpc-0a4c7e2f91b3d5068
+        cidr_block: 10.60.11.0/24
+        availability_zone: us-east-1b
+        map_public_ip_on_launch: false
+        tags: { Name: orders-data-b }
+        tags_all: { Name: orders-data-b }
+  faults:
+    - at: aws_db_instance.orders
+      on: create
+      error: "creating RDS DB Instance (orders-db): operation error RDS: CreateDBInstance, https response error StatusCode: 403, RequestID: 6b1f0c2e-8d4a-4e7b-9c35-2a8f1d7e4b90, api error AccessDenied: User: arn:aws:sts::123456789012:assumed-role/orders-ci-deploy/you-laptop is not authorized to perform: rds:CreateDBInstance on resource: arn:aws:rds:us-east-1:123456789012:db:orders-db because no identity-based policy allows the rds:CreateDBInstance action"
+      until_actions: [grant-rds-permission]
+  evidence:
+    - evidence: partial-apply
+      command: plan
+      contains: "Plan: 1 to add, 0 to change, 0 to destroy."
+    - evidence: network-in-state
+      command: state list
+      contains: "aws_security_group.db"
+    - evidence: access-denied
+      command: apply
+      contains: "not authorized to perform: rds:CreateDBInstance"
+
+hypotheses:
+  - id: ci-role-lacks-rds-create
+    text: "The pipeline's role isn't allowed rds:CreateDBInstance, so the apply stopped at the database after the network was created."
+    correct: true
+  - id: rolled-back
+    text: "The apply failed, so Terraform rolled everything back and the environment is empty."
+    feedback: "Terraform doesn't roll back. terraform state list shows the VPC, both subnets and the security group, and the plan only wants to add the database: the network exists and is tracked."
+  - id: invalid-db-config
+    text: "The database settings in db.tf are invalid (engine version or instance class), and RDS rejected them."
+    feedback: "terraform validate passes, and RDS didn't answer about a parameter: the error is AccessDenied with a 403, \"not authorized to perform: rds:CreateDBInstance\". That's about who is calling, not what they asked for."
+  - id: wrong-region
+    text: "The pipeline is pointed at the wrong region, so RDS refused the request."
+    feedback: "The provider is set to us-east-1, the network was created there, and the denied resource is arn:aws:rds:us-east-1:123456789012:db:orders-db. The region is right; the caller isn't allowed the action."
+
+actions:
+  - id: grant-rds-permission
+    label: "Add rds:CreateDBInstance to the orders-ci-deploy role's policy (aws iam put-role-policy, with your platform-admin profile)"
+    kind: fix
+    match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy(\\s|$))(?=.*--policy-name[ =]\\S)(?=.*--policy-document[ =]\\S)"
+    feedback: "The orders-ci-deploy role may now call rds:CreateDBInstance. Nothing in AWS or in Terraform's state changed; the next apply only has the database left to create."
+  - id: finish-apply
+    label: "Run terraform apply again so it creates only the missing database"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_db_instance.orders
+        - plan_clean: true
+        - not: { applied: { op: delete, address: aws_vpc.main } }
+        - not: { applied: { op: delete, address: aws_security_group.db } }
+        - not: { applied: { op: delete, address: aws_subnet.data_a } }
+        - not: { applied: { op: delete, address: aws_subnet.data_b } }
+    feedback: "The apply created orders-db and nothing else; the network from this morning's run was left alone. The plan is clean: what's in AWS, in state and in the code agree."
+  - id: destroy-and-retry
+    label: "terraform destroy what the failed run created, then apply everything again from scratch"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_vpc.main }
+        - applied: { op: delete, address: aws_security_group.db }
+        - applied: { op: delete, address: aws_subnet.data_a }
+        - applied: { op: delete, address: aws_subnet.data_b }
+    feedback: "The network was fine: it was created, recorded in state, and only needed the database next to it. Destroying it bought nothing (the next apply hits the same AccessDenied at the database) and throws away work Terraform had already done. On an environment that's in use, \"start clean\" deletes things people depend on."
+  - id: edit-state
+    label: "Edit terraform.tfstate by hand to add the database, so Terraform thinks the apply finished"
+    kind: wrong
+    feedback: "State would claim an orders-db that doesn't exist in AWS. The next refresh finds it missing and plans to create it again, straight into the same AccessDenied. State records what really exists; it isn't the lever to fix a failed apply."
+
+solution_paths:
+  - [grant-rds-permission, finish-apply]
+
+key_evidence: [partial-apply, access-denied, ci-role]
+
+evidence_labels:
+  partial-apply: "The VPC, subnets and security group are in state; only the database is left to create"
+  access-denied: "The apply fails at aws_db_instance.orders: not authorized to perform rds:CreateDBInstance"
+  ci-role: "The calls are made as the pipeline's role, orders-ci-deploy"
+
+hints:
+  nudge: "Before deciding anything, find out what this morning's run actually left behind. Ask Terraform."
+  direction: "terraform state list and terraform plan show what exists and what's left. Then read the error box: which resource does \"with\" name, and what does AWS say was refused?"
+  answer: "The network was created and is in state; the database create was denied because orders-ci-deploy has no rds:CreateDBInstance. Grant it (aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://...), then terraform apply again: 1 to add."
+
+analogy:
+  title: "The flat-pack delivery"
+  text: |
+    A delivery van brings a kitchen in three loads. The first two arrive
+    and are unpacked in place; the third is turned back at the gate
+    because the driver's pass doesn't cover the loading bay. Nobody
+    repacks the cupboards and sends them back to the warehouse. You get
+    the driver's pass fixed and wait for the last load.
+
+debrief:
+  root_cause: |
+    The pipeline's role, orders-ci-deploy, was written for the network:
+    it can create VPCs, subnets and security groups and describe RDS, but
+    no policy allows rds:CreateDBInstance. Terraform created the VPC, both
+    subnets and the security group, recording each in state as it
+    finished, then asked RDS for the database and got AccessDenied (403).
+    Terraform does not roll back a partly completed apply: the network
+    stayed, in AWS and in state, and the run exited with the error. The
+    error box named the resource ("with aws_db_instance.orders"), the
+    caller (assumed-role/orders-ci-deploy) and the action that was
+    refused.
+  ideal_path:
+    - "Read ci-apply.log: four resources created, then an AccessDenied error box for aws_db_instance.orders."
+    - "terraform state list and terraform plan: the network is in state and the plan only adds the database (1 to add)."
+    - "Reproduce with terraform apply in the same role: the same error, and nothing else changes."
+    - "aws sts get-caller-identity: you are assumed-role/orders-ci-deploy, the role named in the error. Its policy has rds:Describe* but no rds:CreateDBInstance."
+    - "Grant the action with your admin profile (aws iam put-role-policy), then terraform apply again: Resources: 1 added. The plan is clean."
+  real_world: |
+    A failed apply is not a transaction. Whatever succeeded stays, in the
+    cloud and in state; the next plan shows exactly what's left. The fix
+    is to remove the cause and apply again, not to destroy and start
+    over, and never to edit state to make it look finished. Read the
+    error box closely: "with ADDRESS" tells you which resource failed,
+    and an AWS AccessDenied names the caller, the action and the
+    resource. Change the role's permissions the way your team changes
+    them (often its own Terraform or a pull request to an IAM repo); a
+    one-off put-role-policy fixes today but drifts from the code. A
+    deploy role also needs the delete and modify actions for what it
+    manages, and the RDS describe calls Terraform uses while it waits for
+    the instance to become available. IAM changes can take a few seconds
+    to apply everywhere, so a retry straight after granting can still be
+    denied.
+
+concepts:
+  - term: "Partial apply"
+    text: "When an apply fails, the changes that already succeeded stay in place and in state. Terraform doesn't roll back; you fix the cause and apply again."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/apply"
+  - term: "Implicit deny"
+    text: "IAM denies any action no policy allows. The error says \"because no identity-based policy allows\" the action, as opposed to \"with an explicit deny\"."
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html"
+  - term: "Inline role policy"
+    text: "A policy embedded in one role. aws iam put-role-policy creates it or replaces the document of one with the same name."
+    url: "https://docs.aws.amazon.com/cli/latest/reference/iam/put-role-policy.html"
+  - term: "Caller identity"
+    text: "aws sts get-caller-identity shows which user or assumed role your credentials belong to, with no permissions needed."
+    url: "https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html"
+
+sources:
+  - title: "Terraform: Command: apply (no automatic rollback of a partial apply)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/apply"
+    retrieved: 2026-10-08
+  - title: "AWS IAM User Guide: Troubleshoot access denied error messages"
+    url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html"
+    retrieved: 2026-10-08
+  - title: "AWS CLI: iam put-role-policy"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/iam/put-role-policy.html"
+    retrieved: 2026-10-08
+  - title: "AWS STS API Reference: GetCallerIdentity"
+    url: "https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html"
+    retrieved: 2026-10-08
+  - title: "terraform-provider-aws v5.70.0: RDS DB instance create (internal/service/rds/instance.go)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/v5.70.0/internal/service/rds/instance.go"
+    retrieved: 2026-10-08
+
+command_notes:
+  "cat ci-apply.log": "The pipeline's run, saved from the job. Read it top to bottom: what completed, then the error box. The \"with\" line names the resource that failed."
+  "aws sts get-caller-identity": "The default profile in ~/.aws/config assumes the pipeline's role: assumed-role/orders-ci-deploy, the same caller as in the error."
+  "aws sts get-caller-identity --profile platform-admin": "Your own admin access, through SSO: the identity that can change IAM. (In this lab, pick a profile per command with --profile or an AWS_PROFILE=... prefix; an exported AWS_PROFILE isn't honoured.)"
+  "aws --profile platform-admin sts get-caller-identity": "Your own admin access, through SSO: the identity that can change IAM. (In this lab, pick a profile per command with --profile or an AWS_PROFILE=... prefix; an exported AWS_PROFILE isn't honoured.)"
+  "AWS_PROFILE=platform-admin aws sts get-caller-identity": "Your own admin access, through SSO: the identity that can change IAM. (In this lab, pick a profile per command with --profile or an AWS_PROFILE=... prefix; an exported AWS_PROFILE isn't honoured.)"
+  "aws iam list-role-policies --role-name orders-ci-deploy": "The role has one inline policy, terraform-deploy."
+  "aws iam list-attached-role-policies --role-name orders-ci-deploy": "No managed policies are attached: the inline policy is everything the role may do."
+  "aws iam get-role-policy --role-name orders-ci-deploy --policy-name terraform-deploy": "Network create and delete, state bucket access, and read-only RDS (rds:Describe*). Nothing allows rds:CreateDBInstance."
+  "aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json": "Without --profile this runs as the pipeline role, which can't change IAM (and shouldn't be able to). Use your platform-admin profile."

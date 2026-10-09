@@ -1,0 +1,556 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-cancelled-ci-lock
+track: iac
+difficulty: 2
+title: "Nobody can run Terraform on ledger-infra"
+par_minutes: 11
+
+ticket:
+  from: "Ledger team"
+  severity: SEV4
+  body: |
+    PR #212 was supposed to give us the ledger network and the reconciler
+    worker this morning, but there's no reconciler instance in the
+    console. Since then the pipeline on ledger-infra has been red and
+    nobody can run Terraform on it, not even a plan on a laptop: it
+    complains about the state lock. I saved the PR #212 apply job's log
+    in the repo as ci-pipeline.log. Dmitri says add -lock=false and push
+    it through so we have the worker today. Can you sort it out? Repo is
+    checked out in ~/ledger-infra.
+
+environment: |
+  ledger-infra builds the ledger team's VPC, a worker subnet and security
+  group, and the reconciler worker instance, in account 123456789012,
+  us-east-1. Nothing uses any of it yet. State is in S3
+  (acme-terraform-state, key ledger/terraform.tfstate) with the DynamoDB
+  lock table terraform-locks. The terraform-apply GitHub Actions workflow
+  applies main on every merge, on the platform team's self-hosted runners
+  (runner-01 to runner-20, service user ci). gh is logged in as you for
+  acme/ledger-infra, and your default AWS profile is your own admin role
+  in the account. It is 10:45 UTC.
+
+terminal:
+  prompt: "you@laptop:~/ledger-infra$"
+  commands:
+    # Every way to read the file: the real shell shows it (this output is the file); each one awards the evidence.
+    - match_regex: "^(cat|less|more|tail|head)( -[nN]? ?\\d+| -n ?\\+\\d+| -[NRSfF]+| \\+G)* ci-pipeline\\.log$"
+      example: "cat ci-pipeline.log"
+      evidence: ci-run-dead
+      output: |
+        2026-10-08T07:41:52.1705275Z Current runner version: '2.319.1'
+        2026-10-08T07:41:52.2273534Z Runner name: 'runner-17'
+        2026-10-08T07:41:52.2300977Z Runner group name: 'Default'
+        2026-10-08T07:41:52.2401631Z Machine name: 'runner-17'
+        2026-10-08T07:41:53.0297444Z ##[group]Run actions/checkout@v4
+        2026-10-08T07:41:53.0386418Z with:
+        2026-10-08T07:41:53.0412895Z   repository: acme/ledger-infra
+        2026-10-08T07:41:53.0564477Z ##[endgroup]
+        2026-10-08T07:41:53.0835285Z Syncing repository: acme/ledger-infra
+        2026-10-08T07:41:55.2097995Z HEAD is now at 7c41e09 Ledger network and reconciler worker (#212)
+        2026-10-08T07:41:56.0869565Z ##[group]Run terraform init -input=false
+        2026-10-08T07:41:56.0917105Z terraform init -input=false
+        2026-10-08T07:41:56.1077415Z shell: /usr/bin/bash -e {0}
+        2026-10-08T07:41:56.1112752Z ##[endgroup]
+        2026-10-08T07:41:56.1217394Z 
+        2026-10-08T07:41:56.1322032Z Initializing the backend...
+        2026-10-08T07:41:56.1445944Z 
+        2026-10-08T07:41:56.1573596Z Successfully configured the backend "s3"! Terraform will automatically
+        2026-10-08T07:41:56.1586565Z use this backend unless the backend configuration changes.
+        2026-10-08T07:41:59.1661273Z 
+        2026-10-08T07:41:59.1672524Z Initializing provider plugins...
+        2026-10-08T07:41:59.1698833Z - Finding hashicorp/aws versions matching "~> 5.0"...
+        2026-10-08T07:41:59.1793647Z - Installing hashicorp/aws v5.67.0...
+        2026-10-08T07:41:59.1947318Z - Installed hashicorp/aws v5.67.0 (signed by HashiCorp)
+        2026-10-08T07:41:59.2114966Z 
+        2026-10-08T07:41:59.2437911Z Terraform has been successfully initialized!
+        2026-10-08T07:42:23.1265819Z ##[group]Run terraform apply -auto-approve -input=false
+        2026-10-08T07:42:23.1414235Z terraform apply -auto-approve -input=false
+        2026-10-08T07:42:23.1501770Z shell: /usr/bin/bash -e {0}
+        2026-10-08T07:42:23.1552508Z ##[endgroup]
+        2026-10-08T07:42:25.1440086Z Terraform used the selected providers to generate the following execution
+        2026-10-08T07:42:25.1441726Z plan. Resource actions are indicated with the following symbols:
+        2026-10-08T07:42:25.1460579Z   + create
+        2026-10-08T07:42:25.1468753Z 
+        2026-10-08T07:42:25.1476882Z Terraform will perform the following actions:
+        2026-10-08T07:42:25.1480112Z 
+        2026-10-08T07:42:25.1481745Z   # aws_instance.reconciler will be created
+        2026-10-08T07:42:25.1489778Z   + resource "aws_instance" "reconciler" {
+        2026-10-08T07:42:25.1499033Z       + ami               = "ami-05c8e2d71f9a3b640"
+        2026-10-08T07:42:25.1524664Z       + arn               = (known after apply)
+        2026-10-08T07:42:25.1535981Z       + availability_zone = (known after apply)
+        2026-10-08T07:42:25.1556438Z       + id                = (known after apply)
+        2026-10-08T07:42:25.1573045Z       + instance_type     = "t3.medium"
+        2026-10-08T07:42:25.1573617Z       + key_name          = (known after apply)
+        2026-10-08T07:42:25.1600282Z       + private_ip        = (known after apply)
+        2026-10-08T07:42:25.1615283Z       + public_ip         = (known after apply)
+        2026-10-08T07:42:25.1632276Z       + subnet_id         = (known after apply)
+        2026-10-08T07:42:25.1635710Z       + tags              = {
+        2026-10-08T07:42:25.1643893Z           + "Name" = "ledger-reconciler"
+        2026-10-08T07:42:25.1655531Z         }
+        2026-10-08T07:42:25.1663279Z       + tags_all          = {
+        2026-10-08T07:42:25.1681604Z           + "Name" = "ledger-reconciler"
+        2026-10-08T07:42:25.1686431Z         }
+        2026-10-08T07:42:25.1693440Z     }
+        2026-10-08T07:42:25.1700994Z 
+        2026-10-08T07:42:25.1701779Z   # aws_security_group.workers will be created
+        2026-10-08T07:42:25.1703793Z   + resource "aws_security_group" "workers" {
+        2026-10-08T07:42:25.1711199Z       + arn         = (known after apply)
+        2026-10-08T07:42:25.1717305Z       + description = "ledger worker hosts"
+        2026-10-08T07:42:25.1718048Z       + egress      = (known after apply)
+        2026-10-08T07:42:25.1728052Z       + id          = (known after apply)
+        2026-10-08T07:42:25.1740576Z       + ingress     = (known after apply)
+        2026-10-08T07:42:25.1754209Z       + name        = "ledger-workers"
+        2026-10-08T07:42:25.1823235Z       + name_prefix = (known after apply)
+        2026-10-08T07:42:25.1823959Z       + tags        = {
+        2026-10-08T07:42:25.1837468Z           + "Name" = "ledger-workers"
+        2026-10-08T07:42:25.1872591Z         }
+        2026-10-08T07:42:25.1914270Z       + tags_all    = {
+        2026-10-08T07:42:25.1922607Z           + "Name" = "ledger-workers"
+        2026-10-08T07:42:25.1932690Z         }
+        2026-10-08T07:42:25.1940125Z       + vpc_id      = (known after apply)
+        2026-10-08T07:42:25.1966185Z     }
+        2026-10-08T07:42:25.1981411Z 
+        2026-10-08T07:42:25.1992398Z   # aws_subnet.workers will be created
+        2026-10-08T07:42:25.1997490Z   + resource "aws_subnet" "workers" {
+        2026-10-08T07:42:25.2005322Z       + arn                     = (known after apply)
+        2026-10-08T07:42:25.2008967Z       + availability_zone       = "us-east-1a"
+        2026-10-08T07:42:25.2017712Z       + cidr_block              = "10.40.1.0/24"
+        2026-10-08T07:42:25.2025102Z       + id                      = (known after apply)
+        2026-10-08T07:42:25.2028753Z       + map_public_ip_on_launch = false
+        2026-10-08T07:42:25.2036593Z       + tags                    = {
+        2026-10-08T07:42:25.2041550Z           + "Name" = "ledger-workers"
+        2026-10-08T07:42:25.2043044Z         }
+        2026-10-08T07:42:25.2049973Z       + tags_all                = {
+        2026-10-08T07:42:25.2051565Z           + "Name" = "ledger-workers"
+        2026-10-08T07:42:25.2064524Z         }
+        2026-10-08T07:42:25.2065443Z       + vpc_id                  = (known after apply)
+        2026-10-08T07:42:25.2067755Z     }
+        2026-10-08T07:42:25.2073130Z 
+        2026-10-08T07:42:25.2079503Z   # aws_vpc.ledger will be created
+        2026-10-08T07:42:25.2116412Z   + resource "aws_vpc" "ledger" {
+        2026-10-08T07:42:25.2119163Z       + arn                       = (known after apply)
+        2026-10-08T07:42:25.2124774Z       + cidr_block                = "10.40.0.0/16"
+        2026-10-08T07:42:25.2151571Z       + default_security_group_id = (known after apply)
+        2026-10-08T07:42:25.2164106Z       + enable_dns_hostnames      = false
+        2026-10-08T07:42:25.2178733Z       + enable_dns_support        = true
+        2026-10-08T07:42:25.2182059Z       + id                        = (known after apply)
+        2026-10-08T07:42:25.2221197Z       + tags                      = {
+        2026-10-08T07:42:25.2233293Z           + "Name" = "ledger"
+        2026-10-08T07:42:25.2240988Z         }
+        2026-10-08T07:42:25.2255479Z       + tags_all                  = {
+        2026-10-08T07:42:25.2274089Z           + "Name" = "ledger"
+        2026-10-08T07:42:25.2274685Z         }
+        2026-10-08T07:42:25.2282762Z     }
+        2026-10-08T07:42:25.2285407Z 
+        2026-10-08T07:42:25.2288387Z 
+        2026-10-08T07:42:25.2293977Z Plan: 4 to add, 0 to change, 0 to destroy.
+        2026-10-08T07:42:25.2314983Z aws_vpc.ledger: Creating...
+        2026-10-08T07:42:26.0635444Z aws_vpc.ledger: Creation complete after 1s [id=vpc-0e4b7a19c3d58f260]
+        2026-10-08T07:42:26.0890355Z aws_security_group.workers: Creating...
+        2026-10-08T07:42:28.3025937Z aws_security_group.workers: Creation complete after 2s [id=sg-0c91e5a7d3f4b8216]
+        2026-10-08T07:42:28.3155342Z aws_subnet.workers: Creating...
+        2026-10-08T07:42:29.0427036Z aws_subnet.workers: Creation complete after 1s [id=subnet-0b6d2f8e41a7c9035]
+        2026-10-08T07:42:29.0859665Z aws_instance.reconciler: Creating...
+        2026-10-08T07:42:31.3316151Z 
+        2026-10-08T07:42:31.3437713Z Interrupt received.
+        2026-10-08T07:42:31.3516917Z Please wait for Terraform to exit or data loss may occur.
+        2026-10-08T07:42:31.3934098Z Gracefully shutting down...
+        2026-10-08T07:42:31.3938205Z 
+        2026-10-08T07:42:38.8204834Z 
+        2026-10-08T07:42:38.8497310Z Two interrupts received. Exiting immediately. Note that data loss may have
+        2026-10-08T07:42:38.8989184Z occurred.
+        2026-10-08T07:42:38.9010721Z 
+        2026-10-08T07:42:39.2578697Z ##[error]The operation was canceled.
+        2026-10-08T07:42:39.2639020Z Post job cleanup.
+        2026-10-08T07:42:39.2886726Z Cleaning up orphan processes
+    - match_regex: "^grep( -[a-zA-Z]+| -[ABC] ?\\d+)* ['\"]?[^'\"]*([Ii]nterrupt|INTERRUPT|[Cc]ancel|CANCEL|[Ee]xit|EXIT|[Ee]rror|ERROR)[^'\"]*['\"]? ci-pipeline\\.log$"
+      example: "grep -i interrupt ci-pipeline.log"
+      evidence: ci-run-dead
+      output: |
+        2026-10-08T07:42:31.3437713Z Interrupt received.
+        2026-10-08T07:42:38.8497310Z Two interrupts received. Exiting immediately. Note that data loss may have
+    - match_regex: "^gh run list((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*$"
+      example: "gh run list"
+      evidence: ci-run-dead
+      output: |
+        STATUS  TITLE                                        WORKFLOW         BRANCH  EVENT              ID           ELAPSED  AGE
+        X       terraform-apply                              terraform-apply  main    workflow_dispatch  11824377102  36s      21 minutes ago
+        X       Update README (#213)                         terraform-apply  main    push               11823519084  41s      about 2 hours ago
+        X       Ledger network and reconciler worker (#212)  terraform-apply  main    push               11823046571  48s      about 3 hours ago
+        ✓       Add terraform-apply workflow (#210)          terraform-apply  main    push               11801377240  1m3s     about 1 day ago
+    - match_regex: "^gh run list((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*\\s+(-s|--status)[ =](in_progress|queued|waiting|requested|pending)((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*$"
+      example: "gh run list --status in_progress"
+      evidence: ci-run-dead
+      output: |
+        no runs found
+    - match_regex: "^gh run view 11823046571((\\s+(-R|--repo)[ =]acme/ledger-infra))?$"
+      example: "gh run view 11823046571"
+      evidence: ci-run-dead
+      output: |
+
+        X main terraform-apply · 11823046571
+        Triggered via push about 3 hours ago
+
+        JOBS
+        X apply in 48s (ID 33102958817)
+
+        ANNOTATIONS
+        X The run was canceled by @dmitri-k.
+        apply: .github#1
+
+
+        For more information about the job, try: gh run view --job=33102958817
+        View this run on GitHub: https://github.com/acme/ledger-infra/actions/runs/11823046571
+    - match_regex: "^gh run view 11823519084((\\s+(-R|--repo)[ =]acme/ledger-infra))?$"
+      example: "gh run view 11823519084"
+      output: |
+
+        X main terraform-apply · 11823519084
+        Triggered via push about 2 hours ago
+
+        JOBS
+        X apply in 41s (ID 33103911460)
+          ✓ Set up job
+          ✓ Run actions/checkout@v4
+          ✓ Run terraform init -input=false
+          X Run terraform apply -auto-approve -input=false
+          ✓ Post Run actions/checkout@v4
+          ✓ Complete job
+
+        ANNOTATIONS
+        X Process completed with exit code 1.
+        apply: .github#24
+
+
+        To see what failed, try: gh run view 11823519084 --log-failed
+        View this run on GitHub: https://github.com/acme/ledger-infra/actions/runs/11823519084
+    - match_regex: "^gh run view 11824377102((\\s+(-R|--repo)[ =]acme/ledger-infra))?$"
+      example: "gh run view 11824377102"
+      output: |
+
+        X main terraform-apply · 11824377102
+        Triggered via workflow_dispatch 21 minutes ago
+
+        JOBS
+        X apply in 36s (ID 33106020874)
+          ✓ Set up job
+          ✓ Run actions/checkout@v4
+          ✓ Run terraform init -input=false
+          X Run terraform apply -auto-approve -input=false
+          ✓ Post Run actions/checkout@v4
+          ✓ Complete job
+
+        ANNOTATIONS
+        X Process completed with exit code 1.
+        apply: .github#24
+
+
+        To see what failed, try: gh run view 11824377102 --log-failed
+        View this run on GitHub: https://github.com/acme/ledger-infra/actions/runs/11824377102
+    - match_regex: "^gh run list((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*\\s+(-s|--status)[ =]cancelled((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*$"
+      example: "gh run list --status cancelled"
+      evidence: ci-run-dead
+      output: |
+        STATUS  TITLE                                        WORKFLOW         BRANCH  EVENT  ID           ELAPSED  AGE
+        X       Ledger network and reconciler worker (#212)  terraform-apply  main    push   11823046571  48s      about 3 hours ago
+    - match_regex: "^aws ec2 describe-instances(?!.*--(query|output)[ =])(\\s.*)?$"
+      example: "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler"
+      evidence: ci-no-orphan
+      output: |
+        {
+            "Reservations": []
+        }
+    - match_regex: "^aws ec2 describe-instances(?=.*--query[ =])(?!.*--output[ =](text|table))(\\s.*)?$"
+      example: "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler --query 'Reservations[].Instances[].InstanceId'"
+      evidence: ci-no-orphan
+      output: |
+        []
+
+terraform:
+  dir: "~/ledger-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          backend "s3" {
+            bucket         = "acme-terraform-state"
+            key            = "ledger/terraform.tfstate"
+            region         = "us-east-1"
+            dynamodb_table = "terraform-locks"
+          }
+
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: network.tf
+      content: |
+        resource "aws_vpc" "ledger" {
+          cidr_block = "10.40.0.0/16"
+
+          tags = {
+            Name = "ledger"
+          }
+        }
+
+        resource "aws_subnet" "workers" {
+          vpc_id            = aws_vpc.ledger.id
+          cidr_block        = "10.40.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "ledger-workers"
+          }
+        }
+
+        resource "aws_security_group" "workers" {
+          name        = "ledger-workers"
+          description = "ledger worker hosts"
+          vpc_id      = aws_vpc.ledger.id
+
+          tags = {
+            Name = "ledger-workers"
+          }
+        }
+    - path: compute.tf
+      content: |
+        # Matches the day's card settlements against the bank files.
+        resource "aws_instance" "reconciler" {
+          instance_type = "t3.medium"
+          ami           = "ami-05c8e2d71f9a3b640"
+          subnet_id     = aws_subnet.workers.id
+
+          tags = {
+            Name = "ledger-reconciler"
+          }
+        }
+  # What the cancelled run saved when the interrupt arrived: the network, not the instance.
+  state:
+    - type: aws_vpc
+      name: ledger
+      attrs:
+        id: vpc-0e4b7a19c3d58f260
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0e4b7a19c3d58f260"
+        cidr_block: 10.40.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-03a7d5e9b1c24f860
+        tags: { Name: ledger }
+        tags_all: { Name: ledger }
+    - type: aws_security_group
+      name: workers
+      attrs:
+        id: sg-0c91e5a7d3f4b8216
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0c91e5a7d3f4b8216"
+        name: ledger-workers
+        name_prefix: ""
+        description: ledger worker hosts
+        vpc_id: vpc-0e4b7a19c3d58f260
+        ingress: []
+        egress: []
+        tags: { Name: ledger-workers }
+        tags_all: { Name: ledger-workers }
+    - type: aws_subnet
+      name: workers
+      attrs:
+        id: subnet-0b6d2f8e41a7c9035
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0b6d2f8e41a7c9035"
+        vpc_id: vpc-0e4b7a19c3d58f260
+        cidr_block: 10.40.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: ledger-workers }
+        tags_all: { Name: ledger-workers }
+  # The S3 backend's DynamoDB lock, as the killed CI run left it (Terraform 1.9).
+  lock:
+    id: 4c2e8f17-9a3b-d605-7e1c-b28f5a0d93e4
+    who: ci@runner-17
+    operation: OperationTypeApply
+    created: "2026-10-08 07:42:24.613205871 +0000 UTC"
+    path: acme-terraform-state/ledger/terraform.tfstate
+    info: ""
+    message: "operation error DynamoDB: PutItem, https response error StatusCode: 400, RequestID: UJZDE8GXD6NCF10EPF91DHODZDOC9IS0J8HT9LGMXG9EDN581U33, ConditionalCheckFailedException: The conditional request failed"
+  evidence:
+    - evidence: ci-lock-error
+      command: plan
+      contains: "Error acquiring the state lock"
+    - evidence: ci-lock-holder
+      command: plan
+      contains: "Who:       ci@runner-17"
+    - evidence: ci-network-in-state
+      command: state list
+      contains: "aws_security_group.workers"
+    - evidence: ci-partial-plan
+      command: plan
+      contains: "Plan: 1 to add, 0 to change, 0 to destroy."
+
+hypotheses:
+  - id: stale-lock-cancelled-run
+    text: "The PR #212 apply job was cancelled partway through and exited without releasing the state lock; nothing holds it any more."
+    correct: true
+  - id: someone-applying-now
+    text: "Someone is running terraform apply against ledger-infra right now; wait for them to finish."
+    feedback: "The lock belongs to ci@runner-17 and was taken at 07:42:24 UTC, three hours ago: that's the PR #212 job, whose log ends with Terraform exiting on a second interrupt and the job cancelled. gh run list shows no run queued or in progress. Nobody is applying; the lock outlived the process that took it."
+  - id: corrupt-state
+    text: "The state file in S3 is corrupt, so Terraform can't read it."
+    feedback: "terraform state list and state show read the state fine: the VPC, subnet and security group are all there. The error is about acquiring the lock, which Terraform does before it writes, not about the state's content."
+  - id: backend-credentials
+    text: "Your AWS credentials can't reach the state backend."
+    feedback: "Terraform read the lock's details (ID, Who, Created) out of DynamoDB to show them to you, and the error is ConditionalCheckFailedException: the write was refused because a lock item already exists, not because you can't reach the table."
+
+actions:
+  - id: unlock-and-finish
+    label: "Confirm the CI job is dead, terraform force-unlock the lock ID from the error, review the plan, then apply what's left"
+    kind: fix
+    done_when:
+      all:
+        - lock_free: true
+        - state_has: aws_instance.reconciler
+        - plan_clean: true
+        - not: { applied: { op: create, address: aws_instance.reconciler, lock_bypassed: true } }
+        - not: { applied: { op: delete, address: aws_vpc.ledger } }
+        - not: { applied: { op: delete, address: aws_subnet.workers } }
+        - not: { applied: { op: delete, address: aws_security_group.workers } }
+    feedback: "The stale lock is gone, the plan showed only the reconciler left to create, and the apply took a fresh lock of its own and released it at the end. The network from the cancelled run was kept."
+  - id: apply-without-lock
+    label: "Push it through: terraform apply -lock=false while the CI lock is still held"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: create, address: aws_instance.reconciler, lock_bypassed: true }
+        - applied: { op: delete, address: aws_vpc.ledger, lock_bypassed: true }
+        - applied: { op: delete, address: aws_subnet.workers, lock_bypassed: true }
+        - applied: { op: delete, address: aws_security_group.workers, lock_bypassed: true }
+    feedback: "That wrote the state with no lock at all, and the stale lock is still there blocking everyone else. It happened to be safe only because the CI job was dead, which you hadn't established: if that run had still been going, two applies would have written the same state and one would have lost the other's changes. -lock=false doesn't remove a lock; it ignores every lock, including a live one."
+  - id: wait-for-lock-timeout
+    label: "Re-run with -lock-timeout=30m so Terraform waits for the lock to be released"
+    kind: wrong
+    feedback: "-lock-timeout makes Terraform retry for that long when a live run is about to finish. This lock belongs to a process that no longer exists: nothing will ever release it, so the plan just fails 30 minutes later."
+  - id: rebuild-state
+    label: "Delete the state file from S3 and import everything again to get a clean state"
+    kind: wrong
+    feedback: "The state is fine: state list reads it. The lock is a separate item in the DynamoDB table, so deleting the state doesn't touch it, and Terraform would lose track of the VPC, subnet and security group until you imported each one back."
+
+solution_paths:
+  - [unlock-and-finish]
+
+key_evidence: [ci-lock-holder, ci-run-dead, ci-network-in-state]
+
+evidence_labels:
+  ci-lock-holder: "The lock was taken by ci@runner-17 at 07:42:24 UTC for an apply"
+  ci-run-dead: "The PR #212 job was cancelled and Terraform exited; no run is in progress"
+  ci-network-in-state: "The VPC, subnet and security group from the cancelled run are in state; the reconciler isn't"
+
+hints:
+  nudge: "The error tells you who holds the lock and since when. Is that someone still working?"
+  direction: "Read the Lock Info (Who, Created, Operation), then the PR #212 job: ci-pipeline.log and gh run list. A lock whose process is gone has to be removed by hand; then look at what the run left before applying."
+  answer: "The cancelled PR #212 job (ci@runner-17, 07:42 UTC) died without unlocking; gh run list shows nothing running. terraform force-unlock 4c2e8f17-9a3b-d605-7e1c-b28f5a0d93e4, answer yes, terraform plan (1 to add: the reconciler), then terraform apply."
+
+analogy:
+  title: "The meeting room booking"
+  text: |
+    The room screen says "Booked: Finance sync, 07:40 to 08:30" and it's
+    nearly eleven. You don't barge in through the door, and you don't
+    book it on top of the old booking either. You look through the glass:
+    the room is empty, the meeting ended hours ago and the booking was
+    never released. You cancel the stale booking, check what was left on
+    the whiteboard, and then book the room properly for yourself.
+
+debrief:
+  root_cause: |
+    The PR #212 job was cancelled while terraform apply was creating the
+    reconciler. GitHub Actions sends SIGINT on cancel and SIGTERM 7.5
+    seconds later; Terraform treats both as interrupts. On the first it
+    saved the state (the VPC, subnet and security group it had finished)
+    and started shutting down; on the second it exited immediately, before
+    it had released the lock. The S3 backend's lock is an item in the
+    DynamoDB table terraform-locks, and Terraform takes it with a
+    conditional write (only if no lock item exists), so every later plan
+    and apply, in CI and on laptops, got ConditionalCheckFailedException
+    and printed the lock's details: ci@runner-17, OperationTypeApply,
+    07:42:24 UTC. Nothing would ever release it.
+  ideal_path:
+    - "terraform plan: Error acquiring the state lock. Read the Lock Info: Who ci@runner-17, Operation OperationTypeApply, Created 07:42:24 UTC, three hours ago."
+    - "ci-pipeline.log: the PR #212 job on runner-17 created the network, started the instance, then \"Interrupt received\", \"Two interrupts received. Exiting immediately\" and The operation was canceled."
+    - "gh run list (and gh run view 11823046571): the run was cancelled, later runs failed on the lock, and none is queued or in progress. The holder is dead."
+    - "terraform force-unlock 4c2e8f17-9a3b-d605-7e1c-b28f5a0d93e4 and answer yes."
+    - "terraform plan: 1 to add, the reconciler. The network is in state and needs nothing. Because the run died mid-create, check there's no unrecorded reconciler instance (aws ec2 describe-instances: none)."
+    - "terraform apply: Resources: 1 added. The plan is clean and the next pipeline run passes."
+  real_world: |
+    A lock left by a dead process is normal after a cancelled or killed
+    run, and force-unlock exists for it, but only once you know the
+    holder is gone: Who and Created tell you which machine and when, and
+    the CI system tells you whether that job is still running. Never use
+    -lock=false to get past it: it doesn't remove the lock, it skips
+    locking entirely, so if the holder were alive two runs would write the
+    same state. -lock-timeout is for the other case, a live run about to
+    finish. After unlocking, read the plan before applying: Terraform does
+    not roll back, and a run killed mid-create can leave an object in the
+    cloud that never reached state; applying blind would create a second
+    one. In CI, prefer a workflow that isn't cancelled mid-apply (no
+    cancel-in-progress on apply jobs) and send a single interrupt if you
+    must stop it. Newer Terraform versions (1.10 and later) can lock with
+    a lock file in the S3 bucket itself (use_lockfile) instead of
+    DynamoDB; the lock error and force-unlock work the same way.
+
+concepts:
+  - term: "State locking"
+    text: "Terraform locks the state for every operation that could write it, so two runs can't write it at once. Disabling it with -lock=false is not recommended."
+    url: "https://developer.hashicorp.com/terraform/language/state/locking"
+  - term: "terraform force-unlock"
+    text: "Removes a lock that automatic unlocking failed to release, given its ID from the lock error. It changes no infrastructure; -force skips the question."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/force-unlock"
+  - term: "S3 backend DynamoDB locking"
+    text: "With dynamodb_table set, the lock is an item keyed by bucket/key in a table with a LockID string partition key. Newer versions also offer use_lockfile."
+    url: "https://developer.hashicorp.com/terraform/language/backend/s3"
+  - term: "Workflow cancellation"
+    text: "When a GitHub Actions run is cancelled the runner sends SIGINT, then SIGTERM after 7.5 seconds, then kills the process tree."
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation"
+
+sources:
+  - title: "Terraform: State locking"
+    url: "https://developer.hashicorp.com/terraform/language/state/locking"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: force-unlock"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/force-unlock"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: plan (-lock and -lock-timeout)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+    retrieved: 2026-10-08
+  - title: "Terraform: Backend type s3 (dynamodb_table, use_lockfile)"
+    url: "https://developer.hashicorp.com/terraform/language/backend/s3"
+    retrieved: 2026-10-08
+  - title: "Terraform v1.9.8 source: S3 backend lock and unlock (internal/backend/remote-state/s3/client.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/backend/remote-state/s3/client.go"
+    retrieved: 2026-10-08
+  - title: "Terraform v1.9.8 source: lock error message (internal/command/clistate/state.go) and Lock Info (internal/states/statemgr/locker.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/command/clistate/state.go"
+    retrieved: 2026-10-08
+  - title: "Terraform v1.9.8 source: interrupt messages (internal/command/views/operation.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/command/views/operation.go"
+    retrieved: 2026-10-08
+  - title: "GitHub Docs: Workflow cancellation reference"
+    url: "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation"
+    retrieved: 2026-10-08
+  - title: "GitHub CLI manual: gh run list"
+    url: "https://cli.github.com/manual/gh_run_list"
+    retrieved: 2026-10-08
+
+command_notes:
+  "cat ci-pipeline.log": "The PR #212 job, saved from GitHub (less, more, tail and grep read the same file). runner-17 created the VPC, security group and subnet, started the reconciler, then got the cancel: \"Interrupt received\", and 7.5 seconds later \"Two interrupts received. Exiting immediately\". Terraform never got to release its lock."
+  "grep -i interrupt ci-pipeline.log": "Both interrupts: the first started a graceful shutdown, the second (SIGTERM, 7.5 seconds later) made Terraform exit immediately."
+  "gh run list": "No run is queued or in progress (that would show *). The PR #212 run is the one that took the lock; the two after it failed on that lock."
+  "gh run list --status in_progress": "Nothing is running the workflow right now."
+  "gh run view 11823046571": "The PR #212 run: cancelled by @dmitri-k, not failed. Its only job ran for 48s and finished."
+  "gh run view 11824377102": "The latest run, started by hand at 10:24: it failed in the apply step on the same lock. Re-running the pipeline can't help while the lock is held."
+  "gh run list --status cancelled": "Only one cancelled run: PR #212, the run whose job took the lock at 07:42."
+  "gh run view 11823519084": "The next run after the cancel: it failed in the apply step, on the state lock left behind."
+  "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler": "No reconciler exists, and there are no instances in the account at all: the interrupted create never made one, so the plan's 1 to add is right."
+  "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler --query 'Reservations[].Instances[].InstanceId'": "No instance IDs: nothing was left behind by the killed run."

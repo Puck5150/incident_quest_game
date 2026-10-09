@@ -157,7 +157,7 @@ const LeafSchema = z.union([
   z.strictObject({ lock_free: z.literal(true) }),
   z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
   z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
-  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr }) }),
+  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
 const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])
@@ -280,7 +280,7 @@ export const TerraformSchema = z.strictObject({
         on: z.enum(['create', 'update', 'delete']),
         error: z.string().min(1),
         times: z.int().min(1).optional(),
-        if: z.strictObject({ attr: z.string().min(1), equals: json }).optional(),
+        if: z.union([z.strictObject({ attr: z.string().min(1), equals: json }), z.strictObject({ attr: z.string().min(1), matches: z.string().min(1) })]).optional(),
         until_actions: z.array(id).optional(),
       }),
     )
@@ -609,11 +609,18 @@ export const ScenarioSchema = z
           if (!known.has(`${c.type}:${c.id}`)) issue(`no object with id "${c.id}" in state or cloud.add`, ['terraform', 'cloud', w, i, 'id'])
         }),
       )
-      tf.faults?.forEach((f, i) =>
+      tf.faults?.forEach((f, i) => {
         f.until_actions?.forEach((a) => {
           if (!actionIds.has(a)) issue(`unknown action "${a}"`, ['terraform', 'faults', i, 'until_actions'])
-        }),
-      )
+        })
+        if (f.if && 'matches' in f.if) {
+          try {
+            new RegExp(f.if.matches)
+          } catch {
+            issue(`invalid regex "${f.if.matches}"`, ['terraform', 'faults', i, 'if', 'matches'])
+          }
+        }
+      })
       dupes((tf.evidence ?? []).map((e) => e.evidence)).forEach((d) => issue(`duplicate terraform evidence tag "${d}"`, ['terraform', 'evidence']))
     }
 

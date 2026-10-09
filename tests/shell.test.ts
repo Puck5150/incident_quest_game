@@ -53,6 +53,15 @@ describe('the shell', () => {
     expect((await sh.run('cat /etc/hostname', s, none)).output).toBe('web-01')
   })
 
+  it('less and more print like cat (no terminal to page on), ignore their flags and read stdin', async () => {
+    const s = incident('crashloopbackoff')
+    const sh = new IncidentShell(s)
+    await sh.run('cd /tmp && printf "a\\nb\\n" > f', s, none)
+    for (const cmd of ['less f', 'less -N f', 'less -R +G f', 'more f', 'cat f | less', 'less < f'])
+      expect(await sh.run(cmd, s, none), cmd).toMatchObject({ output: 'a\nb', exitCode: 0 })
+    expect(await sh.run('less nope', s, none)).toMatchObject({ output: 'less: nope: No such file or directory', exitCode: 1 })
+  })
+
   it('answers --help with what the tool can show here, and is honest about the rest', async () => {
     const s = incident('crashloopbackoff')
     const sh = new IncidentShell(s)

@@ -237,6 +237,32 @@
     - { command: "aws iam simulate-principal-policy ...", note: "Ask IAM whether a specific action would be allowed." }
   docs: { title: "AWS CLI: iam get-role-policy", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/iam/get-role-policy.html" }
 
+- id: aws-iam-list-role-policies
+  match: "^aws iam list-role-policies"
+  summary: "Lists the names of the inline policies embedded in a role."
+  parts:
+    - { token: "--role-name orders-ci-deploy", meaning: "The role." }
+  why: "Inline policies live inside the role and don't show up in the attached-policy list; with list-attached-role-policies this is everything the role's identity-based permissions come from."
+  alternatives:
+    - { command: "aws iam list-attached-role-policies --role-name NAME", note: "Managed policies attached to the role." }
+    - { command: "aws iam get-role-policy --role-name NAME --policy-name POLICY", note: "One inline policy's document." }
+  docs: { title: "AWS CLI: iam list-role-policies", url: "https://docs.aws.amazon.com/cli/latest/reference/iam/list-role-policies.html" }
+
+- id: aws-iam-put-role-policy
+  match: "^(AWS_PROFILE=\\S+ )?aws (--profile[ =]\\S+ )?iam put-role-policy"
+  summary: "Adds an inline policy to a role, or replaces the document of the inline policy with that name. Prints nothing on success."
+  parts:
+    - { token: "AWS_PROFILE=platform-admin", meaning: "(If given) run this one command with another named profile from ~/.aws/config." }
+    - { token: "--profile platform-admin", meaning: "Use this named profile's credentials instead of the default (here, an admin who may change IAM)." }
+    - { token: "--role-name orders-ci-deploy", meaning: "The role to change." }
+    - { token: "--policy-name orders-rds", meaning: "The inline policy's name; an existing policy with this name is overwritten." }
+    - { token: "--policy-document file://orders-rds.json", meaning: "The policy JSON, read from a local file with file://." }
+  why: "The direct way to grant a role an action it's missing. In a team, the same change normally goes through the code that manages the role, or it drifts."
+  alternatives:
+    - { command: "aws iam attach-role-policy --role-name NAME --policy-arn ARN", note: "Attach a managed policy instead of an inline one." }
+    - { command: "aws iam simulate-principal-policy --policy-source-arn ARN --action-names rds:CreateDBInstance", note: "Check afterwards that the action is now allowed." }
+  docs: { title: "AWS CLI: iam put-role-policy", url: "https://docs.aws.amazon.com/cli/latest/reference/iam/put-role-policy.html" }
+
 - id: aws-iam-list-access-keys
   match: "^aws iam list-access-keys"
   summary: "Lists a user's access keys and whether each is active."
@@ -523,11 +549,50 @@
     - { command: "aws sqs get-queue-attributes --queue-url URL --attribute-names All", note: "Every setting and the message counts." }
   docs: { title: "AWS CLI: get-queue-attributes", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-attributes.html" }
 
+- id: aws-ec2-describe-instance-types
+  match: "^aws ec2 describe-instance-types"
+  summary: "Describes instance types: vCPUs, memory, network, architectures and more."
+  parts:
+    - { token: "--instance-types c5.24xlarge", meaning: "The type (or types, space-separated) to describe." }
+    - { token: "--query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"", meaning: "A JMESPath filter on the output: just the default vCPU count of each type." }
+  why: "On-Demand quotas are counted in vCPUs, so the question for a quota error is how many vCPUs the type you asked for has."
+  alternatives:
+    - { command: "aws ec2 describe-instance-types --instance-types c5.12xlarge c5.24xlarge --query \"InstanceTypes[].[InstanceType,VCpuInfo.DefaultVCpus]\" --output table", note: "Compare several types side by side." }
+  docs: { title: "AWS CLI: ec2 describe-instance-types", url: "https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instance-types.html" }
+
+- id: aws-service-quotas-get
+  match: "^aws service-quotas get-service-quota"
+  summary: "Shows the applied value of one service quota in the current account and Region."
+  parts:
+    - { token: "--service-code ec2", meaning: "The service the quota belongs to." }
+    - { token: "--quota-code L-1216C47A", meaning: "Which quota: here Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances, counted in vCPUs." }
+    - { token: "--region us-east-1", meaning: "(If given) the Region to ask about; quotas are per Region. Without it, the profile's region." }
+  why: "A limit error names the limit; this shows the quota behind it and its usage metric, so you know how far over you are and what to ask for."
+  alternatives:
+    - { command: "aws service-quotas get-aws-default-service-quota --service-code ec2 --quota-code L-1216C47A", note: "The AWS default value, not your account's applied value." }
+    - { command: "aws service-quotas list-requested-service-quota-change-history --service-code ec2", note: "Increase requests already made and their status." }
+  docs: { title: "AWS CLI: service-quotas get-service-quota", url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/get-service-quota.html" }
+
+- id: aws-service-quotas-request-increase
+  match: "^aws service-quotas request-service-quota-increase"
+  summary: "Asks AWS to raise a quota to a new value. The request starts as PENDING until it is reviewed."
+  parts:
+    - { token: "--service-code ec2", meaning: "The service the quota belongs to." }
+    - { token: "--quota-code L-1216C47A", meaning: "Which quota to raise." }
+    - { token: "--desired-value 128", meaning: "The new total you want, not the amount to add (here vCPUs)." }
+    - { token: "--region us-east-1", meaning: "(If given) the Region whose quota to raise; each Region is separate." }
+  why: "The way to get more of a limit you legitimately need. Size it for everything that will run, and ask early: approval can take from minutes to days."
+  alternatives:
+    - { command: "aws service-quotas get-requested-service-quota-change --request-id ID", note: "Check the status of the request later." }
+  docs: { title: "AWS CLI: service-quotas request-service-quota-increase", url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/request-service-quota-increase.html" }
+
 - id: aws-sts-caller-identity
-  match: "^aws sts get-caller-identity$"
+  match: "^(AWS_PROFILE=\\S+ )?aws (--profile \\S+ )?sts get-caller-identity( --profile \\S+)?$"
   summary: "Shows which account and identity (user or role) your credentials belong to."
   parts:
     - { token: "get-caller-identity", meaning: "No options; works even with no permissions granted." }
+    - { token: "--profile platform-admin", meaning: "(If given) ask about this named profile's credentials instead of the default." }
+    - { token: "AWS_PROFILE=platform-admin", meaning: "(If given) the same, set for this one command through the environment." }
   why: "Before debugging access, confirm who you actually are; many \"denied\" problems are the wrong identity."
   alternatives:
     - { command: "aws configure list", note: "Which credential source and profile the CLI is using." }

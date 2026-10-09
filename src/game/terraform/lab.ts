@@ -34,7 +34,7 @@ export interface Lab {
   faults: Fault[]
   attempts: Map<number, number>
   savedPlans: Map<string, SavedPlan>
-  history: string[] // "OP ADDRESS" per step that completed, in order, across workspaces
+  history: string[] // "OP ADDRESS" per step that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
 }
 
 // One workspace's state: expand the entries and derive each instance's dependencies.

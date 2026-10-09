@@ -89,6 +89,14 @@ describe('predicates', () => {
     expect(await ev({ applied: { op: 'update', address: 'aws_s3_bucket.b' } }, w)).toBe(false)
     expect(await ev({ applied: { op: 'delete', address: 'aws_vpc.main' } }, w)).toBe(true)
     expect(await ev({ applied: { op: 'delete', address: 'aws_vpc.mai' } }, w)).toBe(false)
+    expect(await ev({ applied: { op: 'create', address: 'aws_s3_bucket.b', lock_bypassed: true } }, w)).toBe(false)
+  })
+  it('applied with lock_bypassed: only steps marked as run past a held lock', async () => {
+    const w = world({ history: ['create aws_instance.w (lock bypassed)', 'delete aws_vpc.main'] })
+    expect(await ev({ applied: { op: 'create', address: 'aws_instance.w' } }, w)).toBe(true)
+    expect(await ev({ applied: { op: 'create', address: 'aws_instance.w', lock_bypassed: true } }, w)).toBe(true)
+    expect(await ev({ applied: { op: 'delete', address: 'aws_vpc.main', lock_bypassed: true } }, w)).toBe(false)
+    expect(await ev({ applied: { op: 'create', address: 'aws_instance.wx', lock_bypassed: true } }, w)).toBe(false)
   })
   it('file_contains', async () => {
     const w = world({ files: { 'main.tf': 'a\nretention = 7\n' } })

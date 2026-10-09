@@ -13,7 +13,8 @@ const content = loadContent(path.resolve(import.meta.dirname, '../content'))
 const builtins = new Set<string>(getCommandNames())
 // Typed exactly, these get the scripted answer from the engine; only the
 // shell's own answer differs (custom tools live in /usr/bin there).
-const KNOWN = new Set(['command -v aws'])
+// The shell ignores AWS_PROFILE (see CONTENT_TODO, TF5), the engine answers the exact line.
+const KNOWN = new Set(['command -v aws', 'AWS_PROFILE=platform-admin aws sts get-caller-identity'])
 
 describe('scripted commands agree with the real shell', () => {
   it.each(content.scenarios.filter((s) => s.terminal && isShellPrompt(s)).map((s) => [s.id, s] as const))('%s', async (_id, s) => {

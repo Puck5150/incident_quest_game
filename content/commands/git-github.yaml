@@ -29,12 +29,24 @@
     - { command: "gh run rerun ID --failed", note: "Rerun just the failed jobs." }
   docs: { title: "gh run view", url: "https://cli.github.com/manual/gh_run_view" }
 
+- id: gh-run-view
+  match: "^gh run view \\d+"
+  summary: "Shows one GitHub Actions workflow run: its result, its jobs and their annotations."
+  parts:
+    - { token: "run view 11823046571", meaning: "The run with this id (from gh run list)." }
+  why: "Tells a cancelled run from a failed one: the annotations say who cancelled it, and a failed job lists its steps with the one that failed."
+  alternatives:
+    - { command: "gh run view ID --log", note: "The full log of every step." }
+    - { command: "gh run view ID --log-failed", note: "Only the failed steps' log." }
+  docs: { title: "gh run view", url: "https://cli.github.com/manual/gh_run_view" }
+
 - id: gh-run-list
   match: "^gh run list"
   summary: "Lists recent GitHub Actions workflow runs with their result."
   parts:
     - { token: "--workflow ci.yml", meaning: "(If given) only runs of this workflow." }
     - { token: "--limit 3", meaning: "Only the newest 3 runs." }
+    - { token: "--status in_progress", meaning: "(If given) only runs in this state: in_progress, queued, completed, cancelled, failure, ..." }
     - { token: "--json databaseId,headSha,...", meaning: "(If given) output these fields as JSON." }
     - { token: "--jq '.[] | \"\\(.databaseId) \\(.headSha[0:7]) ...\"'", meaning: "For each run, print one line: id, the first 7 characters of the commit, title, and the time part ([11:19]) of start and finish." }
   why: "Shows when runs started failing and which commit each ran on; start and finish times show two deploys overlapping."
@@ -128,10 +140,31 @@
   parts:
     - { token: "main", meaning: "Compare with the main branch." }
     - { token: "-- db.tf", meaning: "(If given) only this file; -- separates paths from branch names." }
+    - { token: "--stat", meaning: "(If given) only the files changed and their line counts, not the lines themselves." }
   why: "Shows exactly what this branch changes compared with what's deployed, line by line."
   alternatives:
     - { command: "git diff --stat main", note: "Just files and line counts." }
   docs: { title: "git diff", url: "https://git-scm.com/docs/git-diff" }
+
+- id: git-status
+  match: "^git status"
+  summary: "Shows the current branch and any uncommitted changes."
+  parts:
+    - { token: "status", meaning: "The branch you're on, how it compares with its remote branch, and files changed but not committed." }
+  why: "Tells you which branch you're on and whether the files on disk match its last commit."
+  alternatives:
+    - { command: "git branch --show-current", note: "Just the branch name." }
+  docs: { title: "git status", url: "https://git-scm.com/docs/git-status" }
+
+- id: git-branch
+  match: "^git branch"
+  summary: "Lists local branches, with * on the current one."
+  parts:
+    - { token: "branch", meaning: "With no other arguments, list the local branches." }
+  why: "Shows the branch name to compare against main or give to other commands."
+  alternatives:
+    - { command: "git branch -a", note: "Remote-tracking branches too." }
+  docs: { title: "git branch", url: "https://git-scm.com/docs/git-branch" }
 
 - id: git-ls-files-grep
   match: "^git ls-files"

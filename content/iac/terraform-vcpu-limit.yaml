@@ -1,0 +1,426 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-vcpu-limit
+track: iac
+difficulty: 2
+title: "The load-test environment won't finish building"
+par_minutes: 10
+
+ticket:
+  from: "Performance engineering"
+  severity: SEV4
+  body: |
+    We need the load-test environment up for Thursday's soak test. Rafael's
+    PR merged on Friday (network, a small agent box and the load generator)
+    but nobody has applied it yet, and he's out this week. Can you run the
+    apply from ~/loadtest-infra and get it standing? If it fights you, Ana
+    says just flip it to us-west-2, but our dashboards all point at
+    us-east-1 so we'd rather not.
+
+environment: |
+  The load-test environment lives in its own AWS account (123456789012),
+  us-east-1. Nothing else runs there; it's built for a test and torn down
+  after. ~/loadtest-infra holds the Terraform; state is in the platform
+  state bucket. Your default AWS profile has admin access to the account.
+
+terminal:
+  prompt: "you@laptop:~/loadtest-infra$"
+  files:
+    - path: ~/.aws/config
+      content: |
+        [default]
+        sso_session = acme
+        sso_account_id = 123456789012
+        sso_role_name = PlatformAdmin
+        region = us-east-1
+
+        [sso-session acme]
+        sso_start_url = https://acme.awsapps.com/start
+        sso_region = us-east-1
+        sso_registration_scopes = sso:account:access
+  commands:
+    - match_regex: "^aws service-quotas get-service-quota (?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+      example: "aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A"
+      evidence: quota-64
+      output: |
+        {
+            "Quota": {
+                "ServiceCode": "ec2",
+                "ServiceName": "Amazon Elastic Compute Cloud (Amazon EC2)",
+                "QuotaArn": "arn:aws:servicequotas:us-east-1:123456789012:ec2/L-1216C47A",
+                "QuotaCode": "L-1216C47A",
+                "QuotaName": "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances",
+                "Value": 64.0,
+                "Unit": "None",
+                "Adjustable": true,
+                "GlobalQuota": false,
+                "UsageMetric": {
+                    "MetricNamespace": "AWS/Usage",
+                    "MetricName": "ResourceCount",
+                    "MetricDimensions": {
+                        "Class": "Standard/OnDemand",
+                        "Resource": "vCPU",
+                        "Service": "EC2",
+                        "Type": "Resource"
+                    },
+                    "MetricStatisticRecommendation": "Maximum"
+                }
+            }
+        }
+    - match_regex: "^aws ec2 describe-instance-types --instance-types c5\\.24xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types c5.24xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      evidence: loadgen-96-vcpus
+      output: |
+        [
+            96
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types c5\\.18xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types c5.18xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            72
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types c5\\.12xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types c5.12xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            48
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types c5\\.9xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types c5.9xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            36
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types m5\\.12xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types m5.12xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            48
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types m5\\.16xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types m5.16xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            64
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types c6i\\.16xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types c6i.16xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            64
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types m5\\.24xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types m5.24xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            96
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types m4\\.10xlarge --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types m4.10xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            40
+        ]
+    - match_regex: "^aws ec2 describe-instance-types --instance-types t3\\.small --query ['\"]?InstanceTypes\\[\\]\\.VCpuInfo\\.DefaultVCpus['\"]?$"
+      example: "aws ec2 describe-instance-types --instance-types t3.small --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\""
+      output: |
+        [
+            2
+        ]
+    - match_regex: "^aws service-quotas request-service-quota-increase (?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =]96(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+      example: "aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 96"
+      output: |
+        {
+            "RequestedQuota": {
+                "Id": "b7e2c4a91f3d4e6a8c05d2f19e7a3b64kQ2x8RtLm",
+                "ServiceCode": "ec2",
+                "ServiceName": "Amazon Elastic Compute Cloud (Amazon EC2)",
+                "QuotaCode": "L-1216C47A",
+                "QuotaName": "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances",
+                "DesiredValue": 96.0,
+                "Status": "PENDING",
+                "Created": 1791496440.512,
+                "Requester": "{\"accountId\":\"123456789012\",\"callerArn\":\"arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example\"}",
+                "QuotaArn": "arn:aws:servicequotas:us-east-1:123456789012:ec2/L-1216C47A",
+                "GlobalQuota": false,
+                "Unit": "None"
+            }
+        }
+    - match_regex: "^aws service-quotas request-service-quota-increase (?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =]128(\\.0+)?(\\s|$))(?=.*--region[ =]us-west-2(\\s|$))"
+      example: "aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 128 --region us-west-2"
+      output: |
+        {
+            "RequestedQuota": {
+                "Id": "4c9a1e7f2b8d4053a6e1c3f70d9b2e85pV7n3WsZq",
+                "ServiceCode": "ec2",
+                "ServiceName": "Amazon Elastic Compute Cloud (Amazon EC2)",
+                "QuotaCode": "L-1216C47A",
+                "QuotaName": "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances",
+                "DesiredValue": 128.0,
+                "Status": "PENDING",
+                "Created": 1791496512.087,
+                "Requester": "{\"accountId\":\"123456789012\",\"callerArn\":\"arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example\"}",
+                "QuotaArn": "arn:aws:servicequotas:us-west-2:123456789012:ec2/L-1216C47A",
+                "GlobalQuota": false,
+                "Unit": "None"
+            }
+        }
+
+terraform:
+  dir: "~/loadtest-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          backend "s3" {
+            bucket = "acme-terraform-state"
+            key    = "loadtest/terraform.tfstate"
+            region = "us-east-1"
+          }
+
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: network.tf
+      content: |
+        resource "aws_vpc" "loadtest" {
+          cidr_block = "10.70.0.0/16"
+
+          tags = {
+            Name = "loadtest"
+          }
+        }
+
+        resource "aws_subnet" "loadtest" {
+          vpc_id            = aws_vpc.loadtest.id
+          cidr_block        = "10.70.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "loadtest-a"
+          }
+        }
+    - path: compute.tf
+      content: |
+        # Collects results and serves the Grafana dashboard.
+        resource "aws_instance" "agent" {
+          instance_type = "t3.small"
+          ami           = "ami-0a3f5c9e1b7d24680"
+          subnet_id     = aws_subnet.loadtest.id
+
+          tags = {
+            Name = "loadtest-agent"
+          }
+        }
+
+        # Generates the soak-test traffic (k6, 20k virtual users).
+        resource "aws_instance" "loadgen" {
+          instance_type = "c5.24xlarge"
+          ami           = "ami-0a3f5c9e1b7d24680"
+          subnet_id     = aws_subnet.loadtest.id
+
+          tags = {
+            Name = "loadtest-loadgen"
+          }
+        }
+  faults:
+    # Every standard-family size whose vCPUs plus the agent's 2 exceed 64: 16xlarge and up (64+), and metal except
+    # a1.metal (16), z1d.metal (48), m5zn.metal (48). Tested against a table in tests/terraform-vcpu-limit.test.ts.
+    - at: aws_instance.loadgen
+      on: create
+      if: { attr: instance_type, matches: "^(?!(a1|z1d|m5zn)\\.metal$)(i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\\.((1[6-9]|[2-9][0-9]|[1-9][0-9]{2})xlarge|metal(-[0-9]+xl)?)$" }
+      error: "creating EC2 Instance: operation error EC2: RunInstances, https response error StatusCode: 400, RequestID: 3f9c2a71-5d8e-4b06-a1c4-7e2d9b0f6a53, api error VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 64 allows for the instance bucket that the specified instance type belongs to. Please visit http://aws.amazon.com/contact-us/ec2-request to request an adjustment to this limit."
+      until_actions: [request-quota-increase]
+  evidence:
+    - evidence: quota-error
+      command: apply
+      contains: "api error VcpuLimitExceeded"
+    - evidence: partial
+      command: state list
+      contains: "aws_instance.agent"
+
+hypotheses:
+  - id: vcpu-quota
+    text: "The account's vCPU quota for running On-Demand standard instances in us-east-1 is too low for loadgen's instance type on top of what's already running."
+    correct: true
+  - id: terraform-bug
+    text: "Terraform or the AWS provider has a bug with this instance type, or c5.24xlarge is a typo."
+    feedback: "The plan accepted c5.24xlarge, the agent was created by the same provider a moment earlier, and the error comes from EC2 itself (api error VcpuLimitExceeded) naming your current vCPU limit. Terraform passed the request on; AWS said no."
+  - id: az-capacity
+    text: "us-east-1a has run out of c5.24xlarge capacity right now."
+    feedback: "A capacity shortage is a different error: InsufficientInstanceCapacity, a server-side condition that says AWS doesn't have enough of that type available. This error is VcpuLimitExceeded and talks about your limit: it's about your account, not AWS's hardware, and it won't clear by waiting."
+  - id: iam-denied
+    text: "Your role isn't allowed to launch instances of this size."
+    feedback: "The agent instance launched fine with the same credentials, and an IAM refusal is AccessDenied or UnauthorizedOperation with \"not authorized to perform\". This error is a limit, not a permission."
+
+actions:
+  - id: right-size
+    label: "Make loadgen smaller in compute.tf so the account's quota covers it, then apply"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_instance.loadgen
+        - plan_clean: true
+        - file_contains:
+            path: /home/you/loadtest-infra/compute.tf
+            matches: 'resource\s+"aws_instance"\s+"loadgen"\s*\{[^}]*?instance_type\s*=\s*"((i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\.(nano|micro|small|medium|large|xlarge|2xlarge|3xlarge|4xlarge|6xlarge|8xlarge|9xlarge|10xlarge|12xlarge)|(a1|z1d|m5zn)\.metal)"'
+        - not: { applied: { op: delete, address: aws_vpc.loadtest } }
+        - not: { applied: { op: delete, address: aws_subnet.loadtest } }
+        - not: { applied: { op: delete, address: aws_instance.agent } }
+    feedback: "loadgen now fits inside the 64-vCPU quota with the agent's 2, and the apply created just that one instance: the network and agent from the first run were left alone. The plan is clean."
+  - id: request-quota-increase
+    label: "Request a Service Quotas increase for Running On-Demand Standard instances (L-1216C47A) in us-east-1, enough for loadgen plus the agent"
+    kind: fix
+    match_regex: "^aws service-quotas request-service-quota-increase (?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =](9[89]|[1-9][0-9]{2,})(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+    feedback: "Requested: Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances, us-east-1, desired value at least 98 vCPUs (96 for loadgen plus 2 for the agent). In real life this one sits in PENDING until AWS reviews it, sometimes minutes, sometimes days. Here it's approved straight away. Nothing changed in Terraform; the next apply only has loadgen left."
+  - id: finish-apply
+    label: "With the higher quota approved, run terraform apply again so it creates only loadgen"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_instance.loadgen
+        - plan_clean: true
+        - file_contains:
+            path: /home/you/loadtest-infra/compute.tf
+            matches: 'resource\s+"aws_instance"\s+"loadgen"\s*\{[^}]*?instance_type\s*=\s*"(?!(a1|z1d|m5zn)\.metal")(i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\.((16|18|24)xlarge|metal(-(16|24)xl)?)"'
+        - not: { applied: { op: delete, address: aws_vpc.loadtest } }
+        - not: { applied: { op: delete, address: aws_subnet.loadtest } }
+        - not: { applied: { op: delete, address: aws_instance.agent } }
+    feedback: "loadgen launched at full size under the new quota, and the apply only had that one instance to create. The plan is clean."
+  - id: destroy-everything
+    label: "terraform destroy the half-built environment and apply it again from nothing"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_vpc.loadtest }
+        - applied: { op: delete, address: aws_subnet.loadtest }
+        - applied: { op: delete, address: aws_instance.agent }
+    feedback: "The network and the agent were fine, created and in state. Destroying them changes nothing about the quota: the next apply builds them again and stops at loadgen with the same VcpuLimitExceeded. A failed apply isn't something to undo; fix the cause and apply again."
+  - id: switch-region
+    label: "Change the provider to us-west-2 and apply there instead"
+    kind: wrong
+    feedback: "Quotas are per account per Region, so us-west-2 has its own limit, and you haven't checked it: a Region you've never asked to raise sits at whatever AWS has set there, which can be as low as the 5-vCPU default (AWS also raises quotas as an account's usage grows). You'd also build a second copy of the environment away from the dashboards, and leave the us-east-1 network and agent behind in state for the wrong region. Hopping regions to dodge a limit you haven't read is guessing."
+
+solution_paths:
+  - [right-size]
+  - [request-quota-increase, finish-apply]
+
+key_evidence: [quota-error, partial, quota-64, loadgen-96-vcpus]
+
+evidence_labels:
+  quota-error: "loadgen fails with VcpuLimitExceeded: the request would go over the account's vCPU limit of 64"
+  partial: "The VPC, subnet and agent were created and are in state; only loadgen is missing"
+  quota-64: "Service Quotas: Running On-Demand Standard instances in us-east-1 is 64 (counted in vCPUs)"
+  loadgen-96-vcpus: "c5.24xlarge has 96 vCPUs on its own"
+
+hints:
+  nudge: "Read the error box all the way to the end. Who is refusing, and what number does it mention?"
+  direction: "The limit is counted in vCPUs for running On-Demand standard instances, per account and Region. Compare it with what loadgen's type needs (aws ec2 describe-instance-types ... VCpuInfo) and the quota itself (aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A)."
+  answer: "The quota is 64 vCPUs; the agent uses 2 and c5.24xlarge wants 96. Either make loadgen fit (c5.12xlarge is 48) and apply, or request at least 98 with aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 128 and apply again once it's approved. Either way the apply only has loadgen left to create."
+
+analogy:
+  title: "The credit limit"
+  text: |
+    You're kitting out a new office on a company card. The desks and the
+    chairs go through, then the big server rack is declined: not because
+    the shop is out of racks, and not because you aren't allowed to buy
+    one, but because it would take the card over its limit. You don't
+    return the desks. You either pick a smaller rack or ask finance to
+    raise the limit, then go back to the till for the rack alone.
+
+debrief:
+  root_cause: |
+    EC2 limits how many vCPUs of running On-Demand instances an account can
+    have in each Region; the standard families (A, C, D, H, I, M, R, T, Z)
+    share one quota, L-1216C47A. This account's had been raised from the
+    default to 64 for earlier, smaller tests. Terraform created
+    the VPC, the subnet and the t3.small agent (2 vCPUs), then asked for a
+    c5.24xlarge (96 vCPUs) and EC2 refused with VcpuLimitExceeded. The
+    network and agent stayed in AWS and in state; Terraform doesn't roll
+    back. The plan, the code and the credentials were all fine: only the
+    account's limit was in the way.
+  ideal_path:
+    - "terraform apply: the network and agent are created, then the error box for aws_instance.loadgen: VcpuLimitExceeded, \"your current vCPU limit of 64\"."
+    - "terraform state list and terraform plan: three objects exist, only loadgen is left (1 to add)."
+    - "aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A: 64 (vCPUs). describe-instance-types: c5.24xlarge alone is 96."
+    - "Decide with the team: a smaller loadgen that fits (c5.12xlarge, 48), or a quota increase to at least 98, approved before Thursday."
+    - "Change the code or get the increase, then terraform apply: Resources: 1 added. The plan is clean."
+  real_world: |
+    Quota errors come from the cloud, not from Terraform, and they're
+    about your account rather than AWS's capacity: VcpuLimitExceeded won't
+    clear by retrying, while InsufficientInstanceCapacity sometimes does,
+    or by trying another AZ or instance type. Check the quota before a big
+    build, especially in a new account (the default for standard On-Demand
+    instances is 5 vCPUs) or a new Region (quotas are per Region). Increase
+    requests are reviewed by AWS and can take from minutes to days, so
+    raise them early; the vCPU limits calculator in the EC2 console helps
+    size them. Whichever fix you choose, the re-run is safe: Terraform
+    only creates what's missing. Don't loop retries in CI, and don't move
+    Regions to dodge a limit: you'd be building somewhere else with its own
+    limit and leaving the first attempt behind.
+
+concepts:
+  - term: "On-Demand Instance quotas"
+    text: "Per account and Region, counted in vCPUs of running instances. All standard families share one quota (L-1216C47A); instances that are stopped don't count."
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-on-demand-instances.html"
+  - term: "VcpuLimitExceeded vs InsufficientInstanceCapacity"
+    text: "VcpuLimitExceeded is a client error: your account's limit. InsufficientInstanceCapacity is a server error: AWS doesn't have enough of that type available right now."
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html"
+  - term: "Service Quotas"
+    text: "View quotas with get-service-quota and ask for more with request-service-quota-increase; a request starts PENDING until AWS reviews it."
+    url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/request-service-quota-increase.html"
+  - term: "Partial apply"
+    text: "When an apply fails, what already succeeded stays in place and in state. Fix the cause and apply again; the plan shows only what's left."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/apply"
+
+sources:
+  - title: "Amazon EC2 User Guide: On-Demand Instance quotas"
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-on-demand-instances.html"
+    retrieved: 2026-10-08
+  - title: "Amazon EC2 instance type quotas (default values, quota codes)"
+    url: "https://docs.aws.amazon.com/ec2/latest/instancetypes/ec2-instance-quotas.html"
+    retrieved: 2026-10-08
+  - title: "Amazon EC2 API Reference: Error codes"
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html"
+    retrieved: 2026-10-08
+  - title: "AWS CLI: service-quotas get-service-quota"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/get-service-quota.html"
+    retrieved: 2026-10-08
+  - title: "AWS CLI: service-quotas request-service-quota-increase"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/request-service-quota-increase.html"
+    retrieved: 2026-10-08
+  - title: "AWS CLI: ec2 describe-instance-types (VCpuInfo)"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instance-types.html"
+    retrieved: 2026-10-08
+  - title: "Amazon EC2 instance types: compute optimized specifications (c5 vCPUs)"
+    url: "https://docs.aws.amazon.com/ec2/latest/instancetypes/co.html"
+    retrieved: 2026-10-08
+  - title: "terraform-provider-aws v5.70.0: EC2 instance create (internal/service/ec2/ec2_instance.go)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/v5.70.0/internal/service/ec2/ec2_instance.go"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: apply"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/apply"
+    retrieved: 2026-10-08
+
+command_notes:
+  "aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A": "The applied value for Running On-Demand Standard instances in us-east-1: 64. The unit says None, but the usage metric's Resource is vCPU: the quota counts vCPUs of running instances, not instances."
+  "aws ec2 describe-instance-types --instance-types c5.24xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "c5.24xlarge has 96 vCPUs: more than the whole quota on its own."
+  "aws ec2 describe-instance-types --instance-types c5.18xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "c5.18xlarge has 72 vCPUs: still over 64."
+  "aws ec2 describe-instance-types --instance-types c5.12xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "c5.12xlarge has 48 vCPUs: with the agent's 2, that's 50 of 64."
+  "aws ec2 describe-instance-types --instance-types c5.9xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "c5.9xlarge has 36 vCPUs: 38 of 64 with the agent."
+  "aws ec2 describe-instance-types --instance-types m5.12xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "m5.12xlarge has 48 vCPUs: 50 of 64 with the agent."
+  "aws ec2 describe-instance-types --instance-types m5.16xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "m5.16xlarge has 64 vCPUs: the whole quota, and the agent already uses 2."
+  "aws ec2 describe-instance-types --instance-types c6i.16xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "c6i.16xlarge has 64 vCPUs: the whole quota, and the agent already uses 2."
+  "aws ec2 describe-instance-types --instance-types m5.24xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "m5.24xlarge has 96 vCPUs, like c5.24xlarge: every standard family shares the one quota."
+  "aws ec2 describe-instance-types --instance-types m4.10xlarge --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "m4.10xlarge has 40 vCPUs: 42 of 64 with the agent."
+  "aws ec2 describe-instance-types --instance-types t3.small --query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"": "The agent's t3.small has 2 vCPUs, and T instances count toward the same standard quota."
+  "aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 96": "The request went in as PENDING, for 96: the desired value is the new total, and loadgen's 96 plus the agent's 2 is 98. Even approved, this wouldn't fit c5.24xlarge."
+  "aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 128 --region us-west-2": "That raised the request in us-west-2. Quotas are per Region, and the environment is in us-east-1: its limit is still 64."

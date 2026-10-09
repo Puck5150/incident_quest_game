@@ -17,7 +17,8 @@ export interface Fault {
   on: 'create' | 'update' | 'delete'
   error: string // the provider's complete error text, shown as the Error summary
   times?: number // fail this many times, then succeed (default: always)
-  if?: { attr: string; equals: Value } // only when the new object's attribute has this value (create/update)
+  // only when the new object's attribute has this value, or is a string matching this regex (create/update)
+  if?: { attr: string; equals: Value } | { attr: string; matches: string }
   until_actions?: string[] // inactive once all of these actions are taken
 }
 export interface ApplyContext {
@@ -103,6 +104,19 @@ function addInstance(state: State, item: PlanItem, attributes: Attrs): void {
   })
 }
 
+// A missing attribute, a non-string for `matches`, or an invalid regex: no match (never throws).
+function ifHolds(cond: NonNullable<Fault['if']>, attrs: Attrs): boolean {
+  if (!Object.hasOwn(attrs, cond.attr)) return false
+  const v = attrs[cond.attr]
+  if ('equals' in cond) return equal(v, cond.equals)
+  if (typeof v !== 'string') return false
+  try {
+    return new RegExp(cond.matches).test(v)
+  } catch {
+    return false
+  }
+}
+
 export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   let state = structuredClone(input.state)
   const reality = new Map(Object.entries(structuredClone(input.reality)))
@@ -119,7 +133,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       if (f.on !== on || (f.at !== i.address && f.at !== res(i))) continue
       // until_actions: [] (or absent) never deactivates the fault.
       if (f.until_actions?.length && f.until_actions.every((a) => ctx.taken.has(a))) continue
-      if (f.if && !(Object.hasOwn(attrs, f.if.attr) && equal(attrs[f.if.attr], f.if.equals))) continue
+      if (f.if && !ifHolds(f.if, attrs)) continue
       const fired = ctx.attempts.get(n) ?? 0
       if (fired >= (f.times ?? Infinity)) continue
       ctx.attempts.set(n, fired + 1)
@@ -219,6 +233,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
     state.outputs = Object.fromEntries(final.outputs.filter((o) => !hasUnknown(o.value)).map((o) => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }]))
   }
   const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
-  if (steps.length || content(state) !== content(input.state)) state.serial++
+  // Terraform bumps the serial only when the state changed (statemgr/filesystem.go), not for a failed-only run.
+  if (content(state) !== content(input.state)) state.serial++
   return { plan: first!, steps, errors, state, reality: Object.fromEntries(reality), counts }
 }
