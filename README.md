@@ -28,7 +28,7 @@ by keyboard or touch. Some challenges let you **pick your cloud**: the same
 brief on AWS, Azure or Google Cloud, with a debrief that names the equivalent
 services side by side and says where they genuinely differ.
 
-**Play it:** https://puck5150.github.io/incident_quest_game/ (deployed from `main` by CI)
+**Play it:** https://puck5150.github.io/incident_quest_game/ (deployed from `main` by CI; see [RELEASING.md](RELEASING.md) for how changes go live and how to roll back)
 
 ## Run it
 
