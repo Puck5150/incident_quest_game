@@ -235,7 +235,9 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
     const computed = final.outputs.filter((o) => !hasUnknown(o.value)).map((o): [string, State['outputs'][string]] => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }])
     // A targeted run only updates (or, destroying, removes) the outputs inside the targets.
     const scoped = first?.targetOutputs // from the first plan: a destroy has removed the objects the later plans would look at
-    const old = scoped ? Object.entries(state.outputs).filter(([n]) => !scoped.includes(n)) : []
+    // Destroying removes them; otherwise an output that stayed unknown keeps its recorded value.
+    const dropped = scoped && (input.destroy ? scoped : scoped.filter((n) => computed.some(([c]) => c === n)))
+    const old = dropped ? Object.entries(state.outputs).filter(([n]) => !dropped.includes(n)) : []
     state.outputs = Object.fromEntries([...old, ...computed])
   }
   const content = (x: State) => JSON.stringify({ ...x, serial: 0 })

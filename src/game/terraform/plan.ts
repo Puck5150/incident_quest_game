@@ -295,10 +295,11 @@ export function planConfig(input: PlanInput): PlanResult {
     if (lc.lifecycle.preventDestroy) protectedBy.set(node.address, { file: node.file, pos: b.pos, context })
     const planned = new Map<Key, Value>()
     let failed = false
-    let skippedAny = false
     for (const key of ex.keys) {
       if (scope && !scope.includes({ module: instance || undefined, mode: 'managed', type, name }, key)) {
-        skippedAny = true
+        // Not planned: what refers to it sees the recorded object (unknown when there is none).
+        const old = findInstance(base, instanceAddress({ mode: 'managed', type, name, module: instance || undefined }, key))?.instance.attributes
+        planned.set(key, old ? complete(structuredClone(old), schema) : UNKNOWN)
         continue
       }
       const ctx = ex.kind === 'count' ? { count: key as number } : ex.kind === 'for_each' ? { each: ex.each(key as string) } : {}
@@ -386,11 +387,6 @@ export function planConfig(input: PlanInput): PlanResult {
       planned.set(key, complete(p.planned, schema))
     }
     if (failed) return
-    // Instances outside the targets are not planned: what refers to the resource as a whole cannot be known.
-    if (skippedAny) {
-      values.set(mod + node.local, UNKNOWN)
-      return
-    }
     values.set(
       mod + node.local,
       ex.kind === 'count' ? ex.keys.map((k) => planned.get(k)!) : ex.kind === 'for_each' ? Object.fromEntries(ex.keys.map((k): [string, Value] => [k as string, planned.get(k)!])) : planned.get(undefined)!,

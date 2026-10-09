@@ -420,3 +420,46 @@ describe('-target with modules', () => {
     expect(heads((await w.run('plan', '-target=module.net.module.inner.aws_vpc.main')).stdout)).toEqual(['  # module.net.module.inner.aws_vpc.main will be created'])
   })
 })
+
+describe('-target keeps the recorded value of instances it does not plan', () => {
+  const outputOf = (w: ReturnType<typeof world>, n: string) => w.lab.state.outputs[n]?.value
+  it('count: an untargeted or nonexistent index leaves the output alone, in plan and apply', async () => {
+    for (const t of ['aws_s3_bucket.c[1]', 'aws_s3_bucket.c[5]']) {
+      const w = await applied()
+      const before = outputOf(w, 'bucket')
+      const plan = await w.run('plan', `-target=${t}`)
+      expect(plan.stdout, t).not.toContain('Changes to Outputs')
+      expect((await w.run('apply', '-auto-approve', `-target=${t}`)).exitCode).toBe(0)
+      expect(outputOf(w, 'bucket'), t).toBe(before)
+      expect(Object.keys(w.lab.state.outputs).sort()).toEqual(['bucket', 'vpc'])
+    }
+  })
+
+  it('for_each: the same', async () => {
+    const files = { 'main.tf': 'resource "aws_s3_bucket" "b" {\n  for_each = toset(["x", "y"])\n  bucket   = "l-${each.key}"\n}\n\noutput "x" {\n  value = aws_s3_bucket.b["x"].id\n}\n' }
+    const w = await applied(files)
+    const before = outputOf(w, 'x')
+    expect((await w.run('plan', '-target=aws_s3_bucket.b["y"]')).stdout).not.toContain('Changes to Outputs')
+    await w.run('apply', '-auto-approve', '-target=aws_s3_bucket.b["y"]')
+    expect(outputOf(w, 'x')).toBe(before)
+  })
+
+  it('module instance: targeting net["a"] leaves an output reading net["b"] alone', async () => {
+    const files = { 'main.tf': MOD_ROOT + 'output "b_vpc" {\n  value = module.net["b"].vpc_id\n}\n', 'modules/net/main.tf': NET_FIXED }
+    const w = await applied(files, { manifest: MANIFEST })
+    const before = outputOf(w, 'b_vpc')
+    expect(before).toMatch(/^vpc-/)
+    expect((await w.run('plan', '-target=module.net["a"]')).stdout).not.toContain('Changes to Outputs')
+    await w.run('apply', '-auto-approve', '-target=module.net["a"]')
+    expect(outputOf(w, 'b_vpc')).toBe(before)
+  })
+
+  it('an output reading a targeted instance that is planned for change is unknown', async () => {
+    const w = await applied()
+    w.disk[`${DIR}/main.tf`] = ROOT.replace('bucket = "cnt-${count.index}"', 'bucket = "new-${count.index}"')
+    const plan = await w.run('plan', '-target=aws_s3_bucket.c[0]')
+    expect(plan.stdout).toMatch(/Changes to Outputs:\n {2}~ bucket = "[^"]+" -> \(known after apply\)/)
+    const r = await w.run('plan', '-target=aws_s3_bucket.c[1]')
+    expect(r.stdout).not.toContain('Changes to Outputs')
+  })
+})
