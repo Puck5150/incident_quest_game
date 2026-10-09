@@ -9,6 +9,7 @@ import { planConfig, type PlanInput, type PlanItem, type PlanResult } from './pl
 import { alreadyExists, dependencyViolation, fillOnCreate, fillOnUpdate, referencedBy, seconds } from './provider.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
+import { resourceKey } from './address.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
 import type { Diagnostic } from './types.ts'
 
@@ -44,7 +45,7 @@ export interface ApplyResult {
 }
 
 type Attrs = Record<string, Value>
-const res = (i: { type: string; name: string }) => `${i.type}.${i.name}`
+const res = (i: { type: string; name: string }) => resourceKey({ module: [], mode: 'managed', type: i.type, name: i.name })
 const destroyPhase = (i: PlanItem) => i.action === 'destroy' || i.action === 'replace'
 const pending = (i: PlanItem) => destroyPhase(i) || i.action === 'create' || i.action === 'update' || i.action === 'forget' || i.importing !== undefined
 

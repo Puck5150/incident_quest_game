@@ -1,40 +1,67 @@
 // The state-only commands: `terraform state mv`, `state rm`, `taint`, `untaint`
 // and `import`. Each takes a state and returns a new one with serial + 1, or the
 // error the CLI prints; the input is never changed.
+import { compareAddresses, formatModule, modulePathCovers, parseModuleAddr, parseResAddr, staticKey, stepsOf, type ModStep } from './address.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { findInstance, instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
 
 export type OpResult<T = object> = ({ ok: true; state: State } & T) | { ok: false; summary: string; detail: string } // detail '' = plain one-line message form
 
-type Parsed = { ok: true; type: string; name: string; key?: string | number; mode: 'managed' | 'data' }
+type Parsed = { ok: true; type: string; name: string; key?: string | number; mode: 'managed' | 'data'; module?: string }
+type ParsedModule = { ok: true; kind: 'module'; steps: ModStep[]; module: string }
 
-const NOT_RESOURCES = new Set(['var', 'local', 'module', 'data', 'each', 'count', 'path', 'terraform', 'self'])
-const ADDRESS = /^(data\.)?([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)(?:\[(\d+|"(?:[^"\\]|\\.)*")\])?$/
-
-// aws_x.y, aws_x.y[0], aws_x.y["k"], data.aws_x.y; module addresses are not supported.
+// aws_x.y, aws_x.y[0], aws_x.y["k"], data.aws_x.y, each optionally under module.NAME[key]. prefixes.
 export function parseAddress(text: string): Parsed | { ok: false } {
-  const m = ADDRESS.exec(text)
-  if (!m || NOT_RESOURCES.has(m[2])) return { ok: false }
-  const a: Parsed = { ok: true, mode: m[1] ? 'data' : 'managed', type: m[2], name: m[3] }
-  if (m[4] === undefined) return a
-  try {
-    return { ...a, key: m[4].startsWith('"') ? (JSON.parse(m[4]) as string) : Number(m[4]) }
-  } catch {
-    return { ok: false }
-  }
+  const r = parseResAddr(text)
+  if (!r) return { ok: false }
+  const { module, ...rest } = r
+  return { ok: true, ...rest, ...(module.length ? { module: formatModule(module) } : {}) }
+}
+
+// Like parseAddress, but a whole module (module.net, module.net["a"].module.sub) is also a target.
+export function parseTarget(text: string): Parsed | ParsedModule | { ok: false } {
+  const steps = parseModuleAddr(text)
+  return steps ? { ok: true, kind: 'module', steps, module: text } : parseAddress(text)
 }
 
 const fail = (summary: string, detail = '') => ({ ok: false as const, summary, detail })
 const bumped = (state: State): State => ({ ...structuredClone(state), serial: state.serial + 1 })
-const sameResource = (r: StateResource, a: Parsed) => r.mode === a.mode && r.type === a.type && r.name === a.name
+const sameResource = (r: StateResource, a: Parsed) => r.mode === a.mode && r.type === a.type && r.name === a.name && r.module === a.module
+const staticOf = (r: Pick<StateResource, 'module' | 'mode' | 'type' | 'name'>) => staticKey({ ...r, module: stepsOf(r.module) })
 const NOT_ADDRESS = 'address is not a valid resource instance or resource address.'
 
+function moveModule(state: State, from: string, to: string, src: ParsedModule, dst: ParsedModule): OpResult<{ moved: { from: string; to: string }[] }> {
+  const s = bumped(state)
+  const n = src.steps.length
+  const last = src.steps[n - 1]
+  const dlast = dst.steps[dst.steps.length - 1]
+  const hit = s.resources.filter((r) => modulePathCovers(src.steps, stepsOf(r.module)))
+  if (hit.length === 0) return fail('Invalid source address', `Cannot move ${from}: does not match anything in the current state.`)
+  if (last.key === undefined && dlast.key !== undefined) return fail('Invalid target address', `Cannot move ${from} to ${to}: the target must also be a whole module.`)
+  const rewrite = (r: StateResource): string => {
+    const at = stepsOf(r.module)
+    const key = last.key === undefined ? at[n - 1].key : dlast.key
+    return formatModule([...dst.steps.slice(0, -1), { name: dlast.name, ...(key === undefined ? {} : { key }) }, ...at.slice(n)])
+  }
+  const taken = new Set(s.resources.filter((r) => !hit.includes(r)).flatMap((r) => r.instances.map((i) => instanceAddress(r, i.index_key))))
+  const moved = hit.flatMap((r) => r.instances.map((i) => ({ from: instanceAddress(r, i.index_key), to: instanceAddress({ ...r, module: rewrite(r) }, i.index_key) })))
+  if (moved.some((m) => taken.has(m.to))) return fail('Invalid target address', `Cannot move to ${to}: there is already a resource instance at that address in the current state.`)
+  const renamed = new Map(hit.map((r) => [staticOf(r), staticOf({ ...r, module: rewrite(r) })]))
+  for (const r of hit) r.module = rewrite(r)
+  for (const r of s.resources) for (const i of r.instances) if (i.dependencies) i.dependencies = i.dependencies.map((d) => renamed.get(d) ?? d)
+  return { ok: true, state: s, moved: moved.sort((a, b) => compareAddresses(a.from, b.from)) }
+}
+
 export function stateMove(state: State, from: string, to: string): OpResult<{ moved: { from: string; to: string }[] }> {
-  const src = parseAddress(from)
+  const src = parseTarget(from)
   if (!src.ok) return fail('Invalid source address', `Cannot move ${from}: ${NOT_ADDRESS}`)
-  const dst = parseAddress(to)
+  const dst = parseTarget(to)
   if (!dst.ok) return fail('Invalid target address', `Cannot move to ${to}: ${NOT_ADDRESS}`)
+  if ('kind' in src || 'kind' in dst) {
+    if ('kind' in src && 'kind' in dst) return moveModule(state, from, to, src, dst)
+    return fail('Invalid target address', `Cannot move ${from} to ${to}: a module can be moved only to another module address.`)
+  }
   const s = bumped(state)
   const srcIndex = s.resources.findIndex((r) => sameResource(r, src))
   const srcRes = s.resources[srcIndex] as StateResource | undefined
@@ -63,7 +90,8 @@ export function stateMove(state: State, from: string, to: string): OpResult<{ mo
   const moved = moving.map((i) => ({ from: instanceAddress(srcRes, i.index_key), to: instanceAddress(dst, place(i)) })).sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
   srcRes.instances = srcRes.instances.filter((i) => !moving.includes(i))
   if (!dstRes) {
-    dstRes = { ...srcRes, type: dst.type, name: dst.name, instances: [] }
+    const { module: _drop, ...base } = srcRes
+    dstRes = { ...base, ...(dst.module ? { module: dst.module } : {}), type: dst.type, name: dst.name, instances: [] }
     s.resources.splice(srcIndex + 1, 0, dstRes)
   }
   for (const i of moving) {
@@ -75,20 +103,22 @@ export function stateMove(state: State, from: string, to: string): OpResult<{ mo
   if (srcRes.instances.length === 0) {
     s.resources = s.resources.filter((r) => r !== srcRes)
     // The old resource address is gone; anything depending on it now depends on the new one.
-    const oldBase = instanceAddress(srcRes)
-    const newBase = instanceAddress(dst)
+    const oldBase = staticOf(srcRes)
+    const newBase = staticOf(dstRes)
     for (const r of s.resources) for (const i of r.instances) if (i.dependencies) i.dependencies = i.dependencies.map((d) => (d === oldBase ? newBase : d))
   }
   return { ok: true, state: s, moved }
 }
 
 export function stateRemove(state: State, addresses: string[]): OpResult<{ removed: string[] }> {
-  const targets = addresses.map(parseAddress).filter((a) => a.ok)
+  const targets = addresses.map(parseTarget).filter((a) => a.ok)
   const s = bumped(state)
   const removed: string[] = []
   for (const r of s.resources) {
     r.instances = r.instances.filter((i) => {
-      const hit = targets.some((a) => sameResource(r, a) && (a.key === undefined || a.key === i.index_key))
+      const hit = targets.some((a) =>
+        'kind' in a ? modulePathCovers(a.steps, stepsOf(r.module)) : r.mode === a.mode && r.type === a.type && r.name === a.name && modulePathCovers(stepsOf(a.module), stepsOf(r.module), true) && (a.key === undefined || a.key === i.index_key),
+      )
       if (hit) removed.push(instanceAddress(r, i.index_key))
       return !hit
     })
@@ -143,7 +173,7 @@ export function importObject(state: State, reality: Reality, address: string, id
   if (!declared) {
     return fail(
       `Resource address "${instanceAddress(a)}" does not exist in the configuration.`,
-      `Before importing this resource, please create its configuration in the root module. For example:\n\nresource "${a.type}" "${a.name}" {\n  # (resource arguments)\n}`,
+      `Before importing this resource, please create its configuration in ${a.module ? a.module : 'the root module'}. For example:\n\nresource "${a.type}" "${a.name}" {\n  # (resource arguments)\n}`,
     )
   }
   if (findInstance(state, instanceAddress(a, a.key))) {
@@ -154,7 +184,7 @@ export function importObject(state: State, reality: Reality, address: string, id
   const s = bumped(state)
   let r = s.resources.find((x) => sameResource(x, a))
   if (!r) {
-    r = { mode: 'managed', type: a.type, name: a.name, provider: `provider["${schemaFor(a.type)?.provider ?? `registry.terraform.io/hashicorp/${a.type.split('_')[0]}`}"]`, instances: [] }
+    r = { ...(a.module ? { module: a.module } : {}), mode: 'managed', type: a.type, name: a.name, provider: `provider["${schemaFor(a.type)?.provider ?? `registry.terraform.io/hashicorp/${a.type.split('_')[0]}`}"]`, instances: [] }
     s.resources.push(r)
   }
   r.instances.push({ ...(a.key === undefined ? {} : { index_key: a.key }), attributes: structuredClone(reality[k]) })

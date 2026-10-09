@@ -53,7 +53,7 @@ describe('parseAddress', () => {
     expect(parseAddress('data.aws_x.y')).toEqual({ ok: true, mode: 'data', type: 'aws_x', name: 'y' })
   })
   it('rejects module addresses, bare types, broken keys and empty text', () => {
-    for (const t of ['module.m.aws_x.y', 'aws_x', 'aws_x.y[', '', 'var.x', 'aws_x.y[-1]', 'aws_x.y["k]']) expect(parseAddress(t)).toEqual({ ok: false })
+    for (const t of ['aws_x', 'aws_x.y[', '', 'var.x', 'aws_x.y[-1]', 'aws_x.y["k]']) expect(parseAddress(t)).toEqual({ ok: false })
   })
 })
 
@@ -146,8 +146,8 @@ describe('stateMove', () => {
     )
   })
   it('refuses unparseable addresses', () => {
-    expect(pure(NET(), (x) => stateMove(x, 'aws_vpc.old', 'module.m.aws_vpc.old'))).toEqual(
-      fail('Invalid target address', 'Cannot move to module.m.aws_vpc.old: address is not a valid resource instance or resource address.'),
+    expect(pure(NET(), (x) => stateMove(x, 'aws_vpc.old', 'module.m.aws_vpc'))).toEqual(
+      fail('Invalid target address', 'Cannot move to module.m.aws_vpc: address is not a valid resource instance or resource address.'),
     )
     expect(pure(NET(), (x) => stateMove(x, 'aws_vpc', 'aws_vpc.new'))).toEqual(fail('Invalid source address', 'Cannot move aws_vpc: address is not a valid resource instance or resource address.'))
   })

@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { filesOnDisk } from '../game/paths.ts'
+import { MODULE_PATH_SOURCE, parseModuleAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
@@ -216,6 +217,7 @@ const TfState = z.array(
   z.strictObject({
     type: z.string().min(1),
     name: z.string().min(1),
+    module: z.string().refine((m) => parseModuleAddr(m) !== undefined, 'must be a module path like module.net, module.net["a"] or module.a.module.b').optional(),
     key: z.union([z.string(), z.int()]).optional(),
     mode: z.enum(['managed', 'data']).optional(),
     status: z.literal('tainted').optional(),
@@ -276,7 +278,7 @@ export const TerraformSchema = z.strictObject({
   faults: z
     .array(
       z.strictObject({
-        at: z.string().regex(/^[a-z][\w]*\.[\w-]+(\[(\d+|"[^"]*")\])?$/, 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]'),
+        at: z.string().regex(new RegExp(`^${MODULE_PATH_SOURCE}[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|"[^"]*")\\])?$`), 'must be a resource or instance address like aws_s3_bucket.b, aws_s3_bucket.b["x"] or module.net.aws_s3_bucket.b'),
         on: z.enum(['create', 'update', 'delete']),
         error: z.string().min(1),
         times: z.int().min(1).optional(),
@@ -590,8 +592,8 @@ export const ScenarioSchema = z
             if (typeof e.attrs.id !== 'string') issue('needs a string id attribute', [...path, i, 'attrs'])
             else into?.add(`${e.type}:${e.attrs.id}`)
           }
-          const k = `${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
-          if (seen.has(k)) issue(`duplicate state entry ${e.type}.${e.name}[${e.key ?? ''}]`, [...path, i])
+          const k = `${e.module ?? ''}|${mode}.${e.type}.${e.name}[${JSON.stringify(e.key ?? null)}]`
+          if (seen.has(k)) issue(`duplicate state entry ${e.module ? `${e.module}.` : ''}${e.type}.${e.name}[${e.key ?? ''}]`, [...path, i])
           seen.add(k)
         })
       }

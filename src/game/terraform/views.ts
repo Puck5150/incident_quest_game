@@ -3,6 +3,7 @@
 // (and, separately, `output`).
 import { formatDiagnostic } from './diag.ts'
 import { isUnknown, type Value } from './eval.ts'
+import { compareAddresses } from './address.ts'
 import { instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
 
 type Obj = { [key: string]: Value }
@@ -47,7 +48,7 @@ export function stateShow(r: StateResource, inst: StateInstance, sensitive: (att
 export function showState(state: State, sensitive: (type: string, attr: string) => boolean = () => false): string {
   const blocks = state.resources
     .flatMap((r) => r.instances.map((i) => ({ addr: instanceAddress(r, i.index_key), text: stateShow(r, i, (a) => sensitive(r.type, a)) })))
-    .sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
+    .sort((a, b) => compareAddresses(a.addr, b.addr))
   return blocks.length ? blocks.map((b) => b.text).join('\n\n') : 'The state file is empty. No resources are represented.'
 }
 

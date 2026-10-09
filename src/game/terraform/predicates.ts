@@ -3,6 +3,7 @@ import { equal } from './eval.ts'
 import type { PlanResult } from './plan.ts'
 import { hasChanges } from './render.ts'
 import { realityKey, type Reality } from './refresh.ts'
+import { addressCovers } from './address.ts'
 import { listAddresses, type State } from './state.ts'
 
 import type { Leaf, Predicate } from '../../schema/scenario.ts'
@@ -22,8 +23,7 @@ export const LOCK_BYPASSED = ' (lock bypassed)'
 
 const has = <T extends object, K extends string>(o: T, k: K): o is Extract<T, Record<K, unknown>> => Object.hasOwn(o, k)
 
-// A key-less address names every instance of the resource; one with a key names just that one.
-const covers = (given: string, actual: string) => actual === given || (!given.endsWith(']') && actual.startsWith(`${given}[`))
+const covers = addressCovers // a key-less address names every instance of the resource; a module covers all under it
 
 async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Promise<boolean> {
   if (has(l, 'plan_clean')) {

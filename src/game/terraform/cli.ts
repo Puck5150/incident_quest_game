@@ -3,6 +3,7 @@
 // force-unlock and version read the player's working directory and the lab's
 // state; everything else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
+import { compareAddresses, parseResAddr } from './address.ts'
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
@@ -15,7 +16,7 @@ import { refresh as refreshState } from './refresh.ts'
 import { renderPlan, renderPlanErrors } from './render.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
-import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
+import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, parseTarget, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
 import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } from './state.ts'
 import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
@@ -112,7 +113,6 @@ const EMPTY_INIT =
   '\nTerraform initialized in an empty directory!\n\nThe directory has no Terraform configuration files. You may begin working\nwith Terraform immediately by creating Terraform configuration files.\n'
 const ONE_INSTANCE =
   'This command requires that the address references one specific instance.\nTo view the available instances, use "terraform state list". Please modify \nthe address to reference a specific instance.'
-const ADDRESS = /^(data\.)?[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*(\[(\d+|"[^"]*")\])?$/
 const HELP: Record<string, string> = {
   init: 'Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.',
   validate: 'Validate the configuration files in a directory, referring only to the configuration and not accessing any remote services.',
@@ -443,7 +443,7 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
       else if (name === '-destroy' || name === '-refresh-only') return notYet(`${cmd} ${name}`)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
-  const bad = f.replace.find((a) => !ADDRESS.test(a) || a.startsWith('data.'))
+  const bad = f.replace.find((a) => parseResAddr(a)?.mode !== 'managed')
   if (bad !== undefined) return boxFail(`Invalid force-replace address "${bad}"`, `The force-replace address "${bad}" is not a valid resource instance address.`)
   return f
 }
@@ -490,7 +490,7 @@ const refreshLines = (state: State, refresh: boolean) =>
         return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : refresh ? [`${addr}: Refreshing state...${id}`] : [] }
       }),
     )
-    .sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
+    .sort((a, b) => compareAddresses(a.addr, b.addr))
     .flatMap((x) => x.lines)
 
 // What plan, apply, destroy and refresh share: setup checks, variables, the plan and its refresh lines.
@@ -650,7 +650,7 @@ function cmdStateMv(args: string[], ctx: CliContext): Out {
   if (!('pos' in a)) return a
   if (a.pos.length !== 2) return fail('Exactly two arguments expected.')
   // An unparseable address is an argument error, reported before locking.
-  const locked = a.pos.every((x) => parseAddress(x).ok) && checkLock(ctx, a.lock)
+  const locked = a.pos.every((x) => parseTarget(x).ok) && checkLock(ctx, a.lock)
   if (locked) return locked
   if (!ctx.lab.hasState) return fail(NO_STATE)
   const r = stateMove(ctx.lab.state, a.pos[0], a.pos[1])
@@ -666,7 +666,7 @@ function cmdStateRm(args: string[], ctx: CliContext): Out {
   const a = parseArgs(args, ['-dry-run'])
   if (!('pos' in a)) return a
   if (!a.pos.length) return fail('At least one address is required.')
-  const bad = a.pos.find((x) => !parseAddress(x).ok)
+  const bad = a.pos.find((x) => !parseTarget(x).ok)
   if (bad !== undefined) return boxFail(INVALID_ADDRESS, invalidAddressDetail(bad))
   const locked = checkLock(ctx, a.lock)
   if (locked) return locked
@@ -707,7 +707,7 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, cfg.tf)))
   const t = parseAddress(addr)
   // A keyed address needs only its resource block; count and for_each are not checked.
-  const declared = t.ok && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  const declared = t.ok && !t.module && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
   // A keyed address must be an instance the configuration produces; if count/for_each can't be evaluated, accept it.
   if (declared && t.mode === 'managed' && t.key !== undefined) {
     const target = instanceAddress(t, t.key)
@@ -758,7 +758,7 @@ function cmdState(args: string[], ctx: CliContext): Out {
     const all = listAddresses(lab.state)
     const matches = (a: string, w: string) => a === w || a.startsWith(`${w}.`) || a.startsWith(`${w}[`)
     for (const w of wanted) {
-      if (!w.startsWith('module.') && !ADDRESS.test(w)) return boxFail('Invalid address', 'Resource specification must include a resource type and name.')
+      if (!w.startsWith('module.') && !parseResAddr(w)) return boxFail('Invalid address', 'Resource specification must include a resource type and name.')
       if (!all.some((a) => matches(a, w))) {
         if (w.endsWith(']')) return boxFail('Unknown resource instance', `The current state contains no resource instance ${w}. If you've just added its resource to the configuration or have changed the count or for_each arguments, you must run "terraform apply" first to update the resource's entry in the state.`)
         return boxFail('Unknown resource', `The current state contains no resource ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
@@ -770,7 +770,7 @@ function cmdState(args: string[], ctx: CliContext): Out {
     if (!lab.hasState) return fail(NO_STATE)
     const addrs = rest.filter((a) => !a.startsWith('-'))
     if (addrs.length !== 1) return fail('Exactly one argument expected.')
-    if (!ADDRESS.test(addrs[0])) return fail(`Error parsing instance address: ${addrs[0]}\n\n${ONE_INSTANCE}`)
+    if (!parseResAddr(addrs[0])) return fail(`Error parsing instance address: ${addrs[0]}\n\n${ONE_INSTANCE}`)
     const found = findInstance(lab.state, addrs[0])
     if (!found) return fail(`No instance found for the given address!\n\n${ONE_INSTANCE}`)
     return ok(stateShow(found.resource, found.instance, (a) => sensitiveAttr(found.resource.type, a)))

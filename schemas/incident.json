@@ -217,6 +217,9 @@
                 "type": "string",
                 "minLength": 1
               },
+              "module": {
+                "type": "string"
+              },
               "key": {
                 "anyOf": [
                   {
@@ -342,6 +345,9 @@
                     "name": {
                       "type": "string",
                       "minLength": 1
+                    },
+                    "module": {
+                      "type": "string"
                     },
                     "key": {
                       "anyOf": [
@@ -550,7 +556,7 @@
             "properties": {
               "at": {
                 "type": "string",
-                "pattern": "^[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                "pattern": "^(?:module\\.[A-Za-z_][\\w-]*(?:\\[(?:\\d+|\"(?:[^\"\\\\]|\\\\.)*\")\\])?\\.)*[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
               },
               "on": {
                 "type": "string",
