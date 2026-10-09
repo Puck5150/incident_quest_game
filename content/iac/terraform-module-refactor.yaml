@@ -348,7 +348,7 @@ actions:
       all:
         - applied: { op: create, address: module.network }
         - not: { applied: { op: delete, address: aws_vpc.main } }
-    feedback: "-target built a second VPC and two more subnets inside the module while the originals stay in state under their old addresses. Nothing was moved: there are now two networks, the instances still sit in the old one, and the plan still wants to destroy the originals and now points the instances at the new subnets. Removing the duplicates with terraform destroy means destroying what depends on them too, and the db host is protected. Terraform warned that the applied changes may be incomplete. Targeting skips the problem instead of telling Terraform where the objects went."
+    feedback: "-target built a second VPC and two more subnets inside the module while the originals stay in state under their old addresses. Nothing was moved: there are now two networks, the instances still sit in the old one, and the plan still wants to destroy the originals and now points the instances at the new subnets. Removing the duplicates with terraform destroy means destroying what depends on them too, and the db host is protected; forgetting them with state rm would leave a second VPC orphaned in AWS. Terraform warned that the applied changes may be incomplete. Targeting skips the problem instead of telling Terraform where the objects went."
   - id: revert-and-close
     label: "Revert the PR and keep the network code in the root"
     kind: wrong
