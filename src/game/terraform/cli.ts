@@ -233,34 +233,48 @@ function cmdVersion(ctx: CliContext, cfg: Config): Out {
   return ok(lines.join('\n'))
 }
 
-// What init and get share: read each local module from its source and record it in the manifest.
-async function installModules(ctx: CliContext, cfg: Config): Promise<{ lines: string[]; files: File[] } | Out> {
-  const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), undefined, true)
-  if (!m.calls.length) return { lines: [], files: cfg.tf }
+// What init and get share: read each local module from its source, install registry modules from the lab's
+// registry (or keep the installed version while it still satisfies the constraint) and record all in the manifest.
+async function installModules(ctx: CliContext, cfg: Config, upgrade: boolean): Promise<{ lines: string[]; files: File[]; calls: boolean } | Out> {
+  const manifest = parseManifest(await ctx.readFile(resolvePath(cfg.dir, MANIFEST_PATH)))
+  const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), manifest, true, { registry: ctx.lab.registry, upgrade })
+  if (!m.calls.length && !m.install.length) return { lines: [], files: cfg.tf, calls: false }
   const errors = [...m.install, ...m.syntax]
-  if (errors.length) return { stdout: '', stderr: boxes(errors, [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]), exitCode: 1 }
+  const files = [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]
+  if (errors.length) return { stdout: '', stderr: boxes(errors, files), exitCode: 1 }
+  // Registry downloads: write the selected version's files; a file only the previous version had is emptied (no delete here).
+  for (const d of m.downloads) {
+    for (const [path, text] of [...d.files.map((f) => [f.path, f.content] as const), ...d.stale.map((p) => [p, ''] as const)]) {
+      const cut = path.lastIndexOf('/')
+      await ctx.write(resolvePath(cfg.dir, cut < 0 ? d.dir : `${d.dir}/${path.slice(0, cut)}`), path.slice(cut + 1), text)
+    }
+  }
   await ctx.write(resolvePath(cfg.dir, '.terraform/modules'), 'modules.json', formatManifest(m.entries))
-  return { lines: m.entries.map((e) => `- ${e.key} in ${e.dir}`), files: [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)] }
+  return { lines: m.lines, files, calls: true }
 }
 
-async function cmdGet(ctx: CliContext, cfg: Config): Promise<Out> {
+const hasFlag = (args: string[], name: string) => args.some((a) => a === name || a === `${name}=true`)
+
+async function cmdGet(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
   const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
-  const r = await installModules(ctx, cfg)
+  const r = await installModules(ctx, cfg, hasFlag(args, '-update'))
   return 'lines' in r ? ok(r.lines.join('\n')) : r
 }
 
-async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
+async function cmdInit(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
   if (!cfg.tf.length) return ok(EMPTY_INIT)
   // Only syntax stops init; undeclared references and cycles are for validate and plan.
   const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
-  const mods = await installModules(ctx, cfg)
-  if (!('lines' in mods)) return { ...mods, stdout: 'Initializing modules...' }
+  const upgrade = hasFlag(args, '-upgrade')
+  const mods = await installModules(ctx, cfg, upgrade)
+  const header = upgrade ? 'Upgrading modules...' : 'Initializing modules...'
+  if (!('lines' in mods)) return { ...mods, stdout: header }
   const providers = providersOf(mods.files)
   const locked = lockedProviders(cfg)
   const missing = providers.filter((p) => !locked.includes(p))
-  const lines = [...(mods.lines.length ? ['Initializing modules...', ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
+  const lines = [...(mods.calls ? [header, ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
   for (const p of providers) {
     const n = shortName(p)
     lines.push(...(locked.includes(p) ? [`- Reusing previous version of ${n} from the dependency lock file`, `- Using previously-installed ${n} v${PROVIDER_VERSION}`] : [`- Finding latest version of ${n}...`, `- Installing ${n} v${PROVIDER_VERSION}...`, `- Installed ${n} v${PROVIDER_VERSION} (signed by HashiCorp)`]))
@@ -947,9 +961,9 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
     case '-v':
       return cmdVersion(ctx, cfg)
     case 'init':
-      return cmdInit(ctx, cfg)
+      return cmdInit(more, ctx, cfg)
     case 'get':
-      return cmdGet(ctx, cfg)
+      return cmdGet(more, ctx, cfg)
     case 'validate':
       return cmdValidate(cfg)
     case 'plan':

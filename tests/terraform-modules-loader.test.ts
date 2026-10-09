@@ -55,9 +55,9 @@ describe('module loader', () => {
     expect([m.rootBad, m.install]).toEqual([true, []])
   })
 
-  it('registry, git and escaping sources are unsupported', async () => {
+  it('git and escaping sources are unsupported (registry sources are TF6b: see terraform-modules-registry)', async () => {
     const call = (src: string) => [{ name: 'main.tf', text: `module "x" {\n  source = "${src}"\n}\n` }]
-    for (const src of ['acme/network/aws', 'git::https://example.com/x.git', '../x']) {
+    for (const src of ['git::https://example.com/x.git', '../x']) {
       const m = await loadModuleTree(call(src), reader({}), undefined, true)
       expect(m.install.map((d) => d.summary), src).toEqual(['Unsupported module source'])
     }

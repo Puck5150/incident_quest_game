@@ -12,6 +12,8 @@ import { atStage } from './stages.ts'
 import { filesOnDisk } from '../game/paths.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
+import { isRegistrySource, normalizeRegistry, REGISTRY_SOURCE, registryDir } from '../game/terraform/layout.ts'
+import { compareVersions, parseVersion } from '../game/terraform/versions.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
 
@@ -226,6 +228,7 @@ const TfState = z.array(
   }),
 )
 const TfOutputs = z.record(z.string(), z.strictObject({ value: json, sensitive: z.boolean().optional() }))
+const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/
 const wsName = z.string().regex(/^[A-Za-z0-9._-]+$/, 'may only contain letters, digits, ".", "_" and "-"')
 export const TerraformSchema = z.strictObject({
   dir: z.string().min(1).optional(),
@@ -240,15 +243,40 @@ export const TerraformSchema = z.strictObject({
     )
     .min(1),
   vars: TfAttrs.optional(),
-  // What .terraform/modules/modules.json holds when the scenario starts: local modules `init` already installed.
+  // `registry`: the authored offline "registry.terraform.io" (module files per version). `installed`: what
+  // .terraform/modules/modules.json holds when the scenario starts. A registry module's `dir` is
+  // .terraform/modules/<key> (leave it out) and its files are those of the installed `version`.
   modules: z
     .strictObject({
+      registry: z
+        .array(
+          z.strictObject({
+            source: z.string().regex(REGISTRY_SOURCE, 'must look like NAMESPACE/NAME/PROVIDER (optionally HOST/ in front)'),
+            versions: z
+              .array(
+                z.strictObject({
+                  version: z.string().regex(SEMVER, 'must be a version like 2.1.0 or 2.1.0-beta.1'),
+                  files: z
+                    .array(
+                      z.strictObject({
+                        path: z.string().regex(/\.tf$/, 'must be a .tf file').refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path inside the module'),
+                        content: z.string(),
+                      }),
+                    )
+                    .min(1),
+                }),
+              )
+              .min(1),
+          }),
+        )
+        .optional(),
       installed: z
         .array(
           z.strictObject({
             key: z.string().regex(/^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*)*$/, 'must be the call name, or dotted call names for nested modules (net.inner)'),
             source: z.string().min(1),
-            dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory'),
+            version: z.string().regex(SEMVER, 'must be a version like 2.1.0').optional(),
+            dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory').optional(),
           }),
         )
         .optional(),
@@ -615,7 +643,33 @@ export const ScenarioSchema = z
       const installed = tf.modules?.installed ?? []
       if (installed.length && tf.initialized === false) issue('modules.installed needs the lab to start initialised', ['terraform', 'modules', 'installed'])
       dupes(installed.map((m) => m.key)).forEach((d) => issue(`duplicate installed module key "${d}"`, ['terraform', 'modules', 'installed']))
+      const registry = tf.modules?.registry ?? []
+      const sources = registry.map((r) => normalizeRegistry(r.source))
+      dupes(sources).forEach((d) => issue(`duplicate registry module "${d}"`, ['terraform', 'modules', 'registry']))
+      registry.forEach((r, i) => {
+        const vs = r.versions.map((v) => {
+          const p = parseVersion(v.version)
+          return p ? `${p.major}.${p.minor}.${p.patch}${p.pre === undefined ? '' : `-${p.pre}`}` : v.version
+        })
+        dupes(vs).forEach((d) => issue(`duplicate version "${d}" of ${r.source}`, ['terraform', 'modules', 'registry', i, 'versions']))
+        r.versions.forEach((v, j) => {
+          dupes(v.files.map((f) => f.path)).forEach((d) => issue(`duplicate file "${d}" in ${r.source} ${v.version}`, ['terraform', 'modules', 'registry', i, 'versions', j, 'files']))
+          // Local calls inside a registry module need their own files; the module itself needs a .tf at its top.
+          if (!v.files.some((f) => !f.path.includes('/'))) issue(`${r.source} ${v.version} needs a .tf file at the top of the module`, ['terraform', 'modules', 'registry', i, 'versions', j, 'files'])
+        })
+      })
       installed.forEach((m, i) => {
+        if (isRegistrySource(m.source)) {
+          const at = ['terraform', 'modules', 'installed', i]
+          const r = registry.find((x) => normalizeRegistry(x.source) === normalizeRegistry(m.source))
+          if (m.version === undefined) issue('a registry module needs the installed version', [...at, 'version'])
+          else if (!r) issue(`${m.source} is not in modules.registry`, [...at, 'source'])
+          else if (!r.versions.some((v) => { const a = parseVersion(v.version); const b = parseVersion(m.version!); return a && b && compareVersions(a, b) === 0 })) issue(`${m.source} has no version ${m.version} in modules.registry`, [...at, 'version'])
+          if (m.dir !== undefined && m.dir.replace(/^\.\//, '').replace(/\/+$/, '') !== registryDir(m.key)) issue(`a registry module is installed in ${registryDir(m.key)}: leave dir out`, [...at, 'dir'])
+          return
+        }
+        if (m.version !== undefined) issue('only a registry module has a version', ['terraform', 'modules', 'installed', i, 'version'])
+        if (m.dir === undefined) return issue('needs the module directory', ['terraform', 'modules', 'installed', i, 'dir'])
         const dir = m.dir.replace(/^\.\//, '').replace(/\/+$/, '')
         if (!tf.files.some((f) => f.path.endsWith('.tf') && f.path.slice(0, Math.max(0, f.path.lastIndexOf('/'))) === (dir === '.' ? '' : dir))) issue(`no .tf file in terraform.files under "${m.dir}"`, ['terraform', 'modules', 'installed', i, 'dir'])
       })

@@ -5,7 +5,7 @@ import type { Fault } from './apply.ts'
 import type { Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
-import { labDir, labFiles } from './layout.ts'
+import { labDir, labFiles, normalizeRegistry, type RegistryModule } from './layout.ts'
 import type { ModuleTree } from './modules.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
@@ -24,6 +24,7 @@ export interface Lab {
   version: string
   initialized: boolean
   files: { path: string; content: string }[]
+  registry: RegistryModule[] // the authored offline module registry
   hasState: boolean
   state: State
   workspace: string
@@ -115,6 +116,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     version,
     initialized: tf.initialized ?? true,
     files: labFiles(tf, startDir, home),
+    registry: (tf.modules?.registry ?? []).map((r) => ({ source: normalizeRegistry(r.source), versions: structuredClone(r.versions) })),
     hasState,
     state,
     workspace,

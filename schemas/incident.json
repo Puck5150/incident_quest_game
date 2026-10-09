@@ -207,6 +207,62 @@
         "modules": {
           "type": "object",
           "properties": {
+            "registry": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "pattern": "^([a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]+\\/)?[A-Za-z0-9_-]+\\/[A-Za-z0-9_-]+\\/[A-Za-z0-9_-]+$"
+                  },
+                  "versions": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                        },
+                        "files": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "pattern": "\\.tf$"
+                              },
+                              "content": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "content"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "files"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "source",
+                  "versions"
+                ],
+                "additionalProperties": false
+              }
+            },
             "installed": {
               "type": "array",
               "items": {
@@ -220,6 +276,10 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                  },
                   "dir": {
                     "type": "string",
                     "minLength": 1
@@ -227,8 +287,7 @@
                 },
                 "required": [
                   "key",
-                  "source",
-                  "dir"
+                  "source"
                 ],
                 "additionalProperties": false
               }

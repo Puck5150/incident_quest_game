@@ -103,7 +103,7 @@ describe('nested modules: loader', () => {
   })
 
   it('an unsupported source in a nested call is reported at the nested call', async () => {
-    const r = await loadModuleTree(rootFiles(call('net', './modules/net')), reader({ 'modules/net/main.tf': call('reg', 'acme/network/aws') }), undefined, true)
+    const r = await loadModuleTree(rootFiles(call('net', './modules/net')), reader({ 'modules/net/main.tf': call('reg', 'git::https://example.com/x.git') }), undefined, true)
     expect(r.install).toMatchObject([{ summary: 'Unsupported module source', file: 'modules/net/main.tf' }])
   })
 })
