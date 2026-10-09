@@ -129,7 +129,8 @@ function driftBlock(r: PlanResult, d: PlanResult['drift'][number]): string {
 }
 
 function outputChanges(r: PlanResult): string[] {
-  const before = r.refreshed.outputs
+  // A targeted plan leaves the outputs outside its targets alone.
+  const before = r.targetOutputs ? Object.fromEntries(Object.entries(r.refreshed.outputs).filter(([n]) => r.targetOutputs!.includes(n))) : r.refreshed.outputs
   const rows: { name: string; text: (w: number) => string[] }[] = []
   for (const o of r.outputs) {
     const had = Object.hasOwn(before, o.name)

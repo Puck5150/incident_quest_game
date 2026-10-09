@@ -822,3 +822,13 @@ terraform-sg-cycle:
 - [ ] Low confidence: `removed { from = module.x["k"].aws_... }` is accepted and then reports `Removed resource still exists`; real Terraform 1.9 may reject instance keys in `from`.
 - [ ] Simplification: a hand-edited `.terraform.lock.hcl` is indistinguishable from `init -upgrade` for `done_when` (no provider cache model); author wrong actions for it with `file_contains` on `main.tf`.
 - [ ] Not simulated: `-target`, `terraform providers`, `providers lock`, `show <planfile>`, `console`, `fmt`.
+
+## terraform incidents batch 3 (TF6c)
+
+### -target (task 1)
+
+- Verified against Terraform v1.9.8 source: warning texts (`internal/terraform/context_plan.go`, `context_apply.go`), error title `Invalid target "..."` (`internal/command/arguments/extended.go`), graph rule (`transform_targets.go`: targets plus ancestors; outputs kept when every resource ancestor is targeted; only directly targeted nodes get `SetTargets`), and warning order (`backend/local/backend_apply.go`: the apply warning prints just before the summary; plan warnings print after the plan and before the prompt).
+- Unverified: the detail of `Invalid target` is always `Resource specification must include a resource type and name.` (the real detail varies with the parse failure: HCL syntax errors, `Invalid address` variants). Not accepted: the optional `resource.` prefix and whitespace around the address.
+- Deviation: an output that reads a resource only some instances of which are targeted is still planned, with a `(known after apply)` value (Terraform plans it per instance).
+- Deviation: `moved` blocks are applied to the whole state even with targets (Terraform warns `Moved resource instances excluded by targeting` and skips excluded ones); `import` blocks outside the set are ignored.
+- Deviation from the task text: `apply tfplan` prints only `Applied changes may be incomplete` (the plan-time warning is part of `plan`, as in Terraform).

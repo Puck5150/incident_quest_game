@@ -354,3 +354,20 @@ export function buildGraph(input: File[] | ModuleTree): Graph {
   }
   return { nodes, order, blocks, diagnostics: dedupe(diagnostics) }
 }
+
+// Resources a node depends on, followed through locals, outputs, variables and data sources.
+export function resourceDeps(nodes: Map<string, GNode>, node: GNode): string[] {
+  const found = new Set<string>()
+  const seen = new Set<string>()
+  for (const todo = [...node.deps]; todo.length; ) {
+    const a = todo.pop()!
+    if (seen.has(a)) continue
+    seen.add(a)
+    const n = nodes.get(a)
+    if (!n) continue
+    if (n.kind === 'resource') found.add(a)
+    else todo.push(...n.deps)
+  }
+  found.delete(node.address)
+  return [...found].sort()
+}

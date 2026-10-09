@@ -10,12 +10,13 @@ import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
 import { equal, evalExpr, EvalError, hasUnknown, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
 import { expandInstances, type Key } from './expand.ts'
-import { buildGraph, type GNode } from './graph.ts'
+import { buildGraph, resourceDeps, type GNode } from './graph.ts'
+import { destroyScope, targetScope, type TargetScope, type Target } from './target.ts'
 import { applyMoves, movesOf } from './moves.ts'
 import type { ModuleTree } from './modules.ts'
 import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
-import { findInstance, instanceAddress, type State } from './state.ts'
+import { findInstance, instanceAddress, type State, type StateResource } from './state.ts'
 import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjectDetail } from './state-ops.ts'
 import type { Block, Diagnostic, Pos } from './types.ts'
 
@@ -42,6 +43,7 @@ export interface PlanInput {
   replace?: string[]
   skipImports?: Set<string> // instance addresses whose import blocks are already spent (apply imported or deleted them)
   destroy?: boolean // plan -destroy: every managed instance in state is destroyed; arguments are not evaluated
+  targets?: Target[] // -target: only these objects and what they depend on (destroy: and what depends on them)
 }
 export interface PlanItem {
   address: string // the full qualified instance address: module.net.aws_vpc.main[0]
@@ -86,6 +88,7 @@ export interface PlanResult {
   imported: number
   reads?: string[] // instance addresses of the terraform_remote_state data sources read while planning
   instances?: string[] // every module instance path the configuration expands to (module.net["a"]); the root is not listed
+  targetOutputs?: string[] // targeted runs: the root outputs inside the targets (planned, or removed by a targeted destroy)
   partial?: boolean // diagnostics came from prevent_destroy after planning: items and outputs hold what was planned
 }
 
@@ -120,7 +123,8 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
 export function planConfig(input: PlanInput): PlanResult {
   const tree: ModuleTree = input.tree ?? { root: { dir: '', files: input.files ?? [] }, children: new Map() }
   const g = buildGraph(tree)
-  const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
+  const scope = input.targets?.length ? (input.destroy ? destroyScope(g.nodes, input.state, input.targets) : targetScope(g.nodes, input.targets)) : undefined
+  const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshScoped(input.state, input.reality, scope)
   const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, baseState: refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0, instances: [] }
   if (g.diagnostics.length) return result
 
@@ -156,7 +160,7 @@ export function planConfig(input: PlanInput): PlanResult {
   const declared = (a: Address) =>
     isModuleAddress(a) ? !!g.nodes.get(formatModule((a.module ?? []).map((x) => ({ name: x.name }))))?.child : g.nodes.has(staticKey({ module: a.module ?? [], mode: 'managed', type: a.type, name: a.name }))
   const show = formatAddress
-  const imports = im.imports.filter((i) => !input.skipImports?.has(show(i.to)))
+  const imports = im.imports.filter((i) => !input.skipImports?.has(show(i.to)) && (!scope || isModuleAddress(i.to) || scope.visit.has(staticKey({ module: i.to.module ?? [], mode: 'managed', type: i.to.type, name: i.to.name }))))
   for (const r of input.destroy ? [] : rm.removals) {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
   }
@@ -178,7 +182,7 @@ export function planConfig(input: PlanInput): PlanResult {
   if (errors.length) return result
   const base = applied.state // the state planning works from: refreshed, with moves applied
   result.baseState = base
-  if (input.destroy) return planDestroy(g.nodes, result, fail)
+  if (input.destroy) return planDestroy(g.nodes, result, fail, scope)
 
   // Module instances. A module call expands like a resource: one instance, `count` of them or one per `for_each`
   // key. Values are keyed by the instance-qualified path ('module.net["a"].var.cidr'); graph nodes stay static.
@@ -291,7 +295,12 @@ export function planConfig(input: PlanInput): PlanResult {
     if (lc.lifecycle.preventDestroy) protectedBy.set(node.address, { file: node.file, pos: b.pos, context })
     const planned = new Map<Key, Value>()
     let failed = false
+    let skippedAny = false
     for (const key of ex.keys) {
+      if (scope && !scope.includes({ module: instance || undefined, mode: 'managed', type, name }, key)) {
+        skippedAny = true
+        continue
+      }
       const ctx = ex.kind === 'count' ? { count: key as number } : ex.kind === 'for_each' ? { each: ex.each(key as string) } : {}
       const ar = resourceArguments(b, scopeFor(ctx, mod))
       if (!ar.ok) {
@@ -377,6 +386,11 @@ export function planConfig(input: PlanInput): PlanResult {
       planned.set(key, complete(p.planned, schema))
     }
     if (failed) return
+    // Instances outside the targets are not planned: what refers to the resource as a whole cannot be known.
+    if (skippedAny) {
+      values.set(mod + node.local, UNKNOWN)
+      return
+    }
     values.set(
       mod + node.local,
       ex.kind === 'count' ? ex.keys.map((k) => planned.get(k)!) : ex.kind === 'for_each' ? Object.fromEntries(ex.keys.map((k): [string, Value] => [k as string, planned.get(k)!])) : planned.get(undefined)!,
@@ -498,6 +512,7 @@ export function planConfig(input: PlanInput): PlanResult {
   }
   for (const addr of g.order) {
     const node = g.nodes.get(addr)!
+    if (scope && !scope.visit.has(addr)) continue
     // A failed node's dependents are not visited; their errors would only mislead.
     if (node.deps.some((d) => broken.has(d))) {
       broken.add(addr)
@@ -544,7 +559,7 @@ export function planConfig(input: PlanInput): PlanResult {
     const schema = schemaFor(r.type)
     for (const inst of r.instances) {
       const address = instanceAddress(r, inst.index_key)
-      if (planned.has(address) || consumed.has(address)) continue
+      if (planned.has(address) || consumed.has(address) || (scope && !scope.includes(r, inst.index_key))) continue
       if (rm.removals.some((x) => !x.destroy && resourceKey({ module: x.from.module ?? [], mode: 'managed', type: x.from.type, name: x.from.name }) === resourceKey({ module: stepsOf(r.module), mode: 'managed', type: r.type, name: r.name }))) {
         result.items.push({ address, module: r.module ?? '', resource: `${r.type}.${r.name}`, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], dependsOn: inst.dependencies ?? [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
         continue
@@ -622,27 +637,12 @@ export function planConfig(input: PlanInput): PlanResult {
     if (i.action === 'destroy' || i.action === 'replace') result.summary.destroy++
   }
   // A data "terraform_remote_state" removed from the configuration leaves state (deferred reads stay: they are configured).
-  base.resources = base.resources.filter((r) => r.mode !== 'data' || r.type !== 'terraform_remote_state' || configured.has(`${r.module ? `${r.module}.` : ''}data.terraform_remote_state.${r.name}`))
+  base.resources = base.resources.filter((r) => r.mode !== 'data' || r.type !== 'terraform_remote_state' || (scope && !scope.includes(r)) || configured.has(`${r.module ? `${r.module}.` : ''}data.terraform_remote_state.${r.name}`))
   result.driftShown = relevantDrift(g.nodes, result, drift)
+  if (scope) result.targetOutputs = scope.outputs
   return result
 }
 
-// Resources a node depends on, followed through locals, outputs, variables and data sources.
-function resourceDeps(nodes: Map<string, GNode>, node: GNode): string[] {
-  const found = new Set<string>()
-  const seen = new Set<string>()
-  for (const todo = [...node.deps]; todo.length; ) {
-    const a = todo.pop()!
-    if (seen.has(a)) continue
-    seen.add(a)
-    const n = nodes.get(a)
-    if (!n) continue
-    if (n.kind === 'resource') found.add(a)
-    else todo.push(...n.deps)
-  }
-  found.delete(node.address)
-  return [...found].sort()
-}
 const destroyChanges = (schema: ResourceSchema | undefined, attrs: Record<string, Value>): AttrChange[] =>
   Object.entries(attrs)
     .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))
@@ -656,8 +656,10 @@ const preventDestroyError = (address: string): [string, string] => [
 // data sources are dropped from state, and every output is removed. The
 // configuration is consulted only for dependencies, block positions and
 // prevent_destroy; no argument is evaluated, so unset variables don't matter.
-function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file: string, pos: Pos, summary: string, detail: string, context?: string) => void): PlanResult {
-  const base = { ...result.baseState, resources: result.baseState.resources.filter((r) => r.mode === 'managed') }
+function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file: string, pos: Pos, summary: string, detail: string, context?: string) => void, scope?: TargetScope): PlanResult {
+  // A targeted destroy leaves everything outside the targets (and the data sources) in the state.
+  const base = { ...result.baseState, resources: result.baseState.resources.filter((r) => r.mode === 'managed' || scope) }
+  const inScope = (r: StateResource, key?: string | number) => !scope || scope.includes(r, key)
   result.baseState = base
   // Destroying a resource waits for the destroys of what state says depends on
   // it, so when a protected resource fails, Terraform never plans the
@@ -676,13 +678,14 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
     const lc = lifecycle(r)
     return lc?.ok === true && lc.lifecycle.preventDestroy
   }
-  const failing = configError ? [] : base.resources.filter((r) => r.instances.length > 0 && protects(r))
+  const failing = configError ? [] : base.resources.filter((r) => r.mode === 'managed' && r.instances.some((i) => inScope(r, i.index_key)) && protects(r))
   for (const todo = failing.flatMap((r) => deps.get(res(r))!); todo.length; ) {
     const a = todo.pop()!
     if (!skipped.has(a)) todo.push(...(deps.get(a) ?? []))
     skipped.add(a)
   }
   for (const r of base.resources) {
+    if (r.mode !== 'managed') continue
     const node = nodes.get(res(r))
     const b = node?.kind === 'resource' ? node.block : undefined
     const lc = b && lifecycleOf(b)
@@ -690,6 +693,7 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
     if (lc && !lc.ok) fail(node!.file, lc.pos, lc.summary, lc.detail, context)
     if (skipped.has(res(r))) continue
     for (const inst of r.instances) {
+      if (!inScope(r, inst.index_key)) continue
       const address = instanceAddress(r, inst.index_key)
       if (lc?.ok && lc.lifecycle.preventDestroy) fail(node!.file, b!.pos, ...preventDestroyError(address), context)
       result.items.push({
@@ -711,6 +715,7 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
     return result
   }
   if (result.diagnostics.length) result.partial = true
+  if (scope) result.targetOutputs = scope.outputs
   result.items.sort(byInstance)
   result.summary.destroy = result.items.length
   result.driftShown = relevantDrift(nodes, result, result.drift)
@@ -721,6 +726,20 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
 // refers to (directly or through other values), and only the attributes it
 // refers to. What a changing resource's own configuration points at counts; the
 // resource itself does not.
+// refresh limited to the targets: objects outside them keep their recorded state and report no drift.
+function refreshScoped(state: State, reality: Reality, scope?: TargetScope): { state: State; drift: Drift[] } {
+  const full = refreshState(state, reality)
+  if (!scope) return full
+  const kept = structuredClone(state)
+  for (const r of kept.resources) r.instances = r.instances.flatMap((i) => (scope.includes(r, i.index_key) ? (findInstance(full.state, instanceAddress(r, i.index_key))?.instance ?? []) : [i]))
+  kept.resources = kept.resources.filter((r) => r.instances.length > 0)
+  const drift = full.drift.filter((d) => {
+    const a = parseResAddr(d.address)
+    return a !== undefined && scope.includes({ module: a.module.length ? formatModule(a.module) : undefined, mode: a.mode, type: a.type, name: a.name }, a.key)
+  })
+  return { state: kept, drift }
+}
+
 function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Drift[]): Drift[] {
   const before = result.refreshed.outputs
   const start = [

@@ -8,6 +8,7 @@ import { schemaFor } from './resources.ts'
 import { labDir, labFiles, normalizeRegistry, type RegistryModule } from './layout.ts'
 import type { ModuleTree } from './modules.ts'
 import type { RemoteState } from './plan.ts'
+import type { Target } from './target.ts'
 import type { ProviderInfo } from './providers.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
@@ -16,6 +17,7 @@ export interface SavedPlan {
   vars: Record<string, Value>
   replace: string[]
   destroy: boolean
+  targets?: Target[] // -target addresses the plan was made with
   serial: number
   lineage: string
   workspace: string

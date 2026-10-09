@@ -232,7 +232,11 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
 
   if (!errors.length) {
     const final = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: false, skipImports })
-    state.outputs = Object.fromEntries(final.outputs.filter((o) => !hasUnknown(o.value)).map((o) => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }]))
+    const computed = final.outputs.filter((o) => !hasUnknown(o.value)).map((o): [string, State['outputs'][string]] => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }])
+    // A targeted run only updates (or, destroying, removes) the outputs inside the targets.
+    const scoped = first?.targetOutputs // from the first plan: a destroy has removed the objects the later plans would look at
+    const old = scoped ? Object.entries(state.outputs).filter(([n]) => !scoped.includes(n)) : []
+    state.outputs = Object.fromEntries([...old, ...computed])
   }
   const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
   // Terraform bumps the serial only when the state changed (statemgr/filesystem.go), not for a failed-only run.

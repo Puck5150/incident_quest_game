@@ -14,6 +14,7 @@ import { planConfig, type PlanResult } from './plan.ts'
 import { hex } from './provider.ts'
 import { refresh as refreshState } from './refresh.ts'
 import { renderPlan, renderPlanErrors } from './render.ts'
+import { destroyScope, parseTargetArg, targetScope, type Target, type TargetScope } from './target.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
 import { importObject, INVALID_ADDRESS, invalidAddressDetail, NO_IMPORT_CONFIG, noImportConfigDetail, NO_SUCH_INSTANCE, parseAddress, parseTarget, stateMove, stateRemove, taintInstance, untaintInstance, type OpResult } from './state-ops.ts'
@@ -505,6 +506,7 @@ interface PlanFlags {
   autoApprove: boolean
   lock: boolean
   planFile?: string
+  targets: Target[]
 }
 const PLAN_VALUE_FLAGS = new Set(['-var', '-var-file', '-replace', '-out', '-lock-timeout', '-parallelism', '-target'])
 const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warnings', '-refresh', '-detailed-exitcode', '-destroy', '-refresh-only', '-auto-approve'])
@@ -512,7 +514,8 @@ const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warni
 const NOT_FOR: Record<Cmd, string[]> = { plan: ['-auto-approve'], apply: ['-out', '-detailed-exitcode'], destroy: ['-out', '-detailed-exitcode', '-replace'] }
 
 function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
-  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false, lock: true }
+  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false, lock: true, targets: [] }
+  const rawTargets: string[] = []
   for (let i = 0; i < args.length; i++) {
     const raw = args[i]
     if (!raw.startsWith('-') || raw === '-') {
@@ -536,7 +539,7 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
       else if (name === '-var-file') f.sources.push({ kind: 'file', path: value })
       else if (name === '-replace') f.replace.push(value)
       else if (name === '-out') f.out = value
-      else if (name === '-target') return notYet(`${cmd} -target`)
+      else if (name === '-target') rawTargets.push(value)
     } else if (PLAN_BOOL_FLAGS.has(name)) {
       if (name === '-refresh') f.refresh = value !== 'false'
       else if (name === '-lock') f.lock = value !== 'false'
@@ -545,6 +548,10 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
       else if (name === '-destroy' || name === '-refresh-only') return notYet(`${cmd} ${name}`)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
+  // Terraform parses -target before anything else runs; a bad address is an error with the address quoted.
+  const badTargets = rawTargets.filter((t) => parseTargetArg(t) === undefined)
+  if (badTargets.length) return fail(badTargets.map((t) => box('error', `Invalid target ${JSON.stringify(t)}`, 'Resource specification must include a resource type and name.')).join('\n'))
+  f.targets = rawTargets.flatMap((t) => parseTargetArg(t) ?? [])
   const bad = f.replace.find((a) => parseResAddr(a)?.mode !== 'managed')
   if (bad !== undefined) return boxFail(`Invalid force-replace address "${bad}"`, `The force-replace address "${bad}" is not a valid resource instance address.`)
   return f
@@ -585,12 +592,13 @@ export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined
 }
 
 // The lines a plan prints while it reads the state's objects back from the cloud.
-const refreshLines = (state: State, refresh: boolean, reads: string[] = [], planned?: State) =>
+const refreshLines = (state: State, refresh: boolean, reads: string[] = [], planned?: State, scope?: TargetScope) =>
   state.resources
+    .filter((r) => !scope || r.instances.some((i) => scope.includes(r, i.index_key)))
     // a data source whose block was removed is dropped by the plan: no Reading line for it
     .filter((r) => !planned || r.mode !== 'data' || r.type !== 'terraform_remote_state' || planned.resources.some((p) => p.mode === 'data' && p.type === r.type && p.name === r.name && (p.module ?? '') === (r.module ?? '')))
     .flatMap((r) =>
-      r.instances.map((i) => {
+      r.instances.filter((i) => !scope || scope.includes(r, i.index_key)).map((i) => {
         const addr = instanceAddress(r, i.index_key)
         const id = typeof i.attributes.id === 'string' ? ` [id=${i.attributes.id}]` : ''
         return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : refresh ? [`${addr}: Refreshing state...${id}`] : [] }
@@ -608,14 +616,30 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
-  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: f.replace, refresh: f.refresh, destroy })
+  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: f.replace, refresh: f.refresh, destroy, ...(f.targets.length ? { targets: f.targets } : {}) })
   const rendered = renderPlan(result, sourcesOf(allFiles(cfg)))
-  const lines = refreshLines(ctx.lab.state, f.refresh, result.reads, destroy ? undefined : result.baseState)
-  const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
+  const scope = f.targets.length ? (destroy ? destroyScope(s.graph.nodes, ctx.lab.state, f.targets) : targetScope(s.graph.nodes, f.targets)) : undefined
+  const lines = refreshLines(ctx.lab.state, f.refresh, result.reads, destroy ? undefined : result.baseState, scope)
+  // Terraform prints the targeting warning after the plan, with the plan's other diagnostics.
+  const warn = scope ? `\n\n${TARGET_WARNING}` : ''
+  const stdout = (lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered) + warn
   // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
-  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
+  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : warn.trim(), stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
   return { warning, vars: s.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
 }
+
+const TARGET_WARNING = box(
+  'warning',
+  'Resource targeting is in effect',
+  'You are creating a plan with the -target option, which means that the result of this plan may not represent all of the changes requested by the current configuration.\n\nThe -target option is not for routine use, and is provided only for exceptional situations such as recovering from errors or mistakes, or when Terraform specifically suggests to use it as part of an error message.',
+  true,
+)
+const TARGETED_APPLY_WARNING = box(
+  'warning',
+  'Applied changes may be incomplete',
+  'The plan was created with the -target option in effect, so some changes requested in the configuration may have been ignored and the output values may not be fully updated. Run the following command to verify that no other changes are pending:\n    terraform plan\n\nNote that the -target option is not suitable for routine use, and is provided only for exceptional situations such as recovering from errors or mistakes, or when Terraform specifically suggests to use it as part of an error message.',
+  true,
+)
 
 const planId = (lineage: string, serial: number, name: string) => `p${hex(`${lineage}:${serial}:${name}`, 8)}`
 
@@ -635,7 +659,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boole
     const { lineage, serial } = ctx.lab.state
     const path = resolvePath(cfg.dir, f.out)
     const id = planId(lineage, serial, path)
-    ctx.lab.savedPlans.set(id, { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy: false, serial, lineage, workspace: ctx.lab.workspace })
+    ctx.lab.savedPlans.set(id, { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy: false, targets: f.targets, serial, lineage, workspace: ctx.lab.workspace })
     const slash = path.lastIndexOf('/')
     await ctx.write(path.slice(0, slash) || '/', path.slice(slash + 1), `TFPLAN1\n${id}\n`)
   }
@@ -663,7 +687,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   const f = parsePlanFlags(args, mode)
   if (!('sources' in f)) return f
   const destroy = mode === 'destroy'
-  let input: { tree: ModuleTree; vars: Record<string, Value>; replace: string[]; destroy: boolean }
+  let input: { tree: ModuleTree; vars: Record<string, Value>; replace: string[]; destroy: boolean; targets: Target[] }
   let head: string
   let warning = ''
   if (f.planFile !== undefined) {
@@ -675,13 +699,13 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     if (locked) return locked
     if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage || saved.workspace !== ctx.lab.workspace)
       return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
-    input = { tree: saved.tree, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
+    input = { tree: saved.tree, vars: saved.vars, replace: saved.replace, destroy: saved.destroy, targets: saved.targets ?? [] }
     head = '' // a saved plan was already reviewed: no plan text, no question
   } else {
     const p = await makePlan(f, ctx, cfg, destroy)
     if (!('result' in p)) return p
     warning = p.warning
-    input = { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy }
+    input = { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy, targets: f.targets }
     // No changes: nothing to ask, but the apply still runs so the refreshed state is saved.
     head = p.changes || !destroy ? p.stdout : p.stdout.replace(NO_CHANGES, NO_DESTROY)
     if (p.changes && !f.autoApprove) {
@@ -694,7 +718,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     }
   }
   const r: ApplyResult = executeApply(
-    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, refresh: f.refresh },
+    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, refresh: f.refresh, ...(input.targets.length ? { targets: input.targets } : {}) },
     { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: `${ctx.lab.state.lineage}:${ctx.lab.state.serial}` },
   )
   // Outside the lab directory ctx.lab is a throwaway copy, so this commit is discarded.
@@ -705,7 +729,8 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   const bypassed = !f.lock && ctx.lab.lock ? LOCK_BYPASSED : ''
   for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}${bypassed}`)
   const progress = renderProgress(r)
-  const stdout = [head, progress, renderApplyEnd(r, mode)].filter(Boolean).join('\n')
+  // The apply's own warning comes just before the summary (backend/local/backend_apply.go).
+  const stdout = [head, progress, input.targets.length ? `\n${TARGETED_APPLY_WARNING}` : '', renderApplyEnd(r, mode)].filter(Boolean).join('\n')
   return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(treeFiles(input.tree))), exitCode: r.errors.length ? 1 : 0 }
 }
 

@@ -298,8 +298,8 @@ describe('terraform apply', () => {
     expect(bad.exitCode).toBe(1)
   })
 
-  it('keeps -target and -refresh-only unavailable and rejects flags apply does not take', async () => {
-    for (const flag of ['-target=aws_vpc.main', '-refresh-only']) {
+  it('keeps -refresh-only unavailable and rejects flags apply does not take', async () => {
+    for (const flag of ['-refresh-only']) {
       const r = await world().run('apply', flag)
       expect(r.stderr, flag).toContain('Error: Not available in this lab yet')
       expect(r.exitCode).toBe(1)
