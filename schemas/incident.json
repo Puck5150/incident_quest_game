@@ -570,21 +570,43 @@
                 "maximum": 9007199254740991
               },
               "if": {
-                "type": "object",
-                "properties": {
-                  "attr": {
-                    "type": "string",
-                    "minLength": 1
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "attr": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "equals": {
+                        "$ref": "#/definitions/__schema0"
+                      }
+                    },
+                    "required": [
+                      "attr",
+                      "equals"
+                    ],
+                    "additionalProperties": false
                   },
-                  "equals": {
-                    "$ref": "#/definitions/__schema0"
+                  {
+                    "type": "object",
+                    "properties": {
+                      "attr": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "matches": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "attr",
+                      "matches"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "attr",
-                  "equals"
-                ],
-                "additionalProperties": false
+                ]
               },
               "until_actions": {
                 "type": "array",

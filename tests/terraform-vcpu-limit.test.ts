@@ -74,8 +74,22 @@ describe('terraform-vcpu-limit on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(FINISHED)
   })
 
-  it('near miss: another type still over the quota (c5.18xlarge, c5.metal) fails the same way and earns nothing', async () => {
-    for (const t of ['c5.18xlarge', 'c5.metal']) {
+  it('the fault regex covers exactly the standard types whose vCPUs plus the agent\'s 2 exceed 64', () => {
+    const fault = scenario.terraform!.faults![0]
+    const rx = new RegExp((fault.if as { matches: string }).matches)
+    // vCPUs from the EC2 instance types guide (co, gp, mo, pg pages)
+    const VCPUS: Record<string, number> = {
+      't3.small': 2, 'c5.4xlarge': 16, 'c5.9xlarge': 36, 'c5.12xlarge': 48, 'm5.12xlarge': 48, 'z1d.12xlarge': 48, 'm4.10xlarge': 40,
+      'a1.metal': 16, 'z1d.metal': 48, 'm5zn.metal': 48,
+      'm5.16xlarge': 64, 'c6i.16xlarge': 64, 'r5.16xlarge': 64, 'm4.16xlarge': 64, 'r7iz.metal-16xl': 64, 'c6g.metal': 64,
+      'c5.18xlarge': 72, 'c5d.18xlarge': 72, 'c5n.metal': 72, 'c5.24xlarge': 96, 'm5.24xlarge': 96, 'c5.metal': 96, 'm7i.metal-24xl': 96,
+      'c6i.metal': 128, 'm7i.48xlarge': 192,
+    }
+    for (const [t, v] of Object.entries(VCPUS)) expect(rx.test(t), `${t} (${v} vCPUs)`).toBe(v + 2 > 64)
+  })
+
+  it('near miss: other types still over the quota fail the same way and earn nothing', async () => {
+    for (const t of ['c5.18xlarge', 'c5.metal', 'm5.16xlarge', 'c6i.16xlarge', 'c5d.18xlarge', 'm5.24xlarge']) {
       const { sh } = await failedApply()
       await run(sh, SIZE(t))
       const apply = await run(sh, 'terraform apply -auto-approve')
@@ -86,31 +100,22 @@ describe('terraform-vcpu-limit on the simulator', () => {
     }
   })
 
-  it('after the increase, another over-quota c5 size (c5.18xlarge) applies and counts as finishing the quota route, not as right-sizing', async () => {
-    const { sh } = await failedApply()
-    await run(sh, SIZE('c5.18xlarge'))
-    const apply = await run(sh, 'terraform apply -auto-approve', QUOTA)
-    expect(apply.exitCode).toBe(0)
-    expect(await detectedAll(sh)).toEqual(FINISHED)
+  it('after the increase, any over-quota size up to 96 vCPUs finishes the quota route, not right-sizing', async () => {
+    for (const t of ['c5.18xlarge', 'm5.24xlarge', 'm5.16xlarge']) {
+      const { sh } = await failedApply()
+      await run(sh, SIZE(t))
+      const apply = await run(sh, 'terraform apply -auto-approve', QUOTA)
+      expect(apply.exitCode, t).toBe(0)
+      expect(await detectedAll(sh), t).toEqual(FINISHED)
+    }
   })
 
-  it('a type outside the scripted faults that is still over the quota is not credited as right-sizing even if the simulator lets it through', async () => {
-    const { sh } = await failedApply()
-    await run(sh, SIZE('m5.24xlarge'))
-    await run(sh, 'terraform apply -auto-approve')
-    expect(await detectedAll(sh)).toEqual(NONE)
-    // fixing it properly afterwards is still credited
-    await run(sh, "sed -i 's/m5\\.24xlarge/m5.12xlarge/' compute.tf")
-    const apply = await run(sh, 'terraform apply -auto-approve')
-    expect(apply.exitCode).toBe(0)
-    expect(await detectedAll(sh)).toEqual(RIGHT_SIZED)
-  })
-
-  it('the fault `if` matches only the over-quota types: a within-quota c5 applies without the action', async () => {
-    for (const t of ['c5.9xlarge', 'c5.4xlarge']) {
+  it('right-sizing to any type under the line applies without the action and is credited', async () => {
+    for (const t of ['c5.12xlarge', 'm4.10xlarge', 'c5.9xlarge', 'm5.12xlarge', 'z1d.metal']) {
       const { sh } = await failedApply()
       await run(sh, SIZE(t))
       expect((await run(sh, 'terraform apply -auto-approve')).exitCode, t).toBe(0)
+      expect(await detectedAll(sh), t).toEqual(RIGHT_SIZED)
     }
   })
 
@@ -141,6 +146,22 @@ describe('terraform-vcpu-limit on the simulator', () => {
       'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A',
     ])
       expect(actionFor(scenario, cmd), cmd).toBeUndefined()
+    // the lookalikes: a request for 96, or for another Region, goes in as PENDING and takes nothing
+    for (const [cmd, region] of [
+      ['aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 96', 'us-east-1'],
+      ['aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 128 --region us-west-2', 'us-west-2'],
+    ]) {
+      expect(actionFor(scenario, cmd), cmd).toBeUndefined()
+      expect(engineHandles(scenario, cmd, []), cmd).toBe(true)
+      const out = terminalOutput(scenario, cmd, [])
+      expect(out, cmd).toContain('"Status": "PENDING",')
+      expect(out, cmd).toContain(`"QuotaArn": "arn:aws:servicequotas:${region}:123456789012:ec2/L-1216C47A",`)
+      expect(JSON.parse(out).RequestedQuota.QuotaCode).toBe('L-1216C47A')
+      let s = step(scenario, newSession(), { type: 'START', at: 0 })
+      s = step(scenario, s, { type: 'DECLARE_HYPOTHESIS', id: 'vcpu-quota', at: 1 })
+      s = step(scenario, s, { type: 'RUN_COMMAND', input: cmd, at: 2 })
+      expect(s.log.some((e) => e.type === 'TAKE_ACTION'), cmd).toBe(false)
+    }
     // no scripted command answers a line that takes the action
     for (const c of scenario.terminal!.commands)
       if (c.match_regex) expect(new RegExp(c.match_regex).test(REQUEST), c.match_regex).toBe(false)
@@ -165,7 +186,8 @@ describe('terraform-vcpu-limit on the simulator', () => {
     const vcpus = 'aws ec2 describe-instance-types --instance-types c5.24xlarge --query "InstanceTypes[].VCpuInfo.DefaultVCpus"'
     expect(engineHandles(scenario, vcpus, [])).toBe(true)
     expect(terminalOutput(scenario, vcpus, [])).toBe('[\n    96\n]')
-    expect(terminalOutput(scenario, 'aws ec2 describe-instance-types --instance-types c5.12xlarge --query "InstanceTypes[].VCpuInfo.DefaultVCpus"', [])).toBe('[\n    48\n]')
+    for (const [t, v] of Object.entries({ 'c5.12xlarge': 48, 'c5.9xlarge': 36, 'm5.16xlarge': 64, 'c6i.16xlarge': 64, 'm5.24xlarge': 96, 'm4.10xlarge': 40, 't3.small': 2 }))
+      expect(terminalOutput(scenario, `aws ec2 describe-instance-types --instance-types ${t} --query 'InstanceTypes[].VCpuInfo.DefaultVCpus'`, []), t).toBe(`[\n    ${v}\n]`)
     for (const c of scenario.terminal!.commands) expect(scenario.command_notes?.[c.match ?? c.example!], c.match ?? c.example).toBeDefined()
   })
 

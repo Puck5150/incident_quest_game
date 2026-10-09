@@ -499,7 +499,10 @@ terraform:
 
 Fields: `at`, `on`, `error` (the full text shown after `Error:`), `times`
 (default: always), `if: { attr, equals }` (only when the new object's
-attribute has that value; create/update), `until_actions` (list of action ids;
+attribute has that value; create/update) or `if: { attr, matches }` (a
+JavaScript regex tested against the attribute; strings only, so a map, list,
+number or missing attribute never matches; it's a search, so anchor it with
+`^...$`; the validator rejects an invalid regex), `until_actions` (list of action ids;
 the fault stops once ALL are taken).
 
 Rules:

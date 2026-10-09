@@ -60,6 +60,10 @@ describe('the terraform block in the scenario schema', () => {
     expect(bad({ error: '' })).not.toEqual([])
     expect(bad({ until_actions: ['nope'] }).join()).toMatch(/unknown action "nope"/)
     expect(bad({ extra: 1 })).not.toEqual([])
+    expect(bad({ if: { attr: 'bucket', matches: '^x-[0-9]+$' } })).toEqual([])
+    expect(bad({ if: { attr: 'bucket', matches: '(' } }).join()).toMatch(/terraform\.faults\.0\.if\.matches: invalid regex/)
+    expect(bad({ if: { attr: 'bucket', equals: 'x', matches: 'x' } })).not.toEqual([])
+    expect(bad({ if: { attr: 'bucket', matches: '' } })).not.toEqual([])
   })
 
   it('needs a terminal', () => {

@@ -311,6 +311,21 @@ describe('executeApply: scripted faults', () => {
     expect(ops(run(small, { ctx: { faults: [gated], taken: new Set(['attach-policy']) } }))).toEqual(['create aws_instance.w'])
   })
 
+  it('`if: { attr, matches }` fires on a regex match, skips a non-match, a non-string attribute and an invalid regex', () => {
+    const big = 'resource "aws_instance" "w" {\n  ami = "ami-1"\n  instance_type = "m5.24xlarge"\n}\n'
+    const small = big.replace('m5.24xlarge', 't3.micro')
+    const fault = (attr: string, matches: string): Fault => ({ at: 'aws_instance.w', on: 'create', error: 'boom', if: { attr, matches } })
+    expect(ops(run(big, { ctx: { faults: [fault('instance_type', '^[a-z][0-9]\\.(16|24)xlarge$')] } }))).toEqual(['!create aws_instance.w'])
+    expect(ops(run(small, { ctx: { faults: [fault('instance_type', '^[a-z][0-9]\\.(16|24)xlarge$')] } }))).toEqual(['create aws_instance.w'])
+    // tags is a map, not a string; key_name is absent
+    const tagged = big.replace('}\n', '  tags = { Name = "w" }\n}\n')
+    expect(ops(run(tagged, { ctx: { faults: [fault('instance_type', '.*')] } }))).toEqual(['!create aws_instance.w'])
+    expect(ops(run(tagged, { ctx: { faults: [fault('tags', '.*')] } }))).toEqual(['create aws_instance.w'])
+    expect(ops(run(big, { ctx: { faults: [fault('key_name', '.*')] } }))).toEqual(['create aws_instance.w'])
+    expect(() => run(big, { ctx: { faults: [fault('instance_type', '(')] } })).not.toThrow()
+    expect(ops(run(big, { ctx: { faults: [fault('instance_type', '(')] } }))).toEqual(['create aws_instance.w'])
+  })
+
   it('matches instance addresses and resource addresses, and the operation', () => {
     const many = 'resource "aws_s3_bucket" "b" {\n  for_each = toset(["a", "b"])\n  bucket = "bk-${each.key}"\n}\n'
     expect(ops(run(many, { ctx: { faults: [{ at: 'aws_s3_bucket.b["b"]', on: 'create', error: 'boom' }] } }))).toEqual(['create aws_s3_bucket.b["a"]', '!create aws_s3_bucket.b["b"]'])
