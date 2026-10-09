@@ -3,7 +3,7 @@
 // force-unlock and version read the player's working directory and the lab's
 // state; everything else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
-import { compareAddresses, parseResAddr, staticKey } from './address.ts'
+import { compareAddresses, formatModule, parseResAddr, staticKey } from './address.ts'
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
@@ -21,9 +21,11 @@ import { emptyState, findInstance, instanceAddress, listAddresses, stateJson } f
 import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
-import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
+import { lockFile, type LockEntry } from './layout.ts'
 import { formatManifest, loadModuleTree, MANIFEST_PATH, parseManifest, type LoadedModules, type ModuleTree } from './modules.ts'
 import { LOCK_BYPASSED } from './predicates.ts'
+import { availableOf, coreDiagnostics, modulesOf, parseLock, providerNeeds, updateLock } from './providers.ts'
+import { newestSatisfying, parseVersion, satisfies } from './versions.ts'
 
 export { LOCK_FILE } from './layout.ts'
 
@@ -141,7 +143,7 @@ const withWarn = (warn: string, o: Out): Out => (warn ? { ...o, stdout: [warn, o
 const notYet = (sub: string) =>
   boxFail(
     'Not available in this lab yet',
-    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, output, workspace, version.`,
+    `"terraform ${sub}" is not simulated yet in this lab. You can still use: init, validate, plan, apply, destroy, show, state list, state show, state pull, state mv, state rm, import, taint, untaint, refresh, force-unlock, get, output, workspace, version.`,
   )
 const sourcesOf = (files: File[]) => Object.fromEntries(files.map((f) => [f.name, f.text]))
 const boxes = (list: Diagnostic[], files: File[]) => {
@@ -187,28 +189,47 @@ function providersOf(files: File[]): string[] {
     for (const b of parseHcl(f.name, f.text).blocks) {
       if ((b.type !== 'resource' && b.type !== 'data') || !b.labels[0]) continue
       const type = b.labels[0]
+      if (b.type === 'data' && type === 'terraform_remote_state') continue // the built-in provider: no lock entry
       out.add(schemaFor(type)?.provider ?? `${REGISTRY}hashicorp/${type.split('_')[0]}`)
     }
   }
   return [...out].sort()
 }
 const shortName = (source: string) => (source.startsWith(REGISTRY) ? source.slice(REGISTRY.length) : source)
-const lockedProviders = (cfg: Config) => [...cfg.lockText.matchAll(/^provider\s+"([^"]+)"/gm)].map((m) => m[1])
+// Whether a version string meets a constraint string (an unparsable version never does).
+const meets = (version: string, constraints: string) => {
+  const v = parseVersion(version)
+  return v !== undefined && satisfies(v, constraints).ok
+}
+// Requirement problems that are the configuration's own: bad constraints and an unsupported required_version.
+const configDiags = (tree: ModuleTree, version: string): Diagnostic[] => {
+  const mods = modulesOf(tree)
+  return [...providerNeeds(mods, []).diagnostics, ...coreDiagnostics(mods, version)]
+}
+// Syntax errors are reported by the usual path, so a configuration that does not parse has no requirements to check.
+const configErrors = (cfg: Config, version: string): Out | undefined => {
+  if (cfg.modules.rootBad || cfg.modules.syntax.length) return undefined
+  const d = configDiags(cfg.modules.tree, version)
+  return d.length ? fail(boxes(d, allFiles(cfg))) : undefined
+}
 
-// Resources need provider selections in the lock file; without one `init` has not run.
-function lockError(cfg: Config): Out | undefined {
-  const locked = lockedProviders(cfg)
-  const providers = providersOf(allFiles(cfg)).filter((p) => !locked.includes(p))
-  if (!providers.length) return undefined
-  const list = providers.map((p) => `  - provider ${p}: required by this configuration but no version is selected`).join('\n')
-  return fail(
-    box(
-      'error',
-      'Inconsistent dependency lock file',
-      `The following dependency selections recorded in the lock file are inconsistent with the current configuration:\n${list}\n\nTo make the initial dependency selections that will initialize the dependency lock file, run:\n  terraform init`,
-      true,
-    ),
-  )
+// Resources need provider selections in the lock file; without one `init` has not run. With `versions`, a selection
+// that no longer meets the combined constraints is inconsistent too (backend_local.go, Config.VerifyDependencySelections).
+function lockError(cfg: Config, versions = true): Out | undefined {
+  const lock = parseLock(cfg.lockText)
+  const errs: string[] = []
+  for (const n of providerNeeds(modulesOf(cfg.modules.tree), providersOf(allFiles(cfg))).needs) {
+    const e = lock.get(n.source)
+    if (!e) errs.push(`provider ${n.source}: required by this configuration but no version is selected`)
+    else if (versions && n.constraints && e.version !== undefined && !meets(e.version, n.constraints)) {
+      const q = JSON.stringify(n.constraints)
+      errs.push(e.constraints !== n.constraints ? `provider ${n.source}: locked version selection ${e.version} doesn't match the updated version constraints ${q}` : `provider ${n.source}: version constraints ${q} don't match the locked version selection ${e.version}`)
+    }
+  }
+  if (!errs.length) return undefined
+  const list = errs.sort().map((m) => `  - ${m}`).join('\n')
+  const suggestion = lock.size ? 'To update the locked dependency selections to match a changed configuration, run:\n  terraform init -upgrade' : 'To make the initial dependency selections that will initialize the dependency lock file, run:\n  terraform init'
+  return fail(box('error', 'Inconsistent dependency lock file', `The following dependency selections recorded in the lock file are inconsistent with the current configuration:\n${list}\n\n${suggestion}`, true))
 }
 
 // statemgr.LockInfo.String(): the held lock's fields under a "Lock Info:" line.
@@ -229,43 +250,90 @@ function checkLock(ctx: CliContext, lock: boolean): Out | undefined {
 
 function cmdVersion(ctx: CliContext, cfg: Config): Out {
   const lines = [`Terraform v${ctx.lab.version}`, 'on linux_amd64']
-  for (const p of lockedProviders(cfg).sort()) lines.push(`+ provider ${p} v${PROVIDER_VERSION}`)
+  for (const [p, e] of [...parseLock(cfg.lockText)].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) if (e.version !== undefined) lines.push(`+ provider ${p} v${e.version}`)
   return ok(lines.join('\n'))
 }
 
-// What init and get share: read each local module from its source and record it in the manifest.
-async function installModules(ctx: CliContext, cfg: Config): Promise<{ lines: string[]; files: File[] } | Out> {
-  const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), undefined, true)
-  if (!m.calls.length) return { lines: [], files: cfg.tf }
+// What init and get share: read each local module from its source, install registry modules from the lab's
+// registry (or keep the installed version while it still satisfies the constraint) and record all in the manifest.
+async function installModules(ctx: CliContext, cfg: Config, upgrade: boolean): Promise<{ lines: string[]; files: File[]; calls: boolean; tree: ModuleTree } | Out> {
+  const manifest = parseManifest(await ctx.readFile(resolvePath(cfg.dir, MANIFEST_PATH)))
+  const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), manifest, true, { registry: ctx.lab.registry, upgrade })
+  if (!m.calls.length && !m.install.length) return { lines: [], files: cfg.tf, calls: false, tree: m.tree }
   const errors = [...m.install, ...m.syntax]
-  if (errors.length) return { stdout: '', stderr: boxes(errors, [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]), exitCode: 1 }
+  const files = [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]
+  if (errors.length) return { stdout: '', stderr: boxes(errors, files), exitCode: 1 }
+  // Registry downloads: write the selected version's files; a file only the previous version had is emptied (no delete here).
+  for (const d of m.downloads) {
+    for (const [path, text] of [...d.files.map((f) => [f.path, f.content] as const), ...d.stale.map((p) => [p, ''] as const)]) {
+      const cut = path.lastIndexOf('/')
+      await ctx.write(resolvePath(cfg.dir, cut < 0 ? d.dir : `${d.dir}/${path.slice(0, cut)}`), path.slice(cut + 1), text)
+    }
+  }
   await ctx.write(resolvePath(cfg.dir, '.terraform/modules'), 'modules.json', formatManifest(m.entries))
-  return { lines: m.entries.map((e) => `- ${e.key} in ${e.dir}`), files: [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)] }
+  return { lines: m.lines, files, calls: true, tree: m.tree }
 }
 
-async function cmdGet(ctx: CliContext, cfg: Config): Promise<Out> {
+const hasFlag = (args: string[], name: string) => args.some((a) => a === name || a === `${name}=true`)
+
+async function cmdGet(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
   const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
-  const r = await installModules(ctx, cfg)
+  const r = await installModules(ctx, cfg, hasFlag(args, '-update'))
   return 'lines' in r ? ok(r.lines.join('\n')) : r
 }
 
-async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
+async function cmdInit(args: string[], ctx: CliContext, cfg: Config): Promise<Out> {
   if (!cfg.tf.length) return ok(EMPTY_INIT)
   // Only syntax stops init; undeclared references and cycles are for validate and plan.
   const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
-  const mods = await installModules(ctx, cfg)
-  if (!('lines' in mods)) return { ...mods, stdout: 'Initializing modules...' }
-  const providers = providersOf(mods.files)
-  const locked = lockedProviders(cfg)
-  const missing = providers.filter((p) => !locked.includes(p))
-  const lines = [...(mods.lines.length ? ['Initializing modules...', ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
-  for (const p of providers) {
-    const n = shortName(p)
-    lines.push(...(locked.includes(p) ? [`- Reusing previous version of ${n} from the dependency lock file`, `- Using previously-installed ${n} v${PROVIDER_VERSION}`] : [`- Finding latest version of ${n}...`, `- Installing ${n} v${PROVIDER_VERSION}...`, `- Installed ${n} v${PROVIDER_VERSION} (signed by HashiCorp)`]))
+  const upgrade = hasFlag(args, '-upgrade')
+  const mods = await installModules(ctx, cfg, upgrade)
+  if (upgrade && args.includes('-lockfile=readonly') && 'lines' in mods) return { stdout: '', stderr: '╷\n│ Error: The -upgrade flag conflicts with -lockfile=readonly.\n╵', exitCode: 1 }
+  const header = upgrade ? 'Upgrading modules...' : 'Initializing modules...'
+  if (!('lines' in mods)) return { ...mods, stdout: header }
+  const bad = configDiags(mods.tree, ctx.lab.version)
+  if (bad.length) return fail(boxes(bad, mods.files))
+  const lockMap = parseLock(cfg.lockText)
+  const { needs } = providerNeeds(modulesOf(mods.tree), providersOf(mods.files))
+  const readonly = args.includes('-lockfile=readonly')
+  const lines = [...(mods.calls ? [header, ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
+  const errs: string[] = []
+  const entries: LockEntry[] = []
+  let moved = false // a provider was added or its version changed (a constraint hint alone is not a change)
+  for (const n of needs) {
+    const name = shortName(n.source)
+    const cur = lockMap.get(n.source)
+    const constraints = n.constraints ? { constraints: n.constraints } : {}
+    if (cur?.version !== undefined && !upgrade) {
+      if (n.constraints && !meets(cur.version, n.constraints)) {
+        errs.push(`Could not retrieve the list of available versions for provider ${name}: locked provider ${n.source} ${cur.version} does not match configured version constraint ${n.constraints}; must use terraform init -upgrade to allow selection of new versions`)
+        continue
+      }
+      lines.push(`- Reusing previous version of ${name} from the dependency lock file`, `- Using previously-installed ${name} v${cur.version}`)
+      entries.push({ source: n.source, version: cur.version, ...constraints, hashes: cur.hashes })
+      continue
+    }
+    lines.push(n.constraints ? `- Finding ${name} versions matching "${n.constraints}"...` : `- Finding latest version of ${name}...`)
+    const pick = newestSatisfying(availableOf(ctx.lab.providers, n.source), n.constraints || '>= 0.0.0')
+    if (pick === undefined) {
+      errs.push(`Could not retrieve the list of available versions for provider ${name}: no available releases match the given constraints ${n.constraints || '>= 0.0.0'}`)
+      continue
+    }
+    const same = cur?.version === pick
+    lines.push(...(same ? [`- Using previously-installed ${name} v${pick}`] : [`- Installing ${name} v${pick}...`, `- Installed ${name} v${pick} (signed by HashiCorp)`]))
+    entries.push({ source: n.source, version: pick, ...constraints, ...(same ? { hashes: cur.hashes } : {}) })
+    if (!same) moved = true
   }
-  if (missing.length && !cfg.hasLock) {
+  if (errs.length) return { stdout: lines.join('\n'), stderr: errs.map((e) => box('error', 'Failed to query available provider packages', e)).join('\n'), exitCode: 1 }
+  const added = needs.filter((n) => !lockMap.has(n.source)).length > 0
+  if (readonly && added) {
+    return { stdout: lines.join('\n'), stderr: box('error', 'Provider dependency changes detected', 'Changes to the required provider dependencies were detected, but the lock file is read-only. To use and record these requirements, run "terraform init" without the "-lockfile=readonly" flag.'), exitCode: 1 }
+  }
+  const text = !cfg.hasLock ? (entries.length ? lockFile(entries) : '') : updateLock(cfg.lockText, entries)
+  if (!readonly && text !== cfg.lockText && (entries.length || cfg.hasLock)) await ctx.write(cfg.dir, '.terraform.lock.hcl', text)
+  if (added && !cfg.hasLock) {
     lines.push(
       '',
       'Terraform has created a lock file .terraform.lock.hcl to record the provider',
@@ -273,15 +341,13 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
       'so that Terraform can guarantee to make the same selections by default when',
       'you run "terraform init" in the future.',
     )
-    await ctx.write(cfg.dir, '.terraform.lock.hcl', lockFile(missing))
-  } else if (missing.length) {
+  } else if (added || moved) {
     lines.push(
       '',
       'Terraform has made some changes to the provider dependency selections recorded',
       'in the .terraform.lock.hcl file. Review those changes and commit them to your',
       'version control system if they represent changes you intended to make.',
     )
-    await ctx.write(cfg.dir, '.terraform.lock.hcl', `${cfg.lockText.replace(/\n*$/, '\n')}\n${missing.map(lockBlock).join('\n')}`)
   }
   lines.push(
     '',
@@ -298,10 +364,12 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
   return ok(lines.join('\n'))
 }
 
-function cmdValidate(cfg: Config): Out {
+function cmdValidate(cfg: Config, ctx: CliContext): Out {
   if (!cfg.tf.length) return ok('Success! The configuration is valid.\n')
   const mod = moduleErrors(cfg)
   if (mod.length) return fail(boxes(mod, allFiles(cfg)))
+  const core = configErrors(cfg, ctx.lab.version)
+  if (core) return core
   const g = buildGraph(cfg.modules.tree)
   const diags = [...g.diagnostics]
   if (!diags.length) {
@@ -320,7 +388,8 @@ function cmdValidate(cfg: Config): Out {
     }
   }
   if (diags.length) return fail(boxes(diags, allFiles(cfg)))
-  return lockError(cfg) ?? ok('Success! The configuration is valid.\n')
+  // Real validate never reads the lock's versions (only operations do); a missing selection is kept from before.
+  return lockError(cfg, false) ?? ok('Success! The configuration is valid.\n')
 }
 
 // A tfvars file is `name = literal` lines; parse it as the body of a locals block.
@@ -498,7 +567,7 @@ async function prepare(sources: VarSource[], ctx: CliContext, cfg: Config): Prom
   if (mod.length) return fail(boxes(mod, allFiles(cfg)))
   const g = buildGraph(cfg.modules.tree)
   if (!g.diagnostics.length) {
-    const lock = lockError(cfg)
+    const lock = lockError(cfg) ?? configErrors(cfg, ctx.lab.version)
     if (lock) return lock
   }
   const v = await resolveVars(ctx, cfg, sources, g.diagnostics.length ? undefined : g.blocks.filter((b) => b.type === 'variable'))
@@ -512,12 +581,14 @@ export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined
   const cfg = await loadConfig(ctx, resolvePath('/', ctx.lab.dir))
   const s = await prepare([], ctx, cfg)
   if (!('vars' in s)) return undefined
-  return planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
+  return planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: [], refresh: true })
 }
 
 // The lines a plan prints while it reads the state's objects back from the cloud.
-const refreshLines = (state: State, refresh: boolean) =>
+const refreshLines = (state: State, refresh: boolean, reads: string[] = [], planned?: State) =>
   state.resources
+    // a data source whose block was removed is dropped by the plan: no Reading line for it
+    .filter((r) => !planned || r.mode !== 'data' || r.type !== 'terraform_remote_state' || planned.resources.some((p) => p.mode === 'data' && p.type === r.type && p.name === r.name && (p.module ?? '') === (r.module ?? '')))
     .flatMap((r) =>
       r.instances.map((i) => {
         const addr = instanceAddress(r, i.index_key)
@@ -525,6 +596,7 @@ const refreshLines = (state: State, refresh: boolean) =>
         return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : refresh ? [`${addr}: Refreshing state...${id}`] : [] }
       }),
     )
+    .concat(reads.filter((a) => !listAddresses(state).includes(a)).map((addr) => ({ addr, lines: [`${addr}: Reading...`, `${addr}: Read complete after 0s`] })))
     .sort((a, b) => compareAddresses(a.addr, b.addr))
     .flatMap((x) => x.lines)
 
@@ -536,9 +608,9 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
-  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
+  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(allFiles(cfg)))
-  const lines = refreshLines(ctx.lab.state, f.refresh)
+  const lines = refreshLines(ctx.lab.state, f.refresh, result.reads, destroy ? undefined : result.baseState)
   const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
   // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
   if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
@@ -622,7 +694,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     }
   }
   const r: ApplyResult = executeApply(
-    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, refresh: f.refresh },
+    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, refresh: f.refresh },
     { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: `${ctx.lab.state.lineage}:${ctx.lab.state.serial}` },
   )
   // Outside the lab directory ctx.lab is a throwaway copy, so this commit is discarded.
@@ -741,15 +813,16 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   if (!('vars' in s)) return s
   if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, allFiles(cfg))))
   const t = parseAddress(addr)
-  // A keyed address needs only its resource block; count and for_each are not checked.
-  // Module resources are declared when the module call is loaded and its configuration has the block (single-instance calls only).
+  // The block must exist in the module's configuration; module instances and resource keys are checked against what the
+  // configuration expands to (count and for_each). If that can't be evaluated, the address is accepted.
   const ra = parseResAddr(addr)
-  const declared = t.ok && !!ra && !ra.module.some((x) => x.key !== undefined) && s.graph.nodes.has(staticKey(ra))
-  // A keyed address must be an instance the configuration produces; if count/for_each can't be evaluated, accept it.
-  if (declared && t.mode === 'managed' && t.key !== undefined) {
+  const declared = t.ok && !!ra && s.graph.nodes.has(staticKey(ra))
+  if (declared && t.mode === 'managed' && (t.key !== undefined || ra.module.length > 0)) {
     const target = instanceAddress(t, t.key)
-    const p = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
-    if (!p.diagnostics.length && !p.items.some((i) => i.address === target && i.action !== 'destroy' && i.action !== 'forget')) return withWarn(s.warning, boxFail(NO_IMPORT_CONFIG, noImportConfigDetail(target)))
+    const p = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, refresh: false })
+    const moduleOk = !ra.module.length || (p.instances ?? []).includes(formatModule(ra.module))
+    const keyOk = t.key === undefined || p.items.some((i) => i.address === target && i.action !== 'destroy' && i.action !== 'forget')
+    if (!p.diagnostics.length && !(moduleOk && keyOk)) return withWarn(s.warning, boxFail(NO_IMPORT_CONFIG, noImportConfigDetail(target)))
   }
   const locked = declared && t.mode === 'managed' && checkLock(ctx, a.lock)
   if (locked) return locked
@@ -946,11 +1019,11 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
     case '-v':
       return cmdVersion(ctx, cfg)
     case 'init':
-      return cmdInit(ctx, cfg)
+      return cmdInit(more, ctx, cfg)
     case 'get':
-      return cmdGet(ctx, cfg)
+      return cmdGet(more, ctx, cfg)
     case 'validate':
-      return cmdValidate(cfg)
+      return cmdValidate(cfg, ctx)
     case 'plan':
       return cmdPlan(more, ctx, cfg, here)
     case 'apply':

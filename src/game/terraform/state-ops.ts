@@ -4,7 +4,7 @@
 import { compareAddresses, formatModule, modulePathCovers, parseModuleAddr, parseResAddr, staticKey, stepsOf, type ModStep } from './address.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
-import { findInstance, instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
+import { findInstance, instanceAddress, renameDependencies, type State, type StateInstance, type StateResource } from './state.ts'
 
 export type OpResult<T = object> = ({ ok: true; state: State } & T) | { ok: false; summary: string; detail: string } // detail '' = plain one-line message form
 
@@ -49,7 +49,7 @@ function moveModule(state: State, from: string, to: string, src: ParsedModule, d
   if (moved.some((m) => taken.has(m.to))) return fail('Invalid target address', `Cannot move to ${to}: there is already a resource instance at that address in the current state.`)
   const renamed = new Map(hit.map((r) => [staticOf(r), staticOf({ ...r, module: rewrite(r) })]))
   for (const r of hit) r.module = rewrite(r)
-  for (const r of s.resources) for (const i of r.instances) if (i.dependencies) i.dependencies = i.dependencies.map((d) => renamed.get(d) ?? d)
+  renameDependencies(s.resources, renamed)
   return { ok: true, state: s, moved: moved.sort((a, b) => compareAddresses(a.from, b.from)) }
 }
 

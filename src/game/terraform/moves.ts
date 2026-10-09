@@ -2,7 +2,7 @@
 // really the object at another, so changing a name or a key is not a destroy.
 import { formatAddress, isModuleAddress, parseAddress, type Address } from './addresses.ts'
 import { formatModule, formatResAddr, staticKey, stepsOf, type ModStep, type ResAddr } from './address.ts'
-import { type State, type StateInstance, type StateResource } from './state.ts'
+import { renameDependencies, type State, type StateInstance, type StateResource } from './state.ts'
 import { shapeErrors } from './declarations.ts'
 import type { Block, Diagnostic, Pos } from './types.ts'
 
@@ -74,12 +74,23 @@ function step(moves: Move[], a: ResAddr): { next: ResAddr; move: Move } | undefi
       const last = fm[n - 1]
       const have = a.module[n - 1]
       if (last.key !== undefined && last.key !== have.key) continue
+      // module.net -> module.net["a"] adds a key to the unkeyed instance; it is not a move of module.net["x"] instances.
+      if (last.key === undefined && tm[tm.length - 1].key !== undefined && have.key !== undefined) continue
       const key = last.key === undefined ? (tm[tm.length - 1].key ?? have.key) : tm[tm.length - 1].key
       const step = { name: tm[tm.length - 1].name, ...(key === undefined ? {} : { key }) }
       return { next: { ...a, module: [...tm.slice(0, -1), step, ...a.module.slice(n)] }, move: m }
     }
-    if (a.mode === 'data' || m.from.type !== a.type || m.from.name !== a.name || a.module.length !== fm.length || !startsWith(a.module, fm)) continue
-    const to = { module: tm, mode: 'managed' as const, type: m.to.type, name: m.to.name }
+    // An unkeyed module step in `from` matches any instance of that module call and carries its key to `to`.
+    if (a.mode === 'data' || m.from.type !== a.type || m.from.name !== a.name || a.module.length !== fm.length || !fm.every((x, i) => x.name === a.module[i].name && (x.key === a.module[i].key || (x.key === undefined && !(tm[i]?.key !== undefined && a.module[i].key !== undefined))))) continue
+    const to = {
+      module: tm.map((t, i): ModStep => {
+        const key = t.key ?? (i < fm.length && fm[i].key === undefined ? a.module[i].key : undefined)
+        return { name: t.name, ...(key === undefined ? {} : { key }) }
+      }),
+      mode: 'managed' as const,
+      type: m.to.type,
+      name: m.to.name,
+    }
     if (m.from.key === undefined) {
       // Whole-resource move: instances keep their keys, unless the target is keyed and this is the lone unkeyed instance.
       if (a.key === undefined || m.to.key === undefined) return { next: { ...to, key: a.key ?? m.to.key }, move: m }
@@ -167,6 +178,6 @@ export function applyMoves(
   }
   // ponytail: a blocked source whose old address is taken by another moved object is dropped. Unreachable unless state holds duplicate addresses, which applyMoves does not diagnose.
   for (const t of stay) if (!placed.has(t.oldAddr)) place(t.r, t.inst, t.from)
-  for (const g of groups.values()) for (const i of g.instances) if (i.dependencies) i.dependencies = i.dependencies.map((d) => renamed.get(d) ?? d)
+  renameDependencies([...groups.values()], renamed)
   return { state: { ...structuredClone(state), resources: [...groups.values()] }, moved, blocked, diagnostics }
 }

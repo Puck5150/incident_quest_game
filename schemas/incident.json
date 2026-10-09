@@ -204,9 +204,143 @@
             "$ref": "#/definitions/__schema0"
           }
         },
+        "providers": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "lock": {
+                "type": "string",
+                "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+              },
+              "available": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "remote_states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "backend": {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "remote",
+                  "azurerm",
+                  "consul",
+                  "cos",
+                  "gcs",
+                  "http",
+                  "inmem",
+                  "kubernetes",
+                  "oss",
+                  "pg",
+                  "s3"
+                ]
+              },
+              "config": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/definitions/__schema0"
+                }
+              },
+              "workspace": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "outputs": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/definitions/__schema0"
+                }
+              }
+            },
+            "required": [
+              "backend",
+              "config",
+              "outputs"
+            ],
+            "additionalProperties": false
+          }
+        },
         "modules": {
           "type": "object",
           "properties": {
+            "registry": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "pattern": "^([a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]+\\/)?[A-Za-z0-9_-]+\\/[A-Za-z0-9_-]+\\/[A-Za-z0-9_-]+$"
+                  },
+                  "versions": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                        },
+                        "files": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "pattern": "\\.tf$"
+                              },
+                              "content": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "content"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "files"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "source",
+                  "versions"
+                ],
+                "additionalProperties": false
+              }
+            },
             "installed": {
               "type": "array",
               "items": {
@@ -214,11 +348,15 @@
                 "properties": {
                   "key": {
                     "type": "string",
-                    "minLength": 1
+                    "pattern": "^[A-Za-z_][\\w-]*(\\.[A-Za-z_][\\w-]*)*$"
                   },
                   "source": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
                   },
                   "dir": {
                     "type": "string",
@@ -227,8 +365,7 @@
                 },
                 "required": [
                   "key",
-                  "source",
-                  "dir"
+                  "source"
                 ],
                 "additionalProperties": false
               }
@@ -565,7 +702,8 @@
                   "state rm",
                   "workspace new",
                   "workspace select",
-                  "workspace delete"
+                  "workspace delete",
+                  "get"
                 ]
               },
               "contains": {

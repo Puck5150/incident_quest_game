@@ -12,6 +12,8 @@ import { atStage } from './stages.ts'
 import { filesOnDisk } from '../game/paths.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
+import { isRegistrySource, normalizeRegistry, REGISTRY_SOURCE, registryDir } from '../game/terraform/layout.ts'
+import { compareVersions, parseVersion } from '../game/terraform/versions.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
 
@@ -131,7 +133,7 @@ const HypothesesSchema = z
 const json = z.json()
 // done_when (TF3d): a check on the Terraform world that takes the action once it holds.
 // One level of all/any over leaves or negated leaves; no deeper nesting.
-const ADDR_HINT = 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]' // module-qualified and module-only forms are accepted too
+const ADDR_HINT = 'must be a resource or instance address like aws_s3_bucket.b, aws_s3_bucket.b["x"], module.net.aws_x.y, module.net["a"].aws_x.y or a bare module.net' // module-qualified and module-only forms are accepted too
 const resAddr = (s: string) => /^(?:module\.|data\.)?[a-z]/.test(s) && parseResAddr(s) !== undefined
 // A module path (module.net, module.net["a"].module.sub) also names everything under it.
 const tfAddrOrModule = z.string().refine((s) => resAddr(s) || parseModuleAddr(s) !== undefined, ADDR_HINT)
@@ -226,6 +228,7 @@ const TfState = z.array(
   }),
 )
 const TfOutputs = z.record(z.string(), z.strictObject({ value: json, sensitive: z.boolean().optional() }))
+const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/
 const wsName = z.string().regex(/^[A-Za-z0-9._-]+$/, 'may only contain letters, digits, ".", "_" and "-"')
 export const TerraformSchema = z.strictObject({
   dir: z.string().min(1).optional(),
@@ -240,15 +243,63 @@ export const TerraformSchema = z.strictObject({
     )
     .min(1),
   vars: TfAttrs.optional(),
-  // What .terraform/modules/modules.json holds when the scenario starts: local modules `init` already installed.
+  // Provider versions by provider name (aws for hashicorp/aws): `lock` is what the lock file selects, `available`
+  // what `terraform init -upgrade` can choose from. Absent: 5.67.0, and only that.
+  providers: z
+    .record(
+      z.string().regex(/^[a-z][a-z0-9_-]*$/, 'must be a provider name like aws'),
+      z.strictObject({
+        lock: z.string().regex(SEMVER, 'must be a version like 5.31.0').optional(),
+        available: z.array(z.string().regex(SEMVER, 'must be a version like 5.31.0')).min(1).optional(),
+      }),
+    )
+    .optional(),
+  // Upstream states that data "terraform_remote_state" can read: matched by backend type, every authored `config`
+  // key (equal to the data source's) and workspace. `outputs` are the upstream's root outputs.
+  remote_states: z
+    .array(
+      z.strictObject({
+        backend: z.enum(['local', 'remote', 'azurerm', 'consul', 'cos', 'gcs', 'http', 'inmem', 'kubernetes', 'oss', 'pg', 's3']),
+        config: TfAttrs,
+        workspace: wsName.optional(),
+        outputs: TfAttrs,
+      }),
+    )
+    .optional(),
+  // `registry`: the authored offline "registry.terraform.io" (module files per version). `installed`: what
+  // .terraform/modules/modules.json holds when the scenario starts. A registry module's `dir` is
+  // .terraform/modules/<key> (leave it out) and its files are those of the installed `version`.
   modules: z
     .strictObject({
+      registry: z
+        .array(
+          z.strictObject({
+            source: z.string().regex(REGISTRY_SOURCE, 'must look like NAMESPACE/NAME/PROVIDER (optionally HOST/ in front)'),
+            versions: z
+              .array(
+                z.strictObject({
+                  version: z.string().regex(SEMVER, 'must be a version like 2.1.0 or 2.1.0-beta.1'),
+                  files: z
+                    .array(
+                      z.strictObject({
+                        path: z.string().regex(/\.tf$/, 'must be a .tf file').refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path inside the module'),
+                        content: z.string(),
+                      }),
+                    )
+                    .min(1),
+                }),
+              )
+              .min(1),
+          }),
+        )
+        .optional(),
       installed: z
         .array(
           z.strictObject({
-            key: z.string().min(1),
+            key: z.string().regex(/^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*)*$/, 'must be the call name, or dotted call names for nested modules (net.inner)'),
             source: z.string().min(1),
-            dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory'),
+            version: z.string().regex(SEMVER, 'must be a version like 2.1.0').optional(),
+            dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory').optional(),
           }),
         )
         .optional(),
@@ -285,7 +336,7 @@ export const TerraformSchema = z.strictObject({
     .array(
       z.strictObject({
         evidence: id,
-        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete']),
+        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete', 'get']),
         contains: z.string().min(1),
       }),
     )
@@ -612,12 +663,45 @@ export const ScenarioSchema = z
           seen.add(k)
         })
       }
+      Object.entries(tf.providers ?? {}).forEach(([name, p]) => dupes(p.available ?? []).forEach((d) => issue(`duplicate available version "${d}" of provider ${name}`, ['terraform', 'providers', name, 'available'])))
       const installed = tf.modules?.installed ?? []
       if (installed.length && tf.initialized === false) issue('modules.installed needs the lab to start initialised', ['terraform', 'modules', 'installed'])
       dupes(installed.map((m) => m.key)).forEach((d) => issue(`duplicate installed module key "${d}"`, ['terraform', 'modules', 'installed']))
+      const registry = tf.modules?.registry ?? []
+      const sources = registry.map((r) => normalizeRegistry(r.source))
+      dupes(sources).forEach((d) => issue(`duplicate registry module "${d}"`, ['terraform', 'modules', 'registry']))
+      registry.forEach((r, i) => {
+        const vs = r.versions.map((v) => {
+          const p = parseVersion(v.version)
+          return p ? `${p.major}.${p.minor}.${p.patch}${p.pre === undefined ? '' : `-${p.pre}`}` : v.version
+        })
+        dupes(vs).forEach((d) => issue(`duplicate version "${d}" of ${r.source}`, ['terraform', 'modules', 'registry', i, 'versions']))
+        r.versions.forEach((v, j) => {
+          dupes(v.files.map((f) => f.path)).forEach((d) => issue(`duplicate file "${d}" in ${r.source} ${v.version}`, ['terraform', 'modules', 'registry', i, 'versions', j, 'files']))
+          // Local calls inside a registry module need their own files; the module itself needs a .tf at its top.
+          if (!v.files.some((f) => !f.path.includes('/'))) issue(`${r.source} ${v.version} needs a .tf file at the top of the module`, ['terraform', 'modules', 'registry', i, 'versions', j, 'files'])
+        })
+      })
       installed.forEach((m, i) => {
+        if (isRegistrySource(m.source)) {
+          const at = ['terraform', 'modules', 'installed', i]
+          const r = registry.find((x) => normalizeRegistry(x.source) === normalizeRegistry(m.source))
+          if (m.version === undefined) issue('a registry module needs the installed version', [...at, 'version'])
+          else if (!r) issue(`${m.source} is not in modules.registry`, [...at, 'source'])
+          else if (!r.versions.some((v) => { const a = parseVersion(v.version); const b = parseVersion(m.version!); return a && b && compareVersions(a, b) === 0 })) issue(`${m.source} has no version ${m.version} in modules.registry`, [...at, 'version'])
+          if (m.dir !== undefined && m.dir.replace(/^\.\//, '').replace(/\/+$/, '') !== registryDir(m.key)) issue(`a registry module is installed in ${registryDir(m.key)}: leave dir out`, [...at, 'dir'])
+          return
+        }
+        if (m.version !== undefined) issue('only a registry module has a version', ['terraform', 'modules', 'installed', i, 'version'])
+        if (m.dir === undefined) return issue('needs the module directory', ['terraform', 'modules', 'installed', i, 'dir'])
         const dir = m.dir.replace(/^\.\//, '').replace(/\/+$/, '')
         if (!tf.files.some((f) => f.path.endsWith('.tf') && f.path.slice(0, Math.max(0, f.path.lastIndexOf('/'))) === (dir === '.' ? '' : dir))) issue(`no .tf file in terraform.files under "${m.dir}"`, ['terraform', 'modules', 'installed', i, 'dir'])
+      })
+      const seenRs = new Set<string>()
+      tf.remote_states?.forEach((r, i) => {
+        const k = JSON.stringify([r.backend, r.workspace ?? 'default', Object.entries(r.config).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])
+        if (seenRs.has(k)) issue('duplicate remote state (same backend, config and workspace)', ['terraform', 'remote_states', i])
+        seenRs.add(k)
       })
       const known = new Set<string>()
       checkState(tf.state ?? [], ['terraform', 'state'], known)

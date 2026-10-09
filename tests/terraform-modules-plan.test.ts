@@ -244,13 +244,14 @@ output "cidr" {
     expect(d.diagnostics.filter((x) => x.summary === 'Unsupported argument').map((x) => x.line)).toEqual([6])
   })
 
-  it('(h) count, for_each and nested calls are unsupported with clear diagnostics', () => {
+  it('(h) a nested call whose module was not loaded is unsupported with a clear diagnostic', () => {
+    // module count and for_each are supported since TF6b (see terraform-modules-keyed.test.ts)
     const c = plan(tree(`module "net" {\n  source = "./modules/net"\n  cidr   = "x"\n  count  = 2\n}\n`, { net: NET }))
-    expect(c.diagnostics).toMatchObject([{ summary: 'Unsupported module argument', detail: 'Module count and for_each are not supported by this lab yet.', file: 'main.tf', line: 4, context: 'module "net"' }])
+    expect(c.diagnostics).toEqual([])
     const f = plan(tree(`module "net" {\n  source = "./modules/net"\n  cidr   = "x"\n  for_each = { a = 1 }\n}\n`, { net: NET }))
-    expect(f.diagnostics.map((d) => d.detail)).toEqual(['Module count and for_each are not supported by this lab yet.'])
+    expect(f.diagnostics).toEqual([])
     const n = plan(tree(`module "net" {\n  source = "./modules/net"\n  cidr   = "x"\n}\n`, { net: `${NET}module "inner" {\n  source = "./inner"\n}\n` }))
-    expect(n.diagnostics).toMatchObject([{ summary: 'Unsupported nested module', detail: 'Nested modules are not supported by this lab yet.', file: 'modules/net/main.tf', line: 8, context: 'module "inner"' }])
+    expect(n.diagnostics).toMatchObject([{ summary: 'Unsupported module', detail: 'Module calls are not supported by this lab yet.', file: 'modules/net/main.tf', line: 8, context: 'module "inner"' }])
     expect(n.items).toEqual([])
   })
 

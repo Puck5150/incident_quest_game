@@ -91,6 +91,7 @@ describe('terraform modules: init, get and install checks', () => {
     const r = await w.run('validate')
     expect(r.exitCode).toBe(1)
     expect(r.stderr).toContain('Error: Module source has changed')
+    expect(r.stderr).toContain('on main.tf line 2, in module "net":')
     expect(flat(r.stderr)).toContain('The source address was changed since this module was installed. Run "terraform init" to install all modules required by this configuration.')
     await w.run('init')
     expect((await w.run('validate')).stderr).not.toContain('Module source has changed')
@@ -102,6 +103,11 @@ describe('terraform modules: init, get and install checks', () => {
     expect([r.exitCode, r.stdout]).toEqual([0, '- net in modules/net'])
     expect(w.disk[`${LAB}/.terraform/modules/modules.json`]).toBe(MANIFEST)
     expect((await w.run('validate')).stderr).not.toContain('Module not installed')
+  })
+
+  it('evidence can match terraform get output', async () => {
+    const w = fresh({ evidence: [{ evidence: 'got', command: 'get', contains: '- net in modules/net' }] })
+    expect((await w.run('get')).evidence).toEqual(['evidence:got'])
   })
 
   it('init reports a missing module directory with the real Unreadable module directory texts', async () => {
@@ -121,14 +127,16 @@ describe('terraform modules: init, get and install checks', () => {
     expect(r.stderr).toContain('on modules/net/main.tf line 3')
   })
 
-  it('a registry source gives the lab error', async () => {
-    const w = fresh({ files: [{ path: 'main.tf', content: 'module "net" {\n  source = "acme/network/aws"\n  version = "2.0.1"\n}\n' }] })
+  it('a git source gives the lab error; a registry source absent from the lab registry is Module not found', async () => {
+    const git = fresh({ files: [{ path: 'main.tf', content: 'module "net" {\n  source = "git::https://example.com/x.git"\n}\n' }] })
     for (const cmd of ['init', 'get']) {
-      const r = await w.run(cmd)
+      const r = await git.run(cmd)
       expect(r.exitCode, cmd).toBe(1)
       expect(r.stderr, cmd).toContain('Error: Unsupported module source')
       expect(flat(r.stderr), cmd).toContain('this lab only installs local modules')
     }
+    const reg = fresh({ files: [{ path: 'main.tf', content: 'module "net" {\n  source = "acme/network/aws"\n  version = "2.0.1"\n}\n' }] })
+    expect(flat((await reg.run('init')).stderr)).toContain('Module "net" (from main.tf:1) cannot be found in the module registry at registry.terraform.io.')
   })
 
   it('other directories are unaffected', async () => {
