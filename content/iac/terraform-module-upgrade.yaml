@@ -1,0 +1,367 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-module-upgrade
+track: iac
+difficulty: 3
+title: "Nobody touched the Terraform, and the plan wants to replace the production database"
+par_minutes: 12
+
+ticket:
+  from: "Orders team"
+  severity: SEV3
+  body: |
+    Our terraform plan in ~/infra now wants to replace the orders database
+    and then stops with "Instance cannot be destroyed". I haven't changed
+    any Terraform: git says the tree is clean and main is what was last
+    applied. The only thing I did this morning was run terraform init
+    -upgrade to pick up a provider fix. I need a clean plan before the
+    afternoon deploy. Can I just take prevent_destroy out for today?
+
+environment: |
+  The orders database is an RDS for PostgreSQL instance (orders-db) in
+  account 123456789012, us-east-1, created through the platform team's
+  shared acme/database/aws module from the Terraform registry. It holds
+  production data and applications connect through its endpoint. The
+  Terraform that calls the module is in ~/infra.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "git status"
+      evidence: config-unchanged
+      output: |
+        On branch main
+        Your branch is up to date with 'origin/main'.
+
+        nothing to commit, working tree clean
+    - match: "git log --oneline"
+      output: |
+        e5a21c9 db: take the password from a variable
+        7d3f0b8 adopt acme/database/aws for the orders database
+        41c6a92 initial provider setup
+    - match: "git log -p -- main.tf"
+      evidence: floating-constraint
+      output: |
+        commit e5a21c9b6d0f3a7184c2e5d9a0b3f6c81d27e4a5
+        Author: Dana Whitfield <dana@example.com>
+        Date:   Mon Sep 8 10:12:41 2026 -0500
+
+            db: take the password from a variable
+
+        diff --git a/main.tf b/main.tf
+        index 3b9a1c2..a40e7d6 100644
+        --- a/main.tf
+        +++ b/main.tf
+        @@ -16,3 +16,4 @@ module "db" {
+           version = "~> 2.0"
+
+           identifier = "orders-db"
+        +  password   = var.db_password
+         }
+
+        commit 7d3f0b8c4a1e9526d83b07f5c2a6e1d094b8f3c7
+        Author: Dana Whitfield <dana@example.com>
+        Date:   Tue Aug 12 15:40:03 2026 -0500
+
+            adopt acme/database/aws for the orders database
+
+        diff --git a/main.tf b/main.tf
+        index 91c7e0b..3b9a1c2 100644
+        --- a/main.tf
+        +++ b/main.tf
+        @@ -11,0 +12,8 @@ provider "aws" {
+        +module "db" {
+        +  source  = "acme/database/aws"
+        +  version = "~> 2.0"
+        +
+        +  identifier = "orders-db"
+        +}
+    - match: "cat .terraform/modules/modules.json"
+      evidence: module-2-1-0-installed
+      output: |
+        {"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"db","Source":"registry.terraform.io/acme/database/aws","Version":"2.1.0","Dir":".terraform/modules/db"}]}
+    - match: "cat .terraform/modules/db/main.tf"
+      evidence: module-sets-encryption
+      output: &module210 |
+        variable "identifier" {
+          type = string
+        }
+
+        variable "password" {
+          type      = string
+          sensitive = true
+        }
+
+        variable "storage_encrypted" {
+          type    = bool
+          default = true
+        }
+
+        resource "aws_db_instance" "main" {
+          identifier          = var.identifier
+          engine              = "postgres"
+          engine_version      = "15.4"
+          instance_class      = "db.r6g.large"
+          allocated_storage   = 100
+          db_name             = "orders"
+          username            = "orders_admin"
+          password            = var.password
+          multi_az            = true
+          storage_encrypted   = var.storage_encrypted
+          skip_final_snapshot = false
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
+
+        output "endpoint" {
+          value = aws_db_instance.main.endpoint
+        }
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        variable "db_password" {
+          type      = string
+          sensitive = true
+        }
+
+        module "db" {
+          source  = "acme/database/aws"
+          version = "~> 2.0"
+
+          identifier = "orders-db"
+          password   = var.db_password
+        }
+  vars:
+    db_password: "orders-admin-secret"
+  modules:
+    registry:
+      - source: acme/database/aws
+        versions:
+          - version: 2.0.1
+            files:
+              - path: main.tf
+                content: |
+                  variable "identifier" {
+                    type = string
+                  }
+
+                  variable "password" {
+                    type      = string
+                    sensitive = true
+                  }
+
+                  resource "aws_db_instance" "main" {
+                    identifier          = var.identifier
+                    engine              = "postgres"
+                    engine_version      = "15.4"
+                    instance_class      = "db.r6g.large"
+                    allocated_storage   = 100
+                    db_name             = "orders"
+                    username            = "orders_admin"
+                    password            = var.password
+                    multi_az            = true
+                    skip_final_snapshot = false
+
+                    lifecycle {
+                      prevent_destroy = true
+                    }
+                  }
+
+                  output "endpoint" {
+                    value = aws_db_instance.main.endpoint
+                  }
+          - version: 2.1.0
+            files:
+              - path: main.tf
+                content: *module210
+    installed:
+      - { key: db, source: acme/database/aws, version: 2.1.0 }
+  state:
+    - module: module.db
+      type: aws_db_instance
+      name: main
+      attrs:
+        id: orders-db
+        arn: "arn:aws:rds:us-east-1:123456789012:db:orders-db"
+        identifier: orders-db
+        engine: postgres
+        engine_version: "15.4"
+        instance_class: db.r6g.large
+        allocated_storage: 100
+        db_name: orders
+        username: orders_admin
+        password: orders-admin-secret
+        multi_az: true
+        skip_final_snapshot: false
+        storage_encrypted: false
+        endpoint: "orders-db.cxyz.us-east-1.rds.amazonaws.com:5432"
+  evidence:
+    - evidence: prevent-destroy-blocked
+      command: plan
+      contains: "Instance cannot be destroyed"
+    - evidence: encryption-forces-replacement
+      command: plan
+      contains: "storage_encrypted"
+    - evidence: provider-unchanged
+      command: version
+      contains: "provider registry.terraform.io/hashicorp/aws v5.67.0"
+
+hypotheses:
+  - id: module-newer-version
+    text: "The registry module resolved to a newer 2.x release than the one that built this database, and that release sets storage_encrypted = true by default, which can only be applied by replacing the instance."
+    correct: true
+  - id: provider-upgrade
+    text: "The AWS provider that init -upgrade fetched changed how storage_encrypted behaves."
+    feedback: "terraform version still shows the aws provider at v5.67.0 and git status says the lock file is unchanged. The resource arguments that differ come from the module's code, not from a provider change."
+  - id: config-changed
+    text: "Someone changed the database's settings in the Terraform code."
+    feedback: "git status is clean and git log -p -- main.tf shows the module call has not changed since the password variable was added. The root configuration asks for the same thing it always did."
+  - id: console-change
+    text: "Someone changed the database outside Terraform, and Terraform wants to put it back."
+    feedback: "That would show up above the plan as a note that objects changed outside of Terraform, and the arrow would run from the live value back to the configured one. Here the live value, false, is what state records; it is the configuration that now asks for true."
+
+actions:
+  - id: keep-the-database
+    label: "Keep the database: pin the module below 2.1.0 and run terraform init so the older release is installed, or keep 2.1.0 and set storage_encrypted = false in the module call, then confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - not: { applied: { op: delete, address: module.db } }
+        # either the version pin or the input override (one level of all/any only, so one alternation)
+        - file_contains: { path: /home/you/infra/main.tf, matches: 'version\s*=\s*"(=\s*|~>\s*)?2\.0\.1"|storage_encrypted\s*=\s*false' }
+    feedback: "The same database, orders-db, is still in place and the plan is empty. The module version (or the module input) is now decided in the code you review, instead of by whenever someone last ran init. Getting to an encrypted database is still a real job: an RDS instance can only be encrypted when it is created, so it is a planned snapshot-copy migration, not a quiet module bump."
+  - id: edit-the-cached-module
+    label: "Add ignore_changes (or edit the code) in the downloaded module under .terraform/modules/db so the plan goes quiet"
+    kind: wrong
+    done_when:
+      file_contains: { path: /home/you/infra/.terraform/modules/db/main.tf, matches: 'ignore_changes' }
+    feedback: "The plan goes quiet, but only on this laptop. .terraform/modules is a download cache that terraform init fills and init -upgrade or get -update overwrites, so the edit vanishes the next time anyone refreshes, and CI (which runs init itself) never had it. The module's published code is still 2.1.0, and nothing in the repository says why this checkout differs."
+  - id: upgrade-again
+    label: "Run terraform init -upgrade (or terraform get -update) again to get back to a working state"
+    kind: wrong
+    feedback: "-upgrade re-resolves every module to the newest version the constraint allows. ~> 2.0 allows 2.1.0, so you get 2.1.0 again and the same plan. The constraint, not the cache, is what has to change."
+  - id: unguard-and-apply
+    label: "Remove prevent_destroy from the module's code and apply so the deploy can go ahead"
+    kind: destructive
+    done_when: { applied: { op: delete, address: module.db.aws_db_instance.main } }
+    feedback: "Terraform destroyed orders-db, with its data, and created a new empty one with encryption on. prevent_destroy was the only thing standing between a module release and the production database. Backups may let you recover the data, but this is a restore under pressure instead of a reviewed change."
+
+solution_paths:
+  - [keep-the-database]
+
+key_evidence: [encryption-forces-replacement, module-2-1-0-installed, module-sets-encryption, floating-constraint, config-unchanged]
+
+evidence_labels:
+  encryption-forces-replacement: "The plan changes storage_encrypted false -> true on module.db's database, which forces replacement"
+  module-2-1-0-installed: "modules.json shows acme/database/aws installed at version 2.1.0"
+  module-sets-encryption: "The installed module's code sets storage_encrypted from a variable that defaults to true"
+  floating-constraint: "The module call only says version = \"~> 2.0\", which allows any 2.x"
+  config-unchanged: "The repository has no changes: nothing in your own code moved"
+
+hints:
+  nudge: "Nothing in the repository changed, but the plan did. What else feeds a plan besides your own files?"
+  direction: "The module call does not name a version, only a range. See which version is installed (.terraform/modules/modules.json) and what its code does differently."
+  answer: "init -upgrade installed 2.1.0 of acme/database/aws, which sets storage_encrypted = true by default; ~> 2.0 allows it. Pin the version (for example version = \"2.0.1\"), run terraform init so the pinned release is installed, and plan until it says No changes. Setting storage_encrypted = false in the module call keeps 2.1.0 without touching the database."
+
+analogy:
+  title: "The supplier changed the recipe"
+  text: |
+    The kitchen orders "any 2.x bread" from the bakery. Last week's loaf
+    was plain; this week the bakery quietly started adding sesame, still
+    labelled 2.x. Nothing in the kitchen's own recipe changed, but the
+    dish is now different, and the oven that bakes it fresh from scratch
+    (the replace) is the one you do not want to light under the
+    wedding cake. Naming the exact loaf you want means the recipe only
+    changes when the kitchen decides.
+
+debrief:
+  root_cause: |
+    The module call asked for acme/database/aws "~> 2.0", which accepts any
+    2.x release. Terraform does not remember module versions in the lock
+    file, which tracks only providers; whenever init installs the module
+    it takes the newest release the constraint allows, and init -upgrade
+    re-resolves every module that way. This morning's init -upgrade moved
+    the installed module from 2.0.1 to 2.1.0. That release sets
+    storage_encrypted from a variable that defaults to true, and
+    storage_encrypted on an RDS instance cannot change in place, so the
+    plan replaced the database. prevent_destroy refused the destroy, and
+    the plan stopped.
+  ideal_path:
+    - "Read the failed plan: module.db.aws_db_instance.main must be replaced because storage_encrypted goes from false to true, and prevent_destroy stops the destroy."
+    - "Notice nothing in the repository changed (git status clean, no new commits to main.tf) and the provider is the same version."
+    - "Look at .terraform/modules/modules.json (installed Version 2.1.0) and the module's code, which now sets storage_encrypted from a variable that defaults to true."
+    - "See that the module call only says version = \"~> 2.0\", which allows 2.1.0."
+    - "Pin the version, run terraform init so the pinned release replaces 2.1.0, and plan until it says No changes. Alternatively keep 2.1.0 and set storage_encrypted = false in the module call."
+  real_world: |
+    A module's version is an input, just like a variable. A range like
+    ~> 2.0 lets that input change underneath you whenever someone runs
+    init -upgrade or a fresh checkout runs init, and the lock file does not
+    protect you because it only records providers. Terraform's own
+    guidance for third-party modules is to require specific versions so
+    updates only happen when convenient to you. Read a release's notes
+    before raising the pin, try the upgrade in a non-production copy of
+    the stack first, and raise the version in a reviewed change. Keep
+    prevent_destroy on anything holding data you cannot recreate: here it
+    turned a module release into a failed plan instead of a lost
+    database. Getting encryption onto an existing RDS instance is a
+    migration through an encrypted snapshot copy, not a setting you can
+    flip.
+
+concepts:
+  - term: "Module version constraint"
+    text: "For a module from a registry, the version argument limits which releases Terraform may install. ~> 2.0 allows any 2.x release but not 3.0; an exact version allows exactly one."
+    url: "https://developer.hashicorp.com/terraform/language/expressions/version-constraints"
+  - term: "terraform init -upgrade"
+    text: "Re-resolves modules and providers to the newest versions the constraints allow, instead of keeping what is already installed."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/init"
+  - term: "Dependency lock file"
+    text: "Records the selected versions of providers only. Terraform does not remember version selections for remote modules."
+    url: "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+  - term: "prevent_destroy"
+    text: "Makes Terraform reject any plan that would destroy the resource."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+
+sources:
+  - title: "Terraform: Module blocks (the version argument and terraform init)"
+    url: "https://developer.hashicorp.com/terraform/language/modules/configuration"
+    retrieved: 2026-10-09
+  - title: "Terraform: Version constraints"
+    url: "https://developer.hashicorp.com/terraform/language/expressions/version-constraints"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: init"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/init"
+    retrieved: 2026-10-09
+  - title: "Terraform: Dependency lock file"
+    url: "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+    retrieved: 2026-10-09
+  - title: "Terraform: The lifecycle meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-09
+  - title: "Amazon RDS: Encrypting Amazon RDS resources (limitations)"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html"
+    retrieved: 2026-10-09
+
+command_notes:
+  "git status": "Nothing is modified: your own code did not change."
+  "git log --oneline": "Three commits. None changes the database settings."
+  "git log -p -- main.tf": "The module call was added with version = \"~> 2.0\" and has only gained the password since. The range allows any 2.x release."
+  "cat .terraform/modules/modules.json": "init's record of what it installed: acme/database/aws at Version 2.1.0."
+  "cat .terraform/modules/db/main.tf": "The installed module's code: storage_encrypted comes from a variable that defaults to true."
