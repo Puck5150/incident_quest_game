@@ -19,8 +19,8 @@ import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjec
 import type { Diagnostic, Pos } from './types.ts'
 
 export interface PlanInput {
-  files: { name: string; text: string }[] // the root module's files
-  tree?: ModuleTree // the root and its loaded child modules; takes precedence over files
+  files?: { name: string; text: string }[] // compat: the root module's files alone (no child modules); ignored when tree is given
+  tree?: ModuleTree // the root and its loaded child modules; wins over files
   state: State
   reality: Reality
   vars: Record<string, Value>
@@ -80,6 +80,7 @@ const keyRank = (k: Key) => (k === undefined ? 0 : typeof k === 'number' ? 1 : 2
 const modOf = (i: PlanItem) => (i.module ? `${i.module}.x.x` : 'x.x')
 const staticModule = (module: string) => stepsOf(module).map((x) => `module.${x.name}`).join('.')
 // The qualified resource address (no instance key) of an item: how dependencies and lifecycle checks name it.
+// item.module is the instance path from state (module.net["a"]); this strips instance keys to the static form the graph uses.
 export const resKey = (i: Pick<PlanItem, 'module' | 'resource' | 'type' | 'name'>) => `${i.module ? `${staticModule(i.module)}.` : ''}${i.resource ?? `${i.type}.${i.name}`}`
 const byInstance = (a: PlanItem, b: PlanItem) =>
   compareAddresses(modOf(a), modOf(b)) || cmp(a.type, b.type) || cmp(a.name, b.name) || cmp(keyRank(a.key), keyRank(b.key)) || (a.key === undefined || b.key === undefined ? 0 : cmp(a.key, b.key))
@@ -102,7 +103,8 @@ const complete = (planned: Record<string, Value>, schema: ResourceSchema): Recor
   Object.fromEntries([...Object.keys(schema.attrs).map((n): [string, Value] => [n, null]), ...Object.entries(planned)])
 
 export function planConfig(input: PlanInput): PlanResult {
-  const g = buildGraph(input.tree ?? input.files)
+  const tree: ModuleTree = input.tree ?? { root: { dir: '', files: input.files ?? [] }, children: new Map() }
+  const g = buildGraph(tree)
   const { state: refreshed, drift } = input.refresh === false ? { state: structuredClone(input.state), drift: [] as Drift[] } : refreshState(input.state, input.reality)
   const result: PlanResult = { diagnostics: [...g.diagnostics], warnings: [], drift, driftShown: [], items: [], outputs: [], refreshed, baseState: refreshed, summary: { add: 0, change: 0, destroy: 0 }, imported: 0 }
   if (g.diagnostics.length) return result
@@ -124,7 +126,7 @@ export function planConfig(input: PlanInput): PlanResult {
   }
 
   // moved / removed / import: statements about state.
-  const rootFiles = new Set((input.tree?.root.files ?? input.files).map((f) => f.name))
+  const rootFiles = new Set(tree.root.files.map((f) => f.name))
   const rootBlocks = g.blocks.filter((b) => rootFiles.has(b.file)) // moved/removed/import inside child modules are not supported yet
   const mv = movesOf(rootBlocks)
   const rm = removedOf(rootBlocks)
@@ -170,7 +172,7 @@ export function planConfig(input: PlanInput): PlanResult {
         case 'self':
           throw new EvalError('Invalid "self" reference', 'The "self" object is not available in this context.')
         case 'path':
-          return walk({ module: mod ? (input.tree?.children.get(mod.slice(7, -1))?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
+          return walk({ module: mod ? (tree.children.get(g.nodes.get(mod.slice(0, -1))?.block?.labels[0] ?? '')?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
         case 'terraform':
           return walk({ workspace: input.workspace ?? 'default' }, path.slice(1))
         case 'var':
@@ -309,7 +311,7 @@ export function planConfig(input: PlanInput): PlanResult {
         ...(importing ? { importing } : {}),
         ...(reason ? { reason } : {}),
         ...(unchanged ? { unchanged } : {}),
-        ...(reason === 'triggered' ? { triggeredBy: [triggers[0]] } : {}),
+        ...(reason === 'triggered' ? { triggeredBy: [mod + triggers[0]] } : {}),
         ...(p.action === 'replace' && lc.lifecycle.createBeforeDestroy ? { createBeforeDestroy: true } : {}),
       })
       const seen = touched.get(node.address) ?? new Set<string>()
@@ -363,9 +365,9 @@ export function planConfig(input: PlanInput): PlanResult {
       }
       case 'module': {
         const context = `module "${b!.labels[0]}"`
-        if (node.module) fail(node.file, node.pos, 'Unsupported', 'Nested modules are not supported by this lab yet.', context)
+        if (node.module) fail(node.file, node.pos, 'Unsupported nested module', 'Nested modules are not supported by this lab yet.', context)
         else if (!node.child) fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', context)
-        else for (const a of b!.attrs) if (a.name === 'count' || a.name === 'for_each') fail(node.file, a.pos, 'Unsupported', 'Module count and for_each are not supported by this lab yet.', context)
+        else for (const a of b!.attrs) if (a.name === 'count' || a.name === 'for_each') fail(node.file, a.pos, 'Unsupported module argument', 'Module count and for_each are not supported by this lab yet.', context)
         values.set(addr, UNKNOWN)
         break
       }

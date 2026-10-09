@@ -232,13 +232,25 @@ output "cidr" {
     expect(r.diagnostics.filter((d) => d.file === 'modules/net/main.tf')).toHaveLength(1)
   })
 
+  it('(g) static diagnostics of a shared directory are reported once; per-call ones stay per call', () => {
+    const two = `module "a" {\n  source = "./modules/net"\n}\nmodule "b" {\n  source = "./modules/net"\n  bogus  = 1\n}\n`
+    const undeclared = buildGraph(tree(two, { a: 'variable "cidr" {}\nresource "aws_vpc" "main" {\n  cidr_block = var.nope\n}\n', b: 'variable "cidr" {}\nresource "aws_vpc" "main" {\n  cidr_block = var.nope\n}\n' }, { a: 'net', b: 'net' }))
+    expect(undeclared.diagnostics.filter((d) => d.summary === 'Reference to undeclared input variable')).toHaveLength(1)
+    const dupe = 'variable "cidr" {}\nvariable "cidr" {}\n'
+    const d = buildGraph(tree(two, { a: dupe, b: dupe }, { a: 'net', b: 'net' }))
+    expect(d.diagnostics.filter((x) => x.summary === 'Duplicate variable declaration')).toHaveLength(1)
+    // per call: both calls miss "cidr" (different call sites), and only b passes an unsupported argument
+    expect(d.diagnostics.filter((x) => x.summary === 'Missing required argument').map((x) => x.line)).toEqual([1, 4])
+    expect(d.diagnostics.filter((x) => x.summary === 'Unsupported argument').map((x) => x.line)).toEqual([6])
+  })
+
   it('(h) count, for_each and nested calls are unsupported with clear diagnostics', () => {
     const c = plan(tree(`module "net" {\n  source = "./modules/net"\n  cidr   = "x"\n  count  = 2\n}\n`, { net: NET }))
-    expect(c.diagnostics).toMatchObject([{ summary: 'Unsupported', detail: 'Module count and for_each are not supported by this lab yet.', file: 'main.tf', line: 4, context: 'module "net"' }])
+    expect(c.diagnostics).toMatchObject([{ summary: 'Unsupported module argument', detail: 'Module count and for_each are not supported by this lab yet.', file: 'main.tf', line: 4, context: 'module "net"' }])
     const f = plan(tree(`module "net" {\n  source = "./modules/net"\n  cidr   = "x"\n  for_each = { a = 1 }\n}\n`, { net: NET }))
     expect(f.diagnostics.map((d) => d.detail)).toEqual(['Module count and for_each are not supported by this lab yet.'])
     const n = plan(tree(`module "net" {\n  source = "./modules/net"\n  cidr   = "x"\n}\n`, { net: `${NET}module "inner" {\n  source = "./inner"\n}\n` }))
-    expect(n.diagnostics).toMatchObject([{ summary: 'Unsupported', detail: 'Nested modules are not supported by this lab yet.', file: 'modules/net/main.tf', line: 8, context: 'module "inner"' }])
+    expect(n.diagnostics).toMatchObject([{ summary: 'Unsupported nested module', detail: 'Nested modules are not supported by this lab yet.', file: 'modules/net/main.tf', line: 8, context: 'module "inner"' }])
     expect(n.items).toEqual([])
   })
 

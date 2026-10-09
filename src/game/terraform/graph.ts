@@ -167,6 +167,16 @@ interface Mod {
   blocks: Block[]
 }
 
+// A directory called from two places is walked twice: report each identical diagnostic once.
+// Per-call diagnostics (missing/unsupported argument) sit at different call sites, so they stay per call.
+function dedupe(list: Diagnostic[]): Diagnostic[] {
+  const seen = new Set<string>()
+  return list.filter((d) => {
+    const k = JSON.stringify([d.file, d.line, d.col, d.summary, d.detail])
+    return !seen.has(k) && (seen.add(k), true)
+  })
+}
+
 // Accepts the root module's files alone (no module files are known, so a call stays one node), or a module tree.
 export function buildGraph(input: File[] | ModuleTree): Graph {
   const tree: ModuleTree = Array.isArray(input) ? { root: { dir: '', files: input }, children: new Map() } : input
@@ -337,7 +347,7 @@ export function buildGraph(input: File[] | ModuleTree): Graph {
       }
     }
     diagnostics.push({ severity: 'error', summary: `Cycle: ${[...stuck].sort().join(', ')}`, detail: '', file: '', line: 0, col: 0 })
-    return { nodes, order: [], blocks, diagnostics }
+    return { nodes, order: [], blocks, diagnostics: dedupe(diagnostics) }
   }
-  return { nodes, order, blocks, diagnostics }
+  return { nodes, order, blocks, diagnostics: dedupe(diagnostics) }
 }
