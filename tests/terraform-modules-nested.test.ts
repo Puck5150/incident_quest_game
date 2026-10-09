@@ -108,6 +108,14 @@ describe('nested modules: loader', () => {
   })
 })
 
+describe('nested modules: load order', () => {
+  it('entries are depth first with call names sorted per level: net, net.inner, net-x', async () => {
+    const disk = { 'modules/net/main.tf': call('inner', './inner'), 'modules/net/inner/main.tf': res, 'modules/net-x/main.tf': res }
+    const r = await loadModuleTree(rootFiles(`${call('net-x', './modules/net-x')}${call('net', './modules/net')}`), reader(disk), undefined, true)
+    expect(r.entries.map((e) => e.key)).toEqual(['net', 'net.inner', 'net-x'])
+  })
+})
+
 describe('nested modules: init, get and modules.json', () => {
   it('init lists every level and writes dotted keys', async () => {
     const w = world(FILES, { initialized: false, modules: undefined })

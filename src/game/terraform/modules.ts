@@ -188,6 +188,13 @@ export async function loadModuleTree(rootFiles: File[], readDir: (dir: string) =
     const k = JSON.stringify([d.file, d.line, d.col, d.summary])
     return !seen.has(k) && (seen.add(k), true)
   })
-  out.entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  // Depth first with call names sorted at each level, as Terraform loads them: net, net.inner, net-x.
+  const segs = (k: string) => k.split('.')
+  out.entries.sort((a, b) => {
+    const x = segs(a.key)
+    const y = segs(b.key)
+    for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+    return x.length - y.length
+  })
   return out
 }

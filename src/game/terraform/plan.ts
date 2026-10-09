@@ -435,19 +435,19 @@ export function planConfig(input: PlanInput): PlanResult {
     const errorsBefore = errors.length
     if (node.kind === 'module') instsOf.set(addr, [])
     const where = node.module ? (instsOf.get(node.module) ?? []) : ['']
-    for (const instance of where) visit(node, instance)
+    // The same mistake in every instance of a repeated module is reported once, at the first instance (a detail that differs per
+    // instance is dropped with the repeats). Errors of different count/for_each instances of one resource all stay.
+    const first = new Set<string>()
+    const keyOf = (e: Diagnostic) => JSON.stringify([e.file, e.line, e.col, e.summary, e.context])
+    where.forEach((instance, n) => {
+      const before = errors.length
+      visit(node, instance)
+      if (n === 0) for (const e of errors.slice(before)) first.add(keyOf(e))
+      else for (let i = errors.length - 1; i >= before; i--) if (first.has(keyOf(errors[i]))) errors.splice(i, 1)
+    })
     if (errors.length > errorsBefore) broken.add(addr)
   }
 
-  // A configuration error inside a repeated module is the same mistake in every instance: report it once, at the first
-  // instance (a detail that differs per instance is dropped with the repeats).
-  const seenErrors = new Set<string>()
-  for (let i = 0; i < errors.length; i++) {
-    const e = errors[i]
-    const k = JSON.stringify([e.file, e.line, e.col, e.summary, e.context])
-    if (seenErrors.has(k)) errors.splice(i--, 1)
-    else seenErrors.add(k)
-  }
   if (errors.length) {
     result.items = []
     result.outputs = []

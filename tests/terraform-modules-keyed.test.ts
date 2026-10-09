@@ -576,3 +576,24 @@ describe('keyed modules: errors are reported once', () => {
     expect(r.stderr).toContain('on modules/net/main.tf line 3')
   })
 })
+
+describe('errors per resource instance are not collapsed', () => {
+  const COUNTED = (extra = '') => `variable "l" {\n  default = ["a"]\n}\nresource "aws_s3_bucket" "b" {\n  count  = 3\n  bucket = var.l[count.index]${extra}\n}\n`
+  it('root: one Invalid index error per failing count index', async () => {
+    const r = await world(COUNTED()).run('plan')
+    expect(r.stderr.match(/Error: Invalid index/g)).toHaveLength(2)
+  })
+  it('a counted resource in a single-instance module keeps its per-index errors', async () => {
+    const child = 'variable "l" {\n  default = ["a"]\n}\nresource "aws_s3_bucket" "b" {\n  count  = 3\n  bucket = var.l[count.index]\n}\n'
+    const r = await world('module "net" {\n  source = "./modules/net"\n}\n', {}, { 'modules/net/main.tf': child }).run('plan')
+    expect(r.stderr.match(/Error: Invalid index/g)).toHaveLength(2)
+  })
+  it('a counted resource inside a repeated module: per index once, not per module instance', async () => {
+    const child = 'variable "cidr" {}\nvariable "l" {\n  default = ["a"]\n}\nresource "aws_s3_bucket" "b" {\n  count  = 3\n  bucket = var.l[count.index]\n}\n'
+    for (const n of [2, 20]) {
+      const keys = JSON.stringify(Array.from({ length: n }, (_, i) => `k${i}`))
+      const r = await world(FE(keys), {}, { 'modules/net/main.tf': child }).run('plan')
+      expect(r.stderr.match(/Error: Invalid index/g)).toHaveLength(2)
+    }
+  })
+})
