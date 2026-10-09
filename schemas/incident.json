@@ -204,6 +204,31 @@
             "$ref": "#/definitions/__schema0"
           }
         },
+        "providers": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "lock": {
+                "type": "string",
+                "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+              },
+              "available": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
         "modules": {
           "type": "object",
           "properties": {

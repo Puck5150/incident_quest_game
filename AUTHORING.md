@@ -541,7 +541,7 @@ terraform:
     installed: [{ key: network, source: acme/network/aws, version: 2.0.1 }]
 ```
 
-Registry modules behave like any module (addresses `module.network.aws_vpc.main`, state, `count`/`for_each`). A registry module may call another registry module (its own `version`; key `network.inner`, installed in `.terraform/modules/network.inner`) or a local path, which is relative to its install directory. Provider requirements inside registry modules are not read yet.
+Registry modules behave like any module (addresses `module.network.aws_vpc.main`, state, `count`/`for_each`). A registry module may call another registry module (its own `version`; key `network.inner`, installed in `.terraform/modules/network.inner`) or a local path, which is relative to its install directory. Provider requirements inside registry modules count like any other module's (see Provider versions below).
 
 #### Nested modules
 
@@ -557,6 +557,17 @@ modules:
 `terraform init` / `get` print `- net in modules/net` and `- net.inner in modules/net/inner`; a nested call missing from the manifest is `Module not installed` at the nested call. Addresses use the full path: `module.net.module.inner.aws_vpc.main`, with keys at any level (`module.net["a"].module.inner[0].aws_vpc.main`); state `module`, `faults[].at` and `done_when` leaves take them. Root `moved` blocks may rename a nested module by its full path (`from = module.net.module.inner  to = module.net.module.core`) or move a resource between nested modules; `moved` blocks inside a child module are still ignored. A module that calls itself (directly or through others) is a lab error, `Module cycle`; more than 8 levels is `Module stack level too deep`.
 
 Limits: local and authored registry sources only (no git/S3/HTTP), `moved`/`import`/`removed` blocks only in the root module.
+
+
+#### Provider versions, the lock file and `required_version`
+
+`terraform { required_providers { aws = { source = "hashicorp/aws", version = "~> 5.50" } } required_version = ">= 1.5" }` is read from the root module and every loaded child module (local and registry); the constraints for one provider are combined (`~> 5.0, >= 5.50`). `terraform.providers` sets the provider versions of the lab, by provider name (`aws` for `hashicorp/aws`; every field optional): `providers: { aws: { lock: 5.31.0, available: [5.31.0, 5.50.0, 5.67.0] } }`. `lock` is the version the starting `.terraform.lock.hcl` selects (the lock file also records `constraints` when the configuration has them); `available` is what `init` and `init -upgrade` may install, newest satisfying wins. Without the block everything is `5.67.0`, as before. Providers are not version-sensitive in this lab: a version changes only the lock file, `terraform version` and the errors below, never what a resource does.
+
+- A lock that no longer meets the constraints stops `plan`, `apply`, `destroy`, `refresh` and `import` with `Inconsistent dependency lock file` (`locked version selection 5.31.0 doesn't match the updated version constraints "~> 5.50"` when the lock recorded different constraints, `version constraints "~> 5.50" don't match the locked version selection 5.31.0` when they are the same) and the hint `terraform init -upgrade`. `validate` does not check versions (real Terraform only checks them for operations).
+- `terraform init` reuses a satisfied lock; a lock pinning a version the constraints now exclude gives `Failed to query available provider packages` (`locked provider ... does not match configured version constraint ...; must use terraform init -upgrade ...`); `init -upgrade` picks the newest `available` version that satisfies and rewrites the lock; nothing satisfying is `no available releases match the given constraints ~> 9.0`. `-lockfile=readonly` refuses to add providers (`Provider dependency changes detected`) and conflicts with `-upgrade`.
+- A registry module whose newer version raises its provider constraint (module v2 needs `~> 5.50`) is the classic trap: `init -upgrade` upgrades the module and then the provider; a plain `get -update` leaves the lock inconsistent.
+- `required_version` is checked against `terraform.version` (default 1.9.8) when the configuration loads (`init`, `validate`, `plan`, `apply`, `destroy`, `refresh`, `import`): `Unsupported Terraform Core version`, and `Module module.network (from registry.terraform.io/acme/network/aws) does not support Terraform version ...` for a module.
+- The starting lock covers `aws` only (as before); a configuration that also uses another provider needs `terraform init` first.
 
 ### Apply, destroy and faults
 

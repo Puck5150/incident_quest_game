@@ -54,8 +54,33 @@ export const labFiles = (tf: TerraformBlock, startDir: string, home: string) => 
   return [...files, ...mounted, { path: join(dir, MANIFEST_PATH), content: formatManifest(installedEntries(tf)) }]
 }
 
-export const lockBlock = (p: string) => `provider "${p}" {\n  version = "${PROVIDER_VERSION}"\n  hashes = [\n    "h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs=",\n  ]\n}\n`
-export const lockFile = (providers: string[]) => {
+// One provider selection in the lock file. `constraints` is the combined configuration constraint (a hint, only
+// written when the configuration has one); `hashes` are kept when the selected version does not change.
+export interface LockEntry {
+  source: string
+  version: string
+  constraints?: string
+  hashes?: string[]
+}
+const LEGACY_HASH = 'h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs='
+// Invented, stable per (provider, version): FNV-1a folded into 32 bytes, shaped like a real h1: hash. The default
+// version keeps the hash older lock files already had.
+export function providerHash(source: string, version: string): string {
+  if (version === PROVIDER_VERSION) return LEGACY_HASH
+  let h = 2166136261
+  const bytes: number[] = []
+  for (let i = 0; i < 32; i++) {
+    for (const c of `${source}@${version}#${i}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0
+    bytes.push(h & 255)
+  }
+  return `h1:${btoa(String.fromCharCode(...bytes))}`
+}
+export const lockBlock = (e: string | LockEntry) => {
+  const { source, version, constraints, hashes } = typeof e === 'string' ? { source: e, version: PROVIDER_VERSION, constraints: undefined, hashes: undefined } : e
+  const head = constraints ? `  version     = "${version}"\n  constraints = "${constraints}"\n` : `  version = "${version}"\n`
+  return `provider "${source}" {\n${head}  hashes = [\n${(hashes?.length ? hashes : [providerHash(source, version)]).map((h) => `    "${h}",\n`).join('')}  ]\n}\n`
+}
+export const lockFile = (providers: (string | LockEntry)[]) => {
   const blocks = providers.map(lockBlock)
   return `# This file is maintained automatically by "terraform init".\n# Manual edits may be lost in future updates.\n\n${blocks.join('\n')}`
 }

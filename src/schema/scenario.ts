@@ -243,6 +243,17 @@ export const TerraformSchema = z.strictObject({
     )
     .min(1),
   vars: TfAttrs.optional(),
+  // Provider versions by provider name (aws for hashicorp/aws): `lock` is what the lock file selects, `available`
+  // what `terraform init -upgrade` can choose from. Absent: 5.67.0, and only that.
+  providers: z
+    .record(
+      z.string().regex(/^[a-z][a-z0-9_-]*$/, 'must be a provider name like aws'),
+      z.strictObject({
+        lock: z.string().regex(SEMVER, 'must be a version like 5.31.0').optional(),
+        available: z.array(z.string().regex(SEMVER, 'must be a version like 5.31.0')).min(1).optional(),
+      }),
+    )
+    .optional(),
   // `registry`: the authored offline "registry.terraform.io" (module files per version). `installed`: what
   // .terraform/modules/modules.json holds when the scenario starts. A registry module's `dir` is
   // .terraform/modules/<key> (leave it out) and its files are those of the installed `version`.
@@ -640,6 +651,7 @@ export const ScenarioSchema = z
           seen.add(k)
         })
       }
+      Object.entries(tf.providers ?? {}).forEach(([name, p]) => dupes(p.available ?? []).forEach((d) => issue(`duplicate available version "${d}" of provider ${name}`, ['terraform', 'providers', name, 'available'])))
       const installed = tf.modules?.installed ?? []
       if (installed.length && tf.initialized === false) issue('modules.installed needs the lab to start initialised', ['terraform', 'modules', 'installed'])
       dupes(installed.map((m) => m.key)).forEach((d) => issue(`duplicate installed module key "${d}"`, ['terraform', 'modules', 'installed']))
