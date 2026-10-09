@@ -254,6 +254,18 @@ export const TerraformSchema = z.strictObject({
       }),
     )
     .optional(),
+  // Upstream states that data "terraform_remote_state" can read: matched by backend type, every authored `config`
+  // key (equal to the data source's) and workspace. `outputs` are the upstream's root outputs.
+  remote_states: z
+    .array(
+      z.strictObject({
+        backend: z.enum(['local', 'remote', 'azurerm', 'consul', 'cos', 'gcs', 'http', 'inmem', 'kubernetes', 'oss', 'pg', 's3']),
+        config: TfAttrs,
+        workspace: wsName.optional(),
+        outputs: TfAttrs,
+      }),
+    )
+    .optional(),
   // `registry`: the authored offline "registry.terraform.io" (module files per version). `installed`: what
   // .terraform/modules/modules.json holds when the scenario starts. A registry module's `dir` is
   // .terraform/modules/<key> (leave it out) and its files are those of the installed `version`.
@@ -684,6 +696,12 @@ export const ScenarioSchema = z
         if (m.dir === undefined) return issue('needs the module directory', ['terraform', 'modules', 'installed', i, 'dir'])
         const dir = m.dir.replace(/^\.\//, '').replace(/\/+$/, '')
         if (!tf.files.some((f) => f.path.endsWith('.tf') && f.path.slice(0, Math.max(0, f.path.lastIndexOf('/'))) === (dir === '.' ? '' : dir))) issue(`no .tf file in terraform.files under "${m.dir}"`, ['terraform', 'modules', 'installed', i, 'dir'])
+      })
+      const seenRs = new Set<string>()
+      tf.remote_states?.forEach((r, i) => {
+        const k = JSON.stringify([r.backend, r.workspace ?? 'default', Object.entries(r.config).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))])
+        if (seenRs.has(k)) issue('duplicate remote state (same backend, config and workspace)', ['terraform', 'remote_states', i])
+        seenRs.add(k)
       })
       const known = new Set<string>()
       checkState(tf.state ?? [], ['terraform', 'state'], known)

@@ -8,7 +8,7 @@ import { compareAddresses, formatKey, formatModule, parseResAddr, resourceKey, s
 import { formatAddress, isModuleAddress, type Address } from './addresses.ts'
 import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
-import { equal, evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
+import { equal, evalExpr, EvalError, hasUnknown, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
 import { expandInstances, type Key } from './expand.ts'
 import { buildGraph, type GNode } from './graph.ts'
 import { applyMoves, movesOf } from './moves.ts'
@@ -17,9 +17,21 @@ import { realityKey, refresh as refreshState, type Drift, type Reality } from '.
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
 import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjectDetail } from './state-ops.ts'
-import type { Diagnostic, Pos } from './types.ts'
+import type { Block, Diagnostic, Pos } from './types.ts'
+
+// An authored upstream state that data "terraform_remote_state" reads (scenario terraform.remote_states).
+export interface RemoteState {
+  backend: string
+  config: Record<string, Value> // every key must equal the data source's config value for the state to match
+  workspace: string
+  outputs: Record<string, Value>
+}
+// The backend types Terraform 1.9 knows (internal/backend/init).
+const BACKENDS = new Set(['local', 'remote', 'azurerm', 'consul', 'cos', 'gcs', 'http', 'inmem', 'kubernetes', 'oss', 'pg', 's3'])
+const isObj = (v: Value): v is Record<string, Value> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 export interface PlanInput {
+  remoteStates?: RemoteState[]
   files?: { name: string; text: string }[] // compat: the root module's files alone (no child modules); ignored when tree is given
   tree?: ModuleTree // the root and its loaded child modules; wins over files
   state: State
@@ -72,6 +84,7 @@ export interface PlanResult {
   baseState: State // what planning worked from: refreshed, with moves applied
   summary: { add: number; change: number; destroy: number }
   imported: number
+  reads?: string[] // instance addresses of the terraform_remote_state data sources read while planning
   instances?: string[] // every module instance path the configuration expands to (module.net["a"]); the root is not listed
   partial?: boolean // diagnostics came from prevent_destroy after planning: items and outputs hold what was planned
 }
@@ -200,8 +213,19 @@ export function planConfig(input: PlanInput): PlanResult {
         case 'var':
         case 'local':
           return walk(val(`${mod}${root}.${a}`), path.slice(2))
-        case 'data':
-          return walk(val(`${mod}data.${a}.${b}`), path.slice(3))
+        case 'data': {
+          const v = val(`${mod}data.${a}.${b}`)
+          if (a !== 'terraform_remote_state') return walk(v, path.slice(3))
+          // The data source's own attributes are a block schema; below them (outputs.x) it is an ordinary object value.
+          let cur = walk(v, path.slice(3, 4))
+          for (const n of path.slice(4)) {
+            if (isUnknown(cur)) return UNKNOWN
+            if (isObj(cur) && Object.hasOwn(cur, n)) cur = cur[n]
+            else if (isObj(cur)) throw new EvalError('Unsupported attribute', `This object does not have an attribute named "${n}".`)
+            else throw new EvalError('Unsupported attribute', 'This value does not have any attributes.')
+          }
+          return cur
+        }
         case 'module': {
           // The call's outputs as one object; unknown until each output has been evaluated.
           const call = g.nodes.get(`${staticPre(mod)}module.${a}`)
@@ -359,6 +383,47 @@ export function planConfig(input: PlanInput): PlanResult {
     )
   }
 
+  // data "terraform_remote_state": the authored upstream's outputs, or UNKNOWN while an argument is unknown. The result
+  // is also recorded in the planned state (mode data), so apply and refresh keep it like any data source.
+  const readRemote = (node: GNode, b: Block, instance: string): Value => {
+    const mod = pre(instance)
+    const context = `data "terraform_remote_state" "${b.labels[1]}"`
+    const address = `${mod}data.terraform_remote_state.${b.labels[1]}`
+    const err = (pos: Pos, summary: string, detail: string): Value => {
+      errors.push({ severity: 'error', summary, detail, file: node.file, line: pos.line, col: pos.col, context, address })
+      return UNKNOWN
+    }
+    const attr = (n: string) => b.attrs.find((x) => x.name === n)
+    const get = (n: string): Value => {
+      const x = attr(n)
+      return x ? evalAt(node, x.pos, () => evalExpr(x.value, scopeFor({}, mod)), context) : null
+    }
+    if (!attr('backend')) return err(b.pos, 'Missing required argument', 'The argument "backend" is required, but no definition was found.')
+    const [backend, config, workspace, defaults] = ['backend', 'config', 'workspace', 'defaults'].map(get)
+    if ([backend, config, workspace, defaults].some(hasUnknown)) return UNKNOWN
+    if (typeof backend !== 'string') return err(attr('backend')!.pos, 'Incorrect attribute value type', 'Inappropriate value for attribute "backend": string required.')
+    if (!BACKENDS.has(backend)) return err(attr('backend')!.pos, 'Invalid backend configuration', `There is no backend type named "${backend}".`)
+    if (config !== null && !isObj(config)) return err(attr('config')!.pos, 'Invalid backend configuration', 'The configuration must be an object value.')
+    if (defaults !== null && !isObj(defaults)) return err(attr('defaults')!.pos, 'Invalid default values', 'Defaults must be given in an object value.')
+    if (workspace !== null && typeof workspace !== 'string') return err(attr('workspace')!.pos, 'Incorrect attribute value type', 'Inappropriate value for attribute "workspace": string required.')
+    const cfg: Record<string, Value> = isObj(config) ? config : {}
+    const remote = (input.remoteStates ?? []).find(
+      (r) => r.backend === backend && r.workspace === (workspace ?? 'default') && Object.entries(r.config).every(([k, v]) => Object.hasOwn(cfg, k) && equal(cfg[k], v)),
+    )
+    if (!remote) return err(attr('workspace')?.pos ?? b.pos, 'Unable to find remote state', 'No stored state was found for the given workspace in the given backend.')
+    // defaults first; the upstream's outputs win. Map: output names are player data.
+    const outputs = Object.fromEntries(new Map<string, Value>([...Object.entries(defaults ?? {}), ...Object.entries(remote.outputs)]))
+    const attributes = structuredClone({ backend, config, defaults, outputs: outputs as Value, workspace }) as Record<string, Value>
+    let r = base.resources.find((x) => x.mode === 'data' && (x.module ?? '') === instance && x.type === 'terraform_remote_state' && x.name === b.labels[1])
+    if (!r) {
+      r = { ...(instance ? { module: instance } : {}), mode: 'data', type: 'terraform_remote_state', name: b.labels[1], provider: 'provider["terraform.io/builtin/terraform"]', instances: [] }
+      base.resources.push(r)
+    }
+    r.instances = [{ attributes }]
+    ;(result.reads ??= []).push(address)
+    return attributes
+  }
+
   const broken = new Set<string>()
   // One node in one instance of its declaring module.
   const visit = (node: GNode, instance: string) => {
@@ -389,6 +454,10 @@ export function planConfig(input: PlanInput): PlanResult {
         break
       case 'data': {
         const [type, name] = b!.labels
+        if (type === 'terraform_remote_state') {
+          values.set(key, readRemote(node, b!, instance))
+          break
+        }
         values.set(key, base.resources.find((r) => r.mode === 'data' && (r.module ?? '') === instance && r.type === type && r.name === name)?.instances[0]?.attributes ?? UNKNOWN)
         break
       }

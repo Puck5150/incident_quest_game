@@ -189,6 +189,7 @@ function providersOf(files: File[]): string[] {
     for (const b of parseHcl(f.name, f.text).blocks) {
       if ((b.type !== 'resource' && b.type !== 'data') || !b.labels[0]) continue
       const type = b.labels[0]
+      if (b.type === 'data' && type === 'terraform_remote_state') continue // the built-in provider: no lock entry
       out.add(schemaFor(type)?.provider ?? `${REGISTRY}hashicorp/${type.split('_')[0]}`)
     }
   }
@@ -580,11 +581,11 @@ export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined
   const cfg = await loadConfig(ctx, resolvePath('/', ctx.lab.dir))
   const s = await prepare([], ctx, cfg)
   if (!('vars' in s)) return undefined
-  return planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
+  return planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: [], refresh: true })
 }
 
 // The lines a plan prints while it reads the state's objects back from the cloud.
-const refreshLines = (state: State, refresh: boolean) =>
+const refreshLines = (state: State, refresh: boolean, reads: string[] = []) =>
   state.resources
     .flatMap((r) =>
       r.instances.map((i) => {
@@ -593,6 +594,7 @@ const refreshLines = (state: State, refresh: boolean) =>
         return { addr, lines: r.mode === 'data' ? [`${addr}: Reading...`, `${addr}: Read complete after 0s${id}`] : refresh ? [`${addr}: Refreshing state...${id}`] : [] }
       }),
     )
+    .concat(reads.filter((a) => !listAddresses(state).includes(a)).map((addr) => ({ addr, lines: [`${addr}: Reading...`, `${addr}: Read complete after 0s`] })))
     .sort((a, b) => compareAddresses(a.addr, b.addr))
     .flatMap((x) => x.lines)
 
@@ -604,9 +606,9 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
-  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
+  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(allFiles(cfg)))
-  const lines = refreshLines(ctx.lab.state, f.refresh)
+  const lines = refreshLines(ctx.lab.state, f.refresh, result.reads)
   const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
   // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
   if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
@@ -690,7 +692,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     }
   }
   const r: ApplyResult = executeApply(
-    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, refresh: f.refresh },
+    { ...input, state: ctx.lab.state, reality: ctx.lab.reality, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, refresh: f.refresh },
     { faults: ctx.lab.faults, taken: ctx.taken, attempts: ctx.lab.attempts, seed: `${ctx.lab.state.lineage}:${ctx.lab.state.serial}` },
   )
   // Outside the lab directory ctx.lab is a throwaway copy, so this commit is discarded.
@@ -815,7 +817,7 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const declared = t.ok && !!ra && s.graph.nodes.has(staticKey(ra))
   if (declared && t.mode === 'managed' && (t.key !== undefined || ra.module.length > 0)) {
     const target = instanceAddress(t, t.key)
-    const p = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
+    const p = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, refresh: false })
     const moduleOk = !ra.module.length || (p.instances ?? []).includes(formatModule(ra.module))
     const keyOk = t.key === undefined || p.items.some((i) => i.address === target && i.action !== 'destroy' && i.action !== 'forget')
     if (!p.diagnostics.length && !(moduleOk && keyOk)) return withWarn(s.warning, boxFail(NO_IMPORT_CONFIG, noImportConfigDetail(target)))

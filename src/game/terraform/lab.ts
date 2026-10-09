@@ -7,6 +7,7 @@ import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { labDir, labFiles, normalizeRegistry, type RegistryModule } from './layout.ts'
 import type { ModuleTree } from './modules.ts'
+import type { RemoteState } from './plan.ts'
 import type { ProviderInfo } from './providers.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
@@ -26,6 +27,7 @@ export interface Lab {
   initialized: boolean
   files: { path: string; content: string }[]
   registry: RegistryModule[] // the authored offline module registry
+  remoteStates: RemoteState[] // the authored upstream states data "terraform_remote_state" reads
   providers: Map<string, ProviderInfo> // authored provider versions by provider name (aws)
   hasState: boolean
   state: State
@@ -119,6 +121,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     initialized: tf.initialized ?? true,
     files: labFiles(tf, startDir, home),
     registry: (tf.modules?.registry ?? []).map((r) => ({ source: normalizeRegistry(r.source), versions: structuredClone(r.versions) })),
+    remoteStates: (tf.remote_states ?? []).map((r) => ({ backend: r.backend, config: structuredClone(r.config) as Record<string, Value>, workspace: r.workspace ?? 'default', outputs: structuredClone(r.outputs) as Record<string, Value> })),
     providers: new Map(Object.entries(structuredClone(tf.providers ?? {}))),
     hasState,
     state,

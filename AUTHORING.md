@@ -569,6 +569,13 @@ Limits: local and authored registry sources only (no git/S3/HTTP), `moved`/`impo
 - `required_version` is checked against `terraform.version` (default 1.9.8) when the configuration loads (`init`, `validate`, `plan`, `apply`, `destroy`, `refresh`, `import`): `Unsupported Terraform Core version`, and `Module module.network (from registry.terraform.io/acme/network/aws) does not support Terraform version ...` for a module.
 - The starting lock covers `aws` only (as before); a configuration that also uses another provider needs `terraform init` first.
 
+#### Remote state (`data "terraform_remote_state"`)
+
+`terraform.remote_states` authors the upstream states a config can read: `[{ backend: s3, config: { bucket: acme-tf-state, key: network/terraform.tfstate, region: us-east-1 }, workspace: default, outputs: { vpc_id: vpc-0abc, subnet_ids: [subnet-1, subnet-2] } }]`. `backend` is a Terraform 1.9 backend type, `workspace` defaults to `default`, `outputs` are the upstream's root outputs. A `data "terraform_remote_state" "net" { backend = "s3" config = { ... } }` matches the entry with the same backend and workspace whose every authored `config` key equals the data source's (so an entry may list only `bucket` and `key`); the same entry twice is rejected. `data.terraform_remote_state.net.outputs.vpc_id` then works anywhere (also inside modules, with the module prefix); `defaults = { ... }` fills outputs the upstream lacks. The built-in provider needs no lock entry.
+
+- Failures: no matching entry gives `Unable to find remote state` / `No stored state was found for the given workspace in the given backend.` at the data block; an output the upstream does not have gives `Unsupported attribute` / `This object does not have an attribute named "vpc_id".` at the reference (the "upstream renamed an output" incident: author the entry without the old name); `backend = "bogus"` gives `Invalid backend configuration`. While an argument is unknown (for example a bucket made by a resource in the same apply) the read is deferred and downstream values show `(known after apply)`.
+- The data source is saved in state (`terraform state list` shows `data.terraform_remote_state.net`; `state show` prints backend, config and outputs) by `apply`; `plan` prints `data.terraform_remote_state.net: Reading...` / `Read complete after 0s`. The upstream is fixed for the session (mutable upstream outputs are not modelled), and `terraform validate` does not check the arguments.
+
 ### Apply, destroy and faults
 
 `terraform apply` and `terraform destroy` really change the simulated state
