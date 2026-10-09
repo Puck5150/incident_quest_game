@@ -564,3 +564,15 @@ describe('keyed modules: scenario data', () => {
     expect((await w.run('plan')).stdout).toContain('No changes.')
   })
 })
+
+describe('keyed modules: errors are reported once', () => {
+  const bad = `variable "cidr" {}\nresource "aws_vpc" "main" {\n  cidr_block = each.key\n}\n`
+  it.each([2, 20])('a configuration error in the child is shown once for %i instances', async (n) => {
+    const keys = JSON.stringify(Array.from({ length: n }, (_, i) => `k${i}`))
+    const w = world(FE(keys), {}, { 'modules/net/main.tf': bad })
+    const r = await w.run('plan')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr.match(/Error:/g)).toHaveLength(1)
+    expect(r.stderr).toContain('on modules/net/main.tf line 3')
+  })
+})

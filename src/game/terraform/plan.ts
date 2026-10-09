@@ -441,6 +441,15 @@ export function planConfig(input: PlanInput): PlanResult {
     if (errors.length > errorsBefore) broken.add(addr)
   }
 
+  // A configuration error inside a repeated module is the same mistake in every instance: report it once, at the first
+  // instance (a detail that differs per instance is dropped with the repeats).
+  const seenErrors = new Set<string>()
+  for (let i = 0; i < errors.length; i++) {
+    const e = errors[i]
+    const k = JSON.stringify([e.file, e.line, e.col, e.summary, e.context])
+    if (seenErrors.has(k)) errors.splice(i--, 1)
+    else seenErrors.add(k)
+  }
   if (errors.length) {
     result.items = []
     result.outputs = []
