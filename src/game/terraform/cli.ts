@@ -585,8 +585,10 @@ export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined
 }
 
 // The lines a plan prints while it reads the state's objects back from the cloud.
-const refreshLines = (state: State, refresh: boolean, reads: string[] = []) =>
+const refreshLines = (state: State, refresh: boolean, reads: string[] = [], planned?: State) =>
   state.resources
+    // a data source whose block was removed is dropped by the plan: no Reading line for it
+    .filter((r) => !planned || r.mode !== 'data' || r.type !== 'terraform_remote_state' || planned.resources.some((p) => p.mode === 'data' && p.type === r.type && p.name === r.name && (p.module ?? '') === (r.module ?? '')))
     .flatMap((r) =>
       r.instances.map((i) => {
         const addr = instanceAddress(r, i.index_key)
@@ -608,7 +610,7 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const warning = s.warning
   const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: f.replace, refresh: f.refresh, destroy })
   const rendered = renderPlan(result, sourcesOf(allFiles(cfg)))
-  const lines = refreshLines(ctx.lab.state, f.refresh, result.reads)
+  const lines = refreshLines(ctx.lab.state, f.refresh, result.reads, destroy ? undefined : result.baseState)
   const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
   // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
   if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })

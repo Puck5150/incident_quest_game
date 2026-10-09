@@ -455,7 +455,7 @@ terraform:
 Fields:
 - `dir`: the lab directory (default the shell's starting directory; `~/` and absolute paths work). `version`: Terraform version like `1.9.8`. `initialized`: false makes the player run `terraform init` first.
 - `files`: the starting `.tf` files (at least one; module directories such as `modules/net/main.tf` work; local `./` sources and registry modules from `modules.registry`). `vars`: values for `variable` blocks.
-- `modules.installed`: `[{ key, source, dir }]` (a registry module gives `version` instead of `dir`, see Registry modules below) (`key` is the call name, dotted for nested calls: `net`, `net.inner`), the local modules `terraform init` already installed (becomes `.terraform/modules/modules.json`; `dir` must hold `.tf` files in `files`). A lab with module calls that omits it must be run through `terraform init` first (`Module not installed`).
+- `modules.installed`: `[{ key, source, dir }]`, the modules `terraform init` already installed (becomes `.terraform/modules/modules.json`). `key` is the call name, dotted for nested calls (`net`, `net.inner`). A local module gives `dir`, which must hold `.tf` files in `files`; a registry module gives `version` instead of `dir` (see Registry modules). A lab with module calls that omits an entry must be run through `terraform init` first (`Module not installed`). A registry module that itself calls a local submodule cannot be pre-installed this way (the schema requires local dirs to be in `terraform.files`): leave it out and make the player run `terraform init`.
 - `state`: managed (or `mode: data`) objects. Every `attrs` needs a string `id`. `key` makes a `count` or `for_each` instance; `status: tainted` marks one tainted. `outputs`: output values (`sensitive: true` hides them).
 - `cloud`: what really exists. By default it is exactly what `state` says. `cloud.patch` changes attributes of an existing object (drift), `cloud.delete` removes one, `cloud.add` creates one Terraform does not manage.
 - `evidence`: awards a tag when the named subcommand's output contains the substring. Check the exact text by running the command in the shell.
@@ -556,8 +556,48 @@ modules:
 
 `terraform init` / `get` print `- net in modules/net` and `- net.inner in modules/net/inner`; a nested call missing from the manifest is `Module not installed` at the nested call. Addresses use the full path: `module.net.module.inner.aws_vpc.main`, with keys at any level (`module.net["a"].module.inner[0].aws_vpc.main`); state `module`, `faults[].at` and `done_when` leaves take them. Root `moved` blocks may rename a nested module by its full path (`from = module.net.module.inner  to = module.net.module.core`) or move a resource between nested modules; `moved` blocks inside a child module are still ignored. A module that calls itself (directly or through others) is a lab error, `Module cycle`; more than 8 levels is `Module stack level too deep`.
 
-Limits: local and authored registry sources only (no git/S3/HTTP), `moved`/`import`/`removed` blocks only in the root module.
+Limits and deferred (modules): local and authored registry sources only (no git/S3/HTTP, no `//subdir`); `moved`/`import`/`removed` blocks only in the root module; `removed { from = module.net }` unsupported; no module `providers`; dependencies are per resource, not per instance (see Keyed module instances); a file a registry version drops stays on disk as an empty `.tf` after an upgrade (the simulated disk has no delete); mutable remote state and `terraform_remote_state` with `count`/`for_each` are not modelled.
 
+
+**Reference summary (modules).** Sources: local (`./`, `../` inside the lab), authored registry. Calls: single, `count`, `for_each`, nested to 8 levels. Scenario fields: `files` (module dirs), `modules.registry`, `modules.installed`. Commands: `init` (installs; plain `init` keeps a registry version that still satisfies), `init -upgrade` and `get -update` (re-resolve registry modules to the newest satisfying version), `get`, `-replace`, `taint`, `import`, `state list|show|mv|rm`, all with module addresses at any depth. Predicates (`state_has`, `state_lacks`, `applied`, `plan_has.no_destroy`) and `faults[].at` accept keyed and nested addresses (`module.net["a"].module.inner[0].aws_vpc.main`); a step without a key covers every instance. Limits and deferred: see the end of this section.
+
+Worked sketches (YAML-ish, the fields are real; contents shortened).
+
+Module upgrade changes the plan: v2.1.0 of a registry module changed an availability zone, so `init -upgrade` plans a replacement.
+
+```yaml
+terraform:
+  initialized: true
+  files: [{ path: main.tf, content: 'module "network" { source = "acme/network/aws"  version = "~> 2.0" ... }' }]
+  modules:
+    registry:
+      - source: acme/network/aws
+        versions: [{ version: 2.0.1, files: [...] }, { version: 2.1.0, files: [...] }]
+    installed: [{ key: network, source: acme/network/aws, version: 2.0.1 }]
+  state: [{ module: module.network, type: aws_subnet, name: a, attrs: { id: subnet-1, ... } }]
+done_when: { all: [{ plan_has: { no_destroy: [module.network.aws_subnet.a] } }, { not: { applied: { op: delete, address: module.network } } }] }
+```
+
+Lock-file drift: the lock selects 5.31.0 but the configuration now needs `~> 5.50`. Author the stale lock yourself (see the note under Provider versions).
+
+```yaml
+terraform:
+  files:
+    - { path: main.tf, content: 'terraform { required_providers { aws = { source = "hashicorp/aws", version = "~> 5.50" } } } ...' }
+    - { path: .terraform.lock.hcl, content: '<a lock selecting 5.31.0 with constraints "~> 5.31">' }
+  providers: { aws: { lock: 5.31.0, available: [5.31.0, 5.67.0] } }
+evidence: [{ evidence: lock, command: plan, contains: Inconsistent dependency lock file }]
+# fix: terraform init -upgrade, then plan is clean
+```
+
+Remote-state coupling: the upstream no longer has the `vpc_id` output this config reads.
+
+```yaml
+terraform:
+  files: [{ path: main.tf, content: 'data "terraform_remote_state" "net" { backend = "s3" config = {...} }  resource "aws_subnet" "a" { vpc_id = data.terraform_remote_state.net.outputs.vpc_id ... }' }]
+  remote_states: [{ backend: s3, config: { bucket: acme-tf-state, key: network/terraform.tfstate }, outputs: { network_vpc_id: vpc-0abc } }]
+# plan fails with Unsupported attribute at the reference; the fix edits the reference to outputs.network_vpc_id
+```
 
 #### Provider versions, the lock file and `required_version`
 
@@ -568,13 +608,14 @@ Limits: local and authored registry sources only (no git/S3/HTTP), `moved`/`impo
 - A registry module whose newer version raises its provider constraint (module v2 needs `~> 5.50`) is the classic trap: `init -upgrade` upgrades the module and then the provider; a plain `get -update` leaves the lock inconsistent.
 - `required_version` is checked against `terraform.version` (default 1.9.8) when the configuration loads (`init`, `validate`, `plan`, `apply`, `destroy`, `refresh`, `import`): `Unsupported Terraform Core version`, and `Module module.network (from registry.terraform.io/acme/network/aws) does not support Terraform version ...` for a module.
 - The starting lock covers `aws` only (as before); a configuration that also uses another provider needs `terraform init` first.
+- The mounted starting lock always carries the configuration's CURRENT constraints (and `lock` as the selected version). To start with a lock that records STALE constraints (the usual drift), mount your own `.terraform.lock.hcl` among `terraform.files` (it overrides the generated one), or let the player edit the constraint in a `.tf` file: the lock then records the old constraints and the plan reports the mismatch.
 
 #### Remote state (`data "terraform_remote_state"`)
 
 `terraform.remote_states` authors the upstream states a config can read: `[{ backend: s3, config: { bucket: acme-tf-state, key: network/terraform.tfstate, region: us-east-1 }, workspace: default, outputs: { vpc_id: vpc-0abc, subnet_ids: [subnet-1, subnet-2] } }]`. `backend` is a Terraform 1.9 backend type, `workspace` defaults to `default`, `outputs` are the upstream's root outputs. A `data "terraform_remote_state" "net" { backend = "s3" config = { ... } }` matches the entry with the same backend and workspace whose every authored `config` key equals the data source's (so an entry may list only `bucket` and `key`); the same entry twice is rejected. `data.terraform_remote_state.net.outputs.vpc_id` then works anywhere (also inside modules, with the module prefix); `defaults = { ... }` fills outputs the upstream lacks. The built-in provider needs no lock entry.
 
 - Failures: no matching entry gives `Unable to find remote state` / `No stored state was found for the given workspace in the given backend.` at the data block; an output the upstream does not have gives `Unsupported attribute` / `This object does not have an attribute named "vpc_id".` at the reference (the "upstream renamed an output" incident: author the entry without the old name); `backend = "bogus"` gives `Invalid backend configuration`. While an argument is unknown (for example a bucket made by a resource in the same apply) the read is deferred and downstream values show `(known after apply)`.
-- The data source is saved in state (`terraform state list` shows `data.terraform_remote_state.net`; `state show` prints backend, config and outputs) by `apply`; `plan` prints `data.terraform_remote_state.net: Reading...` / `Read complete after 0s`. The upstream is fixed for the session (mutable upstream outputs are not modelled), and `terraform validate` does not check the arguments.
+- The data source is saved in state (`terraform state list` shows `data.terraform_remote_state.net`; `state show` prints backend, config and outputs) by `apply`; `plan` prints `data.terraform_remote_state.net: Reading...` / `Read complete after 0s`. The upstream is fixed for the session: mutable upstream outputs are not modelled, so express "the upstream renamed an output" by authoring `outputs` without the old name. `terraform validate` does not check the arguments. A data block removed from the configuration is dropped from state by the next `apply` (and prints no `Reading` line); a deferred (unknown-argument) read keeps its entry.
 
 ### Apply, destroy and faults
 

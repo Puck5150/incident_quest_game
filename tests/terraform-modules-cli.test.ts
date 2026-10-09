@@ -91,6 +91,7 @@ describe('terraform modules: init, get and install checks', () => {
     const r = await w.run('validate')
     expect(r.exitCode).toBe(1)
     expect(r.stderr).toContain('Error: Module source has changed')
+    expect(r.stderr).toContain('on main.tf line 2, in module "net":')
     expect(flat(r.stderr)).toContain('The source address was changed since this module was installed. Run "terraform init" to install all modules required by this configuration.')
     await w.run('init')
     expect((await w.run('validate')).stderr).not.toContain('Module source has changed')

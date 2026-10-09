@@ -171,7 +171,8 @@ export async function loadModuleTree(rootFiles: File[], readDir: (dir: string) =
             continue
           }
           if (m.source !== call.source) {
-            out.install.push({ ...at(call), summary: 'Module source has changed', detail: `The source address was changed since this module was installed. ${FIX}` })
+            const sp = call.sourcePos ?? call.pos
+            out.install.push({ ...at(call), line: sp.line, col: sp.col, summary: 'Module source has changed', detail: `The source address was changed since this module was installed. ${FIX}` })
             continue
           }
           dir = resolveLocal('', m.dir) ?? m.dir
@@ -189,7 +190,7 @@ export async function loadModuleTree(rootFiles: File[], readDir: (dir: string) =
           const sp = call.sourcePos ?? call.pos
           const here = { ...at(call), line: sp.line, col: sp.col }
           if (m.source !== source) {
-            out.install.push({ ...at(call), summary: 'Module source has changed', detail: `The source address was changed since this module was installed. ${FIX}` })
+            out.install.push({ ...here, summary: 'Module source has changed', detail: `The source address was changed since this module was installed. ${FIX}` })
             continue
           }
           if (call.version !== undefined && m.version === undefined) {

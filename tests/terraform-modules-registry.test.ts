@@ -217,7 +217,9 @@ describe('registry modules: errors', () => {
   it('a changed source reports Module source has changed', async () => {
     const w = world(root('~> 2.0'), installedAt('2.0.1'))
     w.set('main.tf', root('~> 2.0').replace('acme/network/aws', 'acme/other/aws'))
-    expect((await w.run('validate')).stderr).toContain('Error: Module source has changed')
+    const err = (await w.run('validate')).stderr
+    expect(err).toContain('Error: Module source has changed')
+    expect(err).toContain('on main.tf line 2, in module "network":')
   })
 })
 

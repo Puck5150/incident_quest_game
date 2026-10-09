@@ -30,7 +30,7 @@ function world(files: string | Record<string, string>, tf: Partial<TerraformBloc
     readFile: async (p) => disk[p],
     write: async (dir, name, text) => void (disk[`${dir}/${name}`] = text),
   }
-  return { lab, run: (...args: string[]) => runTerraform(args, ctx) }
+  return { lab, set: (name: string, text: string) => void (disk[`${LAB}/${name}`] = text), run: (...args: string[]) => runTerraform(args, ctx) }
 }
 const flat = (s: string) => s.replace(/\n│ /g, ' ')
 
@@ -130,6 +130,28 @@ describe('terraform_remote_state', () => {
     // the bucket id is generated at apply, so the read (and the match) happens with a known value: no remote state matches
     const a = await w.run('apply', '-auto-approve')
     expect(flat(a.stderr)).toContain('Unable to find remote state')
+  })
+
+  it('drops the data source from state when its block is removed', async () => {
+    const w = world(MAIN)
+    await w.run('apply', '-auto-approve')
+    expect((await w.run('state', 'list')).stdout).toContain('data.terraform_remote_state.net')
+    w.set('main.tf', 'resource "aws_subnet" "a" {\n  vpc_id     = "vpc-1"\n  cidr_block = "10.0.1.0/24"\n}\n')
+    const plan = await w.run('plan')
+    expect(plan.stdout).not.toContain('Reading')
+    expect(plan.stdout).not.toContain('terraform_remote_state')
+    await w.run('apply', '-auto-approve')
+    expect((await w.run('state', 'list')).stdout).toBe('aws_subnet.a')
+    expect((await w.run('plan')).stdout).not.toContain('Reading')
+  })
+
+  it('keeps the entry while an argument is unknown (deferred read)', async () => {
+    const src = 'resource "aws_s3_bucket" "state" {\n  bucket = "tf-state"\n}\n' + DATA.replace('"acme-tf-state"', 'aws_s3_bucket.state.id')
+    const w = world(src)
+    w.lab.state = { ...w.lab.state, resources: [{ mode: 'data', type: 'terraform_remote_state', name: 'net', provider: 'provider["terraform.io/builtin/terraform"]', instances: [{ attributes: { backend: 's3', config: CFG, defaults: null, outputs: {}, workspace: null } }] }] }
+    const out = await w.run('plan')
+    expect(out.exitCode).toBe(0)
+    expect(out.stdout).toContain('data.terraform_remote_state.net: Reading...')
   })
 
   it('works inside a module with the module prefix', async () => {

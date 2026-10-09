@@ -385,10 +385,12 @@ export function planConfig(input: PlanInput): PlanResult {
 
   // data "terraform_remote_state": the authored upstream's outputs, or UNKNOWN while an argument is unknown. The result
   // is also recorded in the planned state (mode data), so apply and refresh keep it like any data source.
+  const configured = new Set<string>() // remote-state data blocks present in the configuration, read or deferred
   const readRemote = (node: GNode, b: Block, instance: string): Value => {
     const mod = pre(instance)
     const context = `data "terraform_remote_state" "${b.labels[1]}"`
     const address = `${mod}data.terraform_remote_state.${b.labels[1]}`
+    configured.add(address)
     const err = (pos: Pos, summary: string, detail: string): Value => {
       errors.push({ severity: 'error', summary, detail, file: node.file, line: pos.line, col: pos.col, context, address })
       return UNKNOWN
@@ -619,6 +621,8 @@ export function planConfig(input: PlanInput): PlanResult {
     if (i.action === 'update') result.summary.change++
     if (i.action === 'destroy' || i.action === 'replace') result.summary.destroy++
   }
+  // A data "terraform_remote_state" removed from the configuration leaves state (deferred reads stay: they are configured).
+  base.resources = base.resources.filter((r) => r.mode !== 'data' || r.type !== 'terraform_remote_state' || configured.has(`${r.module ? `${r.module}.` : ''}data.terraform_remote_state.${r.name}`))
   result.driftShown = relevantDrift(g.nodes, result, drift)
   return result
 }
