@@ -211,6 +211,9 @@ export function buildGraph(input: File[] | ModuleTree): Graph {
       if (child) queue.push({ path: m.path ? `${m.path}.module.${name}` : `module.${name}`, key, files: child.files.files, call: b, blocks: [] })
     }
   }
+  // A syntax error in a module's files stops Terraform loading the configuration: nothing else is checked (its blocks are missing, which would only cascade).
+  const rootNames = new Set(tree.root.files.map((f) => f.name))
+  if (diagnostics.some((d) => !rootNames.has(d.file))) return { nodes: new Map(), order: [], blocks, diagnostics: dedupe(diagnostics) }
   const loaded = new Map(mods.filter((m) => m.call).map((m) => [m.path, m]))
 
   const nodes = new Map<string, GNode>()

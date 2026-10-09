@@ -76,7 +76,8 @@ describe('terraform modules: init, get and install checks', () => {
     expect((await w.run('validate')).stderr).not.toContain('Module not installed')
     const plan = await w.run('plan')
     expect(plan.stderr).not.toContain('Module not installed')
-    expect(plan.stderr).toContain('Unsupported module') // replaced when the planner learns modules (TF6a task 4)
+    expect(plan.exitCode).toBe(0)
+    expect(plan.stdout).toContain('# module.net.aws_vpc.main will be created')
   })
 
   it('a scenario with modules.installed starts initialised', async () => {

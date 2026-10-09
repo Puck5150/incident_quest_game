@@ -22,7 +22,7 @@ import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
 import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
-import { formatManifest, loadModuleTree, MANIFEST_PATH, parseManifest, type LoadedModules } from './modules.ts'
+import { formatManifest, loadModuleTree, MANIFEST_PATH, parseManifest, type LoadedModules, type ModuleTree } from './modules.ts'
 import { LOCK_BYPASSED } from './predicates.ts'
 
 export { LOCK_FILE } from './layout.ts'
@@ -161,9 +161,11 @@ function resolvePath(base: string, p: string): string {
 
 const moduleReader = (ctx: CliContext, dir: string) => (rel: string) => ctx.listFiles(resolvePath(dir, rel))
 // Every file the configuration is made of, for snippets in diagnostics: root files and installed module files.
-const allFiles = (cfg: Config): File[] => [...cfg.tf, ...[...cfg.modules.tree.children.values()].flatMap((c) => c.files.files)]
+const treeFiles = (t: ModuleTree): File[] => [...t.root.files, ...[...t.children.values()].flatMap((c) => c.files.files)]
+const allFiles = (cfg: Config): File[] => treeFiles(cfg.modules.tree)
 // Module problems stop every command that loads the configuration (a root syntax error is reported by the usual path).
-const moduleErrors = (cfg: Config): Diagnostic[] => (cfg.modules.rootBad ? [] : [...cfg.modules.install, ...cfg.modules.syntax])
+// Syntax errors in child files are reported once, by the graph.
+const moduleErrors = (cfg: Config): Diagnostic[] => (cfg.modules.rootBad ? [] : cfg.modules.install)
 
 async function loadConfig(ctx: CliContext, dir: string): Promise<Config> {
   const all = await ctx.listFiles(dir)
@@ -196,7 +198,7 @@ const lockedProviders = (cfg: Config) => [...cfg.lockText.matchAll(/^provider\s+
 // Resources need provider selections in the lock file; without one `init` has not run.
 function lockError(cfg: Config): Out | undefined {
   const locked = lockedProviders(cfg)
-  const providers = providersOf(cfg.tf).filter((p) => !locked.includes(p))
+  const providers = providersOf(allFiles(cfg)).filter((p) => !locked.includes(p))
   if (!providers.length) return undefined
   const list = providers.map((p) => `  - provider ${p}: required by this configuration but no version is selected`).join('\n')
   return fail(
@@ -232,13 +234,13 @@ function cmdVersion(ctx: CliContext, cfg: Config): Out {
 }
 
 // What init and get share: read each local module from its source and record it in the manifest.
-async function installModules(ctx: CliContext, cfg: Config): Promise<{ lines: string[] } | Out> {
+async function installModules(ctx: CliContext, cfg: Config): Promise<{ lines: string[]; files: File[] } | Out> {
   const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), undefined, true)
-  if (!m.calls.length) return { lines: [] }
+  if (!m.calls.length) return { lines: [], files: cfg.tf }
   const errors = [...m.install, ...m.syntax]
   if (errors.length) return { stdout: '', stderr: boxes(errors, [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]), exitCode: 1 }
   await ctx.write(resolvePath(cfg.dir, '.terraform/modules'), 'modules.json', formatManifest(m.entries))
-  return { lines: m.entries.map((e) => `- ${e.key} in ${e.dir}`) }
+  return { lines: m.entries.map((e) => `- ${e.key} in ${e.dir}`), files: [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)] }
 }
 
 async function cmdGet(ctx: CliContext, cfg: Config): Promise<Out> {
@@ -255,7 +257,7 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
   const mods = await installModules(ctx, cfg)
   if (!('lines' in mods)) return { ...mods, stdout: 'Initializing modules...' }
-  const providers = providersOf(cfg.tf)
+  const providers = providersOf(mods.files)
   const locked = lockedProviders(cfg)
   const missing = providers.filter((p) => !locked.includes(p))
   const lines = [...(mods.lines.length ? ['Initializing modules...', ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
@@ -300,7 +302,7 @@ function cmdValidate(cfg: Config): Out {
   if (!cfg.tf.length) return ok('Success! The configuration is valid.\n')
   const mod = moduleErrors(cfg)
   if (mod.length) return fail(boxes(mod, allFiles(cfg)))
-  const g = buildGraph(cfg.tf)
+  const g = buildGraph(cfg.modules.tree)
   const diags = [...g.diagnostics]
   if (!diags.length) {
     for (const n of g.nodes.values()) {
@@ -317,7 +319,7 @@ function cmdValidate(cfg: Config): Out {
       })
     }
   }
-  if (diags.length) return fail(boxes(diags, cfg.tf))
+  if (diags.length) return fail(boxes(diags, allFiles(cfg)))
   return lockError(cfg) ?? ok('Success! The configuration is valid.\n')
 }
 
@@ -494,7 +496,7 @@ async function prepare(sources: VarSource[], ctx: CliContext, cfg: Config): Prom
   if (!cfg.tf.length) return boxFail('No configuration files', NO_CONFIG_DETAIL)
   const mod = moduleErrors(cfg)
   if (mod.length) return fail(boxes(mod, allFiles(cfg)))
-  const g = buildGraph(cfg.tf)
+  const g = buildGraph(cfg.modules.tree)
   if (!g.diagnostics.length) {
     const lock = lockError(cfg)
     if (lock) return lock
@@ -510,7 +512,7 @@ export async function worldPlan(ctx: CliContext): Promise<PlanResult | undefined
   const cfg = await loadConfig(ctx, resolvePath('/', ctx.lab.dir))
   const s = await prepare([], ctx, cfg)
   if (!('vars' in s)) return undefined
-  return planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
+  return planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: [], refresh: true })
 }
 
 // The lines a plan prints while it reads the state's objects back from the cloud.
@@ -534,12 +536,12 @@ async function makePlan(f: PlanFlags, ctx: CliContext, cfg: Config, destroy: boo
   const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
   if (locked) return locked
   const warning = s.warning
-  const result = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
-  const rendered = renderPlan(result, sourcesOf(cfg.tf))
+  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, replace: f.replace, refresh: f.refresh, destroy })
+  const rendered = renderPlan(result, sourcesOf(allFiles(cfg)))
   const lines = refreshLines(ctx.lab.state, f.refresh)
   const stdout = lines.length ? `${lines.join('\n')}\n\n${rendered}` : rendered
   // A configuration error stops before planning; prevent_destroy fails after it, so the partial plan prints first (apply asks nothing).
-  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(cfg.tf)), exitCode: 1 })
+  if (result.diagnostics.length) return withWarn(warning, { stdout: result.partial ? stdout : '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
   return { warning, vars: s.vars, result, stdout, changes: !/(^|\n)No changes\. Your infrastructure matches/.test(rendered) }
 }
 
@@ -561,7 +563,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boole
     const { lineage, serial } = ctx.lab.state
     const path = resolvePath(cfg.dir, f.out)
     const id = planId(lineage, serial, path)
-    ctx.lab.savedPlans.set(id, { files: cfg.tf, vars: p.vars, replace: f.replace, destroy: false, serial, lineage, workspace: ctx.lab.workspace })
+    ctx.lab.savedPlans.set(id, { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy: false, serial, lineage, workspace: ctx.lab.workspace })
     const slash = path.lastIndexOf('/')
     await ctx.write(path.slice(0, slash) || '/', path.slice(slash + 1), `TFPLAN1\n${id}\n`)
   }
@@ -589,7 +591,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   const f = parsePlanFlags(args, mode)
   if (!('sources' in f)) return f
   const destroy = mode === 'destroy'
-  let input: { files: File[]; vars: Record<string, Value>; replace: string[]; destroy: boolean }
+  let input: { tree: ModuleTree; vars: Record<string, Value>; replace: string[]; destroy: boolean }
   let head: string
   let warning = ''
   if (f.planFile !== undefined) {
@@ -601,13 +603,13 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     if (locked) return locked
     if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage || saved.workspace !== ctx.lab.workspace)
       return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
-    input = { files: saved.files, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
+    input = { tree: saved.tree, vars: saved.vars, replace: saved.replace, destroy: saved.destroy }
     head = '' // a saved plan was already reviewed: no plan text, no question
   } else {
     const p = await makePlan(f, ctx, cfg, destroy)
     if (!('result' in p)) return p
     warning = p.warning
-    input = { files: cfg.tf, vars: p.vars, replace: f.replace, destroy }
+    input = { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy }
     // No changes: nothing to ask, but the apply still runs so the refreshed state is saved.
     head = p.changes || !destroy ? p.stdout : p.stdout.replace(NO_CHANGES, NO_DESTROY)
     if (p.changes && !f.autoApprove) {
@@ -632,7 +634,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}${bypassed}`)
   const progress = renderProgress(r)
   const stdout = [head, progress, renderApplyEnd(r, mode)].filter(Boolean).join('\n')
-  return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(input.files)), exitCode: r.errors.length ? 1 : 0 }
+  return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(treeFiles(input.tree))), exitCode: r.errors.length ? 1 : 0 }
 }
 
 const sensitiveAttr = (type: string, attr: string) => {
@@ -737,14 +739,15 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const [addr, id] = a.pos
   const s = await prepare(a.sources, ctx, cfg)
   if (!('vars' in s)) return s
-  if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, cfg.tf)))
+  if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, allFiles(cfg))))
   const t = parseAddress(addr)
   // A keyed address needs only its resource block; count and for_each are not checked.
-  const declared = t.ok && !t.module && s.graph.blocks.some((b) => b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  const rootNames = new Set(cfg.tf.map((x) => x.name))
+  const declared = t.ok && !t.module && s.graph.blocks.some((b) => rootNames.has(b.file) && b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
   // A keyed address must be an instance the configuration produces; if count/for_each can't be evaluated, accept it.
   if (declared && t.mode === 'managed' && t.key !== undefined) {
     const target = instanceAddress(t, t.key)
-    const p = planConfig({ files: cfg.tf, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
+    const p = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, refresh: false })
     if (!p.diagnostics.length && !p.items.some((i) => i.address === target && i.action !== 'destroy' && i.action !== 'forget')) return withWarn(s.warning, boxFail(NO_IMPORT_CONFIG, noImportConfigDetail(target)))
   }
   const locked = declared && t.mode === 'managed' && checkLock(ctx, a.lock)
@@ -767,7 +770,7 @@ async function cmdRefresh(args: string[], ctx: CliContext, cfg: Config): Promise
   if (a.pos.length) return boxFail('Too many command line arguments', 'Expected no positional arguments. Did you mean to use -chdir?')
   const p = await prepare(a.sources, ctx, cfg)
   if (!('vars' in p)) return p
-  if (p.graph.diagnostics.length) return withWarn(p.warning, fail(boxes(p.graph.diagnostics, cfg.tf)))
+  if (p.graph.diagnostics.length) return withWarn(p.warning, fail(boxes(p.graph.diagnostics, allFiles(cfg))))
   const locked = checkLock(ctx, a.lock)
   if (locked) return locked
   // Refresh-only: no resource changes are planned and no moved blocks apply, so plan errors don't stop it.

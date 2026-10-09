@@ -6,10 +6,11 @@ import type { Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { labDir, labFiles } from './layout.ts'
+import type { ModuleTree } from './modules.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
 export interface SavedPlan {
-  files: { name: string; text: string }[]
+  tree: ModuleTree // the root and installed module files the plan was made from
   vars: Record<string, Value>
   replace: string[]
   destroy: boolean
