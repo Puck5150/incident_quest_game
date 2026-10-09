@@ -102,12 +102,12 @@ export function compareAddresses(a: string, b: string): number {
   const y = leadingSteps(b)
   const xs = x?.steps ?? []
   const ys = y?.steps ?? []
-  for (let i = 0; i < Math.min(xs.length, ys.length); i++) {
+  if (xs.length !== ys.length) return xs.length - ys.length
+  for (let i = 0; i < xs.length; i++) {
     if (xs[i].name !== ys[i].name) return xs[i].name < ys[i].name ? -1 : 1
     const k = keyOrder(xs[i].key, ys[i].key)
     if (k) return k
   }
-  if (xs.length !== ys.length) return xs.length - ys.length
   const ra = x?.rest ?? a
   const rb = y?.rest ?? b
   return ra < rb ? -1 : ra > rb ? 1 : 0

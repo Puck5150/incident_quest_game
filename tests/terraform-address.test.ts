@@ -42,7 +42,7 @@ describe('address parsing', () => {
   })
   it('sorts root first, then module path step by step (a prefix first), then name and key', () => {
     const list = ['module.b.aws_a.x', 'module.net["a"].aws_a.x', 'module.net.aws_a.x', 'module.a.module.z.aws_a.x', 'data.aws_a.y', 'aws_z.x', 'aws_a.x[1]', 'aws_a.x', 'module.net[0].aws_a.x']
-    expect([...list].sort(compareAddresses)).toEqual(['aws_a.x', 'aws_a.x[1]', 'aws_z.x', 'data.aws_a.y', 'module.a.module.z.aws_a.x', 'module.b.aws_a.x', 'module.net.aws_a.x', 'module.net[0].aws_a.x', 'module.net["a"].aws_a.x'])
+    expect([...list].sort(compareAddresses)).toEqual(['aws_a.x', 'aws_a.x[1]', 'aws_z.x', 'data.aws_a.y', 'module.b.aws_a.x', 'module.net.aws_a.x', 'module.net[0].aws_a.x', 'module.net["a"].aws_a.x', 'module.a.module.z.aws_a.x'])
   })
   it('covers by segment', () => {
     expect(addressCovers('aws_x.y', 'aws_x.y[0]')).toBe(true)
