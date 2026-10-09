@@ -17,6 +17,9 @@ export interface World {
   readFile(path: string): Promise<string | undefined>
 }
 
+// The suffix on a history line whose step ran with -lock=false while the lock was held.
+export const LOCK_BYPASSED = ' (lock bypassed)'
+
 const has = <T extends object, K extends string>(o: T, k: K): o is Extract<T, Record<K, unknown>> => Object.hasOwn(o, k)
 
 // A key-less address names every instance of the resource; one with a key names just that one.
@@ -45,8 +48,12 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   }
   if (has(l, 'reality_lacks')) return !Object.hasOwn(w.reality, realityKey(l.reality_lacks.type, l.reality_lacks.id))
   if (has(l, 'applied')) {
-    const { op, address } = l.applied
-    return w.history.some((h) => h.startsWith(`${op} `) && covers(address, h.slice(op.length + 1)))
+    const { op, address, lock_bypassed } = l.applied
+    return w.history.some((h) => {
+      const bypassed = h.endsWith(LOCK_BYPASSED)
+      const rest = bypassed ? h.slice(0, -LOCK_BYPASSED.length) : h
+      return (!lock_bypassed || bypassed) && rest.startsWith(`${op} `) && covers(address, rest.slice(op.length + 1))
+    })
   }
   try {
     const text = await w.readFile(l.file_contains.path)

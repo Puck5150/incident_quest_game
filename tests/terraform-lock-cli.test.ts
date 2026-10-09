@@ -57,7 +57,7 @@ const lockError = (o: { message?: string; operation?: string; path?: string; inf
   ].join('\n')
 
 const PROMPT =
-  "Do you really want to force-unlock?\n  Terraform will remove the lock on the remote state.\n  This will allow local Terraform commands to modify this state, even though it\n  may be still be in use. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
+  "Do you really want to force-unlock?\n  Terraform will remove the lock on the remote state.\n  This will allow local Terraform commands to modify this state, even though it\n  may still be in use. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
 const UNLOCKED = 'Terraform state has been successfully unlocked!\n\nThe state has been unlocked, and Terraform commands should now be able to\nobtain a new lock on the remote state.'
 const NO_CHANGES = 'No changes. Your infrastructure matches the configuration.'
 
@@ -138,6 +138,15 @@ describe('a held state lock', () => {
     expect((await w.run('destroy', '-lock=false', '-auto-approve')).exitCode).toBe(0)
     expect(w.lab.state.resources).toEqual([])
     expect(w.lab.lock?.id).toBe(LOCK_ID)
+    // the destroy ran past the held lock: its history lines say so
+    expect(w.lab.history).toEqual(['delete aws_s3_bucket.b (lock bypassed)', 'delete aws_vpc.main (lock bypassed)'])
+  })
+
+  it('marks nothing as bypassed when there is no lock to bypass', async () => {
+    const w = world({})
+    w.disk[`${DIR}/main.tf`] = VPC_TF
+    expect((await w.run('apply', '-lock=false', '-auto-approve')).exitCode).toBe(0)
+    expect(w.lab.history).toEqual(['delete aws_s3_bucket.b'])
   })
 
   it('argument and configuration errors come before the lock error', async () => {
@@ -191,7 +200,7 @@ describe('a held state lock', () => {
     expect(r.stderr).toBe('')
     expect((await w.run('-chdir=/tmp', 'apply', '-auto-approve')).exitCode).toBe(0)
     const unlock = await w.run('-chdir=/tmp', 'force-unlock', '-force', LOCK_ID)
-    expect(unlock.stderr).toContain('no lock is held on this state')
+    expect(unlock.stderr).toContain('unexpected end of JSON input')
     expect(w.lab.lock?.id).toBe(LOCK_ID)
   })
 
@@ -214,13 +223,24 @@ describe('terraform force-unlock', () => {
   it('needs exactly one argument', async () => {
     for (const args of [[], [LOCK_ID, 'x'], ['-force']]) {
       const w = world()
-      expect(await w.run('force-unlock', ...args)).toMatchObject({ exitCode: 1, stdout: '', stderr: 'Expected a single argument: LOCK_ID.' })
+      expect(await w.run('force-unlock', ...args)).toMatchObject({ exitCode: 1, stdout: '', stderr: 'Expected a single argument: LOCK_ID' })
       expect(w.lab.lock?.id).toBe(LOCK_ID)
     }
   })
 
-  const NO_LOCK = '╷\n│ Error: Failed to unlock state\n│ \n│ no lock is held on this state\n╵'
-  const MISMATCH = `╷\n│ Error: Failed to unlock state\n│ \n│ failed to unlock state: lock ID "abc" does not match existing lock ID\n│ "${LOCK_ID}"\n╵`
+  // The S3 backend with a DynamoDB table (Terraform 1.9): plain error lines, the mismatch with the held lock's info.
+  const NO_LOCK = `Failed to unlock state: failed to retrieve lock info for lock ID "${LOCK_ID}": unexpected end of JSON input`
+  const MISMATCH = [
+    `Failed to unlock state: lock ID "abc" does not match existing lock ("${LOCK_ID}")`,
+    'Lock Info:',
+    `  ID:        ${LOCK_ID}`,
+    '  Path:      terraform.tfstate',
+    '  Operation: OperationTypeApply',
+    '  Who:       ci@runner-7',
+    '  Version:   1.9.8',
+    '  Created:   2026-10-08 09:14:02.123456789 +0000 UTC',
+    '  Info:      ',
+  ].join('\n')
 
   it('refuses when no lock is held, after the question unless -force', async () => {
     expect(await world({}).run('force-unlock', '-force', LOCK_ID)).toMatchObject({ exitCode: 1, stdout: '', stderr: NO_LOCK })

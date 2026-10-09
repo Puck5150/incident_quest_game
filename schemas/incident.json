@@ -1215,6 +1215,10 @@
                               "address": {
                                 "type": "string",
                                 "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                              },
+                              "lock_bypassed": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": [
@@ -1425,6 +1429,10 @@
                                   "address": {
                                     "type": "string",
                                     "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  },
+                                  "lock_bypassed": {
+                                    "type": "boolean",
+                                    "const": true
                                   }
                                 },
                                 "required": [
@@ -1648,6 +1656,10 @@
                                     "address": {
                                       "type": "string",
                                       "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    },
+                                    "lock_bypassed": {
+                                      "type": "boolean",
+                                      "const": true
                                     }
                                   },
                                   "required": [
@@ -1858,6 +1870,10 @@
                                         "address": {
                                           "type": "string",
                                           "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        },
+                                        "lock_bypassed": {
+                                          "type": "boolean",
+                                          "const": true
                                         }
                                       },
                                       "required": [
@@ -2088,6 +2104,10 @@
                                     "address": {
                                       "type": "string",
                                       "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    },
+                                    "lock_bypassed": {
+                                      "type": "boolean",
+                                      "const": true
                                     }
                                   },
                                   "required": [
@@ -2298,6 +2318,10 @@
                                         "address": {
                                           "type": "string",
                                           "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        },
+                                        "lock_bypassed": {
+                                          "type": "boolean",
+                                          "const": true
                                         }
                                       },
                                       "required": [
@@ -3053,6 +3077,10 @@
                                     "address": {
                                       "type": "string",
                                       "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    },
+                                    "lock_bypassed": {
+                                      "type": "boolean",
+                                      "const": true
                                     }
                                   },
                                   "required": [
@@ -3263,6 +3291,10 @@
                                         "address": {
                                           "type": "string",
                                           "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        },
+                                        "lock_bypassed": {
+                                          "type": "boolean",
+                                          "const": true
                                         }
                                       },
                                       "required": [
@@ -3486,6 +3518,10 @@
                                           "address": {
                                             "type": "string",
                                             "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          },
+                                          "lock_bypassed": {
+                                            "type": "boolean",
+                                            "const": true
                                           }
                                         },
                                         "required": [
@@ -3696,6 +3732,10 @@
                                               "address": {
                                                 "type": "string",
                                                 "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                              },
+                                              "lock_bypassed": {
+                                                "type": "boolean",
+                                                "const": true
                                               }
                                             },
                                             "required": [
@@ -3926,6 +3966,10 @@
                                           "address": {
                                             "type": "string",
                                             "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          },
+                                          "lock_bypassed": {
+                                            "type": "boolean",
+                                            "const": true
                                           }
                                         },
                                         "required": [
@@ -4136,6 +4180,10 @@
                                               "address": {
                                                 "type": "string",
                                                 "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                              },
+                                              "lock_bypassed": {
+                                                "type": "boolean",
+                                                "const": true
                                               }
                                             },
                                             "required": [

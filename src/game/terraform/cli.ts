@@ -21,6 +21,7 @@ import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
 import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
+import { LOCK_BYPASSED } from './predicates.ts'
 
 export { LOCK_FILE } from './layout.ts'
 
@@ -198,14 +199,20 @@ function lockError(cfg: Config): Out | undefined {
   )
 }
 
+// statemgr.LockInfo.String(): the held lock's fields under a "Lock Info:" line.
+const lockInfo = (ctx: CliContext) => {
+  const l = ctx.lab.lock!
+  return ['Lock Info:', ...[['ID', l.id], ['Path', l.path], ['Operation', l.operation], ['Who', l.who], ['Version', ctx.lab.version], ['Created', l.created], ['Info', l.info]].map(([k, v]) => `  ${`${k}:`.padEnd(11)}${v}`)]
+}
+
 // The commands that write state take the lock first; a held lock stops them unless -lock=false.
 function checkLock(ctx: CliContext, lock: boolean): Out | undefined {
   const l = ctx.lab.lock
   if (!lock || !l) return undefined
-  const info = [['ID', l.id], ['Path', l.path], ['Operation', l.operation], ['Who', l.who], ['Version', ctx.lab.version], ['Created', l.created], ['Info', l.info]].map(([k, v]) => `  ${`${k}:`.padEnd(11)}${v}`)
+  const info = lockInfo(ctx)
   const tail =
     'Terraform acquires a state lock to protect the state from being written\nby multiple users at the same time. Please resolve the issue above and try\nagain. For most commands, you can disable locking with the "-lock=false"\nflag, but this is not recommended.'
-  return fail(box('error', 'Error acquiring the state lock', `Error message: ${l.message}\nLock Info:\n${info.join('\n')}\n\n\n${tail}`, true))
+  return fail(box('error', 'Error acquiring the state lock', `Error message: ${l.message}\n${info.join('\n')}\n\n\n${tail}`, true))
 }
 
 function cmdVersion(ctx: CliContext, cfg: Config): Out {
@@ -587,7 +594,9 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   ctx.lab.state = r.state
   ctx.lab.reality = r.reality
   ctx.lab.hasState = true
-  for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}`)
+  // A step applied with -lock=false while someone else held the lock is marked, for done_when.
+  const bypassed = !f.lock && ctx.lab.lock ? LOCK_BYPASSED : ''
+  for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}${bypassed}`)
   const progress = renderProgress(r)
   const stdout = [head, progress, renderApplyEnd(r, mode)].filter(Boolean).join('\n')
   return { ...withWarn(warning, ok(stdout.replace(/^\n/, ''))), stderr: renderApplyErrors(r, sourcesOf(input.files)), exitCode: r.errors.length ? 1 : 0 }
@@ -845,7 +854,7 @@ function cmdWorkspace(args: string[], ctx: CliContext): Out {
 }
 
 const UNLOCK_PROMPT =
-  "Do you really want to force-unlock?\n  Terraform will remove the lock on the remote state.\n  This will allow local Terraform commands to modify this state, even though it\n  may be still be in use. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
+  "Do you really want to force-unlock?\n  Terraform will remove the lock on the remote state.\n  This will allow local Terraform commands to modify this state, even though it\n  may still be in use. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
 const UNLOCKED =
   'Terraform state has been successfully unlocked!\n\nThe state has been unlocked, and Terraform commands should now be able to\nobtain a new lock on the remote state.'
 
@@ -858,7 +867,7 @@ async function cmdForceUnlock(args: string[], ctx: CliContext): Promise<Out> {
     else if (/^--?force(=(true|false))?$/.test(raw)) force = !raw.endsWith('=false')
     else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${raw.replace(/^--/, '-').split('=')[0]}`)
   }
-  if (pos.length !== 1) return fail('Expected a single argument: LOCK_ID.')
+  if (pos.length !== 1) return fail('Expected a single argument: LOCK_ID')
   // Terraform asks first and only finds out whether the lock exists when it tries to remove it.
   let head = ''
   if (!force) {
@@ -866,13 +875,14 @@ async function cmdForceUnlock(args: string[], ctx: CliContext): Promise<Out> {
     head = `${UNLOCK_PROMPT}${answer ?? ''}\n\n`
     if (answer !== 'yes') return { ...ok(`${head}force-unlock cancelled.`), exitCode: 1 }
   }
+  // The S3 backend's DynamoDB lock errors (Terraform 1.9), printed plainly, not as a diagnostic box.
   const held = ctx.lab.lock
   const error = !held
-    ? 'no lock is held on this state'
+    ? `failed to retrieve lock info for lock ID "${pos[0]}": unexpected end of JSON input`
     : held.id !== pos[0]
-      ? `failed to unlock state: lock ID "${pos[0]}" does not match existing lock ID "${held.id}"`
+      ? `lock ID "${pos[0]}" does not match existing lock ("${held.id}")\n${lockInfo(ctx).join('\n')}`
       : undefined
-  if (error) return { ...boxFail('Failed to unlock state', error), stdout: head }
+  if (error) return { stdout: head, stderr: `Failed to unlock state: ${error}`, exitCode: 1 }
   delete ctx.lab.lock
   return ok(`${head}${UNLOCKED}`)
 }

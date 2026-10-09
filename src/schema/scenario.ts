@@ -157,7 +157,7 @@ const LeafSchema = z.union([
   z.strictObject({ lock_free: z.literal(true) }),
   z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
   z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
-  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr }) }),
+  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
 const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])
