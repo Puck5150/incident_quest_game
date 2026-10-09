@@ -53,7 +53,7 @@ terminal:
            egress {
              from_port   = 0
              to_port     = 0
-        @@ -30,11 +39,11 @@ resource "aws_security_group" "app" {
+        @@ -29,11 +38,11 @@ resource "aws_security_group" "app" {
            vpc_id      = aws_vpc.checkout.id
 
            ingress {
@@ -508,7 +508,7 @@ terraform:
 
 hypotheses:
   - id: mutual-reference-cycle
-    text: "Each group's new rule refers to the other group's id, so Terraform needs each group before the other: a dependency cycle it can't order."
+    text: "The PR makes web's new rule refer to app's group id and changes app's rule to refer to web's, so Terraform needs each group before the other: a dependency cycle it can't order."
     correct: true
   - id: provider-bug
     text: "The AWS provider has a bug with ingress rules that reference another security group; upgrade the provider."
@@ -529,15 +529,24 @@ actions:
         - plan_clean: true
         - state_has: aws_security_group.web
         - state_has: aws_security_group.app
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'security_groups\s*=\s*\[\s*aws_security_group\.(web|app)\.id\s*\]' }
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'port\s*=\s*8080\b' }
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'port\s*=\s*8443\b' }
-        - not: { file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'ingress\s*\{(?=[^{}]*port\s*=\s*(8080|8443)\b)(?=[^{}]*0\.0\.0\.0/0)[^{}]*\}' } }
+        # Line-anchored so commented-out lines don't count; each callback/API rule must still exist with a real source.
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*security_groups\s*=\s*\[\s*aws_security_group\.(web|app)\.id\s*\]' }
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*8080\b)(?=[^{}]*\n[ \t]*(cidr_blocks|security_groups)\s*=\s*\[\s*[^\s\]])[^{}]*\}' }
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*8443\b)(?=[^{}]*\n[ \t]*(cidr_blocks|security_groups)\s*=\s*\[\s*[^\s\]])[^{}]*\}' }
+        - not: { file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*(8080|8443)\b)(?=[^{}]*\n[ \t]*(cidr_blocks\s*=\s*\[[^\]\n]*"0\.0\.0\.0/0"|ipv6_cidr_blocks\s*=\s*\[[^\]\n]*"::/0"))[^{}]*\}' } }
         - not: { applied: { op: delete, address: aws_security_group.web } }
         - not: { applied: { op: delete, address: aws_security_group.app } }
         - not: { applied: { op: create, address: aws_security_group.web } }
         - not: { applied: { op: create, address: aws_security_group.app } }
     feedback: "One direction still names the other group by id, the other names the source subnet's CIDR, so there's one reference between the groups and the graph has an order again. Both groups were updated in place: their ids stayed the same, and the instances using them never lost a rule."
+  - id: open-callbacks-to-internet
+    label: "Drop the group reference and open the rule to any address (cidr_blocks = [\"0.0.0.0/0\"]), then apply"
+    kind: destructive
+    done_when:
+      all:
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*(8080|8443)\b)(?=[^{}]*\n[ \t]*(cidr_blocks\s*=\s*\[[^\]\n]*"0\.0\.0\.0/0"|ipv6_cidr_blocks\s*=\s*\[[^\]\n]*"::/0"))[^{}]*\}' }
+        - plan_clean: true
+    feedback: "The cycle went away because that rule no longer reads the other group's id, but the rule now admits the whole internet: a private port meant for one tier is open to every address. Plan and apply were happy; the damage was in AWS the moment it applied. Close it again: keep one rule by group id and write the other by the source subnet's CIDR."
   # Button only: every terminal route (destroy, -replace, state rm then apply) is refused by AWS in this world
   # (DependencyViolation while the hosts use the groups and subnets, InvalidGroup.Duplicate for a second group of the same name).
   - id: recreate-groups
@@ -559,7 +568,7 @@ solution_paths:
 key_evidence: [sgc-cycle-error, sgc-pr-diff]
 
 evidence_labels:
-  sgc-cycle-error: "validate and plan stop with Error: Cycle, naming only the two security groups"
+  sgc-cycle-error: "terraform plan stops with Error: Cycle, naming only the two security groups"
   sgc-pr-diff: "PR #318 makes web's new rule read app's id and app's rule read web's id"
 
 hints:

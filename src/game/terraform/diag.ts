@@ -18,15 +18,17 @@ export function wrap(text: string, width: number, preserveLines = false): string
 }
 
 export function formatDiagnostic(d: Diagnostic, source = '', opts: { preserveLines?: boolean } = {}): string {
-  // The CLI always prints a blank line after the summary, even with nothing under it (a bare "Cycle: ..." error).
+  // format.Diagnostic (v1.9.8): the summary, a blank line, then appendSourceSnippets ("with ADDR," and, when
+  // there is a source range, the "on FILE line N" snippet and a blank line), then the detail.
   const out = ['╷', `│ ${d.severity === 'warning' ? 'Warning' : 'Error'}: ${d.summary}`, '│ ']
   if (d.address) out.push(`│   with ${d.address},`)
   if (d.file && d.line) {
     out.push(`│   on ${d.file} line ${d.line}${d.context ? `, in ${d.context}` : ''}:`)
     const src = source.split('\n')[d.line - 1]
     if (src !== undefined) out.push(`│ ${String(d.line).padStart(4)}: ${src.replace(/\r$/, '')}`)
+    out.push('│ ')
   }
-  if (d.detail) out.push(...(out.length > 3 ? ['│ '] : []), ...wrap(d.detail, 76, opts.preserveLines).map((l) => `│ ${l}`))
+  if (d.detail) out.push(...wrap(d.detail, 76, opts.preserveLines).map((l) => `│ ${l}`))
   out.push('╵')
   return out.join('\n')
 }
