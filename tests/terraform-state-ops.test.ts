@@ -202,7 +202,7 @@ describe('taint / untaint', () => {
     expect(r.state.serial).toBe(8)
   })
   it('refuses to untaint a healthy instance', () => {
-    expect(pure(NET(), (x) => untaintInstance(x, 'aws_vpc.old'))).toEqual(fail('Resource instance is not tainted', 'Resource instance aws_vpc.old is not tainted.'))
+    expect(pure(NET(), (x) => untaintInstance(x, 'aws_vpc.old'))).toEqual(fail('Resource instance is not tainted', 'Resource instance aws_vpc.old is not currently tainted, and so it cannot be untainted.'))
   })
 })
 

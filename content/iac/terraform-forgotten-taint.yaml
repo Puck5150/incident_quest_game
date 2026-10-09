@@ -35,6 +35,8 @@ terminal:
       content: |
         #1790699931
         aws ec2 describe-instance-status --instance-ids i-0c3f7a9e5d1b2c846
+        #1790700012
+        terraform plan
         #1790700090
         terraform state show aws_instance.web
         #1790700127
@@ -44,6 +46,8 @@ terminal:
         #1790701420
         curl -sI https://shop.example.com/
         #1791451402
+        git fetch origin
+        #1791453502
         git checkout tags/cost-center
   commands:
     - match: "git diff main -- web.tf"
@@ -113,12 +117,18 @@ terminal:
                 }
             ]
         }
-    - match_regex: "^history \\| grep( -i)? ['\"]?(taint|terraform taint)['\"]?$"
+    - match_regex: "^history ?\\| ?grep (-i ['\"]?[tT][aA][iI][nN][tT]['\"]?|['\"]?taint['\"]?)$"
       example: "history | grep taint"
       evidence: taint-history
-      output: |
+      output: |2
          1874  2026-09-29 16:42:07 terraform taint aws_instance.web
-         2213  2026-10-08 10:21:36 history | grep taint
+    - match_regex: "^history ?\\| ?grep (-i ['\"]?[tT][eE][rR][rR][aA][fF][oO][rR][mM]['\"]?|['\"]?terraform['\"]?)$"
+      example: "history | grep terraform"
+      evidence: taint-history
+      output: |2
+         1872  2026-09-29 16:40:12 terraform plan
+         1873  2026-09-29 16:41:30 terraform state show aws_instance.web
+         1874  2026-09-29 16:42:07 terraform taint aws_instance.web
     - match: "grep taint ~/.bash_history"
       evidence: taint-history
       output: |
@@ -263,7 +273,9 @@ actions:
     done_when:
       all:
         - plan_has: { no_destroy: [aws_instance.web] }
+        - state_has: aws_instance.web
         - not: { applied: { op: delete, address: aws_instance.web } }
+        - not: { applied: { op: create, address: aws_instance.web } }
     feedback: "The taint is gone and the plan is a one-line in-place tag update. The PR can merge and apply in daylight: the web server keeps running."
   - id: apply-the-pr
     label: "Merge and apply the PR as planned, tonight, and accept the replacement"
@@ -372,5 +384,6 @@ command_notes:
   "git diff main": "The whole PR: one new tag, plus the alignment change around it. Nothing else about the instance."
   "git log --oneline -3": "The top commit is the PR. Nothing on the branch touches the instance otherwise."
   "aws ec2 describe-instances --instance-ids i-0c3f7a9e5d1b2c846": "The instance is running with the AMI, type, subnet and tags state records: nothing drifted."
-  "history | grep taint": "With HISTTIMEFORMAT set (see ~/.bashrc), bash history keeps the time of each command. The taint is from 2026-09-29; the second line is the grep itself."
+  "history | grep taint": "With HISTTIMEFORMAT set (see ~/.bashrc), bash history keeps the time of each command. The taint is from 2026-09-29, nine days ago. (In this game, plain history lists only this session's commands; the older ones are in ~/.bash_history.)"
+  "history | grep terraform": "Every terraform command from that afternoon: a plan, a look at the instance in state, then the taint. Nothing after it applied the replacement. (In this game, plain history lists only this session's commands; the older ones are in ~/.bash_history.)"
   "grep taint ~/.bash_history": "The history file on disk. The #-numbers above each line in it are the timestamps bash saves when HISTTIMEFORMAT is set."

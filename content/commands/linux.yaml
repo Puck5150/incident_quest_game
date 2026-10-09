@@ -499,12 +499,12 @@
 
 - id: history-grep
   match: "^history"
-  summary: "Lists the commands in your bash history, here filtered to the ones that mention a word."
+  summary: "Lists the commands in your bash history, filtered to the lines that contain a word."
   parts:
     - { token: "history", meaning: "Your shell's command history, numbered; with HISTTIMEFORMAT set, each line shows when it ran." }
-    - { token: "| grep taint", meaning: "(If piped) keep only lines containing taint. The grep itself is in history too, so it shows up last." }
+    - { token: "| grep WORD", meaning: "(If piped) keep only lines containing WORD." }
     - { token: "-i", meaning: "(On grep, if given) ignore case." }
-  why: "Terraform doesn't record who tainted an object or when. If it was run from this machine, the shell history does."
+  why: "Shows what was run on this machine and, with HISTTIMEFORMAT, when."
   alternatives:
     - { command: "grep taint ~/.bash_history", note: "The history file on disk; timestamps are the #-lines above each command." }
     - { command: "HISTTIMEFORMAT='%F %T ' history", note: "Show times for a session that doesn't set it." }

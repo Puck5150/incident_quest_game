@@ -117,7 +117,7 @@ export const taintInstance = (state: State, address: string): OpResult =>
 
 export const untaintInstance = (state: State, address: string): OpResult =>
   withInstance(state, address, 'untainted', (i) => {
-    if (i.status !== 'tainted') return fail('Resource instance is not tainted', `Resource instance ${address} is not tainted.`)
+    if (i.status !== 'tainted') return fail('Resource instance is not tainted', `Resource instance ${address} is not currently tainted, and so it cannot be untainted.`)
     delete i.status
     return undefined
   })

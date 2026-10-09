@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { engineHandles, evidenceSeen, terminalOutput, type GameEvent } from '../src/game/engine.ts'
 import { atStage } from '../src/schema/stages.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
@@ -81,7 +82,27 @@ describe('terraform-forgotten-taint on the simulator', () => {
     const { sh, out } = await play('cd ~/infra', 'terraform untaint aws_instance.web', 'terraform untaint aws_instance.web')
     expect(out[2].exitCode).toBe(1)
     expect(out[2].output).toContain('Error: Resource instance is not tainted')
+    expect(out[2].output).toContain('│ Resource instance aws_instance.web is not currently tainted, and so it\n│ cannot be untainted.')
     expect(await detectedAll(sh)).toEqual(FIXED)
+  })
+
+  it('state rm alone is not the fix: the plan creates a second web server', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform state rm aws_instance.web', 'terraform plan')
+    expect(out[2].output).toContain('  # aws_instance.web will be created')
+    expect(out[2].output).toContain('Plan: 1 to add, 0 to change, 0 to destroy.')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('state rm then apply launches a duplicate web server and is not the fix', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform state rm aws_instance.web', 'terraform apply -auto-approve')
+    expect(out[2].exitCode).toBe(0)
+    expect(out[2].output).toContain('aws_instance.web: Creating...')
+    expect(out[2].output).toContain('Apply complete! Resources: 1 added, 0 changed, 0 destroyed.')
+    expect(out[2].output).not.toContain('Destroying')
+    // the old instance still runs, unmanaged, next to the new one
+    expect(await sh.doneWhen({ reality_has: { type: 'aws_instance', id: WEB_ID } })).toBe(true)
+    expect(await sh.doneWhen({ applied: { op: 'create', address: 'aws_instance.web' } })).toBe(true)
+    expect(await detectedAll(sh)).toEqual(NONE)
   })
 
   it('bonus route: state rm then import also leaves no destroy in the plan', async () => {
@@ -89,6 +110,25 @@ describe('terraform-forgotten-taint on the simulator', () => {
     expect(out[2].exitCode).toBe(0)
     expect(out[3].output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
     expect(await detectedAll(sh)).toEqual(FIXED)
+  })
+
+  it('the engine answers the history lookups with only the old matching lines, and they award taint-history', () => {
+    const log: GameEvent[] = []
+    for (const cmd of ['history | grep taint', 'history|grep taint', 'history | grep -i TAINT', "history | grep 'taint'", 'history | grep terraform']) {
+      expect(engineHandles(scenario, cmd, []), cmd).toBe(true)
+      const shown = terminalOutput(scenario, cmd, [])
+      expect(shown, cmd).toContain(' 1874  2026-09-29 16:42:07 terraform taint aws_instance.web')
+      expect(shown, cmd).not.toContain('grep')
+      log.push({ type: 'RUN_COMMAND', input: cmd, at: 0 })
+    }
+    expect(terminalOutput(scenario, 'history | grep terraform', []).split('\n')).toEqual([
+      ' 1872  2026-09-29 16:40:12 terraform plan',
+      ' 1873  2026-09-29 16:41:30 terraform state show aws_instance.web',
+      ' 1874  2026-09-29 16:42:07 terraform taint aws_instance.web',
+    ])
+    expect(evidenceSeen(scenario, [{ type: 'RUN_COMMAND', input: 'history | grep taint', at: 0 }]).has('taint-history')).toBe(true)
+    // plain history is the session's own list, answered by the engine
+    expect(terminalOutput(scenario, 'history', log)).not.toContain('terraform taint')
   })
 
   it('the scripted lookups answer and carry notes', async () => {
@@ -100,15 +140,15 @@ describe('terraform-forgotten-taint on the simulator', () => {
   })
 
   it('(g) every key evidence tag is awarded before any fix', async () => {
-    const lines = ['cd ~/infra', 'terraform plan', 'terraform state show aws_instance.web', 'git diff main -- web.tf', 'history | grep taint']
-    const { out } = await play(...lines)
+    const shell = ['cd ~/infra', 'terraform plan', 'terraform state show aws_instance.web', 'git diff main -- web.tf']
+    const { out } = await play(...shell)
     const hits = out.flatMap((r) => r.hits)
-    // Commands the engine answers itself (history) award evidence from the typed line.
-    const typed = lines.flatMap((l) => scenario.terminal!.commands.filter((c) => c.match === l || (c.match_regex && new RegExp(c.match_regex).test(l))).map((c) => c.evidence))
+    // history is answered by the engine, not the shell: its tag comes from the game log.
+    expect(engineHandles(scenario, 'history | grep taint', [])).toBe(true)
     const tags = new Set([
       ...hits.filter((h) => h.startsWith('evidence:')).map((h) => h.slice('evidence:'.length)),
       ...scenario.terminal!.commands.filter((c) => c.match && hits.includes(c.match)).map((c) => c.evidence),
-      ...typed,
+      ...evidenceSeen(scenario, [{ type: 'RUN_COMMAND', input: 'history | grep taint', at: 0 }]),
     ])
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
   })
