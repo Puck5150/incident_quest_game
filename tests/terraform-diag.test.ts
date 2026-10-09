@@ -22,8 +22,9 @@ describe('formatDiagnostic', () => {
     )
   })
 
-  it('omits the location for diagnostics without a file, such as a cycle', () => {
-    expect(formatDiagnostic({ severity: 'error', summary: 'Cycle: a, b', detail: '', file: '', line: 0, col: 0 })).toBe('╷\n│ Error: Cycle: a, b\n╵')
+  it('omits the location for diagnostics without a file, such as a cycle, but keeps the blank line after the summary', () => {
+    // format.Diagnostic writes the summary then "\n\n" whatever follows (internal/command/format/diagnostic.go, v1.9.8).
+    expect(formatDiagnostic({ severity: 'error', summary: 'Cycle: a, b', detail: '', file: '', line: 0, col: 0 })).toBe('╷\n│ Error: Cycle: a, b\n│ \n╵')
   })
 
   it('omits ", in ..." when there is no context', () => {

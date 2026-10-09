@@ -140,10 +140,31 @@
   parts:
     - { token: "main", meaning: "Compare with the main branch." }
     - { token: "-- db.tf", meaning: "(If given) only this file; -- separates paths from branch names." }
+    - { token: "--stat", meaning: "(If given) only the files changed and their line counts, not the lines themselves." }
   why: "Shows exactly what this branch changes compared with what's deployed, line by line."
   alternatives:
     - { command: "git diff --stat main", note: "Just files and line counts." }
   docs: { title: "git diff", url: "https://git-scm.com/docs/git-diff" }
+
+- id: git-status
+  match: "^git status"
+  summary: "Shows the current branch and any uncommitted changes."
+  parts:
+    - { token: "status", meaning: "The branch you're on, how it compares with its remote branch, and files changed but not committed." }
+  why: "Tells you which branch you're on and whether the files on disk match its last commit."
+  alternatives:
+    - { command: "git branch --show-current", note: "Just the branch name." }
+  docs: { title: "git status", url: "https://git-scm.com/docs/git-status" }
+
+- id: git-branch
+  match: "^git branch"
+  summary: "Lists local branches, with * on the current one."
+  parts:
+    - { token: "branch", meaning: "With no other arguments, list the local branches." }
+  why: "Shows the branch name to compare against main or give to other commands."
+  alternatives:
+    - { command: "git branch -a", note: "Remote-tracking branches too." }
+  docs: { title: "git branch", url: "https://git-scm.com/docs/git-branch" }
 
 - id: git-ls-files-grep
   match: "^git ls-files"

@@ -1,0 +1,661 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-sg-cycle
+track: iac
+difficulty: 2
+title: "The callbacks PR won't even plan"
+par_minutes: 10
+
+ticket:
+  from: "Checkout team"
+  severity: SEV4
+  body: |
+    PR #318 on checkout-infra opens the firewall for the new order-status
+    callbacks (app tier calling back into the web tier on 8443) and, while
+    we were at it, tightens the web-to-app API rule. CI's terraform plan
+    fails on it before it prints any plan at all; main plans fine. Tomás
+    reckons it's a bug in the AWS provider and wants to bump it. The
+    callbacks need to be open by Thursday's release. Branch is checked out in ~/checkout-infra.
+
+environment: |
+  checkout-infra builds the checkout VPC with a web subnet (10.60.1.0/24)
+  and an app subnet (10.60.11.0/24) in us-east-1a, and one security group
+  per tier, in account 123456789012, us-east-1. The web and app instances
+  run in those subnets and use the groups, but the checkout team's deploy
+  tooling launches them, not this repo. State is in S3
+  (acme-terraform-state, key checkout/terraform.tfstate). main is what's
+  applied today. Your default AWS profile is your own admin role in the
+  account.
+
+terminal:
+  prompt: "you@laptop:~/checkout-infra$"
+  commands:
+    - match_regex: "^(git diff (main|origin/main)(\\.\\.\\.?(HEAD|callbacks-8443))?( (-- )?security\\.tf)?|gh pr diff( 318| callbacks-8443)?)$"
+      example: "git diff main"
+      evidence: sgc-pr-diff
+      output: |
+        diff --git a/security.tf b/security.tf
+        index 5d81e3a..c07f2b9 100644
+        --- a/security.tf
+        +++ b/security.tf
+        @@ -11,6 +11,15 @@ resource "aws_security_group" "web" {
+             cidr_blocks = ["0.0.0.0/0"]
+           }
+
+        +  # Order-status callbacks from the app tier.
+        +  ingress {
+        +    description     = "callbacks from app"
+        +    from_port       = 8443
+        +    to_port         = 8443
+        +    protocol        = "tcp"
+        +    security_groups = [aws_security_group.app.id]
+        +  }
+        +
+           egress {
+             from_port   = 0
+             to_port     = 0
+        @@ -30,11 +39,11 @@ resource "aws_security_group" "app" {
+           vpc_id      = aws_vpc.checkout.id
+
+           ingress {
+        -    description = "API from the web subnet"
+        -    from_port   = 8080
+        -    to_port     = 8080
+        -    protocol    = "tcp"
+        -    cidr_blocks = ["10.60.1.0/24"]
+        +    description     = "API from web"
+        +    from_port       = 8080
+        +    to_port         = 8080
+        +    protocol        = "tcp"
+        +    security_groups = [aws_security_group.web.id]
+           }
+
+           egress {
+    - match_regex: "^git diff (main|origin/main)(\\.\\.\\.?(HEAD|callbacks-8443))? --stat$"
+      example: "git diff main --stat"
+      output: |
+         security.tf | 19 ++++++++++++++-----
+         1 file changed, 14 insertions(+), 5 deletions(-)
+    - match_regex: "^git diff (main|origin/main)(\\.\\.\\.?(HEAD|callbacks-8443))? (-- )?network\\.tf$"
+      example: "git diff main -- network.tf"
+      output: ""
+    - match_regex: "^gh pr diff( 318| callbacks-8443)? --name-only$"
+      example: "gh pr diff 318 --name-only"
+      output: |
+        security.tf
+    - match_regex: "^git diff( HEAD)?$"
+      example: "git diff"
+      output: ""
+    - match_regex: "^git log --oneline( -\\d+| -n ?\\d+)?$"
+      example: "git log --oneline -3"
+      output: |
+        c4e19a7 security: callbacks from app on 8443, API from web by group (#318)
+        8b02d6f network: app subnet in us-east-1a
+        3f7a5c1 security: web and app tier groups
+    - match_regex: "^aws ec2 describe-security-groups( --group-ids sg-0a4d7e21c9b3f5068 sg-07c3e9a1d5b2f4e86| --group-ids sg-07c3e9a1d5b2f4e86 sg-0a4d7e21c9b3f5068| --filters Name=group-name,Values=checkout-web,checkout-app)$"
+      example: "aws ec2 describe-security-groups --group-ids sg-0a4d7e21c9b3f5068 sg-07c3e9a1d5b2f4e86"
+      evidence: sgc-groups-live
+      output: |
+        {
+            "SecurityGroups": [
+                {
+                    "GroupId": "sg-0a4d7e21c9b3f5068",
+                    "IpPermissionsEgress": [
+                        {
+                            "IpProtocol": "-1",
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "CidrIp": "0.0.0.0/0"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "VpcId": "vpc-0f2b8d4e61a9c7035",
+                    "SecurityGroupArn": "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a4d7e21c9b3f5068",
+                    "OwnerId": "123456789012",
+                    "GroupName": "checkout-web",
+                    "Description": "checkout web tier",
+                    "IpPermissions": [
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 443,
+                            "ToPort": 443,
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "Description": "HTTPS from the internet",
+                                    "CidrIp": "0.0.0.0/0"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "checkout-web"
+                        }
+                    ]
+                },
+                {
+                    "GroupId": "sg-07c3e9a1d5b2f4e86",
+                    "IpPermissionsEgress": [
+                        {
+                            "IpProtocol": "-1",
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "CidrIp": "0.0.0.0/0"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "VpcId": "vpc-0f2b8d4e61a9c7035",
+                    "SecurityGroupArn": "arn:aws:ec2:us-east-1:123456789012:security-group/sg-07c3e9a1d5b2f4e86",
+                    "OwnerId": "123456789012",
+                    "GroupName": "checkout-app",
+                    "Description": "checkout app tier",
+                    "IpPermissions": [
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 8080,
+                            "ToPort": 8080,
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "Description": "API from the web subnet",
+                                    "CidrIp": "10.60.1.0/24"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "checkout-app"
+                        }
+                    ]
+                }
+            ]
+        }
+    - match_regex: "^aws ec2 describe-security-groups (--group-ids sg-0a4d7e21c9b3f5068|--filters Name=group-name,Values=checkout-web)$"
+      example: "aws ec2 describe-security-groups --group-ids sg-0a4d7e21c9b3f5068"
+      output: |
+        {
+            "SecurityGroups": [
+                {
+                    "GroupId": "sg-0a4d7e21c9b3f5068",
+                    "IpPermissionsEgress": [
+                        {
+                            "IpProtocol": "-1",
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "CidrIp": "0.0.0.0/0"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "VpcId": "vpc-0f2b8d4e61a9c7035",
+                    "SecurityGroupArn": "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a4d7e21c9b3f5068",
+                    "OwnerId": "123456789012",
+                    "GroupName": "checkout-web",
+                    "Description": "checkout web tier",
+                    "IpPermissions": [
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 443,
+                            "ToPort": 443,
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "Description": "HTTPS from the internet",
+                                    "CidrIp": "0.0.0.0/0"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "checkout-web"
+                        }
+                    ]
+                }
+            ]
+        }
+    - match_regex: "^aws ec2 describe-security-groups (--group-ids sg-07c3e9a1d5b2f4e86|--filters Name=group-name,Values=checkout-app)$"
+      example: "aws ec2 describe-security-groups --group-ids sg-07c3e9a1d5b2f4e86"
+      output: |
+        {
+            "SecurityGroups": [
+                {
+                    "GroupId": "sg-07c3e9a1d5b2f4e86",
+                    "IpPermissionsEgress": [
+                        {
+                            "IpProtocol": "-1",
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "CidrIp": "0.0.0.0/0"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "VpcId": "vpc-0f2b8d4e61a9c7035",
+                    "SecurityGroupArn": "arn:aws:ec2:us-east-1:123456789012:security-group/sg-07c3e9a1d5b2f4e86",
+                    "OwnerId": "123456789012",
+                    "GroupName": "checkout-app",
+                    "Description": "checkout app tier",
+                    "IpPermissions": [
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 8080,
+                            "ToPort": 8080,
+                            "UserIdGroupPairs": [],
+                            "IpRanges": [
+                                {
+                                    "Description": "API from the web subnet",
+                                    "CidrIp": "10.60.1.0/24"
+                                }
+                            ],
+                            "Ipv6Ranges": [],
+                            "PrefixListIds": []
+                        }
+                    ],
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "checkout-app"
+                        }
+                    ]
+                }
+            ]
+        }
+    - match_regex: "^git status$"
+      example: "git status"
+      output: |
+        On branch callbacks-8443
+        Your branch is up to date with 'origin/callbacks-8443'.
+
+        nothing to commit, working tree clean
+    - match_regex: "^git branch$"
+      example: "git branch"
+      output: |
+        * callbacks-8443
+          main
+
+terraform:
+  dir: "~/checkout-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          backend "s3" {
+            bucket = "acme-terraform-state"
+            key    = "checkout/terraform.tfstate"
+            region = "us-east-1"
+          }
+
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: network.tf
+      content: |
+        resource "aws_vpc" "checkout" {
+          cidr_block = "10.60.0.0/16"
+
+          tags = {
+            Name = "checkout"
+          }
+        }
+
+        resource "aws_subnet" "web" {
+          vpc_id            = aws_vpc.checkout.id
+          cidr_block        = "10.60.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "checkout-web"
+          }
+        }
+
+        resource "aws_subnet" "app" {
+          vpc_id            = aws_vpc.checkout.id
+          cidr_block        = "10.60.11.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "checkout-app"
+          }
+        }
+    - path: security.tf
+      content: |
+        resource "aws_security_group" "web" {
+          name        = "checkout-web"
+          description = "checkout web tier"
+          vpc_id      = aws_vpc.checkout.id
+
+          ingress {
+            description = "HTTPS from the internet"
+            from_port   = 443
+            to_port     = 443
+            protocol    = "tcp"
+            cidr_blocks = ["0.0.0.0/0"]
+          }
+
+          # Order-status callbacks from the app tier.
+          ingress {
+            description     = "callbacks from app"
+            from_port       = 8443
+            to_port         = 8443
+            protocol        = "tcp"
+            security_groups = [aws_security_group.app.id]
+          }
+
+          egress {
+            from_port   = 0
+            to_port     = 0
+            protocol    = "-1"
+            cidr_blocks = ["0.0.0.0/0"]
+          }
+
+          tags = {
+            Name = "checkout-web"
+          }
+        }
+
+        resource "aws_security_group" "app" {
+          name        = "checkout-app"
+          description = "checkout app tier"
+          vpc_id      = aws_vpc.checkout.id
+
+          ingress {
+            description     = "API from web"
+            from_port       = 8080
+            to_port         = 8080
+            protocol        = "tcp"
+            security_groups = [aws_security_group.web.id]
+          }
+
+          egress {
+            from_port   = 0
+            to_port     = 0
+            protocol    = "-1"
+            cidr_blocks = ["0.0.0.0/0"]
+          }
+
+          tags = {
+            Name = "checkout-app"
+          }
+        }
+  # What main applied: each group with its CIDR rules, before PR #318's cross-references.
+  state:
+    - type: aws_vpc
+      name: checkout
+      attrs:
+        id: vpc-0f2b8d4e61a9c7035
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0f2b8d4e61a9c7035"
+        cidr_block: 10.60.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0e81b4d6a2c9f7351
+        tags: { Name: checkout }
+        tags_all: { Name: checkout }
+    - type: aws_subnet
+      name: web
+      attrs:
+        id: subnet-04e7a1c9d3b5f2068
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-04e7a1c9d3b5f2068"
+        vpc_id: vpc-0f2b8d4e61a9c7035
+        cidr_block: 10.60.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: checkout-web }
+        tags_all: { Name: checkout-web }
+    - type: aws_subnet
+      name: app
+      attrs:
+        id: subnet-0c5f9b2e7a1d3e846
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0c5f9b2e7a1d3e846"
+        vpc_id: vpc-0f2b8d4e61a9c7035
+        cidr_block: 10.60.11.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: checkout-app }
+        tags_all: { Name: checkout-app }
+    - type: aws_security_group
+      name: web
+      attrs:
+        id: sg-0a4d7e21c9b3f5068
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a4d7e21c9b3f5068"
+        name: checkout-web
+        name_prefix: ""
+        description: checkout web tier
+        vpc_id: vpc-0f2b8d4e61a9c7035
+        ingress:
+          - { description: "HTTPS from the internet", from_port: 443, to_port: 443, protocol: tcp, cidr_blocks: ["0.0.0.0/0"] }
+        egress:
+          - { from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }
+        tags: { Name: checkout-web }
+        tags_all: { Name: checkout-web }
+    - type: aws_security_group
+      name: app
+      attrs:
+        id: sg-07c3e9a1d5b2f4e86
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-07c3e9a1d5b2f4e86"
+        name: checkout-app
+        name_prefix: ""
+        description: checkout app tier
+        vpc_id: vpc-0f2b8d4e61a9c7035
+        ingress:
+          - { description: "API from the web subnet", from_port: 8080, to_port: 8080, protocol: tcp, cidr_blocks: ["10.60.1.0/24"] }
+        egress:
+          - { from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }
+        tags: { Name: checkout-app }
+        tags_all: { Name: checkout-app }
+  # The deploy tooling's web and app hosts live in these subnets and use these groups: AWS refuses to delete any of them,
+  # and refuses a second group with a name the VPC already has.
+  faults:
+    - at: aws_subnet.web
+      on: delete
+      error: "deleting EC2 Subnet (subnet-04e7a1c9d3b5f2068): operation error EC2: DeleteSubnet, https response error StatusCode: 400, RequestID: c7a2e9f4-5d18-4b3e-9a60-e1f8b3d27c05, api error DependencyViolation: The subnet 'subnet-04e7a1c9d3b5f2068' has dependencies and cannot be deleted."
+    - at: aws_subnet.app
+      on: delete
+      error: "deleting EC2 Subnet (subnet-0c5f9b2e7a1d3e846): operation error EC2: DeleteSubnet, https response error StatusCode: 400, RequestID: 0e9b4d61-a7c3-4f25-8d1e-b52c6f09a7e3, api error DependencyViolation: The subnet 'subnet-0c5f9b2e7a1d3e846' has dependencies and cannot be deleted."
+    - at: aws_security_group.web
+      on: delete
+      error: "deleting Security Group (sg-0a4d7e21c9b3f5068): operation error EC2: DeleteSecurityGroup, https response error StatusCode: 400, RequestID: 6f1c2a9e-3b7d-4e05-a8c4-91d2e7b05f36, api error DependencyViolation: resource sg-0a4d7e21c9b3f5068 has a dependent object"
+    - at: aws_security_group.app
+      on: delete
+      error: "deleting Security Group (sg-07c3e9a1d5b2f4e86): operation error EC2: DeleteSecurityGroup, https response error StatusCode: 400, RequestID: 2d84b7f0-c1e9-4a36-b5d2-7e09f3a1c648, api error DependencyViolation: resource sg-07c3e9a1d5b2f4e86 has a dependent object"
+    - at: aws_security_group.web
+      on: create
+      if: { attr: name, equals: checkout-web }
+      error: "creating Security Group (checkout-web): operation error EC2: CreateSecurityGroup, https response error StatusCode: 400, RequestID: a3e5f8d1-07b2-4c9e-8f61-d4b29c7e0a15, api error InvalidGroup.Duplicate: The security group 'checkout-web' already exists for VPC 'vpc-0f2b8d4e61a9c7035'"
+    - at: aws_security_group.app
+      on: create
+      if: { attr: name, equals: checkout-app }
+      error: "creating Security Group (checkout-app): operation error EC2: CreateSecurityGroup, https response error StatusCode: 400, RequestID: 5b0d9c37-e2a4-4f18-9c6e-08a7f1d3b952, api error InvalidGroup.Duplicate: The security group 'checkout-app' already exists for VPC 'vpc-0f2b8d4e61a9c7035'"
+  evidence:
+    - evidence: sgc-cycle-error
+      command: plan
+      contains: "Error: Cycle: aws_security_group.app, aws_security_group.web"
+    - evidence: sgc-cycle-offline
+      command: validate
+      contains: "Error: Cycle: aws_security_group.app, aws_security_group.web"
+
+hypotheses:
+  - id: mutual-reference-cycle
+    text: "Each group's new rule refers to the other group's id, so Terraform needs each group before the other: a dependency cycle it can't order."
+    correct: true
+  - id: provider-bug
+    text: "The AWS provider has a bug with ingress rules that reference another security group; upgrade the provider."
+    feedback: "The error comes before the provider is asked anything: plan stops with no refresh and no plan, and validate, which never calls AWS, gives the same error. It names exactly two things, the two groups, and each one's new rule reads the other's id. Group-to-group rules work fine on their own: the app rule by web's id alone would plan."
+  - id: missing-depends-on
+    text: "Terraform doesn't know which group to create first; add depends_on to make the order explicit."
+    feedback: "Terraform already knows the order each reference asks for, and that's the problem: web needs app's id and app needs web's id. depends_on only adds edges to the graph. It can't remove one, so it can't break a loop; at best it adds another."
+  - id: aws-rejects-circular-rules
+    text: "AWS doesn't allow two security groups to reference each other, so the rules have to go."
+    feedback: "AWS allows it: a rule's source can be any security group in the VPC, including one whose own rules point back. The error is Terraform's, printed by validate and plan without calling AWS. The two rules can exist; they just can't both be written inline in the two group resources."
+
+actions:
+  - id: break-the-cycle
+    label: "Break the loop in security.tf: keep one rule by group id and write the other by the source subnet's CIDR, then plan (only the in-place rule changes) and apply"
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - state_has: aws_security_group.web
+        - state_has: aws_security_group.app
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'security_groups\s*=\s*\[\s*aws_security_group\.(web|app)\.id\s*\]' }
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'port\s*=\s*8080\b' }
+        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'port\s*=\s*8443\b' }
+        - not: { file_contains: { path: /home/you/checkout-infra/security.tf, matches: 'ingress\s*\{(?=[^{}]*port\s*=\s*(8080|8443)\b)(?=[^{}]*0\.0\.0\.0/0)[^{}]*\}' } }
+        - not: { applied: { op: delete, address: aws_security_group.web } }
+        - not: { applied: { op: delete, address: aws_security_group.app } }
+        - not: { applied: { op: create, address: aws_security_group.web } }
+        - not: { applied: { op: create, address: aws_security_group.app } }
+    feedback: "One direction still names the other group by id, the other names the source subnet's CIDR, so there's one reference between the groups and the graph has an order again. Both groups were updated in place: their ids stayed the same, and the instances using them never lost a rule."
+  # Button only: every terminal route (destroy, -replace, state rm then apply) is refused by AWS in this world
+  # (DependencyViolation while the hosts use the groups and subnets, InvalidGroup.Duplicate for a second group of the same name).
+  - id: recreate-groups
+    label: "Start the groups fresh: destroy or -replace both security groups and apply them again with the new rules"
+    kind: destructive
+    feedback: "Terraform deletes a group before creating its replacement, and AWS refuses: the web and app hosts the deploy tooling launched still use both groups (DependencyViolation), and a second group with the same name is refused too (InvalidGroup.Duplicate). Getting past that means taking the hosts off the groups, which is an outage, and the new groups would get new ids that the deploy tooling doesn't know. The cycle was only in the configuration; nothing about the live groups needed replacing."
+  - id: add-depends-on
+    label: "Add depends_on = [aws_security_group.web] to the app group so Terraform knows the order"
+    kind: wrong
+    feedback: "depends_on adds an edge; it never removes one. app already depends on web through web's id, and web still depends on app, so validate and plan still say Cycle."
+  - id: bump-provider
+    label: "Upgrade the AWS provider to the latest version and re-run init"
+    kind: wrong
+    feedback: "The cycle is in Terraform's own graph of the configuration, built before any provider is called. A newer provider sees the same two references."
+
+solution_paths:
+  - [break-the-cycle]
+
+key_evidence: [sgc-cycle-error, sgc-pr-diff]
+
+evidence_labels:
+  sgc-cycle-error: "validate and plan stop with Error: Cycle, naming only the two security groups"
+  sgc-pr-diff: "PR #318 makes web's new rule read app's id and app's rule read web's id"
+
+hints:
+  nudge: "validate gives the same error as plan, and it never talks to AWS. What do the two things it names have in common in this PR?"
+  direction: "Compare the PR with main (git diff main). Each group's new ingress rule refers to the other group's id. Terraform has to know a value before it can use it, so each group would have to exist before the other."
+  answer: "Keep one rule by group id (app's 8080 rule from aws_security_group.web.id) and write the other by CIDR: web's 8443 rule with cidr_blocks = [aws_subnet.app.cidr_block] instead of security_groups = [aws_security_group.app.id]. terraform plan shows both groups updated in place (0 to add, 2 to change, 0 to destroy); apply it."
+
+analogy:
+  title: "The two signatures"
+  text: |
+    Purchasing won't sign the order until Finance has signed the budget,
+    and Finance won't sign the budget until it has the signed order to
+    attach. Each office is right on its own terms, and the paperwork will
+    sit there forever. Adding a third form that says "Finance goes first"
+    doesn't help: Finance still needs the order. One of the two has to
+    stop asking for the other's signature, say Finance approves against
+    the department's budget line instead, and then both can sign in turn.
+
+debrief:
+  root_cause: |
+    Terraform orders its work with a graph: an expression that reads
+    another resource's attribute is an edge, and the referenced resource
+    must be handled first. PR #318 gave aws_security_group.web an inline
+    ingress rule with security_groups = [aws_security_group.app.id] and
+    changed aws_security_group.app's rule to security_groups =
+    [aws_security_group.web.id]. Each group now needed the other's id
+    first. That loop has no valid order, so Terraform refused to build the
+    graph: validate and plan both stopped with "Error: Cycle:" and the two
+    addresses, before refresh, before any plan and without calling AWS.
+    AWS itself is fine with two groups that reference each other.
+  ideal_path:
+    - "terraform plan and terraform validate: Error: Cycle: aws_security_group.app, aws_security_group.web. validate doesn't talk to AWS, so this is about the configuration."
+    - "git diff main: the PR adds a web rule from app's group id and changes app's rule to come from web's group id. Each group now refers to the other."
+    - "terraform state list: both groups exist from main (aws ec2 describe-security-groups shows them with main's CIDR rules); nothing needs creating."
+    - "Edit security.tf: keep app's 8080 rule by web's group id, and give web's 8443 rule cidr_blocks = [aws_subnet.app.cidr_block] instead of app's group id."
+    - "terraform plan: 0 to add, 2 to change, 0 to destroy, both groups updated in place (~ ingress). terraform apply."
+  real_world: |
+    The idiomatic fix is to take rules out of the group resources: declare
+    the groups with no inline rules and write each rule as its own
+    resource (aws_vpc_security_group_ingress_rule, or the older
+    aws_security_group_rule), which depends on both groups but neither
+    group depends on it. That keeps both directions by group id, which is
+    tighter than a subnet CIDR (anything in the subnet, not only members of
+    the group, now gets 8443). The provider docs warn not to mix inline
+    rules with separate rule resources for the same group: they overwrite
+    each other. Changing a group's rules is an in-place update, so the
+    group keeps its id; recreating it would cut off everything that uses
+    it. depends_on adds edges and can never break a cycle. terraform graph
+    draws a configuration's dependency graph.
+
+concepts:
+  - term: "Resource dependencies"
+    text: "Terraform infers dependencies from expressions that reference another resource and uses them to order operations; depends_on adds dependencies Terraform can't see."
+    url: "https://developer.hashicorp.com/terraform/language/resources/behavior#resource-dependencies"
+  - term: "depends_on"
+    text: "Declares extra dependencies on other resources or modules. It only ever adds to the graph."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on"
+  - term: "aws_security_group inline rules"
+    text: "ingress and egress blocks are written inline in the group. The provider docs recommend separate rule resources instead, and say not to mix the two for one group."
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group"
+  - term: "Security group rules"
+    text: "A rule's source can be a CIDR range or another security group; a group can reference a group that references it back."
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+
+sources:
+  - title: "Terraform: Resource behavior (resource dependencies)"
+    url: "https://developer.hashicorp.com/terraform/language/resources/behavior"
+    retrieved: 2026-10-09
+  - title: "Terraform: The depends_on meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: validate"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/validate"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: graph"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/graph"
+    retrieved: 2026-10-09
+  - title: "AWS provider: aws_security_group"
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group"
+    retrieved: 2026-10-09
+  - title: "Amazon VPC User Guide: Security group rules"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+    retrieved: 2026-10-09
+  - title: "Terraform v1.9.8 source: the Cycle error (internal/dag/dag.go Validate)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/dag/dag.go"
+    retrieved: 2026-10-09
+
+command_notes:
+  "git diff main": "PR #318 against what's applied: web gets a new 8443 rule whose source is aws_security_group.app.id, and app's 8080 rule switches from the web subnet's CIDR to aws_security_group.web.id. Each group now reads the other's id."
+  "gh pr diff 318 --name-only": "PR #318 changes one file, security.tf."
+  "git diff main --stat": "Only security.tf changed; the network is untouched."
+  "git diff main -- network.tf": "Nothing: the PR doesn't touch the network."
+  "git diff": "Nothing uncommitted: the PR's changes are already committed on the branch, so compare with main instead."
+  "aws ec2 describe-security-groups --group-ids sg-0a4d7e21c9b3f5068": "The web group as AWS has it: 443 from anywhere, nothing on 8443 yet."
+  "aws ec2 describe-security-groups --group-ids sg-07c3e9a1d5b2f4e86": "The app group as AWS has it: 8080 from the web subnet's CIDR, main's rule."
+  "git status": "You're on the PR's branch, callbacks-8443, with nothing uncommitted."
+  "git branch": "The PR's branch, callbacks-8443, and main."
+  "git log --oneline -3": "The PR's single commit on top of main's two."
+  "aws ec2 describe-security-groups --group-ids sg-0a4d7e21c9b3f5068 sg-07c3e9a1d5b2f4e86": "Both groups exist with main's rules: web allows 443 from anywhere, app allows 8080 from the web subnet's CIDR. Nothing from the PR has reached AWS."
