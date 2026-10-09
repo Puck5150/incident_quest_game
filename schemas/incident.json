@@ -1114,8 +1114,7 @@
                                 "minItems": 1,
                                 "type": "array",
                                 "items": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               }
                             },
@@ -1134,8 +1133,7 @@
                         "type": "object",
                         "properties": {
                           "state_has": {
-                            "type": "string",
-                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -1147,8 +1145,7 @@
                         "type": "object",
                         "properties": {
                           "state_lacks": {
-                            "type": "string",
-                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -1251,8 +1248,7 @@
                                 ]
                               },
                               "address": {
-                                "type": "string",
-                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                "type": "string"
                               },
                               "lock_bypassed": {
                                 "type": "boolean",
@@ -1328,8 +1324,7 @@
                                     "minItems": 1,
                                     "type": "array",
                                     "items": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   }
                                 },
@@ -1348,8 +1343,7 @@
                             "type": "object",
                             "properties": {
                               "state_has": {
-                                "type": "string",
-                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -1361,8 +1355,7 @@
                             "type": "object",
                             "properties": {
                               "state_lacks": {
-                                "type": "string",
-                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -1465,8 +1458,7 @@
                                     ]
                                   },
                                   "address": {
-                                    "type": "string",
-                                    "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                    "type": "string"
                                   },
                                   "lock_bypassed": {
                                     "type": "boolean",
@@ -1555,8 +1547,7 @@
                                       "minItems": 1,
                                       "type": "array",
                                       "items": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     }
                                   },
@@ -1575,8 +1566,7 @@
                               "type": "object",
                               "properties": {
                                 "state_has": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -1588,8 +1578,7 @@
                               "type": "object",
                               "properties": {
                                 "state_lacks": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -1692,8 +1681,7 @@
                                       ]
                                     },
                                     "address": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     },
                                     "lock_bypassed": {
                                       "type": "boolean",
@@ -1769,8 +1757,7 @@
                                           "minItems": 1,
                                           "type": "array",
                                           "items": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         }
                                       },
@@ -1789,8 +1776,7 @@
                                   "type": "object",
                                   "properties": {
                                     "state_has": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -1802,8 +1788,7 @@
                                   "type": "object",
                                   "properties": {
                                     "state_lacks": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -1906,8 +1891,7 @@
                                           ]
                                         },
                                         "address": {
-                                          "type": "string",
-                                          "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          "type": "string"
                                         },
                                         "lock_bypassed": {
                                           "type": "boolean",
@@ -2003,8 +1987,7 @@
                                       "minItems": 1,
                                       "type": "array",
                                       "items": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     }
                                   },
@@ -2023,8 +2006,7 @@
                               "type": "object",
                               "properties": {
                                 "state_has": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -2036,8 +2018,7 @@
                               "type": "object",
                               "properties": {
                                 "state_lacks": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -2140,8 +2121,7 @@
                                       ]
                                     },
                                     "address": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     },
                                     "lock_bypassed": {
                                       "type": "boolean",
@@ -2217,8 +2197,7 @@
                                           "minItems": 1,
                                           "type": "array",
                                           "items": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         }
                                       },
@@ -2237,8 +2216,7 @@
                                   "type": "object",
                                   "properties": {
                                     "state_has": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -2250,8 +2228,7 @@
                                   "type": "object",
                                   "properties": {
                                     "state_lacks": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -2354,8 +2331,7 @@
                                           ]
                                         },
                                         "address": {
-                                          "type": "string",
-                                          "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          "type": "string"
                                         },
                                         "lock_bypassed": {
                                           "type": "boolean",
@@ -2976,8 +2952,7 @@
                                       "minItems": 1,
                                       "type": "array",
                                       "items": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     }
                                   },
@@ -2996,8 +2971,7 @@
                               "type": "object",
                               "properties": {
                                 "state_has": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -3009,8 +2983,7 @@
                               "type": "object",
                               "properties": {
                                 "state_lacks": {
-                                  "type": "string",
-                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -3113,8 +3086,7 @@
                                       ]
                                     },
                                     "address": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     },
                                     "lock_bypassed": {
                                       "type": "boolean",
@@ -3190,8 +3162,7 @@
                                           "minItems": 1,
                                           "type": "array",
                                           "items": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         }
                                       },
@@ -3210,8 +3181,7 @@
                                   "type": "object",
                                   "properties": {
                                     "state_has": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -3223,8 +3193,7 @@
                                   "type": "object",
                                   "properties": {
                                     "state_lacks": {
-                                      "type": "string",
-                                      "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                      "type": "string"
                                     }
                                   },
                                   "required": [
@@ -3327,8 +3296,7 @@
                                           ]
                                         },
                                         "address": {
-                                          "type": "string",
-                                          "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                          "type": "string"
                                         },
                                         "lock_bypassed": {
                                           "type": "boolean",
@@ -3417,8 +3385,7 @@
                                             "minItems": 1,
                                             "type": "array",
                                             "items": {
-                                              "type": "string",
-                                              "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                              "type": "string"
                                             }
                                           }
                                         },
@@ -3437,8 +3404,7 @@
                                     "type": "object",
                                     "properties": {
                                       "state_has": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
@@ -3450,8 +3416,7 @@
                                     "type": "object",
                                     "properties": {
                                       "state_lacks": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
@@ -3554,8 +3519,7 @@
                                             ]
                                           },
                                           "address": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           },
                                           "lock_bypassed": {
                                             "type": "boolean",
@@ -3631,8 +3595,7 @@
                                                 "minItems": 1,
                                                 "type": "array",
                                                 "items": {
-                                                  "type": "string",
-                                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                                  "type": "string"
                                                 }
                                               }
                                             },
@@ -3651,8 +3614,7 @@
                                         "type": "object",
                                         "properties": {
                                           "state_has": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         },
                                         "required": [
@@ -3664,8 +3626,7 @@
                                         "type": "object",
                                         "properties": {
                                           "state_lacks": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         },
                                         "required": [
@@ -3768,8 +3729,7 @@
                                                 ]
                                               },
                                               "address": {
-                                                "type": "string",
-                                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                                "type": "string"
                                               },
                                               "lock_bypassed": {
                                                 "type": "boolean",
@@ -3865,8 +3825,7 @@
                                             "minItems": 1,
                                             "type": "array",
                                             "items": {
-                                              "type": "string",
-                                              "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                              "type": "string"
                                             }
                                           }
                                         },
@@ -3885,8 +3844,7 @@
                                     "type": "object",
                                     "properties": {
                                       "state_has": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
@@ -3898,8 +3856,7 @@
                                     "type": "object",
                                     "properties": {
                                       "state_lacks": {
-                                        "type": "string",
-                                        "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
@@ -4002,8 +3959,7 @@
                                             ]
                                           },
                                           "address": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           },
                                           "lock_bypassed": {
                                             "type": "boolean",
@@ -4079,8 +4035,7 @@
                                                 "minItems": 1,
                                                 "type": "array",
                                                 "items": {
-                                                  "type": "string",
-                                                  "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                                  "type": "string"
                                                 }
                                               }
                                             },
@@ -4099,8 +4054,7 @@
                                         "type": "object",
                                         "properties": {
                                           "state_has": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         },
                                         "required": [
@@ -4112,8 +4066,7 @@
                                         "type": "object",
                                         "properties": {
                                           "state_lacks": {
-                                            "type": "string",
-                                            "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                            "type": "string"
                                           }
                                         },
                                         "required": [
@@ -4216,8 +4169,7 @@
                                                 ]
                                               },
                                               "address": {
-                                                "type": "string",
-                                                "pattern": "^(data\\.)?[a-z][\\w]*\\.[\\w-]+(\\[(\\d+|\"[^\"]*\")\\])?$"
+                                                "type": "string"
                                               },
                                               "lock_bypassed": {
                                                 "type": "boolean",

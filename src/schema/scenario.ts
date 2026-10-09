@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { filesOnDisk } from '../game/paths.ts'
-import { MODULE_PATH_SOURCE, parseModuleAddr } from '../game/terraform/address.ts'
+import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
 
 export { artifacts, type ArtifactKind } from './constants.ts'
@@ -131,9 +131,10 @@ const HypothesesSchema = z
 const json = z.json()
 // done_when (TF3d): a check on the Terraform world that takes the action once it holds.
 // One level of all/any over leaves or negated leaves; no deeper nesting.
-const tfAddr = z
-  .string()
-  .regex(/^(data\.)?[a-z][\w]*\.[\w-]+(\[(\d+|"[^"]*")\])?$/, 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]')
+const ADDR_HINT = 'must be a resource or instance address like aws_s3_bucket.b or aws_s3_bucket.b["x"]' // module-qualified and module-only forms are accepted too
+const resAddr = (s: string) => /^(?:module\.|data\.)?[a-z]/.test(s) && parseResAddr(s) !== undefined
+// A module path (module.net, module.net["a"].module.sub) also names everything under it.
+const tfAddrOrModule = z.string().refine((s) => resAddr(s) || parseModuleAddr(s) !== undefined, ADDR_HINT)
 const tfType = z
   .string()
   .min(1)
@@ -152,13 +153,13 @@ const regex = z
   })
 const LeafSchema = z.union([
   z.strictObject({ plan_clean: z.literal(true) }),
-  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddr).min(1) }) }),
-  z.strictObject({ state_has: tfAddr }),
-  z.strictObject({ state_lacks: tfAddr }),
+  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddrOrModule).min(1) }) }),
+  z.strictObject({ state_has: tfAddrOrModule }),
+  z.strictObject({ state_lacks: tfAddrOrModule }),
   z.strictObject({ lock_free: z.literal(true) }),
   z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
   z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
-  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddr, lock_bypassed: z.literal(true).optional() }) }),
+  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
 const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])

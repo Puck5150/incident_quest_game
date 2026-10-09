@@ -5,6 +5,8 @@ import { IncidentShell } from '../src/game/shell.ts'
 import type { Scenario, TerraformBlock } from '../src/schema/scenario.ts'
 import { LOCK_FILE, runTerraform, type CliContext } from '../src/game/terraform/cli.ts'
 import { labFromScenario } from '../src/game/terraform/lab.ts'
+import { ScenarioSchema } from '../src/schema/scenario.ts'
+import { loadIncident } from './helpers/terraform-incident.ts'
 import { listAddresses } from '../src/game/terraform/state.ts'
 
 const LAB = '/home/you/infra'
@@ -326,5 +328,97 @@ describe('the refactor incident through the shell', () => {
     expect(await sh.doneWhen(SAVED)).toBe(true)
     expect(await sh.doneWhen({ plan_clean: true })).toBe(true)
     expect(await sh.doneWhen({ applied: { op: 'delete', address: 'aws_vpc.main' } })).toBe(false)
+  })
+})
+
+describe('module addresses in done_when (schema and evaluation)', () => {
+  const build = (done_when: unknown): Scenario => {
+    const s = structuredClone(loadIncident('terraform-forces-replacement')) as Scenario
+    const evidence = s.terraform!.evidence
+    s.terraform = {
+      dir: '~/infra',
+      evidence,
+      files: [{ path: 'main.tf', content: call('net') }, { path: 'modules/net/main.tf', content: NET }],
+      state: [{ type: 'aws_vpc', name: 'main', module: 'module.net', attrs: VPC_ATTRS }],
+      ...installed,
+    } as Scenario['terraform']
+    delete s.command_notes
+    for (const a of s.actions) delete a.file
+    s.actions.find((a) => a.id === 'revert-and-migrate')!.done_when = done_when as never
+    return s
+  }
+  const accepted = [
+    { state_has: 'module.net.aws_vpc.main' },
+    { state_has: 'module.net["a"].aws_vpc.main["k"]' },
+    { state_lacks: 'module.a.module.b.aws_vpc.main' },
+    { state_has: 'module.net' },
+    { state_lacks: 'module.net["a"]' },
+    { state_has: 'module.a.module.b' },
+    { plan_has: { no_destroy: ['module.net', 'module.net.aws_vpc.main', 'aws_vpc.main'] } },
+    { applied: { op: 'delete', address: 'module.net' } },
+    { applied: { op: 'create', address: 'module.net["a"].aws_vpc.main' } },
+    { state_has: 'aws_vpc.main' },
+  ]
+  it.each(accepted)('accepts %j', (leaf) => {
+    const r = ScenarioSchema.safeParse(build(leaf))
+    expect(r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`)).toEqual([])
+  })
+  it.each(['module.', 'module', 'module.net.', 'module.net[', 'module.net.aws_vpc', 'Module.net', 'module.net..aws_vpc.main', '../x.y'])('rejects %j', (a) => {
+    for (const leaf of [{ state_has: a }, { state_lacks: a }, { plan_has: { no_destroy: [a] } }, { applied: { op: 'delete', address: a } }]) {
+      expect(ScenarioSchema.safeParse(build(leaf)).success).toBe(false)
+    }
+  })
+  it('a schema-valid scenario is evaluated by the shell', async () => {
+    const s = build({ all: [{ state_has: 'module.net' }, { plan_has: { no_destroy: ['module.net'] } }, { not: { state_has: 'module.other' } }] })
+    expect(ScenarioSchema.safeParse(s).success).toBe(true)
+    const sh = new IncidentShell(s)
+    await sh.run('ls', s, new Set())
+    expect(await sh.doneWhen(s.actions.find((a) => a.id === 'revert-and-migrate')!.done_when!)).toBe(true)
+    expect(await sh.doneWhen({ state_has: 'module.other' })).toBe(false)
+    expect(await sh.doneWhen({ state_lacks: 'module.net["a"]' })).toBe(true)
+  })
+})
+
+describe('moved rewrites recorded dependencies', () => {
+  const SUBNET = 'resource "aws_subnet" "a" {\n  vpc_id     = aws_vpc.main.id\n  cidr_block = "10.0.1.0/24"\n}\n'
+  const deps = (w: ReturnType<typeof world>) => Object.fromEntries(w.lab.state.resources.flatMap((r) => r.instances.map((i) => [`${r.module ?? ''}|${r.type}.${r.name}`, i.dependencies])))
+
+  it('root to module: destroying everything afterwards runs the subnet first', async () => {
+    // module.zzz.aws_subnet.a depends on the root VPC through a module input.
+    const zzz = 'variable "vpc" {\n  type = string\n}\n\nresource "aws_subnet" "a" {\n  vpc_id     = var.vpc\n  cidr_block = "10.0.1.0/24"\n}\n'
+    const w = world(ROOT_FLAT + 'module "zzz" {\n  source = "./modules/zzz"\n  vpc    = aws_vpc.main.id\n}\n', {
+      modules: { installed: [{ key: 'zzz', source: './modules/zzz', dir: 'modules/zzz' }, { key: 'aaa', source: './modules/net', dir: 'modules/net' }] },
+      files: [{ path: 'main.tf', content: '' }, { path: 'modules/net/main.tf', content: NET }, { path: 'modules/zzz/main.tf', content: zzz }],
+    } as Partial<TerraformBlock>)
+    w.setRoot(ROOT_FLAT + 'module "zzz" {\n  source = "./modules/zzz"\n  vpc    = aws_vpc.main.id\n}\n')
+    expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
+    expect(deps(w)['module.zzz|aws_subnet.a']).toEqual(['aws_vpc.main'])
+    w.setRoot('module "aaa" {\n  source = "./modules/net"\n  cidr   = "10.0.0.0/16"\n}\n\nmodule "zzz" {\n  source = "./modules/zzz"\n  vpc    = module.aaa.vpc\n}\n' + MOVED('aws_vpc.main', 'module.aaa.aws_vpc.main'))
+    w.disk[`${LAB}/modules/net/main.tf`] = NET + 'output "vpc" {\n  value = aws_vpc.main.id\n}\n'
+    const a = await w.run('apply', '-auto-approve')
+    expect(a.exitCode).toBe(0)
+    expect(a.stdout).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
+    expect(deps(w)['module.zzz|aws_subnet.a']).toEqual(['module.aaa.aws_vpc.main'])
+    w.setRoot('')
+    const d = await w.run('apply', '-auto-approve')
+    expect(d.exitCode).toBe(0)
+    expect(d.stderr).not.toContain('DependencyViolation')
+    expect(listAddresses(w.lab.state)).toEqual([])
+  })
+
+  it('module rename and module to root rewrite dependencies', async () => {
+    const OUT = 'output "vpc_id" {\n  value = aws_vpc.main.id\n}\n'
+    const w = world(call('net') + SUBNET.replace('aws_vpc.main.id', 'module.net.vpc_id'))
+    w.disk[`${LAB}/modules/net/main.tf`] = NET + OUT
+    expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
+    expect(deps(w)['|aws_subnet.a']).toEqual(['module.net.aws_vpc.main'])
+    w.setRoot(call('network') + SUBNET.replace('aws_vpc.main.id', 'module.network.vpc_id') + MOVED('module.net', 'module.network'))
+    await w.run('apply', '-auto-approve')
+    expect(deps(w)['|aws_subnet.a']).toEqual(['module.network.aws_vpc.main'])
+    w.disk[`${LAB}/modules/net/main.tf`] = NET
+    w.setRoot(ROOT_FLAT + SUBNET + MOVED('module.network.aws_vpc.main', 'aws_vpc.main'))
+    const r = await w.run('apply', '-auto-approve')
+    expect(r.stdout).toContain('0 destroyed')
+    expect(deps(w)['|aws_subnet.a']).toEqual(['aws_vpc.main'])
   })
 })

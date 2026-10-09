@@ -1,7 +1,7 @@
 // `moved` blocks: the statement that an object at one address in state is
 // really the object at another, so changing a name or a key is not a destroy.
 import { formatAddress, isModuleAddress, parseAddress, type Address } from './addresses.ts'
-import { formatModule, formatResAddr, stepsOf, type ModStep, type ResAddr } from './address.ts'
+import { formatModule, formatResAddr, staticKey, stepsOf, type ModStep, type ResAddr } from './address.ts'
 import { type State, type StateInstance, type StateResource } from './state.ts'
 import { shapeErrors } from './declarations.ts'
 import type { Block, Diagnostic, Pos } from './types.ts'
@@ -124,6 +124,7 @@ export function applyMoves(
   const placed = new Set<string>()
   const moved = new Map<string, string>()
   const blocked: { from: string; to: string; claimed?: true }[] = []
+  const renamed = new Map<string, string>() // resource key before the move -> after, for the dependencies other instances recorded
   const place = (r: StateResource, inst: StateInstance, dest: ResAddr) => {
     const module = dest.module.length ? formatModule(dest.module) : undefined
     const gk = `${module ?? ''}|${r.mode}:${dest.type}.${dest.name}`
@@ -162,8 +163,10 @@ export function applyMoves(
     }
     place(t.r, t.inst, t.dest)
     moved.set(t.newAddr, t.oldAddr)
+    if (staticKey(t.from) !== staticKey(t.dest)) renamed.set(staticKey(t.from), staticKey(t.dest))
   }
   // ponytail: a blocked source whose old address is taken by another moved object is dropped. Unreachable unless state holds duplicate addresses, which applyMoves does not diagnose.
   for (const t of stay) if (!placed.has(t.oldAddr)) place(t.r, t.inst, t.from)
+  for (const g of groups.values()) for (const i of g.instances) if (i.dependencies) i.dependencies = i.dependencies.map((d) => renamed.get(d) ?? d)
   return { state: { ...structuredClone(state), resources: [...groups.values()] }, moved, blocked, diagnostics }
 }
