@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { actionFor, evidenceSeen, newSession, step, terminalOutput, type GameEvent } from '../src/game/engine.ts'
+import { actionFor, engineHandles, evidenceSeen, newSession, step, terminalOutput, type GameEvent } from '../src/game/engine.ts'
 import type { IncidentShell } from '../src/game/shell.ts'
 import { atStage } from '../src/schema/stages.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
@@ -18,6 +18,7 @@ const TRAPPED = { ...NONE, 'destroy-and-retry': true }
 const GRANT = 'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json'
 
 const run = (sh: IncidentShell, line: string, taken = new Set<string>()) => sh.run(line, atStage(scenario, 0), taken)
+const serial = async (sh: IncidentShell) => JSON.parse((await run(sh, 'terraform state pull')).output).serial as number
 const stateList = async (sh: IncidentShell) => (await run(sh, 'terraform state list')).output.split('\n').filter(Boolean)
 const networkInCloud = async (sh: IncidentShell) =>
   (await sh.doneWhen({ reality_has: { type: 'aws_vpc', id: IDS.aws_vpc } })) &&
@@ -39,12 +40,17 @@ describe('terraform-partial-apply-iam on the simulator', () => {
     expect(out[2].output).toContain('Plan: 1 to add, 0 to change, 0 to destroy.')
     expect(out[2].hits).toContain('evidence:partial-apply')
     expect(out[3].output).toContain('Success! The configuration is valid.')
+    expect(scenario.terraform!.files.find((f) => f.path === 'main.tf')!.content).toContain('backend "s3" {')
     expect(await networkInCloud(sh)).toBe(true)
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 
   it('(b) apply reproduces the AccessDenied box, exits 1, changes nothing, and fails the same way again', async () => {
+    const { sh: fresh } = await play('cd ~/orders-infra')
+    const before = await serial(fresh)
     const { sh, out } = await play('cd ~/orders-infra', 'terraform apply -auto-approve', 'terraform apply -auto-approve')
+    // nothing changed, so the state is not rewritten with a new serial
+    expect(await serial(sh)).toBe(before)
     for (const r of [out[1], out[2]]) {
       expect(r.exitCode).toBe(1)
       expect(r.output).toContain('aws_db_instance.orders: Creating...\n╷\n│ Error: creating RDS DB Instance (orders-db): operation error RDS: CreateDBInstance, https response error StatusCode: 403')
@@ -98,7 +104,10 @@ describe('terraform-partial-apply-iam on the simulator', () => {
 
   it('(d2) destroying before the grant then retrying still fails at the database', async () => {
     const { sh } = await play('cd ~/orders-infra', 'terraform destroy -auto-approve')
+    const before = await serial(sh)
     const apply = await run(sh, 'terraform apply -auto-approve')
+    // a failed apply that did create other objects saves them: the serial moves
+    expect(await serial(sh)).toBe(before + 1)
     expect(apply.exitCode).toBe(1)
     expect(apply.output).toContain('Plan: 5 to add, 0 to change, 0 to destroy.')
     expect(apply.output).toContain(DENIED)
@@ -113,6 +122,7 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       'aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json --profile platform-admin',
       'aws iam put-role-policy --role-name=orders-ci-deploy --policy-name=orders-rds --policy-document=file://orders-rds.json --profile=platform-admin',
       'AWS_PROFILE=platform-admin aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json',
+      'aws --profile platform-admin iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json',
     ])
       expect(actionFor(scenario, cmd), cmd).toBe(grant)
     for (const cmd of [
@@ -120,8 +130,17 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deployer --policy-name orders-rds --policy-document file://orders-rds.json',
       'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds',
       'aws iam put-role-policy --profile platform-admins --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json',
+      'aws iam put-role-policy --profile platform-admin-x --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json',
+      'aws --profile platform-admin-x iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json',
+      'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy-x --policy-name orders-rds --policy-document file://orders-rds.json',
     ])
       expect(actionFor(scenario, cmd), cmd).toBeUndefined()
+    // the scripted denial never answers a command that takes the grant, and vice versa
+    const deny = scenario.terminal!.commands.find((c) => c.match_regex?.includes('put-role-policy'))!
+    for (const cmd of [GRANT, 'aws --profile platform-admin iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json'])
+      expect(new RegExp(deny.match_regex!).test(cmd), cmd).toBe(false)
+    for (const cmd of ['aws --profile orders-ci iam put-role-policy --role-name orders-ci-deploy --policy-name x --policy-document file://x.json', 'aws iam put-role-policy --profile platform-admin-x --role-name orders-ci-deploy --policy-name x --policy-document file://x.json'])
+      expect(new RegExp(deny.match_regex!).test(cmd), cmd).toBe(true)
     // as the pipeline role the call itself is denied
     expect(terminalOutput(scenario, 'aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json', [])).toContain(
       'is not authorized to perform: iam:PutRolePolicy on resource: role orders-ci-deploy because no identity-based policy allows the iam:PutRolePolicy action',
@@ -143,6 +162,11 @@ describe('terraform-partial-apply-iam on the simulator', () => {
     expect(out[1].output).toContain(`assumed-role/orders-ci-deploy/GitHubActions is ${DENIED}`)
     expect(out[1].output).toContain('│   with aws_db_instance.orders,')
     expect(out[2].output).toContain('"Arn": "arn:aws:sts::123456789012:assumed-role/orders-ci-deploy/you-laptop"')
+    // the engine answers these exact lines before the shell sees them (the shell itself ignores AWS_PROFILE)
+    for (const cmd of ['AWS_PROFILE=platform-admin aws sts get-caller-identity', 'aws --profile platform-admin sts get-caller-identity', 'aws sts get-caller-identity --profile platform-admin']) {
+      expect(engineHandles(scenario, cmd, []), cmd).toBe(true)
+      expect(terminalOutput(scenario, cmd, []), cmd).toContain('assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example')
+    }
     expect(out[3].output).toContain('"rds:Describe*"')
     expect(out[3].output).not.toContain('rds:CreateDBInstance')
     for (const c of scenario.terminal!.commands) expect(scenario.command_notes?.[c.match ?? c.example!], c.match ?? c.example).toBeDefined()

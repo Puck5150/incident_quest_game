@@ -249,7 +249,7 @@
   docs: { title: "AWS CLI: iam list-role-policies", url: "https://docs.aws.amazon.com/cli/latest/reference/iam/list-role-policies.html" }
 
 - id: aws-iam-put-role-policy
-  match: "^(AWS_PROFILE=\\S+ )?aws iam put-role-policy"
+  match: "^(AWS_PROFILE=\\S+ )?aws (--profile[ =]\\S+ )?iam put-role-policy"
   summary: "Adds an inline policy to a role, or replaces the document of the inline policy with that name. Prints nothing on success."
   parts:
     - { token: "AWS_PROFILE=platform-admin", meaning: "(If given) run this one command with another named profile from ~/.aws/config." }
@@ -550,11 +550,12 @@
   docs: { title: "AWS CLI: get-queue-attributes", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-attributes.html" }
 
 - id: aws-sts-caller-identity
-  match: "^aws sts get-caller-identity( --profile \\S+)?$"
+  match: "^(AWS_PROFILE=\\S+ )?aws (--profile \\S+ )?sts get-caller-identity( --profile \\S+)?$"
   summary: "Shows which account and identity (user or role) your credentials belong to."
   parts:
     - { token: "get-caller-identity", meaning: "No options; works even with no permissions granted." }
     - { token: "--profile platform-admin", meaning: "(If given) ask about this named profile's credentials instead of the default." }
+    - { token: "AWS_PROFILE=platform-admin", meaning: "(If given) the same, set for this one command through the environment." }
   why: "Before debugging access, confirm who you actually are; many \"denied\" problems are the wrong identity."
   alternatives:
     - { command: "aws configure list", note: "Which credential source and profile the CLI is using." }

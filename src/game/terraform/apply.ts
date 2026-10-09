@@ -219,6 +219,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
     state.outputs = Object.fromEntries(final.outputs.filter((o) => !hasUnknown(o.value)).map((o) => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }]))
   }
   const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
-  if (steps.length || content(state) !== content(input.state)) state.serial++
+  // Terraform bumps the serial only when the state changed (statemgr/filesystem.go), not for a failed-only run.
+  if (content(state) !== content(input.state)) state.serial++
   return { plan: first!, steps, errors, state, reality: Object.fromEntries(reality), counts }
 }

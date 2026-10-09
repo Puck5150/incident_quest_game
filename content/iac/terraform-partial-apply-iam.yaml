@@ -21,9 +21,9 @@ environment: |
   The orders environment (a VPC with two data subnets, a database security
   group and a PostgreSQL instance) is new: nothing uses it yet. Account
   123456789012, us-east-1. The pipeline applies ~/orders-infra with the
-  IAM role orders-ci-deploy. Your shell in ~/orders-infra uses the same
-  role (AWS_PROFILE=orders-ci, set in ~/.bashrc) so you run exactly what
-  the pipeline runs; your own platform admin access is the platform-admin
+  IAM role orders-ci-deploy. On your laptop the default AWS profile
+  assumes the same role (see ~/.aws/config), so you run exactly what the
+  pipeline runs; your own platform admin access is the platform-admin
   profile (--profile platform-admin).
 
 terminal:
@@ -33,8 +33,6 @@ terminal:
       content: |
         # ~/.bashrc
         alias ll="ls -alF"
-        # Reproduce pipeline runs with the pipeline's own role.
-        export AWS_PROFILE=orders-ci
     - path: ~/.aws/config
       content: |
         [profile platform-admin]
@@ -43,7 +41,8 @@ terminal:
         sso_role_name = PlatformAdmin
         region = us-east-1
 
-        [profile orders-ci]
+        # Default: the pipeline's own role, to reproduce pipeline runs.
+        [default]
         role_arn = arn:aws:iam::123456789012:role/orders-ci-deploy
         source_profile = platform-admin
         role_session_name = you-laptop
@@ -182,6 +181,20 @@ terminal:
             "Account": "123456789012",
             "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example"
         }
+    - match: "aws --profile platform-admin sts get-caller-identity"
+      output: |
+        {
+            "UserId": "AROA3X7KQ2HZ4PLATFMAD:you@acme.example",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example"
+        }
+    - match: "AWS_PROFILE=platform-admin aws sts get-caller-identity"
+      output: |
+        {
+            "UserId": "AROA3X7KQ2HZ4PLATFMAD:you@acme.example",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_PlatformAdmin_5f2c8e1a9b3d7c40/you@acme.example"
+        }
     - match: "aws iam list-role-policies --role-name orders-ci-deploy"
       output: |
         {
@@ -245,7 +258,7 @@ terminal:
                 ]
             }
         }
-    - match_regex: "^aws iam put-role-policy (?!.*--profile[ =]platform-admin\\b)"
+    - match_regex: "^aws (?!.*--profile[ =]platform-admin(\\s|$))(--profile[ =]\\S+ )?iam put-role-policy "
       example: "aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json"
       output: |
 
@@ -259,6 +272,12 @@ terraform:
     - path: main.tf
       content: |
         terraform {
+          backend "s3" {
+            bucket = "acme-terraform-state"
+            key    = "orders/terraform.tfstate"
+            region = "us-east-1"
+          }
+
           required_providers {
             aws = {
               source  = "hashicorp/aws"
@@ -409,7 +428,7 @@ actions:
   - id: grant-rds-permission
     label: "Add rds:CreateDBInstance to the orders-ci-deploy role's policy (aws iam put-role-policy, with your platform-admin profile)"
     kind: fix
-    match_regex: "^(AWS_PROFILE=platform-admin aws iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy\\b)|aws iam put-role-policy (?=.*--profile[ =]platform-admin\\b)(?=.*--role-name[ =]orders-ci-deploy\\b))(?=.*--policy-name[ =]\\S)(?=.*--policy-document[ =]\\S)"
+    match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy(\\s|$))(?=.*--policy-name[ =]\\S)(?=.*--policy-document[ =]\\S)"
     feedback: "The orders-ci-deploy role may now call rds:CreateDBInstance. Nothing in AWS or in Terraform's state changed; the next apply only has the database left to create."
   - id: finish-apply
     label: "Run terraform apply again so it creates only the missing database"
@@ -420,6 +439,8 @@ actions:
         - plan_clean: true
         - not: { applied: { op: delete, address: aws_vpc.main } }
         - not: { applied: { op: delete, address: aws_security_group.db } }
+        - not: { applied: { op: delete, address: aws_subnet.data_a } }
+        - not: { applied: { op: delete, address: aws_subnet.data_b } }
     feedback: "The apply created orders-db and nothing else; the network from this morning's run was left alone. The plan is clean: what's in AWS, in state and in the code agree."
   - id: destroy-and-retry
     label: "terraform destroy what the failed run created, then apply everything again from scratch"
@@ -428,6 +449,8 @@ actions:
       any:
         - applied: { op: delete, address: aws_vpc.main }
         - applied: { op: delete, address: aws_security_group.db }
+        - applied: { op: delete, address: aws_subnet.data_a }
+        - applied: { op: delete, address: aws_subnet.data_b }
     feedback: "The network was fine: it was created, recorded in state, and only needed the database next to it. Destroying it bought nothing (the next apply hits the same AccessDenied at the database) and throws away work Terraform had already done. On an environment that's in use, \"start clean\" deletes things people depend on."
   - id: edit-state
     label: "Edit terraform.tfstate by hand to add the database, so Terraform thinks the apply finished"
@@ -525,8 +548,10 @@ sources:
 
 command_notes:
   "cat ci-apply.log": "The pipeline's run, saved from the job. Read it top to bottom: what completed, then the error box. The \"with\" line names the resource that failed."
-  "aws sts get-caller-identity": "Your shell uses AWS_PROFILE=orders-ci, so this is the pipeline's role: assumed-role/orders-ci-deploy, the same caller as in the error."
-  "aws sts get-caller-identity --profile platform-admin": "Your own admin access, through SSO. This is the identity that can change IAM."
+  "aws sts get-caller-identity": "The default profile in ~/.aws/config assumes the pipeline's role: assumed-role/orders-ci-deploy, the same caller as in the error."
+  "aws sts get-caller-identity --profile platform-admin": "Your own admin access, through SSO: the identity that can change IAM. (In this lab, pick a profile per command with --profile or an AWS_PROFILE=... prefix; an exported AWS_PROFILE isn't honoured.)"
+  "aws --profile platform-admin sts get-caller-identity": "Your own admin access, through SSO: the identity that can change IAM. (In this lab, pick a profile per command with --profile or an AWS_PROFILE=... prefix; an exported AWS_PROFILE isn't honoured.)"
+  "AWS_PROFILE=platform-admin aws sts get-caller-identity": "Your own admin access, through SSO: the identity that can change IAM. (In this lab, pick a profile per command with --profile or an AWS_PROFILE=... prefix; an exported AWS_PROFILE isn't honoured.)"
   "aws iam list-role-policies --role-name orders-ci-deploy": "The role has one inline policy, terraform-deploy."
   "aws iam list-attached-role-policies --role-name orders-ci-deploy": "No managed policies are attached: the inline policy is everything the role may do."
   "aws iam get-role-policy --role-name orders-ci-deploy --policy-name terraform-deploy": "Network create and delete, state bucket access, and read-only RDS (rds:Describe*). Nothing allows rds:CreateDBInstance."

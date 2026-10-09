@@ -688,7 +688,8 @@ Legacy content:
 ## terraform incidents batch 2 (TF5)
 
 Open simulator defects found in TF5:
-- [ ] State serial on a failed apply: `executeApply` bumps the serial whenever a step ran, failed ones included, so an apply whose only step failed (terraform-partial-apply-iam) leaves identical state with serial + 1. Real Terraform increments only when the state changed (`statemgr/filesystem.go` v1.9.8, `StatesMarshalEqual`). Not fixed: the serial seeds generated ids, so the fix moves ids in other tests.
+- [ ] Address-keyed faults can be bypassed by renaming: a fault's `at` is an address, so renaming the resource in the `.tf` (or `state mv` plus a rename) makes a new address the fault doesn't cover, and the create succeeds. In terraform-partial-apply-iam a renamed db would still be denied in reality. Simulator limit; a fault keyed on the type/natural id (or on the provider call) would close it.
+- [ ] Profiles: the lab's `aws` answers only from scripted lines, so a profile works per command (`--profile NAME`, or an exact scripted `AWS_PROFILE=NAME aws ...` line the engine answers first); `export AWS_PROFILE=...` and an env prefix inside a pipeline run in the shell and get the default profile's output, and ~/.bashrc is never sourced. Later improvement: have `IncidentShell.program` honour `ctx.env.AWS_PROFILE` when choosing scripted output.
 - [ ] Apply concurrency: creates run one at a time, so an independent resource that fails (the db instance, which has no reference to the network) prints `Creating...` first and its error only at the end, after the others complete. Real Terraform runs independent creates in parallel (default `-parallelism=10`); the interleaving would differ but the outcome (network created, db denied, error box at the end) is the same.
 - [ ] Scripted commands always exit 0: the scripted `aws iam put-role-policy` AccessDenied (no `--profile`) prints the error but real AWS CLI v2 exits non-zero (254 for a service error).
 
