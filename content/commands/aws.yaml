@@ -549,6 +549,43 @@
     - { command: "aws sqs get-queue-attributes --queue-url URL --attribute-names All", note: "Every setting and the message counts." }
   docs: { title: "AWS CLI: get-queue-attributes", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-attributes.html" }
 
+- id: aws-ec2-describe-instance-types
+  match: "^aws ec2 describe-instance-types"
+  summary: "Describes instance types: vCPUs, memory, network, architectures and more."
+  parts:
+    - { token: "--instance-types c5.24xlarge", meaning: "The type (or types, space-separated) to describe." }
+    - { token: "--query \"InstanceTypes[].VCpuInfo.DefaultVCpus\"", meaning: "A JMESPath filter on the output: just the default vCPU count of each type." }
+  why: "On-Demand quotas are counted in vCPUs, so the question for a quota error is how many vCPUs the type you asked for has."
+  alternatives:
+    - { command: "aws ec2 describe-instance-types --instance-types c5.12xlarge c5.24xlarge --query \"InstanceTypes[].[InstanceType,VCpuInfo.DefaultVCpus]\" --output table", note: "Compare several types side by side." }
+  docs: { title: "AWS CLI: ec2 describe-instance-types", url: "https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instance-types.html" }
+
+- id: aws-service-quotas-get
+  match: "^aws service-quotas get-service-quota"
+  summary: "Shows the applied value of one service quota in the current account and Region."
+  parts:
+    - { token: "--service-code ec2", meaning: "The service the quota belongs to." }
+    - { token: "--quota-code L-1216C47A", meaning: "Which quota: here Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances, counted in vCPUs." }
+    - { token: "--region us-east-1", meaning: "(If given) the Region to ask about; quotas are per Region. Without it, the profile's region." }
+  why: "A limit error names the limit; this shows the quota behind it and its usage metric, so you know how far over you are and what to ask for."
+  alternatives:
+    - { command: "aws service-quotas get-aws-default-service-quota --service-code ec2 --quota-code L-1216C47A", note: "The AWS default value, not your account's applied value." }
+    - { command: "aws service-quotas list-requested-service-quota-change-history --service-code ec2", note: "Increase requests already made and their status." }
+  docs: { title: "AWS CLI: service-quotas get-service-quota", url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/get-service-quota.html" }
+
+- id: aws-service-quotas-request-increase
+  match: "^aws service-quotas request-service-quota-increase"
+  summary: "Asks AWS to raise a quota to a new value. The request starts as PENDING until it is reviewed."
+  parts:
+    - { token: "--service-code ec2", meaning: "The service the quota belongs to." }
+    - { token: "--quota-code L-1216C47A", meaning: "Which quota to raise." }
+    - { token: "--desired-value 128", meaning: "The new total you want, not the amount to add (here vCPUs)." }
+    - { token: "--region us-east-1", meaning: "(If given) the Region whose quota to raise; each Region is separate." }
+  why: "The way to get more of a limit you legitimately need. Size it for everything that will run, and ask early: approval can take from minutes to days."
+  alternatives:
+    - { command: "aws service-quotas get-requested-service-quota-change --request-id ID", note: "Check the status of the request later." }
+  docs: { title: "AWS CLI: service-quotas request-service-quota-increase", url: "https://docs.aws.amazon.com/cli/latest/reference/service-quotas/request-service-quota-increase.html" }
+
 - id: aws-sts-caller-identity
   match: "^(AWS_PROFILE=\\S+ )?aws (--profile \\S+ )?sts get-caller-identity( --profile \\S+)?$"
   summary: "Shows which account and identity (user or role) your credentials belong to."
