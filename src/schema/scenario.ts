@@ -239,6 +239,20 @@ export const TerraformSchema = z.strictObject({
     )
     .min(1),
   vars: TfAttrs.optional(),
+  // What .terraform/modules/modules.json holds when the scenario starts: local modules `init` already installed.
+  modules: z
+    .strictObject({
+      installed: z
+        .array(
+          z.strictObject({
+            key: z.string().min(1),
+            source: z.string().min(1),
+            dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory'),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   state: TfState.optional(),
   outputs: TfOutputs.optional(),
   lock: z
@@ -597,6 +611,13 @@ export const ScenarioSchema = z
           seen.add(k)
         })
       }
+      const installed = tf.modules?.installed ?? []
+      if (installed.length && tf.initialized === false) issue('modules.installed needs the lab to start initialised', ['terraform', 'modules', 'installed'])
+      dupes(installed.map((m) => m.key)).forEach((d) => issue(`duplicate installed module key "${d}"`, ['terraform', 'modules', 'installed']))
+      installed.forEach((m, i) => {
+        const dir = m.dir.replace(/^\.\//, '').replace(/\/+$/, '')
+        if (!tf.files.some((f) => f.path.endsWith('.tf') && f.path.slice(0, Math.max(0, f.path.lastIndexOf('/'))) === (dir === '.' ? '' : dir))) issue(`no .tf file in terraform.files under "${m.dir}"`, ['terraform', 'modules', 'installed', i, 'dir'])
+      })
       const known = new Set<string>()
       checkState(tf.state ?? [], ['terraform', 'state'], known)
       for (const [name, w] of Object.entries(tf.workspaces ?? {})) checkState(w.state ?? [], ['terraform', 'workspaces', name, 'state'], known)

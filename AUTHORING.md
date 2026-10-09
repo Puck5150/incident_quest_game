@@ -454,7 +454,8 @@ terraform:
 
 Fields:
 - `dir`: the lab directory (default the shell's starting directory; `~/` and absolute paths work). `version`: Terraform version like `1.9.8`. `initialized`: false makes the player run `terraform init` first.
-- `files`: the starting `.tf` files (at least one). `vars`: values for `variable` blocks.
+- `files`: the starting `.tf` files (at least one; module directories such as `modules/net/main.tf` work, local `./` sources only). `vars`: values for `variable` blocks.
+- `modules.installed`: `[{ key, source, dir }]`, the local modules `terraform init` already installed (becomes `.terraform/modules/modules.json`; `dir` must hold `.tf` files in `files`). A lab with module calls that omits it must be run through `terraform init` first (`Module not installed`).
 - `state`: managed (or `mode: data`) objects. Every `attrs` needs a string `id`. `key` makes a `count` or `for_each` instance; `status: tainted` marks one tainted. `outputs`: output values (`sensitive: true` hides them).
 - `cloud`: what really exists. By default it is exactly what `state` says. `cloud.patch` changes attributes of an existing object (drift), `cloud.delete` removes one, `cloud.add` creates one Terraform does not manage.
 - `evidence`: awards a tag when the named subcommand's output contains the substring. Check the exact text by running the command in the shell.

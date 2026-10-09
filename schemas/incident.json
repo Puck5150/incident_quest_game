@@ -204,6 +204,38 @@
             "$ref": "#/definitions/__schema0"
           }
         },
+        "modules": {
+          "type": "object",
+          "properties": {
+            "installed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "dir": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "key",
+                  "source",
+                  "dir"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "state": {
           "type": "array",
           "items": {

@@ -22,6 +22,7 @@ import type { State } from './state.ts'
 import type { Block, Diagnostic } from './types.ts'
 import { outputsText, showState, stateShow } from './views.ts'
 import { lockBlock, lockFile, PROVIDER_VERSION } from './layout.ts'
+import { formatManifest, loadModuleTree, MANIFEST_PATH, parseManifest, type LoadedModules } from './modules.ts'
 import { LOCK_BYPASSED } from './predicates.ts'
 
 export { LOCK_FILE } from './layout.ts'
@@ -57,6 +58,7 @@ interface Config {
   tfvars: File[]
   hasLock: boolean
   lockText: string
+  modules: LoadedModules // the module calls of tf, checked against the installed manifest
 }
 
 const USAGE = `Usage: terraform [global options] <subcommand> [args]
@@ -99,7 +101,7 @@ Global options (use these before the subcommand, if any):
   -help         Show this help output, or the help for a specified subcommand.
   -version      An alias for the "version" subcommand.`
 
-const NOT_YET = new Set(['console', 'fmt', 'get', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
+const NOT_YET = new Set(['console', 'fmt', 'graph', 'login', 'logout', 'metadata', 'providers', 'test'])
 const REGISTRY = 'registry.terraform.io/'
 const RULE = '─'.repeat(77)
 const NO_STATE_SUMMARY = 'No state file was found!'
@@ -157,11 +159,19 @@ function resolvePath(base: string, p: string): string {
   return `/${parts.join('/')}`
 }
 
+const moduleReader = (ctx: CliContext, dir: string) => (rel: string) => ctx.listFiles(resolvePath(dir, rel))
+// Every file the configuration is made of, for snippets in diagnostics: root files and installed module files.
+const allFiles = (cfg: Config): File[] => [...cfg.tf, ...[...cfg.modules.tree.children.values()].flatMap((c) => c.files.files)]
+// Module problems stop every command that loads the configuration (a root syntax error is reported by the usual path).
+const moduleErrors = (cfg: Config): Diagnostic[] => (cfg.modules.rootBad ? [] : [...cfg.modules.install, ...cfg.modules.syntax])
+
 async function loadConfig(ctx: CliContext, dir: string): Promise<Config> {
   const all = await ctx.listFiles(dir)
+  const tf = all.filter((f) => f.name.endsWith('.tf')).sort(byName)
   return {
     dir,
-    tf: all.filter((f) => f.name.endsWith('.tf')).sort(byName),
+    tf,
+    modules: await loadModuleTree(tf, moduleReader(ctx, dir), parseManifest(await ctx.readFile(resolvePath(dir, MANIFEST_PATH))), false),
     tfvars: [...all.filter((f) => f.name === 'terraform.tfvars'), ...all.filter((f) => f.name.endsWith('.auto.tfvars')).sort(byName)],
     hasLock: all.some((f) => f.name === '.terraform.lock.hcl'),
     lockText: all.find((f) => f.name === '.terraform.lock.hcl')?.text ?? '',
@@ -221,15 +231,34 @@ function cmdVersion(ctx: CliContext, cfg: Config): Out {
   return ok(lines.join('\n'))
 }
 
+// What init and get share: read each local module from its source and record it in the manifest.
+async function installModules(ctx: CliContext, cfg: Config): Promise<{ lines: string[] } | Out> {
+  const m = await loadModuleTree(cfg.tf, moduleReader(ctx, cfg.dir), undefined, true)
+  if (!m.calls.length) return { lines: [] }
+  const errors = [...m.install, ...m.syntax]
+  if (errors.length) return { stdout: '', stderr: boxes(errors, [...cfg.tf, ...[...m.tree.children.values()].flatMap((c) => c.files.files)]), exitCode: 1 }
+  await ctx.write(resolvePath(cfg.dir, '.terraform/modules'), 'modules.json', formatManifest(m.entries))
+  return { lines: m.entries.map((e) => `- ${e.key} in ${e.dir}`) }
+}
+
+async function cmdGet(ctx: CliContext, cfg: Config): Promise<Out> {
+  const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
+  if (syntax.length) return fail(boxes(syntax, cfg.tf))
+  const r = await installModules(ctx, cfg)
+  return 'lines' in r ? ok(r.lines.join('\n')) : r
+}
+
 async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
   if (!cfg.tf.length) return ok(EMPTY_INIT)
   // Only syntax stops init; undeclared references and cycles are for validate and plan.
   const syntax = cfg.tf.flatMap((f) => parseHcl(f.name, f.text).diagnostics)
   if (syntax.length) return fail(boxes(syntax, cfg.tf))
+  const mods = await installModules(ctx, cfg)
+  if (!('lines' in mods)) return { ...mods, stdout: 'Initializing modules...' }
   const providers = providersOf(cfg.tf)
   const locked = lockedProviders(cfg)
   const missing = providers.filter((p) => !locked.includes(p))
-  const lines = ['', 'Initializing the backend...', '', 'Initializing provider plugins...']
+  const lines = [...(mods.lines.length ? ['Initializing modules...', ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
   for (const p of providers) {
     const n = shortName(p)
     lines.push(...(locked.includes(p) ? [`- Reusing previous version of ${n} from the dependency lock file`, `- Using previously-installed ${n} v${PROVIDER_VERSION}`] : [`- Finding latest version of ${n}...`, `- Installing ${n} v${PROVIDER_VERSION}...`, `- Installed ${n} v${PROVIDER_VERSION} (signed by HashiCorp)`]))
@@ -269,6 +298,8 @@ async function cmdInit(ctx: CliContext, cfg: Config): Promise<Out> {
 
 function cmdValidate(cfg: Config): Out {
   if (!cfg.tf.length) return ok('Success! The configuration is valid.\n')
+  const mod = moduleErrors(cfg)
+  if (mod.length) return fail(boxes(mod, allFiles(cfg)))
   const g = buildGraph(cfg.tf)
   const diags = [...g.diagnostics]
   if (!diags.length) {
@@ -461,6 +492,8 @@ type Prepared = { warning: string; vars: Record<string, Value>; graph: ReturnTyp
 // What plan, apply, destroy, import and refresh share: configuration, lock file and variables.
 async function prepare(sources: VarSource[], ctx: CliContext, cfg: Config): Promise<Prepared | Out> {
   if (!cfg.tf.length) return boxFail('No configuration files', NO_CONFIG_DETAIL)
+  const mod = moduleErrors(cfg)
+  if (mod.length) return fail(boxes(mod, allFiles(cfg)))
   const g = buildGraph(cfg.tf)
   if (!g.diagnostics.length) {
     const lock = lockError(cfg)
@@ -910,6 +943,8 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
       return cmdVersion(ctx, cfg)
     case 'init':
       return cmdInit(ctx, cfg)
+    case 'get':
+      return cmdGet(ctx, cfg)
     case 'validate':
       return cmdValidate(cfg)
     case 'plan':
