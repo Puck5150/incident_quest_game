@@ -93,7 +93,7 @@ describe('terraform-forgotten-taint on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 
-  it('state rm then apply launches a duplicate web server and is not the fix', async () => {
+  it('state rm then apply launches a duplicate web server: destructive, not the fix', async () => {
     const { sh, out } = await play('cd ~/infra', 'terraform state rm aws_instance.web', 'terraform apply -auto-approve')
     expect(out[2].exitCode).toBe(0)
     expect(out[2].output).toContain('aws_instance.web: Creating...')
@@ -102,13 +102,16 @@ describe('terraform-forgotten-taint on the simulator', () => {
     // the old instance still runs, unmanaged, next to the new one
     expect(await sh.doneWhen({ reality_has: { type: 'aws_instance', id: WEB_ID } })).toBe(true)
     expect(await sh.doneWhen({ applied: { op: 'create', address: 'aws_instance.web' } })).toBe(true)
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(TRAPPED)
   })
 
   it('bonus route: state rm then import also leaves no destroy in the plan', async () => {
     const { sh, out } = await play('cd ~/infra', 'terraform state rm aws_instance.web', `terraform import aws_instance.web ${WEB_ID}`, 'terraform plan')
     expect(out[2].exitCode).toBe(0)
     expect(out[3].output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
+    expect(await detectedAll(sh)).toEqual(FIXED)
+    const apply = await sh.run('terraform apply -auto-approve', atStage(scenario, 0), new Set())
+    expect(apply.output).toContain('Apply complete! Resources: 0 added, 1 changed, 0 destroyed.')
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 

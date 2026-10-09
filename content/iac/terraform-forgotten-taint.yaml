@@ -281,8 +281,10 @@ actions:
     label: "Merge and apply the PR as planned, tonight, and accept the replacement"
     kind: destructive
     done_when:
-      applied: { op: delete, address: aws_instance.web }
-    feedback: "Terraform terminated the only web server and launched a new one: new instance id, new private and public IP, a cold boot, and 502s behind the load balancer until it is registered and healthy. All for a tag that could have been added in place."
+      any:
+        - applied: { op: delete, address: aws_instance.web }
+        - applied: { op: create, address: aws_instance.web }
+    feedback: "Terraform launched a new web instance for a tag that could have been added in place. Applied with the taint, it terminated the only web server first: new instance id, new IPs, a cold boot, and 502s behind the load balancer until the new one is registered and healthy. Applied after dropping the instance from state, it left the real server running, unmanaged, and created a second one beside it: double the cost, and a production host Terraform no longer tracks."
   - id: revert-the-tag
     label: "Drop the CostCenter line from the PR so the plan stops replacing the instance"
     kind: wrong
