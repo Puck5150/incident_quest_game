@@ -173,7 +173,7 @@ export function importObject(state: State, reality: Reality, address: string, id
   if (!declared) {
     return fail(
       `Resource address "${instanceAddress(a)}" does not exist in the configuration.`,
-      `Before importing this resource, please create its configuration in ${a.module ? a.module : 'the root module'}. For example:\n\nresource "${a.type}" "${a.name}" {\n  # (resource arguments)\n}`,
+      `Before importing this resource, please create its configuration in ${a.module ? formatModule(stepsOf(a.module).map((x) => ({ name: x.name }))) : 'the root module'}. For example:\n\nresource "${a.type}" "${a.name}" {\n  # (resource arguments)\n}`,
     )
   }
   if (findInstance(state, instanceAddress(a, a.key))) {

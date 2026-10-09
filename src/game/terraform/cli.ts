@@ -3,7 +3,7 @@
 // force-unlock and version read the player's working directory and the lab's
 // state; everything else answers honestly that it is not simulated yet. Nothing here throws on
 // player input: a failure is a boxed diagnostic or a plain message with exit 1.
-import { compareAddresses, parseResAddr } from './address.ts'
+import { compareAddresses, parseResAddr, staticKey } from './address.ts'
 import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
@@ -742,8 +742,9 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   if (s.graph.diagnostics.length) return withWarn(s.warning, fail(boxes(s.graph.diagnostics, allFiles(cfg))))
   const t = parseAddress(addr)
   // A keyed address needs only its resource block; count and for_each are not checked.
-  const rootNames = new Set(cfg.tf.map((x) => x.name))
-  const declared = t.ok && !t.module && s.graph.blocks.some((b) => rootNames.has(b.file) && b.type === 'resource' && b.labels[0] === t.type && b.labels[1] === t.name)
+  // Module resources are declared when the module call is loaded and its configuration has the block (single-instance calls only).
+  const ra = parseResAddr(addr)
+  const declared = t.ok && !!ra && !ra.module.some((x) => x.key !== undefined) && s.graph.nodes.has(staticKey(ra))
   // A keyed address must be an instance the configuration produces; if count/for_each can't be evaluated, accept it.
   if (declared && t.mode === 'managed' && t.key !== undefined) {
     const target = instanceAddress(t, t.key)

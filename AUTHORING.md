@@ -468,6 +468,52 @@ Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `sta
 
 Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
 
+### Modules (local) and module refactors
+
+`module` blocks work in `terraform.files` like any other block. Only local sources (`./modules/net`) are supported, each call is a single instance (no `count`/`for_each` on a module call), and modules cannot call other modules. The module directory must be among `files` and be listed in `modules.installed` (or the player runs `terraform init` first).
+
+```yaml
+terraform:
+  files:
+    - { path: main.tf, content: 'module "net" {\n  source = "./modules/net"\n  cidr   = "10.0.0.0/16"\n}\n' }
+    - { path: modules/net/main.tf, content: '...variable "cidr" ...resource "aws_vpc" "main" ...' }
+  modules:
+    installed: [{ key: net, source: ./modules/net, dir: modules/net }]
+  state:
+    - { type: aws_vpc, name: main, attrs: { id: vpc-1, cidr_block: 10.0.0.0/16 } }          # root address aws_vpc.main
+    - { type: aws_subnet, name: a, module: module.net, attrs: { id: subnet-1 } }              # module.net.aws_subnet.a
+```
+
+Module addresses (`module.net.aws_vpc.main`, a whole module `module.net`) work in:
+- `state[].module` (the module path of that entry, `module.net`), `faults[].at` (`module.net.aws_vpc.main`);
+- `done_when` leaves: `state_has`/`state_lacks`/`applied`/`plan_has.no_destroy` (`module.net` covers everything under it);
+- the CLI: `state list|show|mv|rm`, `taint`, `-replace`, `import`.
+
+`moved` and `import` blocks live in the root module's files only. A `moved` (or `removed`) block inside a child module is ignored; an `import` block there is an error ("Import blocks are only allowed in the root module."). Their addresses may be module-qualified:
+
+```hcl
+moved { from = aws_vpc.main        to = module.net.aws_vpc.main }   # root into a module
+moved { from = module.net          to = module.network }            # rename a module (all resources under it)
+import { to = module.net.aws_s3_bucket.b  id = "legacy" }
+removed { from = module.net.aws_vpc.main  lifecycle { destroy = false } }
+```
+
+`removed { from = module.net }` (a whole module) is not supported.
+
+Worked example, a module-refactor incident: the starting `files` already hold the refactored config (the VPC now inside `module "net"`) while `state` still holds `aws_vpc.main` at the root, and the plan shows `aws_vpc.main will be destroyed` plus `module.net.aws_vpc.main will be created`. Two fixes, both leave the VPC untouched: add `moved { from = aws_vpc.main  to = module.net.aws_vpc.main }` and `terraform apply`, or `terraform state mv aws_vpc.main module.net.aws_vpc.main`. Detect it from the world:
+
+```yaml
+done_when:
+  all:
+    - state_has: module.net.aws_vpc.main
+    - plan_clean: true
+    - not: { applied: { op: delete, address: aws_vpc.main } }
+```
+
+The trap is `destructive` with `done_when: { applied: { op: delete, address: aws_vpc.main } }`. Remember `done_when` sees the files only after the player's first shell command (the lab mounts then), so tests run `ls` first.
+
+Limits until TF6b: local sources only, single-instance module calls, no nested modules, `moved`/`import`/`removed` blocks only in the root module, no registry versions.
+
 ### Apply, destroy and faults
 
 `terraform apply` and `terraform destroy` really change the simulated state

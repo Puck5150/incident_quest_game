@@ -145,3 +145,34 @@ describe('applyMoves', () => {
     expect(listAddresses(r.state)).toEqual(['aws_s3_bucket.old["a"]'])
   })
 })
+
+describe('module-aware moves', () => {
+  const inMod = (module: string | undefined, type: string, name: string): State => {
+    const s = stateWith({ type, name })
+    if (module) s.resources[0].module = module
+    return s
+  }
+  it('reads module-qualified and module-only addresses', () => {
+    const r = moves(MV('aws_vpc.main', 'module.net.aws_vpc.main') + MV('module.a', 'module.b'))
+    expect(r.diagnostics).toEqual([])
+    expect(r.moves.map((m) => [m.from, m.to])).toEqual([
+      [{ type: 'aws_vpc', name: 'main' }, { module: [{ name: 'net' }], type: 'aws_vpc', name: 'main' }],
+      [{ module: [{ name: 'a' }], type: '', name: '' }, { module: [{ name: 'b' }], type: '', name: '' }],
+    ])
+  })
+  it('moves between root and modules, and renames a module with everything under it', () => {
+    expect(listAddresses(run(MV('aws_vpc.main', 'module.net.aws_vpc.main'), inMod(undefined, 'aws_vpc', 'main')).state)).toEqual(['module.net.aws_vpc.main'])
+    expect(listAddresses(run(MV('module.net.aws_vpc.main', 'aws_vpc.main'), inMod('module.net', 'aws_vpc', 'main')).state)).toEqual(['aws_vpc.main'])
+    const r = run(MV('module.net', 'module.network'), inMod('module.net', 'aws_vpc', 'main'))
+    expect(listAddresses(r.state)).toEqual(['module.network.aws_vpc.main'])
+    expect(r.state.resources[0].module).toBe('module.network')
+    expect([...r.moved]).toEqual([['module.network.aws_vpc.main', 'module.net.aws_vpc.main']])
+  })
+  it('does not apply a root resource move to a module resource of the same name', () => {
+    expect(listAddresses(run(MV('aws_vpc.main', 'aws_vpc.other'), inMod('module.net', 'aws_vpc', 'main')).state)).toEqual(['module.net.aws_vpc.main'])
+  })
+  it('rejects mixed kinds and a module moved into itself', () => {
+    expect(moves(MV('module.a', 'aws_vpc.b')).diagnostics[0]).toMatchObject({ summary: 'Invalid "moved" addresses' })
+    expect(moves(MV('module.a', 'module.a.module.b')).diagnostics[0].detail).toContain('a module cannot be moved into itself')
+  })
+})

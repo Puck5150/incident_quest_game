@@ -4,7 +4,8 @@
 // instances that are no longer configured. Any configuration error stops the
 // plan: nothing is half-planned. prevent_destroy is the exception: it fails
 // after planning, and the result keeps the partial plan (`partial`).
-import { compareAddresses, parseResAddr, staticKey, stepsOf } from './address.ts'
+import { compareAddresses, formatModule, parseResAddr, resourceKey, staticKey, stepsOf } from './address.ts'
+import { formatAddress, isModuleAddress, type Address } from './addresses.ts'
 import { lifecycleOf, resourceArguments } from './arguments.ts'
 import { importsOf, removedOf } from './declarations.ts'
 import { equal, evalExpr, EvalError, isUnknown, UNKNOWN, type Scope, type Value } from './eval.ts'
@@ -127,13 +128,20 @@ export function planConfig(input: PlanInput): PlanResult {
 
   // moved / removed / import: statements about state.
   const rootFiles = new Set(tree.root.files.map((f) => f.name))
-  const rootBlocks = g.blocks.filter((b) => rootFiles.has(b.file)) // moved/removed/import inside child modules are not supported yet
+  const rootBlocks = g.blocks.filter((b) => rootFiles.has(b.file)) // moved/removed blocks inside child modules are ignored (TF6b); import blocks there are an error, as in Terraform
   const mv = movesOf(rootBlocks)
   const rm = removedOf(rootBlocks)
   const im = importsOf(rootBlocks)
   errors.push(...mv.diagnostics, ...rm.diagnostics, ...im.diagnostics)
-  const declared = (a: { type: string; name: string }) => g.nodes.has(`${a.type}.${a.name}`)
-  const show = (a: { type: string; name: string; key?: string | number }) => instanceAddress({ mode: 'managed', type: a.type, name: a.name }, a.key)
+  for (const b of g.blocks) {
+    if (b.type !== 'import' || rootFiles.has(b.file)) continue
+    const owner = [...tree.children].find(([, c]) => c.files.files.some((f) => f.name === b.file))
+    fail(b.file, b.pos, 'Invalid import configuration', `An import block was detected in "module.${owner?.[0] ?? '?'}". Import blocks are only allowed in the root module.`)
+  }
+  // A resource address is declared when the graph has its (module-qualified, key-less) node; a module address when its call is loaded.
+  const declared = (a: Address) =>
+    isModuleAddress(a) ? !!g.nodes.get(formatModule((a.module ?? []).map((x) => ({ name: x.name }))))?.child : g.nodes.has(staticKey({ module: a.module ?? [], mode: 'managed', type: a.type, name: a.name }))
+  const show = formatAddress
   const imports = im.imports.filter((i) => !input.skipImports?.has(show(i.to)))
   for (const r of input.destroy ? [] : rm.removals) {
     if (declared(r.from)) fail(r.file, r.pos, 'Removed resource still exists', `This statement declares that ${show(r.from)} was removed, so it should no longer be declared in the configuration, but the resource is still declared.`)
@@ -256,7 +264,7 @@ export function planConfig(input: PlanInput): PlanResult {
         }
       }
       let importing: string | undefined
-      const decl = node.module ? undefined : imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key)
+      const decl = imports.find((d) => d.to.type === type && d.to.name === name && d.to.key === key && formatModule(d.to.module ?? []) === node.module)
       if (!priorInst && decl) {
         const before = errors.length
         let id = evalAt(node, decl.idPos, () => evalExpr(decl.id, scopeFor({})), 'import')
@@ -398,7 +406,7 @@ export function planConfig(input: PlanInput): PlanResult {
   const planned = new Set(result.items.map((i) => i.address))
   // Instance-level checks need the expansion, so they run after the walk.
   for (const m of mv.moves) {
-    const still = m.from.key === undefined && m.to.key === undefined ? declared(m.from) : planned.has(show(m.from))
+    const still = (m.from.key === undefined && m.to.key === undefined) || isModuleAddress(m.from) ? declared(m.from) : planned.has(show(m.from))
     if (still) fail(m.file, m.pos, 'Moved object still exists', `This statement declares that ${show(m.from)} was moved to ${show(m.to)}, but ${show(m.from)} is still declared in the configuration.`)
   }
   for (const i of imports) {
@@ -410,7 +418,7 @@ export function planConfig(input: PlanInput): PlanResult {
     for (const inst of r.instances) {
       const address = instanceAddress(r, inst.index_key)
       if (planned.has(address) || consumed.has(address)) continue
-      if (!r.module && rm.removals.some((x) => x.from.type === r.type && x.from.name === r.name && !x.destroy)) {
+      if (rm.removals.some((x) => !x.destroy && resourceKey({ module: x.from.module ?? [], mode: 'managed', type: x.from.type, name: x.from.name }) === resourceKey({ module: stepsOf(r.module), mode: 'managed', type: r.type, name: r.name }))) {
         result.items.push({ address, module: r.module ?? '', resource: `${r.type}.${r.name}`, type: r.type, name: r.name, key: inst.index_key, action: 'forget', changes: [], dependsOn: inst.dependencies ?? [], unchanged: Object.fromEntries(Object.entries(inst.attributes).filter(([, v]) => v !== null)) })
         continue
       }
