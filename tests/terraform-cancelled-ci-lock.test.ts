@@ -176,7 +176,7 @@ describe('terraform-cancelled-ci-lock on the simulator', () => {
   })
 
   it('the CI log and the gh lookups answer, in every common spelling, and carry notes', async () => {
-    const { out } = await play('cd ~/ledger-infra', 'cat ci-pipeline.log', 'tail -n 5 ci-pipeline.log', 'less ci-pipeline.log', 'gh run list', 'gh run view 11823046571')
+    const { out } = await play('cd ~/ledger-infra', 'cat ci-pipeline.log', 'tail -n 5 ci-pipeline.log', 'less ci-pipeline.log', 'gh run list', 'gh run view 11823046571', 'less -N ci-pipeline.log', 'more ci-pipeline.log', 'cat ci-pipeline.log | less -R')
     expect(out[1].output).toContain("Runner name: 'runner-17'")
     expect(out[1].output).toContain('aws_subnet.workers: Creation complete after 1s [id=subnet-0b6d2f8e41a7c9035]')
     expect(out[1].output).toMatch(/Interrupt received\.\n.*Please wait for Terraform to exit or data loss may occur\.\n.*Gracefully shutting down\.\.\./)
@@ -189,11 +189,16 @@ describe('terraform-cancelled-ci-lock on the simulator', () => {
     expect(out[4].output).toContain('X       Ledger network and reconciler worker (#212)  terraform-apply  main    push               11823046571  48s      about 3 hours ago')
     expect(out[4].output).not.toMatch(/^\*/m)
     expect(out[5].output).toContain('X The run was canceled by @dmitri-k.')
+    // less and more are real shell commands: with no terminal they print the file like cat, flags ignored
+    for (const r of out.slice(6)) expect(r.output).toBe(out[1].output)
+    expect(out[1].output).toContain('Installed hashicorp/aws v5.67.0 (signed by HashiCorp)')
+    expect(out[4].output).toContain('X       Update README (#213) ')
 
     const ran = (cmd: string) => evidenceSeen(scenario, [{ type: 'RUN_COMMAND', input: cmd, at: 0 }])
     for (const cmd of [
       'cat ci-pipeline.log',
       'less ci-pipeline.log',
+      'less -N ci-pipeline.log',
       'more ci-pipeline.log',
       'tail ci-pipeline.log',
       'tail -n 20 ci-pipeline.log',
@@ -211,10 +216,17 @@ describe('terraform-cancelled-ci-lock on the simulator', () => {
       'gh run list --status in_progress',
       'gh run list -s queued',
       'gh run view 11823046571',
+      'gh run list --status cancelled',
     ])
       expect(ran(cmd).has('ci-run-dead'), cmd).toBe(true)
-    // a grep for something unrelated earns nothing
-    expect(ran('grep runner ci-pipeline.log').has('ci-run-dead')).toBe(false)
+    // a grep whose matches don't show the run dying earns nothing
+    for (const cmd of ['grep runner ci-pipeline.log', 'grep -i lock ci-pipeline.log', 'grep -i signal ci-pipeline.log', 'grep -i terminated ci-pipeline.log'])
+      expect(ran(cmd).has('ci-run-dead'), cmd).toBe(false)
+    // the latest run and the cancelled filter answer too
+    expect(terminalOutput(scenario, 'gh run view 11824377102', [])).toContain('Triggered via workflow_dispatch 21 minutes ago')
+    expect(terminalOutput(scenario, 'gh run list -s cancelled --limit 5', [])).toBe(
+      'STATUS  TITLE                                        WORKFLOW         BRANCH  EVENT  ID           ELAPSED  AGE\nX       Ledger network and reconciler worker (#212)  terraform-apply  main    push   11823046571  48s      about 3 hours ago',
+    )
     // the engine answers the gh and less lines; the real shell reads the file for tail and grep
     expect(engineHandles(scenario, 'gh run list --limit 5', [])).toBe(true)
     expect(terminalOutput(scenario, 'gh run list --status in_progress', [])).toBe('no runs found')
@@ -228,8 +240,8 @@ describe('terraform-cancelled-ci-lock on the simulator', () => {
     for (const c of scenario.terminal!.commands) expect(scenario.command_notes?.[c.match ?? c.example!], c.match ?? c.example).toBeDefined()
   })
 
-  it('every key evidence tag is awarded on the ideal path', async () => {
-    const shell = ['cd ~/ledger-infra', 'terraform plan', `terraform force-unlock -force ${LOCK_ID}`, 'terraform plan']
+  it('every key evidence tag is awarded before any unlock (the partial plan is a bonus after it)', async () => {
+    const shell = ['cd ~/ledger-infra', 'terraform plan', 'terraform state list']
     const { out } = await play(...shell)
     const log: GameEvent[] = [
       { type: 'RUN_COMMAND', input: 'cat ci-pipeline.log', at: 0 },
@@ -238,5 +250,6 @@ describe('terraform-cancelled-ci-lock on the simulator', () => {
     ]
     const seen = evidenceSeen(scenario, log)
     for (const t of scenario.key_evidence) expect(seen.has(t), t).toBe(true)
+    expect(scenario.key_evidence).not.toContain('ci-partial-plan')
   })
 })

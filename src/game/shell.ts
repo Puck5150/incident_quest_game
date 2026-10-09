@@ -201,6 +201,16 @@ export class IncidentShell {
         defineCommand('__scripted', (args) => Promise.resolve(this.program(name, args[0], args.slice(1)))),
         defineCommand('sudo', (args, ctx) => this.sudo(name, args, ctx as unknown as Ctx)),
         ...['nano', 'vi', 'vim', 'editor'].map((ed) => defineCommand(ed, (args, ctx) => this.edit(args, ctx as never, ed))),
+        // Pagers: with no terminal to page on, less and more print like cat (flags such as -N, -R, +G are ignored).
+        // A scripted "less ..." line still answers first (it makes less a program above).
+        ...['less', 'more'].filter((p) => !programs.has(p)).map((p) =>
+          defineCommand(p, async (args, ctx) => {
+            const run = ctx.execWithInheritedStdin ?? ctx.exec
+            if (!run) return { stdout: '', stderr: `${p}: unavailable\n`, exitCode: 1 }
+            const r = await run(['cat', ...args.filter((a) => !/^[-+]./.test(a))].map(quote).join(' '), { cwd: ctx.cwd })
+            return { ...r, stderr: r.stderr.replaceAll('cat: ', `${p}: `) }
+          }),
+        ),
       ],
       executionLimits: { maxExecutionTimeMs: 5_000 },
     })

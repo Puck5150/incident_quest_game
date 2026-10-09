@@ -32,7 +32,9 @@ environment: |
 terminal:
   prompt: "you@laptop:~/ledger-infra$"
   commands:
-    - match: "cat ci-pipeline.log"
+    # Every way to read the file: the real shell shows it (this output is the file); each one awards the evidence.
+    - match_regex: "^(cat|less|more|tail|head)( -[nN]? ?\\d+| -n ?\\+\\d+| -[NRSfF]+| \\+G)* ci-pipeline\\.log$"
+      example: "cat ci-pipeline.log"
       evidence: ci-run-dead
       output: |
         2026-10-08T07:41:52.1705275Z Current runner version: '2.319.1'
@@ -57,8 +59,8 @@ terminal:
         2026-10-08T07:41:59.1661273Z 
         2026-10-08T07:41:59.1672524Z Initializing provider plugins...
         2026-10-08T07:41:59.1698833Z - Finding hashicorp/aws versions matching "~> 5.0"...
-        2026-10-08T07:41:59.1793647Z - Installing hashicorp/aws v5.70.0...
-        2026-10-08T07:41:59.1947318Z - Installed hashicorp/aws v5.70.0 (signed by HashiCorp)
+        2026-10-08T07:41:59.1793647Z - Installing hashicorp/aws v5.67.0...
+        2026-10-08T07:41:59.1947318Z - Installed hashicorp/aws v5.67.0 (signed by HashiCorp)
         2026-10-08T07:41:59.2114966Z 
         2026-10-08T07:41:59.2437911Z Terraform has been successfully initialized!
         2026-10-08T07:42:23.1265819Z ##[group]Run terraform apply -auto-approve -input=false
@@ -161,280 +163,7 @@ terminal:
         2026-10-08T07:42:39.2578697Z ##[error]The operation was canceled.
         2026-10-08T07:42:39.2639020Z Post job cleanup.
         2026-10-08T07:42:39.2886726Z Cleaning up orphan processes
-    - match: "less ci-pipeline.log"
-      evidence: ci-run-dead
-      output: |
-        2026-10-08T07:41:52.1705275Z Current runner version: '2.319.1'
-        2026-10-08T07:41:52.2273534Z Runner name: 'runner-17'
-        2026-10-08T07:41:52.2300977Z Runner group name: 'Default'
-        2026-10-08T07:41:52.2401631Z Machine name: 'runner-17'
-        2026-10-08T07:41:53.0297444Z ##[group]Run actions/checkout@v4
-        2026-10-08T07:41:53.0386418Z with:
-        2026-10-08T07:41:53.0412895Z   repository: acme/ledger-infra
-        2026-10-08T07:41:53.0564477Z ##[endgroup]
-        2026-10-08T07:41:53.0835285Z Syncing repository: acme/ledger-infra
-        2026-10-08T07:41:55.2097995Z HEAD is now at 7c41e09 Ledger network and reconciler worker (#212)
-        2026-10-08T07:41:56.0869565Z ##[group]Run terraform init -input=false
-        2026-10-08T07:41:56.0917105Z terraform init -input=false
-        2026-10-08T07:41:56.1077415Z shell: /usr/bin/bash -e {0}
-        2026-10-08T07:41:56.1112752Z ##[endgroup]
-        2026-10-08T07:41:56.1217394Z 
-        2026-10-08T07:41:56.1322032Z Initializing the backend...
-        2026-10-08T07:41:56.1445944Z 
-        2026-10-08T07:41:56.1573596Z Successfully configured the backend "s3"! Terraform will automatically
-        2026-10-08T07:41:56.1586565Z use this backend unless the backend configuration changes.
-        2026-10-08T07:41:59.1661273Z 
-        2026-10-08T07:41:59.1672524Z Initializing provider plugins...
-        2026-10-08T07:41:59.1698833Z - Finding hashicorp/aws versions matching "~> 5.0"...
-        2026-10-08T07:41:59.1793647Z - Installing hashicorp/aws v5.70.0...
-        2026-10-08T07:41:59.1947318Z - Installed hashicorp/aws v5.70.0 (signed by HashiCorp)
-        2026-10-08T07:41:59.2114966Z 
-        2026-10-08T07:41:59.2437911Z Terraform has been successfully initialized!
-        2026-10-08T07:42:23.1265819Z ##[group]Run terraform apply -auto-approve -input=false
-        2026-10-08T07:42:23.1414235Z terraform apply -auto-approve -input=false
-        2026-10-08T07:42:23.1501770Z shell: /usr/bin/bash -e {0}
-        2026-10-08T07:42:23.1552508Z ##[endgroup]
-        2026-10-08T07:42:25.1440086Z Terraform used the selected providers to generate the following execution
-        2026-10-08T07:42:25.1441726Z plan. Resource actions are indicated with the following symbols:
-        2026-10-08T07:42:25.1460579Z   + create
-        2026-10-08T07:42:25.1468753Z 
-        2026-10-08T07:42:25.1476882Z Terraform will perform the following actions:
-        2026-10-08T07:42:25.1480112Z 
-        2026-10-08T07:42:25.1481745Z   # aws_instance.reconciler will be created
-        2026-10-08T07:42:25.1489778Z   + resource "aws_instance" "reconciler" {
-        2026-10-08T07:42:25.1499033Z       + ami               = "ami-05c8e2d71f9a3b640"
-        2026-10-08T07:42:25.1524664Z       + arn               = (known after apply)
-        2026-10-08T07:42:25.1535981Z       + availability_zone = (known after apply)
-        2026-10-08T07:42:25.1556438Z       + id                = (known after apply)
-        2026-10-08T07:42:25.1573045Z       + instance_type     = "t3.medium"
-        2026-10-08T07:42:25.1573617Z       + key_name          = (known after apply)
-        2026-10-08T07:42:25.1600282Z       + private_ip        = (known after apply)
-        2026-10-08T07:42:25.1615283Z       + public_ip         = (known after apply)
-        2026-10-08T07:42:25.1632276Z       + subnet_id         = (known after apply)
-        2026-10-08T07:42:25.1635710Z       + tags              = {
-        2026-10-08T07:42:25.1643893Z           + "Name" = "ledger-reconciler"
-        2026-10-08T07:42:25.1655531Z         }
-        2026-10-08T07:42:25.1663279Z       + tags_all          = {
-        2026-10-08T07:42:25.1681604Z           + "Name" = "ledger-reconciler"
-        2026-10-08T07:42:25.1686431Z         }
-        2026-10-08T07:42:25.1693440Z     }
-        2026-10-08T07:42:25.1700994Z 
-        2026-10-08T07:42:25.1701779Z   # aws_security_group.workers will be created
-        2026-10-08T07:42:25.1703793Z   + resource "aws_security_group" "workers" {
-        2026-10-08T07:42:25.1711199Z       + arn         = (known after apply)
-        2026-10-08T07:42:25.1717305Z       + description = "ledger worker hosts"
-        2026-10-08T07:42:25.1718048Z       + egress      = (known after apply)
-        2026-10-08T07:42:25.1728052Z       + id          = (known after apply)
-        2026-10-08T07:42:25.1740576Z       + ingress     = (known after apply)
-        2026-10-08T07:42:25.1754209Z       + name        = "ledger-workers"
-        2026-10-08T07:42:25.1823235Z       + name_prefix = (known after apply)
-        2026-10-08T07:42:25.1823959Z       + tags        = {
-        2026-10-08T07:42:25.1837468Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.1872591Z         }
-        2026-10-08T07:42:25.1914270Z       + tags_all    = {
-        2026-10-08T07:42:25.1922607Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.1932690Z         }
-        2026-10-08T07:42:25.1940125Z       + vpc_id      = (known after apply)
-        2026-10-08T07:42:25.1966185Z     }
-        2026-10-08T07:42:25.1981411Z 
-        2026-10-08T07:42:25.1992398Z   # aws_subnet.workers will be created
-        2026-10-08T07:42:25.1997490Z   + resource "aws_subnet" "workers" {
-        2026-10-08T07:42:25.2005322Z       + arn                     = (known after apply)
-        2026-10-08T07:42:25.2008967Z       + availability_zone       = "us-east-1a"
-        2026-10-08T07:42:25.2017712Z       + cidr_block              = "10.40.1.0/24"
-        2026-10-08T07:42:25.2025102Z       + id                      = (known after apply)
-        2026-10-08T07:42:25.2028753Z       + map_public_ip_on_launch = false
-        2026-10-08T07:42:25.2036593Z       + tags                    = {
-        2026-10-08T07:42:25.2041550Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.2043044Z         }
-        2026-10-08T07:42:25.2049973Z       + tags_all                = {
-        2026-10-08T07:42:25.2051565Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.2064524Z         }
-        2026-10-08T07:42:25.2065443Z       + vpc_id                  = (known after apply)
-        2026-10-08T07:42:25.2067755Z     }
-        2026-10-08T07:42:25.2073130Z 
-        2026-10-08T07:42:25.2079503Z   # aws_vpc.ledger will be created
-        2026-10-08T07:42:25.2116412Z   + resource "aws_vpc" "ledger" {
-        2026-10-08T07:42:25.2119163Z       + arn                       = (known after apply)
-        2026-10-08T07:42:25.2124774Z       + cidr_block                = "10.40.0.0/16"
-        2026-10-08T07:42:25.2151571Z       + default_security_group_id = (known after apply)
-        2026-10-08T07:42:25.2164106Z       + enable_dns_hostnames      = false
-        2026-10-08T07:42:25.2178733Z       + enable_dns_support        = true
-        2026-10-08T07:42:25.2182059Z       + id                        = (known after apply)
-        2026-10-08T07:42:25.2221197Z       + tags                      = {
-        2026-10-08T07:42:25.2233293Z           + "Name" = "ledger"
-        2026-10-08T07:42:25.2240988Z         }
-        2026-10-08T07:42:25.2255479Z       + tags_all                  = {
-        2026-10-08T07:42:25.2274089Z           + "Name" = "ledger"
-        2026-10-08T07:42:25.2274685Z         }
-        2026-10-08T07:42:25.2282762Z     }
-        2026-10-08T07:42:25.2285407Z 
-        2026-10-08T07:42:25.2288387Z 
-        2026-10-08T07:42:25.2293977Z Plan: 4 to add, 0 to change, 0 to destroy.
-        2026-10-08T07:42:25.2314983Z aws_vpc.ledger: Creating...
-        2026-10-08T07:42:26.0635444Z aws_vpc.ledger: Creation complete after 1s [id=vpc-0e4b7a19c3d58f260]
-        2026-10-08T07:42:26.0890355Z aws_security_group.workers: Creating...
-        2026-10-08T07:42:28.3025937Z aws_security_group.workers: Creation complete after 2s [id=sg-0c91e5a7d3f4b8216]
-        2026-10-08T07:42:28.3155342Z aws_subnet.workers: Creating...
-        2026-10-08T07:42:29.0427036Z aws_subnet.workers: Creation complete after 1s [id=subnet-0b6d2f8e41a7c9035]
-        2026-10-08T07:42:29.0859665Z aws_instance.reconciler: Creating...
-        2026-10-08T07:42:31.3316151Z 
-        2026-10-08T07:42:31.3437713Z Interrupt received.
-        2026-10-08T07:42:31.3516917Z Please wait for Terraform to exit or data loss may occur.
-        2026-10-08T07:42:31.3934098Z Gracefully shutting down...
-        2026-10-08T07:42:31.3938205Z 
-        2026-10-08T07:42:38.8204834Z 
-        2026-10-08T07:42:38.8497310Z Two interrupts received. Exiting immediately. Note that data loss may have
-        2026-10-08T07:42:38.8989184Z occurred.
-        2026-10-08T07:42:38.9010721Z 
-        2026-10-08T07:42:39.2578697Z ##[error]The operation was canceled.
-        2026-10-08T07:42:39.2639020Z Post job cleanup.
-        2026-10-08T07:42:39.2886726Z Cleaning up orphan processes
-    - match: "more ci-pipeline.log"
-      evidence: ci-run-dead
-      output: |
-        2026-10-08T07:41:52.1705275Z Current runner version: '2.319.1'
-        2026-10-08T07:41:52.2273534Z Runner name: 'runner-17'
-        2026-10-08T07:41:52.2300977Z Runner group name: 'Default'
-        2026-10-08T07:41:52.2401631Z Machine name: 'runner-17'
-        2026-10-08T07:41:53.0297444Z ##[group]Run actions/checkout@v4
-        2026-10-08T07:41:53.0386418Z with:
-        2026-10-08T07:41:53.0412895Z   repository: acme/ledger-infra
-        2026-10-08T07:41:53.0564477Z ##[endgroup]
-        2026-10-08T07:41:53.0835285Z Syncing repository: acme/ledger-infra
-        2026-10-08T07:41:55.2097995Z HEAD is now at 7c41e09 Ledger network and reconciler worker (#212)
-        2026-10-08T07:41:56.0869565Z ##[group]Run terraform init -input=false
-        2026-10-08T07:41:56.0917105Z terraform init -input=false
-        2026-10-08T07:41:56.1077415Z shell: /usr/bin/bash -e {0}
-        2026-10-08T07:41:56.1112752Z ##[endgroup]
-        2026-10-08T07:41:56.1217394Z 
-        2026-10-08T07:41:56.1322032Z Initializing the backend...
-        2026-10-08T07:41:56.1445944Z 
-        2026-10-08T07:41:56.1573596Z Successfully configured the backend "s3"! Terraform will automatically
-        2026-10-08T07:41:56.1586565Z use this backend unless the backend configuration changes.
-        2026-10-08T07:41:59.1661273Z 
-        2026-10-08T07:41:59.1672524Z Initializing provider plugins...
-        2026-10-08T07:41:59.1698833Z - Finding hashicorp/aws versions matching "~> 5.0"...
-        2026-10-08T07:41:59.1793647Z - Installing hashicorp/aws v5.70.0...
-        2026-10-08T07:41:59.1947318Z - Installed hashicorp/aws v5.70.0 (signed by HashiCorp)
-        2026-10-08T07:41:59.2114966Z 
-        2026-10-08T07:41:59.2437911Z Terraform has been successfully initialized!
-        2026-10-08T07:42:23.1265819Z ##[group]Run terraform apply -auto-approve -input=false
-        2026-10-08T07:42:23.1414235Z terraform apply -auto-approve -input=false
-        2026-10-08T07:42:23.1501770Z shell: /usr/bin/bash -e {0}
-        2026-10-08T07:42:23.1552508Z ##[endgroup]
-        2026-10-08T07:42:25.1440086Z Terraform used the selected providers to generate the following execution
-        2026-10-08T07:42:25.1441726Z plan. Resource actions are indicated with the following symbols:
-        2026-10-08T07:42:25.1460579Z   + create
-        2026-10-08T07:42:25.1468753Z 
-        2026-10-08T07:42:25.1476882Z Terraform will perform the following actions:
-        2026-10-08T07:42:25.1480112Z 
-        2026-10-08T07:42:25.1481745Z   # aws_instance.reconciler will be created
-        2026-10-08T07:42:25.1489778Z   + resource "aws_instance" "reconciler" {
-        2026-10-08T07:42:25.1499033Z       + ami               = "ami-05c8e2d71f9a3b640"
-        2026-10-08T07:42:25.1524664Z       + arn               = (known after apply)
-        2026-10-08T07:42:25.1535981Z       + availability_zone = (known after apply)
-        2026-10-08T07:42:25.1556438Z       + id                = (known after apply)
-        2026-10-08T07:42:25.1573045Z       + instance_type     = "t3.medium"
-        2026-10-08T07:42:25.1573617Z       + key_name          = (known after apply)
-        2026-10-08T07:42:25.1600282Z       + private_ip        = (known after apply)
-        2026-10-08T07:42:25.1615283Z       + public_ip         = (known after apply)
-        2026-10-08T07:42:25.1632276Z       + subnet_id         = (known after apply)
-        2026-10-08T07:42:25.1635710Z       + tags              = {
-        2026-10-08T07:42:25.1643893Z           + "Name" = "ledger-reconciler"
-        2026-10-08T07:42:25.1655531Z         }
-        2026-10-08T07:42:25.1663279Z       + tags_all          = {
-        2026-10-08T07:42:25.1681604Z           + "Name" = "ledger-reconciler"
-        2026-10-08T07:42:25.1686431Z         }
-        2026-10-08T07:42:25.1693440Z     }
-        2026-10-08T07:42:25.1700994Z 
-        2026-10-08T07:42:25.1701779Z   # aws_security_group.workers will be created
-        2026-10-08T07:42:25.1703793Z   + resource "aws_security_group" "workers" {
-        2026-10-08T07:42:25.1711199Z       + arn         = (known after apply)
-        2026-10-08T07:42:25.1717305Z       + description = "ledger worker hosts"
-        2026-10-08T07:42:25.1718048Z       + egress      = (known after apply)
-        2026-10-08T07:42:25.1728052Z       + id          = (known after apply)
-        2026-10-08T07:42:25.1740576Z       + ingress     = (known after apply)
-        2026-10-08T07:42:25.1754209Z       + name        = "ledger-workers"
-        2026-10-08T07:42:25.1823235Z       + name_prefix = (known after apply)
-        2026-10-08T07:42:25.1823959Z       + tags        = {
-        2026-10-08T07:42:25.1837468Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.1872591Z         }
-        2026-10-08T07:42:25.1914270Z       + tags_all    = {
-        2026-10-08T07:42:25.1922607Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.1932690Z         }
-        2026-10-08T07:42:25.1940125Z       + vpc_id      = (known after apply)
-        2026-10-08T07:42:25.1966185Z     }
-        2026-10-08T07:42:25.1981411Z 
-        2026-10-08T07:42:25.1992398Z   # aws_subnet.workers will be created
-        2026-10-08T07:42:25.1997490Z   + resource "aws_subnet" "workers" {
-        2026-10-08T07:42:25.2005322Z       + arn                     = (known after apply)
-        2026-10-08T07:42:25.2008967Z       + availability_zone       = "us-east-1a"
-        2026-10-08T07:42:25.2017712Z       + cidr_block              = "10.40.1.0/24"
-        2026-10-08T07:42:25.2025102Z       + id                      = (known after apply)
-        2026-10-08T07:42:25.2028753Z       + map_public_ip_on_launch = false
-        2026-10-08T07:42:25.2036593Z       + tags                    = {
-        2026-10-08T07:42:25.2041550Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.2043044Z         }
-        2026-10-08T07:42:25.2049973Z       + tags_all                = {
-        2026-10-08T07:42:25.2051565Z           + "Name" = "ledger-workers"
-        2026-10-08T07:42:25.2064524Z         }
-        2026-10-08T07:42:25.2065443Z       + vpc_id                  = (known after apply)
-        2026-10-08T07:42:25.2067755Z     }
-        2026-10-08T07:42:25.2073130Z 
-        2026-10-08T07:42:25.2079503Z   # aws_vpc.ledger will be created
-        2026-10-08T07:42:25.2116412Z   + resource "aws_vpc" "ledger" {
-        2026-10-08T07:42:25.2119163Z       + arn                       = (known after apply)
-        2026-10-08T07:42:25.2124774Z       + cidr_block                = "10.40.0.0/16"
-        2026-10-08T07:42:25.2151571Z       + default_security_group_id = (known after apply)
-        2026-10-08T07:42:25.2164106Z       + enable_dns_hostnames      = false
-        2026-10-08T07:42:25.2178733Z       + enable_dns_support        = true
-        2026-10-08T07:42:25.2182059Z       + id                        = (known after apply)
-        2026-10-08T07:42:25.2221197Z       + tags                      = {
-        2026-10-08T07:42:25.2233293Z           + "Name" = "ledger"
-        2026-10-08T07:42:25.2240988Z         }
-        2026-10-08T07:42:25.2255479Z       + tags_all                  = {
-        2026-10-08T07:42:25.2274089Z           + "Name" = "ledger"
-        2026-10-08T07:42:25.2274685Z         }
-        2026-10-08T07:42:25.2282762Z     }
-        2026-10-08T07:42:25.2285407Z 
-        2026-10-08T07:42:25.2288387Z 
-        2026-10-08T07:42:25.2293977Z Plan: 4 to add, 0 to change, 0 to destroy.
-        2026-10-08T07:42:25.2314983Z aws_vpc.ledger: Creating...
-        2026-10-08T07:42:26.0635444Z aws_vpc.ledger: Creation complete after 1s [id=vpc-0e4b7a19c3d58f260]
-        2026-10-08T07:42:26.0890355Z aws_security_group.workers: Creating...
-        2026-10-08T07:42:28.3025937Z aws_security_group.workers: Creation complete after 2s [id=sg-0c91e5a7d3f4b8216]
-        2026-10-08T07:42:28.3155342Z aws_subnet.workers: Creating...
-        2026-10-08T07:42:29.0427036Z aws_subnet.workers: Creation complete after 1s [id=subnet-0b6d2f8e41a7c9035]
-        2026-10-08T07:42:29.0859665Z aws_instance.reconciler: Creating...
-        2026-10-08T07:42:31.3316151Z 
-        2026-10-08T07:42:31.3437713Z Interrupt received.
-        2026-10-08T07:42:31.3516917Z Please wait for Terraform to exit or data loss may occur.
-        2026-10-08T07:42:31.3934098Z Gracefully shutting down...
-        2026-10-08T07:42:31.3938205Z 
-        2026-10-08T07:42:38.8204834Z 
-        2026-10-08T07:42:38.8497310Z Two interrupts received. Exiting immediately. Note that data loss may have
-        2026-10-08T07:42:38.8989184Z occurred.
-        2026-10-08T07:42:38.9010721Z 
-        2026-10-08T07:42:39.2578697Z ##[error]The operation was canceled.
-        2026-10-08T07:42:39.2639020Z Post job cleanup.
-        2026-10-08T07:42:39.2886726Z Cleaning up orphan processes
-    # Other ways to read the same file: the real shell shows the file; these only award the evidence.
-    - match_regex: "^(tail|head)( -[nN]? ?\\d+| -n ?\\+\\d+| -[fF])* ci-pipeline\\.log$"
-      example: "tail ci-pipeline.log"
-      evidence: ci-run-dead
-      output: |
-        2026-10-08T07:42:31.3516917Z Please wait for Terraform to exit or data loss may occur.
-        2026-10-08T07:42:31.3934098Z Gracefully shutting down...
-        2026-10-08T07:42:31.3938205Z 
-        2026-10-08T07:42:38.8204834Z 
-        2026-10-08T07:42:38.8497310Z Two interrupts received. Exiting immediately. Note that data loss may have
-        2026-10-08T07:42:38.8989184Z occurred.
-        2026-10-08T07:42:38.9010721Z 
-        2026-10-08T07:42:39.2578697Z ##[error]The operation was canceled.
-        2026-10-08T07:42:39.2639020Z Post job cleanup.
-        2026-10-08T07:42:39.2886726Z Cleaning up orphan processes
-    - match_regex: "^grep( -[a-zA-Z]+| -[ABC] ?\\d+)* ['\"]?[^'\"]*([Ii]nterrupt|INTERRUPT|[Cc]ancel|CANCEL|[Tt]erminat|[Ee]xit|[Ee]rror|ERROR|[Ss]ignal|[Ll]ock|LOCK)[^'\"]*['\"]? ci-pipeline\\.log$"
+    - match_regex: "^grep( -[a-zA-Z]+| -[ABC] ?\\d+)* ['\"]?[^'\"]*([Ii]nterrupt|INTERRUPT|[Cc]ancel|CANCEL|[Ee]xit|EXIT|[Ee]rror|ERROR)[^'\"]*['\"]? ci-pipeline\\.log$"
       example: "grep -i interrupt ci-pipeline.log"
       evidence: ci-run-dead
       output: |
@@ -446,7 +175,7 @@ terminal:
       output: |
         STATUS  TITLE                                        WORKFLOW         BRANCH  EVENT              ID           ELAPSED  AGE
         X       terraform-apply                              terraform-apply  main    workflow_dispatch  11824377102  36s      21 minutes ago
-        X       Pin aws provider to ~> 5.70 (#213)           terraform-apply  main    push               11823519084  41s      about 2 hours ago
+        X       Update README (#213)                         terraform-apply  main    push               11823519084  41s      about 2 hours ago
         X       Ledger network and reconciler worker (#212)  terraform-apply  main    push               11823046571  48s      about 3 hours ago
         ✓       Add terraform-apply workflow (#210)          terraform-apply  main    push               11801377240  1m3s     about 1 day ago
     - match_regex: "^gh run list((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*\\s+(-s|--status)[ =](in_progress|queued|waiting|requested|pending)((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*$"
@@ -495,6 +224,35 @@ terminal:
 
         To see what failed, try: gh run view 11823519084 --log-failed
         View this run on GitHub: https://github.com/acme/ledger-infra/actions/runs/11823519084
+    - match_regex: "^gh run view 11824377102((\\s+(-R|--repo)[ =]acme/ledger-infra))?$"
+      example: "gh run view 11824377102"
+      output: |
+
+        X main terraform-apply · 11824377102
+        Triggered via workflow_dispatch 21 minutes ago
+
+        JOBS
+        X apply in 36s (ID 33106020874)
+          ✓ Set up job
+          ✓ Run actions/checkout@v4
+          ✓ Run terraform init -input=false
+          X Run terraform apply -auto-approve -input=false
+          ✓ Post Run actions/checkout@v4
+          ✓ Complete job
+
+        ANNOTATIONS
+        X Process completed with exit code 1.
+        apply: .github#24
+
+
+        To see what failed, try: gh run view 11824377102 --log-failed
+        View this run on GitHub: https://github.com/acme/ledger-infra/actions/runs/11824377102
+    - match_regex: "^gh run list((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*\\s+(-s|--status)[ =]cancelled((\\s+(-L|--limit)[ =]?\\d+)|(\\s+(-w|--workflow)[ =]['\"]?terraform-apply(\\.ya?ml)?['\"]?)|(\\s+(-b|--branch)[ =]main)|(\\s+(-R|--repo)[ =]acme/ledger-infra))*$"
+      example: "gh run list --status cancelled"
+      evidence: ci-run-dead
+      output: |
+        STATUS  TITLE                                        WORKFLOW         BRANCH  EVENT  ID           ELAPSED  AGE
+        X       Ledger network and reconciler worker (#212)  terraform-apply  main    push   11823046571  48s      about 3 hours ago
     - match_regex: "^aws ec2 describe-instances(?!.*--(query|output)[ =])(\\s.*)?$"
       example: "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler"
       evidence: ci-no-orphan
@@ -683,12 +441,12 @@ actions:
 solution_paths:
   - [unlock-and-finish]
 
-key_evidence: [ci-lock-holder, ci-run-dead, ci-partial-plan]
+key_evidence: [ci-lock-holder, ci-run-dead, ci-network-in-state]
 
 evidence_labels:
   ci-lock-holder: "The lock was taken by ci@runner-17 at 07:42:24 UTC for an apply"
   ci-run-dead: "The PR #212 job was cancelled and Terraform exited; no run is in progress"
-  ci-partial-plan: "After the unlock, only the reconciler is left to create"
+  ci-network-in-state: "The VPC, subnet and security group from the cancelled run are in state; the reconciler isn't"
 
 hints:
   nudge: "The error tells you who holds the lock and since when. Is that someone still working?"
@@ -786,14 +544,13 @@ sources:
     retrieved: 2026-10-08
 
 command_notes:
-  "cat ci-pipeline.log": "The PR #212 job, saved from GitHub. runner-17 created the VPC, security group and subnet, started the reconciler, then got the cancel: \"Interrupt received\", and 7.5 seconds later \"Two interrupts received. Exiting immediately\". Terraform never got to release its lock."
-  "less ci-pipeline.log": "The PR #212 job, saved from GitHub (this terminal prints it whole). The end is what matters: the two interrupts and The operation was canceled."
-  "more ci-pipeline.log": "The PR #212 job, saved from GitHub (this terminal prints it whole). The end is what matters: the two interrupts and The operation was canceled."
-  "tail ci-pipeline.log": "The end of the job: the interrupts and The operation was canceled. The run is over; nothing is left running on its behalf."
+  "cat ci-pipeline.log": "The PR #212 job, saved from GitHub (less, more, tail and grep read the same file). runner-17 created the VPC, security group and subnet, started the reconciler, then got the cancel: \"Interrupt received\", and 7.5 seconds later \"Two interrupts received. Exiting immediately\". Terraform never got to release its lock."
   "grep -i interrupt ci-pipeline.log": "Both interrupts: the first started a graceful shutdown, the second (SIGTERM, 7.5 seconds later) made Terraform exit immediately."
   "gh run list": "No run is queued or in progress (that would show *). The PR #212 run is the one that took the lock; the two after it failed on that lock."
   "gh run list --status in_progress": "Nothing is running the workflow right now."
   "gh run view 11823046571": "The PR #212 run: cancelled by @dmitri-k, not failed. Its only job ran for 48s and finished."
+  "gh run view 11824377102": "The latest run, started by hand at 10:24: it failed in the apply step on the same lock. Re-running the pipeline can't help while the lock is held."
+  "gh run list --status cancelled": "Only one cancelled run: PR #212, the run whose job took the lock at 07:42."
   "gh run view 11823519084": "The next run after the cancel: it failed in the apply step, on the state lock left behind."
   "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler": "No reconciler exists, and there are no instances in the account at all: the interrupted create never made one, so the plan's 1 to add is right."
   "aws ec2 describe-instances --filters Name=tag:Name,Values=ledger-reconciler --query 'Reservations[].Instances[].InstanceId'": "No instance IDs: nothing was left behind by the killed run."

@@ -719,7 +719,11 @@ terraform-cancelled-ci-lock:
 - [ ] From experience, not docs: the GitHub job log lines `Current runner version`, `Runner name`, `Runner group name`, `Machine name`, `##[group]`/`##[endgroup]`, `shell: /usr/bin/bash -e {0}`, `##[error]The operation was canceled.`, `Post job cleanup.`, `Cleaning up orphan processes`, and the timestamp prefix; the annotation `The run was canceled by @USER.` (seen on a public GitHub Enterprise run page) but its `apply: .github#1` location line and `Process completed with exit code 1.` at `.github#24` are guesses. The log has no ANSI colour codes (a real raw log from a coloured terraform would).
 - [ ] The lock box wraps the long DynamoDB message at the simulator's width; real Terraform wraps to the terminal width.
 - [ ] Not simulated: `aws dynamodb get-item/scan/delete-item` on terraform-locks (deleting the lock item by hand does the same as force-unlock, without the ID check); `gh run view --log`, `--job`; `gh run list --json`. They answer "no simulated output".
-- [ ] Simulator: `less` and `more` aren't just-bash commands; any incident without a scripted `less FILE` line answers "command not found" for them (here they are scripted for ci-pipeline.log). A real pager command in the shell would close it.
-- [ ] Simulator: `terraform import`/`state rm`/`state mv`/`taint` with `-lock=false` under a held lock record nothing in the apply history, so the trap catches only apply/destroy bypasses.
+- [x] `less` and `more` are now shell commands (src/game/shell.ts): with no terminal they print like cat, ignore flags (-N, -R, +G) and read stdin, as less does when stdout isn't a terminal. A scripted `less FILE` line still answers first.
+- [ ] key_evidence is all earnable while the lock is held (lock holder, run dead, network in state); the post-unlock plan (`ci-partial-plan`) is non-key. gh run #213 is a README change and the CI log installs the simulator's provider v5.67.0, so nothing contradicts `~> 5.0`.
 - [ ] Invented: lock ID, RequestID, resource ids, run/job ids, runner name and user, PR titles and numbers, @dmitri-k, the AMI id, the timestamps.
-- [ ] Overlap: terraform-state-lock (scripted, S3 use_lockfile) teaches the same stale-lock skill; this one adds the DynamoDB backend, the simulator, the real interrupt mechanism and checking the partial apply before re-applying. Task 5 should decide whether both stay.
+
+## terraform follow-ups (TF7)
+
+- [ ] Lock bypass history for state-writing CLI commands: `state rm`, `state mv`, `taint`, `untaint`, `import`, `workspace new`/`delete` run with `-lock=false` past a held lock record nothing (only apply/destroy steps get ` (lock bypassed)`). Record a marker for them too, and add an "any bypass" predicate leaf (e.g. `lock_bypassed: true` on its own) so a trap needn't list addresses.
+- [ ] Retire content/iac/terraform-state-lock.yaml (scripted, S3 use_lockfile): terraform-cancelled-ci-lock supersedes it on the simulator.
