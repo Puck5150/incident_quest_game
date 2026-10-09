@@ -44,3 +44,34 @@
     - { command: "terraform workspace list", note: "All workspaces, with * on the current one." }
     - { command: "echo $TF_WORKSPACE", note: "If set, it overrides the selected workspace." }
   docs: { title: "terraform workspace show", url: "https://developer.hashicorp.com/terraform/cli/commands/workspace/show" }
+
+- id: terraform-init-upgrade
+  match: "^terraform init -upgrade"
+  summary: "Re-selects providers (and modules) at the newest versions the configuration's constraints allow, and rewrites the dependency lock file to match."
+  parts:
+    - { token: "init", meaning: "Install the providers and modules the configuration needs and record the provider selections in .terraform.lock.hcl." }
+    - { token: "-upgrade", meaning: "Ignore the versions already recorded in the lock file and take the newest version each constraint allows." }
+  why: "After a provider constraint changes, the lock file no longer matches it; this is the command that regenerates the lock file correctly, with the checksums Terraform computed itself."
+  alternatives:
+    - { command: "terraform init -lockfile=readonly", note: "Verify against the committed lock without changing it (CI); conflicts with -upgrade." }
+  docs: { title: "terraform init", url: "https://developer.hashicorp.com/terraform/cli/commands/init" }
+
+- id: terraform-version
+  match: "^terraform version"
+  summary: "Prints the Terraform version and the provider versions the lock file selected."
+  parts:
+    - { token: "version", meaning: "Terraform's own version, then one line per provider recorded in .terraform.lock.hcl." }
+  why: "Shows which provider version this working directory will actually use, whatever the configuration's constraint says."
+  alternatives:
+    - { command: "cat .terraform.lock.hcl", note: "The lock file itself, with constraints and checksums." }
+  docs: { title: "terraform version", url: "https://developer.hashicorp.com/terraform/cli/commands/version" }
+
+- id: terraform-providers
+  match: "^terraform providers"
+  summary: "Prints the providers the configuration (and state) requires, with their version constraints, module by module."
+  parts:
+    - { token: "providers", meaning: "A tree of each module's provider requirements and the providers recorded in state." }
+  why: "Shows the constraint side of a lock-file comparison without running a plan."
+  alternatives:
+    - { command: "terraform version", note: "The version side: what the lock file selected." }
+  docs: { title: "terraform providers", url: "https://developer.hashicorp.com/terraform/cli/commands/providers" }
