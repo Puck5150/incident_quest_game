@@ -496,3 +496,16 @@
   alternatives:
     - { command: "grep -nE 'a|b' FILE", note: "With line numbers." }
   docs: { title: "grep(1)", url: "https://man7.org/linux/man-pages/man1/grep.1.html" }
+
+- id: history-grep
+  match: "^history"
+  summary: "Lists the commands in your bash history, here filtered to the ones that mention a word."
+  parts:
+    - { token: "history", meaning: "Your shell's command history, numbered; with HISTTIMEFORMAT set, each line shows when it ran." }
+    - { token: "| grep taint", meaning: "(If piped) keep only lines containing taint. The grep itself is in history too, so it shows up last." }
+    - { token: "-i", meaning: "(On grep, if given) ignore case." }
+  why: "Terraform doesn't record who tainted an object or when. If it was run from this machine, the shell history does."
+  alternatives:
+    - { command: "grep taint ~/.bash_history", note: "The history file on disk; timestamps are the #-lines above each command." }
+    - { command: "HISTTIMEFORMAT='%F %T ' history", note: "Show times for a session that doesn't set it." }
+  docs: { title: "Bash manual: Bash History Builtins", url: "https://www.gnu.org/software/bash/manual/html_node/Bash-History-Builtins.html" }

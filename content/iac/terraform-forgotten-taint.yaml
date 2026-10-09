@@ -1,0 +1,376 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-forgotten-taint
+track: iac
+difficulty: 2
+title: "A tag change wants to replace the production web server"
+par_minutes: 10
+
+ticket:
+  from: "Platform team"
+  severity: SEV4
+  body: |
+    Finance wants a CostCenter tag on everything, so my PR (tags/cost-center)
+    adds one line to the web server's tags. CI's terraform plan says it will
+    destroy the web instance and create a new one. That's our only web
+    server: a replacement is minutes of 502s. Do tags really force a
+    replacement on EC2? Should I just merge and do it at night? Branch is
+    checked out in ~/infra.
+
+environment: |
+  The shop's web tier is a single EC2 instance (web, t3.medium) in a public
+  subnet of the shop VPC, account 123456789012, us-east-1. A load balancer
+  managed in another stack sends all traffic to it. Its Terraform lives in
+  ~/infra on your laptop; main holds what was last applied.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  files:
+    - path: ~/.bashrc
+      content: |
+        # ~/.bashrc
+        alias ll="ls -alF"
+        export HISTTIMEFORMAT='%F %T '
+        export HISTSIZE=10000
+    - path: ~/.bash_history
+      content: |
+        #1790699931
+        aws ec2 describe-instance-status --instance-ids i-0c3f7a9e5d1b2c846
+        #1790700090
+        terraform state show aws_instance.web
+        #1790700127
+        terraform taint aws_instance.web
+        #1790700912
+        aws ec2 reboot-instances --instance-ids i-0c3f7a9e5d1b2c846
+        #1790701420
+        curl -sI https://shop.example.com/
+        #1791451402
+        git checkout tags/cost-center
+  commands:
+    - match: "git diff main -- web.tf"
+      evidence: tag-only-diff
+      output: |
+        diff --git a/web.tf b/web.tf
+        index 4e2a9c1..b71d03f 100644
+        --- a/web.tf
+        +++ b/web.tf
+        @@ -15,7 +15,8 @@ resource "aws_instance" "web" {
+           subnet_id     = aws_subnet.public_a.id
+
+           tags = {
+        -    Name = "web"
+        -    Team = "platform"
+        +    Name       = "web"
+        +    Team       = "platform"
+        +    CostCenter = "1234"
+           }
+         }
+    - match: "git diff main"
+      evidence: tag-only-diff
+      output: |
+        diff --git a/web.tf b/web.tf
+        index 4e2a9c1..b71d03f 100644
+        --- a/web.tf
+        +++ b/web.tf
+        @@ -15,7 +15,8 @@ resource "aws_instance" "web" {
+           subnet_id     = aws_subnet.public_a.id
+
+           tags = {
+        -    Name = "web"
+        -    Team = "platform"
+        +    Name       = "web"
+        +    Team       = "platform"
+        +    CostCenter = "1234"
+           }
+         }
+    - match: "git log --oneline -3"
+      output: |
+        b9e04d2 tags: add CostCenter to the web server
+        6c1f83a web: move to t3.medium
+        2a7d5e9 network: public subnet in us-east-1a
+    - match: "aws ec2 describe-instances --instance-ids i-0c3f7a9e5d1b2c846"
+      evidence: instance-unchanged
+      output: |
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "ImageId": "ami-0c7217cdde317cfec",
+                            "InstanceId": "i-0c3f7a9e5d1b2c846",
+                            "InstanceType": "t3.medium",
+                            "LaunchTime": "2026-03-02T09:14:21+00:00",
+                            "Placement": { "AvailabilityZone": "us-east-1a" },
+                            "PrivateIpAddress": "10.40.1.17",
+                            "PublicIpAddress": "54.210.33.87",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-0d2e4f6a8b1c3d579",
+                            "Tags": [
+                                { "Key": "Name", "Value": "web" },
+                                { "Key": "Team", "Value": "platform" }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    - match_regex: "^history \\| grep( -i)? ['\"]?(taint|terraform taint)['\"]?$"
+      example: "history | grep taint"
+      evidence: taint-history
+      output: |
+         1874  2026-09-29 16:42:07 terraform taint aws_instance.web
+         2213  2026-10-08 10:21:36 history | grep taint
+    - match: "grep taint ~/.bash_history"
+      evidence: taint-history
+      output: |
+        terraform taint aws_instance.web
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: network.tf
+      content: |
+        resource "aws_vpc" "main" {
+          cidr_block = "10.40.0.0/16"
+
+          tags = {
+            Name = "shop"
+          }
+        }
+
+        resource "aws_subnet" "public_a" {
+          vpc_id                  = aws_vpc.main.id
+          cidr_block              = "10.40.1.0/24"
+          availability_zone       = "us-east-1a"
+          map_public_ip_on_launch = true
+
+          tags = {
+            Name = "shop-public-a"
+          }
+        }
+    - path: web.tf
+      content: |
+        resource "aws_security_group" "web" {
+          name        = "web"
+          description = "Web tier"
+          vpc_id      = aws_vpc.main.id
+
+          tags = {
+            Name = "web"
+          }
+        }
+
+        resource "aws_instance" "web" {
+          ami           = "ami-0c7217cdde317cfec"
+          instance_type = "t3.medium"
+          subnet_id     = aws_subnet.public_a.id
+
+          tags = {
+            Name       = "web"
+            Team       = "platform"
+            CostCenter = "1234"
+          }
+        }
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-0b5d7f9a1c3e5a024
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0b5d7f9a1c3e5a024"
+        cidr_block: 10.40.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0e1f3a5c7b9d2e468
+        tags: { Name: shop }
+        tags_all: { Name: shop }
+    - type: aws_subnet
+      name: public_a
+      attrs:
+        id: subnet-0d2e4f6a8b1c3d579
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0d2e4f6a8b1c3d579"
+        vpc_id: vpc-0b5d7f9a1c3e5a024
+        cidr_block: 10.40.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: true
+        tags: { Name: shop-public-a }
+        tags_all: { Name: shop-public-a }
+    - type: aws_security_group
+      name: web
+      attrs:
+        id: sg-0a8c2e4f6b1d3a597
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0a8c2e4f6b1d3a597"
+        name: web
+        name_prefix: ""
+        description: Web tier
+        vpc_id: vpc-0b5d7f9a1c3e5a024
+        ingress: []
+        egress: []
+        tags: { Name: web }
+        tags_all: { Name: web }
+    - type: aws_instance
+      name: web
+      status: tainted
+      attrs:
+        id: i-0c3f7a9e5d1b2c846
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0c3f7a9e5d1b2c846"
+        ami: ami-0c7217cdde317cfec
+        instance_type: t3.medium
+        subnet_id: subnet-0d2e4f6a8b1c3d579
+        availability_zone: us-east-1a
+        private_ip: 10.40.1.17
+        public_ip: 54.210.33.87
+        tags: { Name: web, Team: platform }
+        tags_all: { Name: web, Team: platform }
+  evidence:
+    - evidence: replace-planned
+      command: plan
+      contains: "aws_instance.web is tainted, so must be replaced"
+    - evidence: tainted-in-state
+      command: state show
+      contains: "# aws_instance.web: (tainted)"
+
+hypotheses:
+  - id: leftover-taint
+    text: "The instance is marked tainted in state from an earlier taint, so any plan replaces it, whatever the PR changes."
+    correct: true
+  - id: tags-force-replacement
+    text: "Changing tags on an EC2 instance forces a replacement."
+    feedback: "Tags on aws_instance update in place. Read the line above the -/+ block: a replacement caused by a changed argument says \"must be replaced\" and marks that argument \"# forces replacement\". This one says \"is tainted, so must be replaced\", and nothing in the diff is marked as forcing it."
+  - id: ami-drifted
+    text: "The AMI changed, so Terraform has to rebuild the instance on the new image."
+    feedback: "The ami in web.tf is the one the instance runs (describe-instances shows the same ImageId), and the plan doesn't mark ami as forcing replacement. Neither the configuration nor the instance changed it."
+  - id: console-change
+    text: "Someone changed the instance in the console, and Terraform is putting it back."
+    feedback: "Drift shows up as changed values under the instance in the plan (and in terraform plan -refresh-only). The only difference here is the new CostCenter tag from the PR; describe-instances shows the instance as Terraform last left it."
+
+actions:
+  - id: untaint
+    label: "Remove the taint from aws_instance.web (terraform untaint), then confirm the plan only updates the tags in place"
+    kind: fix
+    done_when:
+      all:
+        - plan_has: { no_destroy: [aws_instance.web] }
+        - not: { applied: { op: delete, address: aws_instance.web } }
+    feedback: "The taint is gone and the plan is a one-line in-place tag update. The PR can merge and apply in daylight: the web server keeps running."
+  - id: apply-the-pr
+    label: "Merge and apply the PR as planned, tonight, and accept the replacement"
+    kind: destructive
+    done_when:
+      applied: { op: delete, address: aws_instance.web }
+    feedback: "Terraform terminated the only web server and launched a new one: new instance id, new private and public IP, a cold boot, and 502s behind the load balancer until it is registered and healthy. All for a tag that could have been added in place."
+  - id: revert-the-tag
+    label: "Drop the CostCenter line from the PR so the plan stops replacing the instance"
+    kind: wrong
+    feedback: "The tag isn't what triggers the replacement. Without it the plan still says \"is tainted, so must be replaced\", and the next PR to touch this stack, or anyone's apply, replaces the web server."
+
+solution_paths:
+  - [untaint]
+
+key_evidence: [replace-planned, tainted-in-state, taint-history, tag-only-diff]
+
+evidence_labels:
+  replace-planned: "The plan replaces aws_instance.web because it \"is tainted\", not because of an argument"
+  tainted-in-state: "terraform state show marks the instance (tainted)"
+  taint-history: "Your shell history has terraform taint aws_instance.web from 2026-09-29"
+  tag-only-diff: "The PR only adds a CostCenter tag"
+
+hints:
+  nudge: "Read the line above the -/+ block in the plan. What reason does Terraform give for replacing the instance?"
+  direction: "A replacement driven by an argument names it with \"# forces replacement\". This one doesn't. Look at how state records the instance."
+  answer: "The instance is tainted in state (terraform state show aws_instance.web says (tainted), and your history shows a terraform taint from nine days ago). Run terraform untaint aws_instance.web and plan again: one in-place update of the tags."
+
+analogy:
+  title: "The sticky note on the server"
+  text: |
+    During an outage someone sticks a note on a server: "replace this".
+    The server recovers after a reboot, but the note stays. Weeks later a
+    technician comes to label the cabinet, reads the note, and swaps the
+    server out. Nobody asked for a new server that day; the note did.
+    Peel the note off before sending anyone in.
+
+debrief:
+  root_cause: |
+    terraform taint doesn't touch AWS: it marks the object as tainted in
+    state, and every later plan replaces it until an apply does the
+    replacement or someone runs terraform untaint. Nine days ago, while the
+    web server was misbehaving, you ran terraform taint aws_instance.web,
+    then fixed it with a reboot instead and never applied. The taint sat in
+    state. The CostCenter PR was the first plan since, so it showed a
+    replacement that had nothing to do with the tag. The plan said so:
+    "is tainted, so must be replaced", with no "# forces replacement" on
+    any argument.
+  ideal_path:
+    - "Read the plan's reason line: \"is tainted, so must be replaced\", and no argument marked \"# forces replacement\"."
+    - "Check git diff main: the PR only adds a tag, which updates in place."
+    - "terraform state show aws_instance.web: the header says (tainted)."
+    - "Find where it came from (history | grep taint): a taint from a debugging session nine days ago."
+    - "terraform untaint aws_instance.web, plan again: 0 to add, 1 to change, 0 to destroy. Then apply."
+  real_world: |
+    Read the reason line above every replacement in a plan before deciding
+    when to apply it. terraform taint is deprecated: HashiCorp recommends
+    terraform apply -replace=ADDRESS (Terraform v0.15.2 and later), which
+    shows the replacement in a plan you review and leaves nothing behind
+    in state if you change your mind. A taint is shared state: anyone's
+    next plan picks it up, and the docs warn that others can plan against
+    a tainted object before you've reviewed the effect. If you taint
+    something and then fix it another way, untaint it right away.
+    Terraform also taints an object by itself when a create fails part
+    way, so a "tainted" in a plan isn't always a person's doing.
+
+concepts:
+  - term: "Tainted"
+    text: "A state flag on an object Terraform should replace on its next apply: set by a partly failed create or by terraform taint, cleared by the replacement or by terraform untaint."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/untaint"
+  - term: "terraform untaint"
+    text: "Removes the taint flag from an object in state. It doesn't change anything in AWS."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/untaint"
+  - term: "-replace=ADDRESS"
+    text: "A plan or apply option that replaces one object in that plan only. The recommended replacement for terraform taint."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+  - term: "terraform taint (deprecated)"
+    text: "Marks an object tainted in state so later plans replace it."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/taint"
+
+sources:
+  - title: "Terraform: Command: taint"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/taint"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: untaint"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/untaint"
+    retrieved: 2026-10-08
+  - title: "Terraform: Command: plan (-replace)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+    retrieved: 2026-10-08
+  - title: "Terraform source v1.9.8: plan reason lines (internal/command/jsonformat/plan.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/command/jsonformat/plan.go"
+    retrieved: 2026-10-08
+  - title: "Terraform source v1.9.8: untaint command (internal/command/untaint.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/command/untaint.go"
+    retrieved: 2026-10-08
+  - title: "Terraform source v1.9.8: state show tainted marker (internal/command/jsonformat/state.go)"
+    url: "https://github.com/hashicorp/terraform/blob/v1.9.8/internal/command/jsonformat/state.go"
+    retrieved: 2026-10-08
+  - title: "Bash manual: HISTTIMEFORMAT"
+    url: "https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html"
+    retrieved: 2026-10-08
+
+command_notes:
+  "git diff main -- web.tf": "The whole PR: one new tag, plus the alignment change around it. Nothing else about the instance."
+  "git diff main": "The whole PR: one new tag, plus the alignment change around it. Nothing else about the instance."
+  "git log --oneline -3": "The top commit is the PR. Nothing on the branch touches the instance otherwise."
+  "aws ec2 describe-instances --instance-ids i-0c3f7a9e5d1b2c846": "The instance is running with the AMI, type, subnet and tags state records: nothing drifted."
+  "history | grep taint": "With HISTTIMEFORMAT set (see ~/.bashrc), bash history keeps the time of each command. The taint is from 2026-09-29; the second line is the grep itself."
+  "grep taint ~/.bash_history": "The history file on disk. The #-numbers above each line in it are the timestamps bash saves when HISTTIMEFORMAT is set."
