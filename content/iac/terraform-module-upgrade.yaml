@@ -35,45 +35,84 @@ terminal:
         nothing to commit, working tree clean
     - match: "git log --oneline"
       output: |
-        e5a21c9 db: take the password from a variable
-        7d3f0b8 adopt acme/database/aws for the orders database
-        41c6a92 initial provider setup
+        86a8f1f db: take the password from a variable
+        624a113 adopt acme/database/aws for the orders database
+        d0f319a initial provider setup
     - match: "git log -p -- main.tf"
       evidence: floating-constraint
       output: |
-        commit e5a21c9b6d0f3a7184c2e5d9a0b3f6c81d27e4a5
+        commit 86a8f1f4031117bf9807574e1c2bdbdf591f4b81
         Author: Dana Whitfield <dana@example.com>
-        Date:   Mon Sep 8 10:12:41 2026 -0500
+        Date:   Tue Sep 8 10:12:41 2026 -0500
 
             db: take the password from a variable
 
         diff --git a/main.tf b/main.tf
-        index 3b9a1c2..a40e7d6 100644
+        index 906aa6d..933a40c 100644
         --- a/main.tf
         +++ b/main.tf
-        @@ -16,3 +16,4 @@ module "db" {
+        @@ -11,9 +11,15 @@ provider "aws" {
+           region = "us-east-1"
+         }
+         
+        +variable "db_password" {
+        +  type      = string
+        +  sensitive = true
+        +}
+        +
+         module "db" {
+           source  = "acme/database/aws"
            version = "~> 2.0"
-
+         
            identifier = "orders-db"
         +  password   = var.db_password
          }
 
-        commit 7d3f0b8c4a1e9526d83b07f5c2a6e1d094b8f3c7
+        commit 624a113ab2dffad73e695b10c32d3d045208f53a
         Author: Dana Whitfield <dana@example.com>
-        Date:   Tue Aug 12 15:40:03 2026 -0500
+        Date:   Wed Aug 12 15:40:03 2026 -0500
 
             adopt acme/database/aws for the orders database
 
         diff --git a/main.tf b/main.tf
-        index 91c7e0b..3b9a1c2 100644
+        index 61b6b4e..906aa6d 100644
         --- a/main.tf
         +++ b/main.tf
-        @@ -11,0 +12,8 @@ provider "aws" {
+        @@ -10,3 +10,10 @@ terraform {
+         provider "aws" {
+           region = "us-east-1"
+         }
+        +
         +module "db" {
         +  source  = "acme/database/aws"
         +  version = "~> 2.0"
         +
         +  identifier = "orders-db"
+        +}
+
+        commit d0f319ad819cff89146ea00b78517c2a9b625fec
+        Author: Dana Whitfield <dana@example.com>
+        Date:   Tue Jul 21 09:00:00 2026 -0500
+
+            initial provider setup
+
+        diff --git a/main.tf b/main.tf
+        new file mode 100644
+        index 0000000..61b6b4e
+        --- /dev/null
+        +++ b/main.tf
+        @@ -0,0 +1,12 @@
+        +terraform {
+        +  required_providers {
+        +    aws = {
+        +      source  = "hashicorp/aws"
+        +      version = "~> 5.0"
+        +    }
+        +  }
+        +}
+        +
+        +provider "aws" {
+        +  region = "us-east-1"
         +}
     - match: "cat .terraform/modules/modules.json"
       evidence: module-2-1-0-installed
@@ -238,21 +277,31 @@ hypotheses:
     feedback: "That would show up above the plan as a note that objects changed outside of Terraform, and the arrow would run from the live value back to the configured one. Here the live value, false, is what state records; it is the configuration that now asks for true."
 
 actions:
-  - id: keep-the-database
-    label: "Keep the database: pin the module below 2.1.0 and run terraform init so the older release is installed, or keep 2.1.0 and set storage_encrypted = false in the module call, then confirm the plan has no changes"
+  - id: pin-the-module
+    label: "Pin the module below 2.1.0 in the module call and run terraform init so the older release is installed, then confirm the plan has no changes"
     kind: fix
     done_when:
       all:
         - plan_clean: true
         - not: { applied: { op: delete, address: module.db } }
-        # either the version pin or the input override (one level of all/any only, so one alternation)
-        - file_contains: { path: /home/you/infra/main.tf, matches: 'version\s*=\s*"(=\s*|~>\s*)?2\.0\.1"|storage_encrypted\s*=\s*false' }
-    feedback: "The same database, orders-db, is still in place and the plan is empty. The module version (or the module input) is now decided in the code you review, instead of by whenever someone last ran init. Getting to an encrypted database is still a real job: an RDS instance can only be encrypted when it is created, so it is a planned snapshot-copy migration, not a quiet module bump."
+        # world-based: whatever the constraint says, 2.0.x is what init installed (manifest layout: Key, Source, Version, Dir)
+        - file_contains: { path: /home/you/infra/.terraform/modules/modules.json, matches: '"Key":"db","Source":"[^"]*","Version":"2\.0\.\d+","Dir"' }
+    feedback: "The same database, orders-db, is still in place, the installed module is back on a 2.0 release and the plan is empty. The version the stack runs is now decided by a constraint in the code you review, instead of by whenever someone last ran init. Getting to an encrypted database is still a real job: an RDS instance can only be encrypted when it is created, so it is a planned snapshot-copy migration, not a quiet module bump."
+  - id: override-the-input
+    label: "Keep 2.1.0 and set storage_encrypted = false in the module call, then confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - not: { applied: { op: delete, address: module.db } }
+        - file_contains: { path: /home/you/infra/main.tf, matches: '^\s*storage_encrypted\s*=\s*false\s*$' }
+        - file_contains: { path: /home/you/infra/.terraform/modules/modules.json, matches: '"Key":"db","Source":"[^"]*","Version":"2\.1\.0","Dir"' }
+    feedback: "The same database, orders-db, is still in place on the new module release and the plan is empty, because the module call now says explicitly what you want instead of taking the module's new default. That is a deferral, not a migration: the code now states the database is unencrypted. Getting to an encrypted database is still a planned snapshot-copy migration, since an RDS instance can only be encrypted when it is created."
   - id: edit-the-cached-module
-    label: "Add ignore_changes (or edit the code) in the downloaded module under .terraform/modules/db so the plan goes quiet"
+    label: "Add ignore_changes (or change a default) in the downloaded module under .terraform/modules/db so the plan goes quiet"
     kind: wrong
     done_when:
-      file_contains: { path: /home/you/infra/.terraform/modules/db/main.tf, matches: 'ignore_changes' }
+      file_contains: { path: /home/you/infra/.terraform/modules/db/main.tf, matches: 'ignore_changes|default\s*=\s*false' }
     feedback: "The plan goes quiet, but only on this laptop. .terraform/modules is a download cache that terraform init fills and init -upgrade or get -update overwrites, so the edit vanishes the next time anyone refreshes, and CI (which runs init itself) never had it. The module's published code is still 2.1.0, and nothing in the repository says why this checkout differs."
   - id: upgrade-again
     label: "Run terraform init -upgrade (or terraform get -update) again to get back to a working state"
@@ -265,7 +314,8 @@ actions:
     feedback: "Terraform destroyed orders-db, with its data, and created a new empty one with encryption on. prevent_destroy was the only thing standing between a module release and the production database. Backups may let you recover the data, but this is a restore under pressure instead of a reviewed change."
 
 solution_paths:
-  - [keep-the-database]
+  - [pin-the-module]
+  - [override-the-input]
 
 key_evidence: [encryption-forces-replacement, module-2-1-0-installed, module-sets-encryption, floating-constraint, config-unchanged]
 

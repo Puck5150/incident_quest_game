@@ -14,8 +14,9 @@ const PIN = "sed -i 's/~> 2.0/2.0.1/' main.tf"
 const INPUT = "sed -i 's/identifier.*/&\\n  storage_encrypted = false/' main.tf"
 const UNGUARD = "sed -i '/prevent_destroy/d' .terraform/modules/db/main.tf"
 const IGNORE = "sed -i 's/^  lifecycle {$/  lifecycle {\\n    ignore_changes = [storage_encrypted]/' .terraform/modules/db/main.tf"
-const NONE = { 'keep-the-database': false, 'edit-the-cached-module': false, 'upgrade-again': false, 'unguard-and-apply': false }
-const FIXED = { ...NONE, 'keep-the-database': true }
+const NONE = { 'pin-the-module': false, 'override-the-input': false, 'edit-the-cached-module': false, 'upgrade-again': false, 'unguard-and-apply': false }
+const PINNED = { ...NONE, 'pin-the-module': true }
+const OVERRIDDEN = { ...NONE, 'override-the-input': true }
 const TRAPPED = { ...NONE, 'unguard-and-apply': true }
 const CACHE_EDITED = { ...NONE, 'edit-the-cached-module': true }
 
@@ -73,7 +74,7 @@ describe('terraform-module-upgrade on the simulator', () => {
     const plan = await sh.run('terraform plan', atStage(scenario, 0), new Set())
     expect(plan.exitCode).toBe(0)
     expect(plan.output).toContain('No changes.')
-    expect(await detectedAll(sh)).toEqual(FIXED)
+    expect(await detectedAll(sh)).toEqual(PINNED)
   })
 
   it('(b1) pinning with = and init -upgrade stays inside the pin; get -update does too', async () => {
@@ -81,17 +82,39 @@ describe('terraform-module-upgrade on the simulator', () => {
       const { sh, out } = await play('cd ~/infra', "sed -i 's/~> 2.0/= 2.0.1/' main.tf", `terraform ${re}`, 'terraform plan')
       expect(out[2].output).toContain(`Downloading ${REG} 2.0.1 for db...`)
       expect(out[3].output).toContain('No changes.')
-      expect(await detectedAll(sh)).toEqual(FIXED)
+      expect(await detectedAll(sh)).toEqual(PINNED)
     }
   })
 
-  it('(b2) a pin that only excludes 2.1.0 (~> 2.0.1) is also a fix; a pin to 2.1.0 is not', async () => {
-    const ok = await play('cd ~/infra', "sed -i 's/~> 2.0/~> 2.0.1/' main.tf", 'terraform init', 'terraform plan')
-    expect(ok.out[3].output).toContain('No changes.')
-    expect(await detectedAll(ok.sh)).toEqual(FIXED)
-    const no = await play('cd ~/infra', "sed -i 's/~> 2.0/2.1.0/' main.tf", 'terraform init', 'terraform plan')
+  it('(b2) any spelling that leaves 2.0.x installed and the plan clean is the pin route; the manifest bytes are the real compact JSON', async () => {
+    const spellings = ['~> 2.0.0', '~> 2.0.1', '= 2.0.1', '2.0.1', '>= 2.0.0, < 2.1.0', '< 2.1', '!= 2.1.0, ~> 2.0', '<2.1.0']
+    for (const v of spellings) {
+      const { sh, out } = await play('cd ~/infra', `sed -i 's/version = "~> 2.0"/version = "${v}"/' main.tf`, 'terraform init', 'terraform plan', 'cat .terraform/modules/modules.json')
+      expect(out[3].output, v).toContain('No changes.')
+      expect(out[4].output, v).toBe(`{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"db","Source":"${REG}","Version":"2.0.1","Dir":".terraform/modules/db"}]}`)
+      expect(await detectedAll(sh), v).toEqual(PINNED)
+    }
+    // a constraint that still allows 2.1.0 plus init -upgrade lands on 2.1.0: nothing credited
+    const no = await play('cd ~/infra', "sed -i 's/~> 2.0/~> 2.0/' main.tf", 'terraform init -upgrade', 'terraform plan')
     expect(no.out[3].exitCode).toBe(1)
     expect(await detectedAll(no.sh)).toEqual(NONE)
+    // pinning to 2.1.0 is not a fix
+    const to210 = await play('cd ~/infra', "sed -i 's/~> 2.0/2.1.0/' main.tf", 'terraform init', 'terraform plan')
+    expect(to210.out[3].exitCode).toBe(1)
+    expect(await detectedAll(to210.sh)).toEqual(NONE)
+  })
+
+  it('(b2a) override and pin together do not plan: 2.0.1 has no storage_encrypted input, so neither route is credited', async () => {
+    const { sh, out } = await play('cd ~/infra', INPUT, PIN, 'terraform init', 'terraform plan')
+    expect(out[4].exitCode).toBe(1)
+    expect(out[4].output).toContain('Unsupported argument')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(b2b) changing the cached module default to false quiets the plan but is the wrong action, not a fix', async () => {
+    const { sh, out } = await play('cd ~/infra', "sed -i 's/default = true/default = false/' .terraform/modules/db/main.tf", 'terraform plan')
+    expect(out[2].output).toContain('No changes.')
+    expect(await detectedAll(sh)).toEqual(CACHE_EDITED)
   })
 
   it('(b3) pinning without init is not the fix, and neither is init alone', async () => {
@@ -109,7 +132,7 @@ describe('terraform-module-upgrade on the simulator', () => {
     expect(out[3].output).toContain('No changes.')
     expect(out[4].output).toContain(`"${DB}"`)
     expect(await manifestVersion(sh)).toBe('2.1.0')
-    expect(await detectedAll(sh)).toEqual(FIXED)
+    expect(await detectedAll(sh)).toEqual(OVERRIDDEN)
   })
 
   it('(d) init -upgrade and get -update on the floating constraint pick 2.1.0 again, so they are not the fix', async () => {
@@ -157,13 +180,13 @@ describe('terraform-module-upgrade on the simulator', () => {
   })
 
   it('(h) both fix routes keep the same database; re-applying is a no-op', async () => {
-    for (const route of [[PIN, 'terraform init'], [INPUT]]) {
+    for (const [route, want] of [[[PIN, 'terraform init'], PINNED], [[INPUT], OVERRIDDEN]] as const) {
       const { sh, out } = await play('cd ~/infra', ...route, 'terraform apply -auto-approve', 'terraform apply -auto-approve', 'terraform state show module.db.aws_db_instance.main')
       expect(out.at(-3)!.output).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
       expect(out.at(-2)!.output).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
       expect(out.at(-1)!.output).toContain(`"${DB}"`)
       expect(await sh.doneWhen({ reality_has: { type: 'aws_db_instance', id: DB, attr: 'storage_encrypted', equals: false } })).toBe(true)
-      expect(await detectedAll(sh)).toEqual(FIXED)
+      expect(await detectedAll(sh)).toEqual(want)
     }
   })
 
