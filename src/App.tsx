@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import content, { loadItem, type Item, type MultiChallenge } from 'virtual:content'
 import type { GameEvent } from './game/engine.ts'
 import { score, type Score } from './game/scoring.ts'
@@ -16,6 +16,7 @@ import type { CrossCloud } from './components/CrossCloud.tsx'
 import Icon from './components/Icon.tsx'
 import Callsign from './components/Callsign.tsx'
 import { setSound } from './game/sound.ts'
+import { previewOn, visible } from './game/preview.ts'
 import { SHIFT_UNLOCK, type Severity } from './game/shift.ts'
 
 // Home and skill tree load up front; play and debrief screens load on first use.
@@ -47,12 +48,13 @@ type Screen =
 // What finishing something changed, shown in the debrief header.
 type Outcome = { gained: number; rankUp?: string; cleared?: string; unlocked: string[] }
 
-// Everything playable, for the queue, the skill tree and unlocks.
-const items = content.items
-const unlocks = (p: Progress) => unlockedTracks(content.tracks, items, p.completed)
-const resolvedIncidents = (p: Progress) => items.filter((x) => x.kind === 'incident' && p.completed[x.id]).length
-
 export default function App() {
+  // Everything playable, for the queue, the skill tree, unlocks and shifts.
+  // Unpublished items are left out unless preview is on; this is the only filter.
+  const [preview] = useState(previewOn)
+  const items = useMemo(() => visible(content.items, preview), [preview])
+  const unlocks = (p: Progress) => unlockedTracks(content.tracks, items, p.completed)
+  const resolvedIncidents = (p: Progress) => items.filter((x) => x.kind === 'incident' && p.completed[x.id]).length
   const [progress, setProgress] = useState(loadProgress)
   const [screen, setScreen] = useState<Screen>({ name: 'home' })
   // The item being played, loaded on demand (each item is its own chunk).
@@ -294,6 +296,11 @@ export default function App() {
             <button className="text-accent underline" onClick={() => go('#/preview')}>
               Back to the preview page
             </button>
+          </p>
+        )}
+        {'id' in screen && items.find((x) => x.id === screen.id)?.published === false && (
+          <p className="mb-4 rounded-lg border border-warn bg-panel px-4 py-2 text-sm">
+            <strong className="font-mono tracking-wider uppercase">Unpublished</strong>: players cannot see this yet. You can open it because preview is on.
           </p>
         )}
         <Suspense fallback={<p className="text-muted">Loading…</p>}>

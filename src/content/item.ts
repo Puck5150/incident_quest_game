@@ -21,6 +21,7 @@ type MultiBase = {
   track: string
   title: string
   difficulty: number
+  published?: boolean
   providers: Provider[]
   differences: Record<string, string> // palette or option id -> what isn't equivalent
 }
@@ -129,7 +130,7 @@ function variantsOf<M extends { providers: Provider[] }, C extends Challenge | C
 export function parseItem(raw: string, where: string): { item?: Item; errors: string[] } {
   const errors: string[] = []
   const kind = contentKind(raw)
-  const base = (m: MultiBase) => ({ id: m.id, track: m.track, title: m.title, difficulty: m.difficulty, providers: m.providers })
+  const base = (m: MultiBase) => ({ id: m.id, track: m.track, title: m.title, difficulty: m.difficulty, published: m.published, providers: m.providers })
 
   if (kind === 'pick-cloud-canvas') {
     const m = checkRaw(raw, MultiCanvasSchema, where, errors)

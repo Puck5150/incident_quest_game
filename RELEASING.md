@@ -41,8 +41,10 @@ live on its own.
 - Ship in slices: engine changes first, then the content that uses them.
 - A scenario can be merged without being offered to players by setting
   `published: false` at its top level. It still validates and its tests still run;
-  it just does not appear in tracks or on the board. Flip it to `true` (or remove
-  the line) in a small PR when you want it live.
+  players do not see it (board, sector counts, map, shifts, direct links). Check it
+  on the live site with `?preview=1`, where it shows with an "Unpublished" marker.
+  Flip it to `true` (or remove the line) in a small PR when you want it live. See
+  "Shipping dark" in AUTHORING.md.
 - Prefer many small merges over one big one. If a slice is risky, hide it behind
   `published: false` first.
 
