@@ -137,7 +137,7 @@ export function planConfig(input: PlanInput): PlanResult {
   for (const b of g.blocks) {
     if (b.type !== 'import' || rootFiles.has(b.file)) continue
     const owner = [...tree.children].find(([, c]) => c.files.files.some((f) => f.name === b.file))
-    fail(b.file, b.pos, 'Invalid import configuration', `An import block was detected in "module.${owner?.[0] ?? '?'}". Import blocks are only allowed in the root module.`)
+    fail(b.file, b.pos, 'Invalid import configuration', `An import block was detected in "module.${(owner?.[0] ?? '?').split('.').join('.module.')}". Import blocks are only allowed in the root module.`)
   }
   // A resource address is declared when the graph has its (module-qualified, key-less) node; a module address when its call is loaded.
   const declared = (a: Address) =>
@@ -194,7 +194,7 @@ export function planConfig(input: PlanInput): PlanResult {
         case 'self':
           throw new EvalError('Invalid "self" reference', 'The "self" object is not available in this context.')
         case 'path':
-          return walk({ module: mod ? (tree.children.get(g.nodes.get(insts.get(mod.slice(0, -1))?.static ?? '')?.block?.labels[0] ?? '')?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
+          return walk({ module: mod ? (tree.children.get((insts.get(mod.slice(0, -1))?.static ?? '').replace(/^module\./, '').replaceAll('.module.', '.'))?.files.dir ?? '.') : '.', root: '.', cwd: '.' }, path.slice(1))
         case 'terraform':
           return walk({ workspace: input.workspace ?? 'default' }, path.slice(1))
         case 'var':
@@ -361,7 +361,7 @@ export function planConfig(input: PlanInput): PlanResult {
 
   const broken = new Set<string>()
   // One node in one instance of its declaring module.
-  const visit = (node: GNode, instance: string, first: boolean) => {
+  const visit = (node: GNode, instance: string) => {
     const b = node.block
     const mod = pre(instance)
     const key = mod + node.local
@@ -394,9 +394,7 @@ export function planConfig(input: PlanInput): PlanResult {
       }
       case 'module': {
         const context = `module "${b!.labels[0]}"`
-        if (node.module) {
-          if (first) fail(node.file, node.pos, 'Unsupported nested module', 'Nested modules are not supported by this lab yet.', context)
-        } else if (!node.child) fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', context)
+        if (!node.child) fail(node.file, node.pos, 'Unsupported module', 'Module calls are not supported by this lab yet.', context)
         else {
           const ex = expandInstances(b!, scopeFor({}, mod))
           if (!ex.ok) fail(node.file, ex.pos, ex.summary, ex.detail, context)
@@ -437,7 +435,7 @@ export function planConfig(input: PlanInput): PlanResult {
     const errorsBefore = errors.length
     if (node.kind === 'module') instsOf.set(addr, [])
     const where = node.module ? (instsOf.get(node.module) ?? []) : ['']
-    where.forEach((instance, n) => visit(node, instance, n === 0))
+    for (const instance of where) visit(node, instance)
     if (errors.length > errorsBefore) broken.add(addr)
   }
 

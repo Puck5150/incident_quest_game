@@ -21,7 +21,7 @@ export interface ModuleCall {
 }
 export interface ModuleTree {
   root: ModuleFiles
-  children: Map<string, { call: ModuleCall; files: ModuleFiles }> // by call key; children of the root only until TF6b
+  children: Map<string, { call: ModuleCall; files: ModuleFiles }> // by dotted call key ('net', 'net.inner'), every level
 }
 export interface LoadedModules {
   tree: ModuleTree
@@ -102,8 +102,12 @@ const at = (c: ModuleCall) => ({ severity: 'error' as const, file: c.file, line:
 const unsupported = (c: ModuleCall, detail: string): Diagnostic => ({ ...at(c), summary: 'Unsupported module source', detail })
 const where = (c: ModuleCall) => `${c.file}:${c.pos.line}`
 
+export const MAX_MODULE_DEPTH = 8
+
 // readDir gets a lab-relative directory and returns the files in it. With install, the manifest is ignored and
 // local directories are read from the source (what `init` and `get` do); otherwise the manifest says what is installed.
+// Module calls inside child modules are followed: a local source is relative to the CALLING module's directory, and a
+// call's key is the dotted path of call names (`net`, `net.inner`), as in the manifest.
 export async function loadModuleTree(rootFiles: File[], readDir: (dir: string) => Promise<File[]>, manifest: ManifestEntry[] | undefined, install: boolean): Promise<LoadedModules> {
   const root = moduleCalls(rootFiles, '')
   const out: LoadedModules = { tree: { root: { dir: '', files: rootFiles }, children: new Map() }, calls: root.calls, entries: [], install: root.diagnostics, syntax: [], rootBad: root.bad }
@@ -113,43 +117,77 @@ export async function loadModuleTree(rootFiles: File[], readDir: (dir: string) =
     const tf = (await readDir(dir)).filter((f) => f.name.endsWith('.tf')).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     return tf.map((f) => ({ name: `${dir}/${f.name}`, text: f.text }))
   }
-  for (const call of root.calls) {
-    const kind = sourceKind(call.source)
-    if (kind !== 'local') {
-      out.install.push(unsupported(call, `Module source "${call.source}" is a ${kind === 'registry' ? 'registry' : kind === 'git' ? 'git' : 'remote'} address, and this lab only installs local modules such as "./modules/net".`))
-      continue
-    }
-    const rel = resolveLocal(call.moduleDir, call.source)
-    if (rel === undefined) {
-      out.install.push(unsupported(call, `Module source "${call.source}" is outside the lab directory, which this lab does not model.`))
-      continue
-    }
-    let dir = rel
-    if (!install) {
-      const m = installed.get(call.name)
-      if (!m) {
-        out.install.push({ ...at(call), summary: 'Module not installed', detail: `This module is not yet installed. ${FIX}` })
+  const walk = async (calls: ModuleCall[], prefix: string, chain: string[]): Promise<void> => {
+    for (const call of calls) {
+      const key = prefix ? `${prefix}.${call.name}` : call.name
+      const kind = sourceKind(call.source)
+      if (kind !== 'local') {
+        out.install.push(unsupported(call, `Module source "${call.source}" is a ${kind === 'registry' ? 'registry' : kind === 'git' ? 'git' : 'remote'} address, and this lab only installs local modules such as "./modules/net".`))
         continue
       }
-      if (m.source !== call.source) {
-        out.install.push({ ...at(call), summary: 'Module source has changed', detail: `The source address was changed since this module was installed. ${FIX}` })
+      const rel = resolveLocal(call.moduleDir, call.source)
+      if (rel === undefined) {
+        out.install.push(unsupported(call, `Module source "${call.source}" is outside the lab directory, which this lab does not model.`))
         continue
       }
-      dir = resolveLocal('', m.dir) ?? m.dir
+      let dir = rel
+      if (!install) {
+        const m = installed.get(key)
+        if (!m) {
+          out.install.push({ ...at(call), summary: 'Module not installed', detail: `This module is not yet installed. ${FIX}` })
+          continue
+        }
+        if (m.source !== call.source) {
+          out.install.push({ ...at(call), summary: 'Module source has changed', detail: `The source address was changed since this module was installed. ${FIX}` })
+          continue
+        }
+        dir = resolveLocal('', m.dir) ?? m.dir
+      }
+      // Lab-specific guards: real Terraform has none for local sources (it would never finish).
+      const here = [...chain, dir === '.' ? '' : dir]
+      if (chain.includes(dir === '.' ? '' : dir)) {
+        out.install.push({ ...at(call), summary: 'Module cycle', detail: `Module "${call.name}" calls the module in "${dir}", which is already being loaded: ${here.map((d) => d || '.').join(' -> ')}.` })
+        continue
+      }
+      if (here.length - 1 > MAX_MODULE_DEPTH) {
+        out.install.push({ ...at(call), summary: 'Module stack level too deep', detail: `This configuration has nested modules more than ${MAX_MODULE_DEPTH} levels deep.` })
+        continue
+      }
+      const files = await read(dir)
+      if (!files.length) {
+        const err = (summary: string, detail: string): Diagnostic => ({ severity: 'error', summary, detail, file: '', line: 0, col: 0 })
+        if (install) {
+          out.install.push(err('Unreadable module directory', `Unable to evaluate directory symlink: lstat ${rel}: no such file or directory`))
+          out.install.push(err('Unreadable module directory', `The directory  could not be read for module "${call.name}" at ${where(call)}.`))
+        } else out.install.push({ ...at(call), summary: 'Module not installed', detail: `This module's local cache directory ${dir} could not be read. ${FIX}` })
+        continue
+      }
+      out.entries.push({ key, source: call.source, dir })
+      out.tree.children.set(key, { call, files: { dir, files } })
+      let bad = false
+      for (const f of files) {
+        const d = parseHcl(f.name, f.text).diagnostics
+        out.syntax.push(...d)
+        if (d.length) bad = true
+      }
+      if (!bad) {
+        const sub = moduleCalls(files, dir)
+        out.install.push(...sub.diagnostics)
+        await walk(sub.calls, key, here)
+      }
     }
-    const files = await read(dir)
-    if (!files.length) {
-      const err = (summary: string, detail: string): Diagnostic => ({ severity: 'error', summary, detail, file: '', line: 0, col: 0 })
-      if (install) {
-        out.install.push(err('Unreadable module directory', `Unable to evaluate directory symlink: lstat ${rel}: no such file or directory`))
-        out.install.push(err('Unreadable module directory', `The directory  could not be read for module "${call.name}" at ${where(call)}.`))
-      } else out.install.push({ ...at(call), summary: 'Module not installed', detail: `This module's local cache directory ${dir} could not be read. ${FIX}` })
-      continue
-    }
-    out.entries.push({ key: call.name, source: call.source, dir })
-    out.tree.children.set(call.name, { call, files: { dir, files } })
-    for (const f of files) out.syntax.push(...parseHcl(f.name, f.text).diagnostics)
   }
+  await walk(root.calls, '', [''])
+  // A directory called from two places is walked twice: report each identical problem once.
+  const seen = new Set<string>()
+  out.install = out.install.filter((d) => {
+    const k = JSON.stringify([d.file, d.line, d.col, d.summary, d.detail])
+    return !seen.has(k) && (seen.add(k), true)
+  })
+  out.syntax = out.syntax.filter((d) => {
+    const k = JSON.stringify([d.file, d.line, d.col, d.summary])
+    return !seen.has(k) && (seen.add(k), true)
+  })
   out.entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   return out
 }

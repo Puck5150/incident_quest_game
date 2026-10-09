@@ -246,7 +246,7 @@ export const TerraformSchema = z.strictObject({
       installed: z
         .array(
           z.strictObject({
-            key: z.string().min(1),
+            key: z.string().regex(/^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*)*$/, 'must be the call name, or dotted call names for nested modules (net.inner)'),
             source: z.string().min(1),
             dir: z.string().min(1).refine((p) => !p.startsWith('/') && !p.split('/').includes('..'), 'must be a relative path under the working directory'),
           }),

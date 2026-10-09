@@ -214,7 +214,7 @@
                 "properties": {
                   "key": {
                     "type": "string",
-                    "minLength": 1
+                    "pattern": "^[A-Za-z_][\\w-]*(\\.[A-Za-z_][\\w-]*)*$"
                   },
                   "source": {
                     "type": "string",

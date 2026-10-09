@@ -455,7 +455,7 @@ terraform:
 Fields:
 - `dir`: the lab directory (default the shell's starting directory; `~/` and absolute paths work). `version`: Terraform version like `1.9.8`. `initialized`: false makes the player run `terraform init` first.
 - `files`: the starting `.tf` files (at least one; module directories such as `modules/net/main.tf` work, local `./` sources only). `vars`: values for `variable` blocks.
-- `modules.installed`: `[{ key, source, dir }]`, the local modules `terraform init` already installed (becomes `.terraform/modules/modules.json`; `dir` must hold `.tf` files in `files`). A lab with module calls that omits it must be run through `terraform init` first (`Module not installed`).
+- `modules.installed`: `[{ key, source, dir }]` (`key` is the call name, dotted for nested calls: `net`, `net.inner`), the local modules `terraform init` already installed (becomes `.terraform/modules/modules.json`; `dir` must hold `.tf` files in `files`). A lab with module calls that omits it must be run through `terraform init` first (`Module not installed`).
 - `state`: managed (or `mode: data`) objects. Every `attrs` needs a string `id`. `key` makes a `count` or `for_each` instance; `status: tainted` marks one tainted. `outputs`: output values (`sensitive: true` hides them).
 - `cloud`: what really exists. By default it is exactly what `state` says. `cloud.patch` changes attributes of an existing object (drift), `cloud.delete` removes one, `cloud.add` creates one Terraform does not manage.
 - `evidence`: awards a tag when the named subcommand's output contains the substring. Check the exact text by running the command in the shell.
@@ -470,7 +470,7 @@ Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute
 
 ### Modules (local) and module refactors
 
-`module` blocks work in `terraform.files` like any other block. Only local sources (`./modules/net`) are supported, a call may use `count` or `for_each` (see Keyed module instances below), and modules cannot call other modules yet. The module directory must be among `files` and be listed in `modules.installed` (or the player runs `terraform init` first).
+`module` blocks work in `terraform.files` like any other block. Only local sources (`./modules/net`) are supported, a call may use `count` or `for_each` (see Keyed module instances below), and modules may call other local modules (see Nested modules below). The module directory must be among `files` and be listed in `modules.installed` (or the player runs `terraform init` first).
 
 ```yaml
 terraform:
@@ -521,7 +521,20 @@ A `module` call with `count` or `for_each` expands like a resource: instances `m
 - `terraform import 'module.net["a"].aws_s3_bucket.b' id` needs the key to be in the call's current expansion (accepted when the expansion cannot be evaluated yet).
 - Dependencies are per resource, not per instance (as `dependencies` in real state files are): a resource that uses any instance of `module.net.aws_vpc.main` is created after, and destroyed before, ALL instances of it, and a failure of one instance holds back the dependents of every instance. Real Terraform tracks instances individually; design incidents so that this difference does not matter.
 
-Limits: local sources only, no nested modules, `moved`/`import`/`removed` blocks only in the root module, no registry versions.
+#### Nested modules
+
+A child module may contain `module` calls with local sources. A source is relative to the CALLING module's directory (`./inner` inside `modules/net` means `modules/net/inner`; `../shared` reaches a sibling). List every level in `modules.installed` with dotted keys and lab-relative dirs:
+
+```yaml
+modules:
+  installed:
+    - { key: net,       source: ./modules/net, dir: modules/net }
+    - { key: net.inner, source: ./inner,       dir: modules/net/inner }
+```
+
+`terraform init` / `get` print `- net in modules/net` and `- net.inner in modules/net/inner`; a nested call missing from the manifest is `Module not installed` at the nested call. Addresses use the full path: `module.net.module.inner.aws_vpc.main`, with keys at any level (`module.net["a"].module.inner[0].aws_vpc.main`); state `module`, `faults[].at` and `done_when` leaves take them. Root `moved` blocks may rename a nested module by its full path (`from = module.net.module.inner  to = module.net.module.core`) or move a resource between nested modules; `moved` blocks inside a child module are still ignored. A module that calls itself (directly or through others) is a lab error, `Module cycle`; more than 8 levels is `Module stack level too deep`.
+
+Limits: local sources only, `moved`/`import`/`removed` blocks only in the root module, no registry versions.
 
 ### Apply, destroy and faults
 
