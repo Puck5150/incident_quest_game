@@ -630,3 +630,26 @@
   alternatives:
     - { command: "aws sqs list-queues --queue-name-prefix app-", note: "Every queue whose name starts with the prefix." }
   docs: { title: "AWS CLI: sqs get-queue-url", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-url.html" }
+
+- id: aws-lambda-event-source-mapping
+  match: "^aws lambda (list-event-source-mappings|get-event-source-mapping)"
+  summary: "Shows how a function is fed from a queue or stream: the mapping's UUID, batch size and scaling configuration."
+  parts:
+    - { token: "--function-name NAME", meaning: "(list) Only the mappings that invoke this function." }
+    - { token: "--uuid ID", meaning: "(get) One mapping, by the UUID the list shows." }
+    - { token: "ScalingConfig.MaximumConcurrency", meaning: "In the output: the most concurrent invocations the queue poller is allowed to start for this mapping." }
+  why: "For a queue consumer, the mapping is where its concurrency is controlled without making Lambda throttle the messages."
+  alternatives:
+    - { command: "aws lambda get-function-concurrency --function-name NAME", note: "The function-level reserved concurrency, a different control." }
+  docs: { title: "AWS CLI: lambda list-event-source-mappings", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/list-event-source-mappings.html" }
+
+- id: aws-lambda-esm-max-concurrency
+  match: "^aws lambda update-event-source-mapping"
+  summary: "Changes an event source mapping; --scaling-config MaximumConcurrency caps how many invocations an SQS queue may drive at once."
+  parts:
+    - { token: "--uuid ID", meaning: "The mapping to change." }
+    - { token: "--scaling-config MaximumConcurrency=50", meaning: "The poller stops starting new invocations beyond 50 at a time; extra messages simply wait in the queue." }
+  why: "Caps a batch consumer without throttling: messages are not received and failed, so they do not burn their retries toward a dead-letter queue."
+  alternatives:
+    - { command: "aws lambda put-function-concurrency --function-name NAME --reserved-concurrent-executions N", note: "Caps the whole function, but the poller keeps invoking into throttles, returning messages to the queue." }
+  docs: { title: "AWS CLI: lambda update-event-source-mapping", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/update-event-source-mapping.html" }
