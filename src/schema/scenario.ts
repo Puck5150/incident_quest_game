@@ -155,7 +155,11 @@ const regex = z
   })
 const LeafSchema = z.union([
   z.strictObject({ plan_clean: z.literal(true) }),
-  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddrOrModule).min(1) }) }),
+  z.strictObject({
+    plan_has: z
+      .strictObject({ no_destroy: z.array(tfAddrOrModule).min(1).optional(), no_change: z.array(tfAddrOrModule).min(1).optional() })
+      .refine((p) => p.no_destroy !== undefined || p.no_change !== undefined, 'plan_has needs no_destroy or no_change'),
+  }),
   z.strictObject({ state_has: tfAddrOrModule }),
   z.strictObject({ state_lacks: tfAddrOrModule }),
   z.strictObject({ lock_free: z.literal(true) }),

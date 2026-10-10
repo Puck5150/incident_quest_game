@@ -1288,11 +1288,15 @@
                                 "items": {
                                   "type": "string"
                                 }
+                              },
+                              "no_change": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               }
                             },
-                            "required": [
-                              "no_destroy"
-                            ],
                             "additionalProperties": false
                           }
                         },
@@ -1511,11 +1515,15 @@
                                     "items": {
                                       "type": "string"
                                     }
+                                  },
+                                  "no_change": {
+                                    "minItems": 1,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
                                   }
                                 },
-                                "required": [
-                                  "no_destroy"
-                                ],
                                 "additionalProperties": false
                               }
                             },
@@ -1747,11 +1755,15 @@
                                       "items": {
                                         "type": "string"
                                       }
+                                    },
+                                    "no_change": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
                                     }
                                   },
-                                  "required": [
-                                    "no_destroy"
-                                  ],
                                   "additionalProperties": false
                                 }
                               },
@@ -1970,11 +1982,15 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "no_change": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
-                                      "required": [
-                                        "no_destroy"
-                                      ],
                                       "additionalProperties": false
                                     }
                                   },
@@ -2213,11 +2229,15 @@
                                       "items": {
                                         "type": "string"
                                       }
+                                    },
+                                    "no_change": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
                                     }
                                   },
-                                  "required": [
-                                    "no_destroy"
-                                  ],
                                   "additionalProperties": false
                                 }
                               },
@@ -2436,11 +2456,15 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "no_change": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
-                                      "required": [
-                                        "no_destroy"
-                                      ],
                                       "additionalProperties": false
                                     }
                                   },
@@ -3204,11 +3228,15 @@
                                       "items": {
                                         "type": "string"
                                       }
+                                    },
+                                    "no_change": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
                                     }
                                   },
-                                  "required": [
-                                    "no_destroy"
-                                  ],
                                   "additionalProperties": false
                                 }
                               },
@@ -3427,11 +3455,15 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "no_change": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
-                                      "required": [
-                                        "no_destroy"
-                                      ],
                                       "additionalProperties": false
                                     }
                                   },
@@ -3663,11 +3695,15 @@
                                             "items": {
                                               "type": "string"
                                             }
+                                          },
+                                          "no_change": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
                                           }
                                         },
-                                        "required": [
-                                          "no_destroy"
-                                        ],
                                         "additionalProperties": false
                                       }
                                     },
@@ -3886,11 +3922,15 @@
                                                 "items": {
                                                   "type": "string"
                                                 }
+                                              },
+                                              "no_change": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
                                               }
                                             },
-                                            "required": [
-                                              "no_destroy"
-                                            ],
                                             "additionalProperties": false
                                           }
                                         },
@@ -4129,11 +4169,15 @@
                                             "items": {
                                               "type": "string"
                                             }
+                                          },
+                                          "no_change": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
                                           }
                                         },
-                                        "required": [
-                                          "no_destroy"
-                                        ],
                                         "additionalProperties": false
                                       }
                                     },
@@ -4352,11 +4396,15 @@
                                                 "items": {
                                                   "type": "string"
                                                 }
+                                              },
+                                              "no_change": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
                                               }
                                             },
-                                            "required": [
-                                              "no_destroy"
-                                            ],
                                             "additionalProperties": false
                                           }
                                         },

@@ -41,7 +41,22 @@ export function formatDuration(s: number): string {
 const str = (v: Value | undefined): string | undefined => (typeof v === 'string' ? v : undefined)
 const ec2 = (kind: string) => (id: string) => `arn:aws:ec2:${REGION}:${ACCOUNT}:${kind}/${id}`
 
+// The provider's default alphabet: letters, digits and special characters, each class on unless its flag is false.
+function password(c: Ctx): string {
+  const on = (k: string) => c.p[k] !== false
+  const chars = (on('lower') ? 'abcdefghijklmnopqrstuvwxyz' : '') + (on('upper') ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' : '') + (on('numeric') ? '0123456789' : '') + (on('special') ? (str(c.p.override_special) ?? '!@#$%&*()-_=+[]{}<>:?') : '')
+  const n = typeof c.p.length === 'number' ? c.p.length : 0
+  const bytes = c.h('pw', 2 * n)
+  return chars ? Array.from({ length: n }, (_, i) => chars[parseInt(bytes.slice(2 * i, 2 * i + 2), 16) % chars.length]).join('') : ''
+}
+
 const TYPES: Record<string, TypeInfo> = {
+  random_password: {
+    id: () => 'none',
+    // Deterministic per apply (the seed carries the state serial), so a replay repeats it and a replacement differs.
+    defaults: (_i, c) => ({ result: password(c) }),
+    seconds: [0, 0, 0],
+  },
   aws_vpc: {
     id: (c) => `vpc-0${c.h('vpc', 8)}`,
     arn: ec2('vpc'),

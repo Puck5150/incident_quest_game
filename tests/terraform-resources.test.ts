@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { diffInstance, SCHEMAS, schemaFor, unsupportedType } from '../src/game/terraform/resources.ts'
 import { UNKNOWN } from '../src/game/terraform/eval.ts'
+import { runTerraform, type CliContext } from '../src/game/terraform/cli.ts'
+import { labFromScenario } from '../src/game/terraform/lab.ts'
+import { mountedLock } from '../src/game/terraform/providers.ts'
+import type { TerraformBlock } from '../src/schema/scenario.ts'
 
 describe('resource schemas', () => {
   it('knows the AWS types the incidents use', () => {
@@ -20,6 +24,7 @@ describe('resource schemas', () => {
   it('gives every schema a read-only id and arn, and marks secrets', () => {
     for (const [t, s] of Object.entries(SCHEMAS)) {
       expect(s.attrs.id?.readOnly, `${t}.id`).toBe(true)
+      if (t === 'random_password') continue // not an AWS resource: no arn
       expect(s.attrs.arn?.readOnly, `${t}.arn`).toBe(true)
     }
     expect(schemaFor('aws_db_instance')!.attrs.password.sensitive).toBe(true)
@@ -237,5 +242,91 @@ describe('diffInstance: forced replacement', () => {
     const p = diffInstance(inst, { ...cfg, instance_type: 't3.small' }, prior, [], true)
     expect(p.action).toBe('replace')
     expect(p.changes.find((c) => c.name === 'instance_type')).toMatchObject({ before: 't3.micro', after: 't3.small' })
+  })
+})
+
+describe('random_password', () => {
+  const LAB = '/home/you/infra'
+  const cfg = (args = '  length = 32\n') => `terraform {\n  required_providers {\n    random = {\n      source = "hashicorp/random"\n    }\n  }\n}\n\nresource "random_password" "db" {\n${args}}\n`
+  function world(main: string) {
+    const block = { files: [{ path: 'main.tf', content: main }], state: [] } as unknown as TerraformBlock
+    const lab = labFromScenario(block, LAB, '/home/you')
+    const disk: Record<string, string> = {}
+    for (const f of lab.files) disk[f.path] = f.content
+    if (lab.initialized) disk[`${LAB}/.terraform.lock.hcl`] = mountedLock(block, lab.files)
+    const ctx: CliContext = {
+      lab,
+      cwd: LAB,
+      mainHost: true,
+      env: {},
+      taken: new Set(),
+      listFiles: async (dir) => Object.entries(disk).filter(([p]) => p.slice(0, p.lastIndexOf('/')) === dir).map(([p, text]) => ({ name: p.slice(p.lastIndexOf('/') + 1), text })),
+      readFile: async (p) => disk[p],
+      write: async (dir, name, text) => void (disk[`${dir}/${name}`] = text),
+    }
+    return { run: (...a: string[]) => runTerraform(a, ctx), set: (t: string) => void (disk[`${LAB}/main.tf`] = t) }
+  }
+  const result = async (w: ReturnType<typeof world>) => /"result": "([^"]*)"/.exec((await w.run('state', 'pull')).stdout)?.[1]
+
+  it('has the provider-documented schema', () => {
+    const a = schemaFor('random_password')!
+    expect(a.provider).toBe('registry.terraform.io/hashicorp/random')
+    for (const n of ['length', 'special', 'upper', 'lower', 'numeric', 'keepers', 'override_special']) expect(a.attrs[n].forceNew, n).toBe(true)
+    for (const n of ['special', 'upper', 'lower', 'numeric']) expect(a.attrs[n].default, n).toBe(true)
+    expect(a.attrs.result).toMatchObject({ readOnly: true, sensitive: true })
+    expect(a.attrs.bcrypt_hash).toBeUndefined()
+  })
+
+  it('init installs the random provider; plan creates with a sensitive result', async () => {
+    const w = world(cfg())
+    const init = await w.run('init')
+    expect(init.stdout).toMatch(/- Installed hashicorp\/random v[\d.]+ \(signed by HashiCorp\)/)
+    const plan = (await w.run('plan')).stdout
+    expect(plan).toContain('# random_password.db will be created')
+    expect(plan).toContain('+ result  = (sensitive value)')
+    expect(plan).toContain('+ length  = 32')
+    expect(plan).toContain('+ special = true')
+  })
+
+  it('applies a stable 32-char result from the seed; state show masks it, state pull does not', async () => {
+    const w = world(cfg())
+    await w.run('init')
+    await w.run('apply', '-auto-approve')
+    const r = await result(w)
+    expect(r).toMatch(/^[A-Za-z0-9!@#$%&*()\-_=+[\]{}<>:?]{32}$/)
+    expect((await w.run('state', 'show', 'random_password.db')).stdout).toContain('result  = (sensitive value)')
+    expect((await w.run('state', 'show', 'random_password.db')).stdout).not.toContain(r!)
+    const again = world(cfg())
+    await again.run('init')
+    await again.run('apply', '-auto-approve')
+    expect(await result(again)).toBe(r)
+  })
+
+  it('honours the character-class flags', async () => {
+    const w = world(cfg('  length = 40\n  special = false\n  upper = false\n  numeric = false\n'))
+    await w.run('init')
+    await w.run('apply', '-auto-approve')
+    expect(await result(w)).toMatch(/^[a-z]{40}$/)
+  })
+
+  it('changing length forces replacement with a new result; -replace and taint work', async () => {
+    const w = world(cfg())
+    await w.run('init')
+    await w.run('apply', '-auto-approve')
+    const first = await result(w)
+    w.set(cfg('  length = 24\n'))
+    const plan = (await w.run('plan')).stdout
+    expect(plan).toContain('# random_password.db must be replaced')
+    expect(plan).toMatch(/~ length\s+= 32 -> 24 # forces replacement/)
+    await w.run('apply', '-auto-approve')
+    const second = await result(w)
+    expect(second).toHaveLength(24)
+    w.set(cfg('  length = 24\n'))
+    await w.run('apply', '-auto-approve', '-replace=random_password.db')
+    const third = await result(w)
+    expect(third).not.toBe(second)
+    expect(third).not.toBe(first)
+    await w.run('taint', 'random_password.db')
+    expect((await w.run('plan')).stdout).toContain('# random_password.db is tainted, so must be replaced')
   })
 })

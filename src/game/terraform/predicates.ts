@@ -33,7 +33,9 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   if (has(l, 'plan_has')) {
     const p = plan()
     if (!p || p.diagnostics.length) return false
-    return !p.items.some((i) => (i.action === 'destroy' || i.action === 'replace') && l.plan_has.no_destroy.some((a) => covers(a, i.address)))
+    const { no_destroy, no_change } = l.plan_has
+    const hit = (actions: string[], list: string[] | undefined) => !!list && p.items.some((i) => actions.includes(i.action) && list.some((a) => covers(a, i.address)))
+    return !hit(['destroy', 'replace'], no_destroy) && !hit(['update', 'destroy', 'replace'], no_change)
   }
   if (has(l, 'state_has')) return listAddresses(w.state).some((a) => covers(l.state_has, a))
   if (has(l, 'state_lacks')) return !listAddresses(w.state).some((a) => covers(l.state_lacks, a))

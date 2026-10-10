@@ -476,7 +476,7 @@ Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `sta
 
 `evidence[].command` is one of: `plan`, `validate`, `init`, `show`, `output`, `version`, `state list`, `state show`, `state pull`, `state mv`, `state rm`, `apply`, `destroy`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `get`, `providers`, `workspace show`, `workspace list`, `workspace new`, `workspace select`, `workspace delete`.
 
-Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
+Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported (the AWS ones plus `random_password` from `hashicorp/random`: `length` required, `special`/`upper`/`lower`/`numeric` default true, every argument forces replacement; `result` is sensitive and derived from the lab seed, so a replay repeats it and a replacement changes it; `min_*` and `bcrypt_hash` are not modelled).
 
 Destroy-time errors come from the cloud as it is: a subnet, security group or VPC is refused (`DependencyViolation`, SG text with the SDK v2 `DeleteSecurityGroup` wrapper) while any other object in the cloud mentions its id, so a blocker is just a `cloud.add` object (for example an `aws_network_interface` with `subnet_id` or `groups` holding the id, or a subnet created out of band for a VPC). A bucket is refused with `BucketNotEmpty` while objects exist and `force_destroy` is not `true` IN STATE: author objects as `cloud.add: [{ type: aws_s3_object, attrs: { id: "BUCKET/path/key", bucket: BUCKET, key: path/key } }]`. Setting `force_destroy = true` in the configuration is not enough; an `apply` must write it, then `destroy` removes the objects and the bucket. Scripted `faults` still win over these. Bucket versions are not modelled.
 
@@ -849,6 +849,7 @@ Leaves (one key each):
 |---|---|
 | `plan_clean: true` | A real refresh and plan, run now on the files on disk with variables resolved as `terraform plan` does (including exported `TF_VAR_*` from the saved shell environment), shows no changes and no diagnostics. It ignores locks. False when the configuration cannot be planned (syntax error, missing variable, no config). |
 | `plan_has: { no_destroy: [ADDR, …] }` | That same plan would not destroy or replace any listed address. Same plan caveats as `plan_clean`; false if it cannot be planned. |
+| `plan_has: { no_change: [ADDR, …] }` | That same plan would not update, replace or destroy any listed address (a create is not a change). Key-less and module addresses cover instances and module children. False if it cannot be planned or has diagnostics. Both keys may be given; `plan_has` needs at least one. |
 | `state_has: ADDR` / `state_lacks: ADDR` | The address is (or is not) in state. |
 | `lock_free: true` | No state lock is held. |
 | `lock_bypassed: true` | Some command ran with `-lock=false` while someone else's lock was held and left the marker: an apply or destroy step, `state mv`, `state rm`, `taint`, `untaint`, `import` or `workspace new`/`delete`. It stays true after a later `force-unlock`. Reads (`plan`, `show`, `state list`) and commands that failed record nothing. Use it when a trap should not have to list addresses. |
@@ -861,6 +862,7 @@ Leaves (one key each):
 done_when: { state_lacks: aws_instance.web }
 done_when: { reality_has: { type: aws_s3_bucket, id: logs, attr: versioning, equals: true } }
 done_when: { plan_has: { no_destroy: [aws_db_instance.orders] } }
+done_when: { plan_has: { no_change: [aws_security_group.payments] } }
 done_when: { lock_free: true }
 done_when: { applied: { op: create, address: aws_instance.reconciler, lock_bypassed: true } }
 done_when: { file_contains: { path: /home/you/infra/db.tf, matches: 'ignore_changes\s*=\s*\[[^\]]*storage_encrypted' } }

@@ -19,6 +19,7 @@ export interface ResourceSchema {
 }
 
 const AWS = 'registry.terraform.io/hashicorp/aws'
+const RANDOM = 'registry.terraform.io/hashicorp/random'
 const RO: AttrSpec = { readOnly: true }
 const TAGS_ALL: AttrSpec = { computed: true, copyOf: 'tags' }
 const NEW: AttrSpec = { forceNew: true }
@@ -85,6 +86,21 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
   aws_iam_role: aws({ name: NEWC, path: { forceNew: true, default: '/' }, assume_role_policy: {}, tags: {}, tags_all: TAGS_ALL }),
   aws_ecs_service: aws({ name: NEW, cluster: NEWC, task_definition: {}, desired_count: { default: 0 }, tags: {}, tags_all: TAGS_ALL }),
   aws_cloudwatch_log_group: aws({ name: NEWC, retention_in_days: { default: 0 }, tags: {}, tags_all: TAGS_ALL }),
+  // Every configurable argument of the random provider's resources forces replacement. min_* and bcrypt_hash are not modelled.
+  random_password: {
+    provider: RANDOM,
+    attrs: {
+      id: RO,
+      result: { readOnly: true, sensitive: true },
+      length: NEW,
+      special: { forceNew: true, default: true },
+      upper: { forceNew: true, default: true },
+      lower: { forceNew: true, default: true },
+      numeric: { forceNew: true, default: true },
+      override_special: NEW,
+      keepers: NEW,
+    },
+  },
 }
 
 export function schemaFor(type: string): ResourceSchema | undefined {
