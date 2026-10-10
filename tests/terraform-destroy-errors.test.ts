@@ -77,7 +77,7 @@ describe('blockers', () => {
     const r = run('resource "aws_security_group" "web" {\n  name = "web"\n  description = "d"\n}\n', st, { ...cloudOf(st), ...eni({ groups: ['sg-9'] }) }, true)
     expect(r.errors[0].summary).toMatch(/^deleting Security Group \(sg-9\): operation error EC2: DeleteSecurityGroup, https response error StatusCode: 400, RequestID: [0-9a-f-]{36}, api error DependencyViolation: resource sg-9 has a dependent object$/)
   })
-  it('VPC blocked by a subnet created out of band; dependents of a failed delete are skipped', () => {
+  it('VPC blocked by a subnet created out of band', () => {
     const st = stateOf({ type: 'aws_vpc', name: 'v', attrs: VPC })
     const r = run('resource "aws_vpc" "v" {\n  cidr_block = "10.0.0.0/16"\n}\n', st, { ...cloudOf(st), [realityKey('aws_subnet', 'subnet-x')]: { id: 'subnet-x', vpc_id: 'vpc-1' } }, true)
     expect(r.errors[0].summary).toContain("DeleteVpc, https response error StatusCode: 400")
