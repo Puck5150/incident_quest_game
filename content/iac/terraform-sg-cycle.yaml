@@ -1,9 +1,9 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: terraform-sg-cycle
 track: iac
-difficulty: 2
+difficulty: 3
 title: "The callbacks PR won't even plan"
-par_minutes: 10
+par_minutes: 13
 
 ticket:
   from: "Checkout team"
@@ -593,7 +593,7 @@ evidence_labels:
 
 hints:
   nudge: "validate gives the same error as plan, and it never talks to AWS. What do the two things it names have in common in this PR?"
-  direction: "Compare the PR with main (git diff main). Each group's new ingress rule refers to the other group's id. Terraform has to know a value before it can use it, so each group would have to exist before the other. The loop only exists because the rules are written inside the group resources: a rule can be its own resource (aws_vpc_security_group_ingress_rule) that points at both groups by id."
+  direction: "Compare the PR with main (git diff main). Each group's new ingress rule refers to the other group's id. Terraform has to know a value before it can use it, so each group would have to exist before the other. The loop only exists because the rules are written inside the group resources: a rule can be its own resource (aws_vpc_security_group_ingress_rule) that points at both groups by id. Careful with the groups themselves: deleting their inline ingress/egress arguments does not revoke the rules AWS already holds (and AWS refuses a duplicate rule), so clear them with ingress = [] and egress = [] first, apply, then remove those arguments."
   answer: "Take every rule out of the two group resources and write each as its own resource: aws_vpc_security_group_ingress_rule / aws_vpc_security_group_egress_rule with security_group_id = the group and referenced_security_group_id = the peer group (app 8080 from web, web 8443 from app), plus web's 443 from 0.0.0.0/0 (cidr_ipv4) and an allow-all egress rule (ip_protocol = \"-1\", cidr_ipv4 = \"0.0.0.0/0\") for each group. Groups hold their old inline rules in AWS even after you delete the blocks, and AWS refuses a duplicate rule, so in the first apply set ingress = [] and egress = [] in both groups (they are cleared before the rules are created); apply, then delete those two lines from each group so rules are managed one way only, and terraform plan should say No changes with no warning."
 
 analogy:
