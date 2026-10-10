@@ -60,10 +60,25 @@ terminal:
   prompt: "you@laptop:~$"
   commands:
     - match: "aws iam list-access-keys --user-name backup-bot"
+      when_actions: [delete-leaked-key]
+      output: |
+        {
+            "AccessKeyMetadata": []
+        }
+    - match: "aws iam list-access-keys --user-name backup-bot"
       output: |
         {
             "AccessKeyMetadata": [
                 { "UserName": "backup-bot", "AccessKeyId": "AKIAIOSFODNN7EXAMPLE", "Status": "Inactive", "CreateDate": "2024-09-12T10:31:07Z" }
+            ]
+        }
+    - match: "aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=AKIAIOSFODNN7EXAMPLE"
+      output: |
+        {
+            "Events": [
+                { "EventTime": "2026-10-01T16:41:09Z", "EventName": "GetCallerIdentity", "Username": "backup-bot", "SourceIPAddress": "198.51.100.77" },
+                { "EventTime": "2026-10-01T16:41:30Z", "EventName": "ListBuckets", "Username": "backup-bot", "SourceIPAddress": "198.51.100.77" },
+                { "EventTime": "2026-10-01T02:00:11Z", "EventName": "PutObject", "Username": "backup-bot", "SourceIPAddress": "10.0.4.17" }
             ]
         }
     - match: "aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values=i-0backup01"
@@ -129,6 +144,15 @@ actions:
     label: "Delete AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from /etc/backup/env, then re-run the backup"
     kind: fix
     feedback: "The AWS CLI uses environment variables before instance profile credentials, so while the dead key was still exported, the new role was ignored. With them gone, the CLI falls through to the role, and the upload succeeds."
+  - id: delete-leaked-key
+    label: "aws iam delete-access-key --user-name backup-bot --access-key-id AKIAIOSFODNN7EXAMPLE"
+    kind: fix
+    match_regex: "^aws iam delete-access-key --user-name backup-bot --access-key-id AKIAIOSFODNN7EXAMPLE$"
+    feedback: "Deactivated is not deleted: anyone could ask to reactivate it, and it still shows up in audits. Deleting the leaked key finishes the job. Delete the backup-bot user too once nothing else uses it."
+  - id: review-cloudtrail
+    label: "Review CloudTrail for every call made with AKIAIOSFODNN7EXAMPLE since the gist went public, and escalate anything that is not the backup job"
+    kind: fix
+    feedback: "A leaked key is a possible breach until the logs say otherwise. The lookup shows two calls from 198.51.100.77, an address that is not your instance: someone tried the key and listed your buckets before it was deactivated. Hand that to security and check what else backup-bot could reach."
   - id: reactivate
     label: "Reactivate the access key so tonight's backup runs"
     kind: destructive
@@ -143,7 +167,7 @@ actions:
     feedback: "The key is rejected before permissions are even checked. More permissions on a dead key change nothing, and would make the next leak worse."
 
 solution_paths:
-  - [attach-role, remove-keys]
+  - [attach-role, remove-keys, delete-leaked-key, review-cloudtrail]
 
 key_evidence: [key-rejected, key-deactivated, keys-in-env, no-role]
 
@@ -156,7 +180,7 @@ evidence_labels:
 hints:
   nudge: "The dump worked. What does the upload's error say about the key itself?"
   direction: "Find where the script's credentials come from, and what security did yesterday. Does the instance have a role it could use instead?"
-  answer: "The script exports backup-bot's access key from /etc/backup/env, and security deactivated it after it leaked. Attach a role to the instance with just the S3 permission it needs, and remove the keys from the env file so the CLI uses the role."
+  answer: "The script exports backup-bot's access key from /etc/backup/env, and security deactivated it after it leaked. Attach a role to the instance with just the S3 permission it needs (s3:PutObject on orders/*), remove the keys from the env file so the CLI uses the role, delete the leaked key, and review CloudTrail for what anyone did with it."
 
 analogy:
   title: "The copied front-door key"
@@ -182,13 +206,17 @@ debrief:
     - "Find where the key lives (/etc/backup/env) and confirm the instance has no role."
     - "Create a role with only the permission the backup needs and attach it to the instance."
     - "Remove the keys from the env file: the CLI uses environment variables before the instance role."
-    - "Re-run the backup, then delete backup-bot's key (and the user, if nothing else uses it)."
+    - "Re-run the backup, then delete the leaked key (deactivated is not deleted) and the backup-bot user if nothing else uses it."
+    - "Review CloudTrail for calls made with the key from outside your network: treat the leak as a possible breach until proven otherwise."
+    - "Optionally require IMDSv2 on the instance so the role's credentials are harder to steal."
   real_world: |
     Long-term access keys on servers are one of the most common ways AWS
     accounts get compromised: they end up in repositories, gists, images
     and backups. AWS recommends that workloads use temporary credentials
     from IAM roles. When you move a workload to a role, remove the old keys
-    everywhere, or they'll quietly keep taking precedence.
+    everywhere, or they'll quietly keep taking precedence. After a leak,
+    delete (not just deactivate) the key and read CloudTrail for its use
+    before calling the incident closed.
 
 concepts:
   - term: "IAM user vs IAM role"
