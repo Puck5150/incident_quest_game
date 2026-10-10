@@ -16,7 +16,7 @@ import { applyMoves, movesOf } from './moves.ts'
 import type { ModuleTree } from './modules.ts'
 import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
-import { findInstance, instanceAddress, type State, type StateResource } from './state.ts'
+import { findInstance, instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
 import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjectDetail } from './state-ops.ts'
 import type { Block, Diagnostic, Pos } from './types.ts'
 
@@ -59,6 +59,7 @@ export interface PlanItem {
   reason?: 'tainted' | 'requested' | 'triggered'
   triggeredBy?: string[]
   createBeforeDestroy?: boolean
+  deposed?: string // a destroy of the old object a failed create_before_destroy replacement left behind (its key)
   unchanged?: Record<string, Value>
   dependsOn: string[] // module-qualified resource addresses (no instance keys) this item's resource depends on
   block?: { file: string; line: number; col: number } // where the resource is declared
@@ -580,6 +581,13 @@ export function planConfig(input: PlanInput): PlanResult {
       })
     }
   }
+  // Old objects a failed create_before_destroy replacement left behind are destroyed on the next run.
+  for (const r of base.resources) {
+    if (r.mode !== 'managed') continue
+    for (const inst of r.instances) {
+      if (inst.deposed?.length && !(scope && !scope.includes(r, inst.index_key))) result.items.push(...deposedItems(r, inst, g.nodes))
+    }
+  }
   // Real Terraform only warns when a keyless address names a count/for_each resource.
   for (const a of new Set(input.replace ?? [])) {
     if (a.includes('[')) continue
@@ -606,7 +614,7 @@ export function planConfig(input: PlanInput): PlanResult {
   // ponytail: moved/import check errors above keep the old errors-only output; real Terraform would show a partial plan there too.
   const checked = errors.length > 0
   const res = resKey
-  const guarded = (i: PlanItem) => protectedBy.has(res(i)) && (i.action === 'destroy' || i.action === 'replace')
+  const guarded = (i: PlanItem) => protectedBy.has(res(i)) && !i.deposed && (i.action === 'destroy' || i.action === 'replace')
   const failing = new Set(result.items.filter(guarded).map(res))
   const skipped = new Set<string>()
   if (!checked) for (const a of g.order) if (g.nodes.get(a)!.deps.some((d) => failing.has(d) || skipped.has(d))) skipped.add(a)
@@ -639,6 +647,24 @@ export function planConfig(input: PlanInput): PlanResult {
   return result
 }
 
+// ponytail: prevent_destroy is not applied to a deposed object (unverified), and a deposed object's block position is its resource's.
+function deposedItems(r: StateResource, inst: StateInstance, nodes: Map<string, GNode>): PlanItem[] {
+  const node = nodes.get(resKey({ module: r.module, type: r.type, name: r.name }))
+  const b = node?.kind === 'resource' ? node.block : undefined
+  return (inst.deposed ?? []).map((d) => ({
+    address: instanceAddress(r, inst.index_key),
+    module: r.module ?? '',
+    resource: `${r.type}.${r.name}`,
+    type: r.type,
+    name: r.name,
+    key: inst.index_key,
+    action: 'destroy',
+    deposed: d.key,
+    dependsOn: inst.dependencies ?? [],
+    ...(b ? { block: { file: node!.file, line: b.pos.line, col: b.pos.col } } : {}),
+    changes: destroyChanges(schemaFor(r.type), d.attributes),
+  }))
+}
 const destroyChanges = (schema: ResourceSchema | undefined, attrs: Record<string, Value>): AttrChange[] =>
   Object.entries(attrs)
     .map(([name, before]) => ({ name, before, after: null, forcesReplacement: false, sensitive: !!(schema && Object.hasOwn(schema.attrs, name) && schema.attrs[name].sensitive) }))
@@ -704,6 +730,7 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
         ...(b ? { block: { file: node!.file, line: b.pos.line, col: b.pos.col } } : {}),
         changes: destroyChanges(schemaFor(r.type), inst.attributes),
       })
+      result.items.push(...deposedItems(r, inst, nodes))
     }
   }
   if (configError) {

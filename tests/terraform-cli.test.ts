@@ -508,3 +508,13 @@ describe('terraform: evidence', () => {
     expect((await w.run('version')).evidence).toEqual([])
   })
 })
+
+describe('terraform state list with a deposed object', () => {
+  it('prints a second row for the deposed object; state show shows the live one', async () => {
+    const w = world()
+    w.ctx.lab.state.resources.find((r) => r.type === 'aws_vpc')!.instances[0].deposed = [{ key: 'abcd1234', attributes: { id: 'vpc-0' } }]
+    expect((await w.run('state', 'list')).stdout).toBe('aws_vpc.main\naws_vpc.main (deposed object abcd1234)')
+    expect((await w.run('state', 'list', 'aws_vpc.main')).stdout).toBe('aws_vpc.main\naws_vpc.main (deposed object abcd1234)')
+    expect((await w.run('state', 'show', 'aws_vpc.main')).stdout).toContain('id')
+  })
+})

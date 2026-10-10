@@ -1017,7 +1017,8 @@ function cmdState(args: string[], ctx: CliContext): Out {
         return boxFail('Unknown resource', `The current state contains no resource ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
       }
     }
-    return ok((wanted.length ? all.filter((a) => wanted.some((w) => matches(a, w))) : all).join('\n'))
+    const deposed = (a: string) => (findInstance(lab.state, a)?.instance.deposed ?? []).map((d) => `${a} (deposed object ${d.key})`)
+    return ok((wanted.length ? all.filter((a) => wanted.some((w) => matches(a, w))) : all).flatMap((a) => [a, ...deposed(a)]).join('\n'))
   }
   if (sub === 'show') {
     if (!lab.hasState) return fail(NO_STATE)

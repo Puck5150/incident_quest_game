@@ -9,6 +9,8 @@ export interface StateInstance {
   attributes: Record<string, Value>
   status?: 'tainted'
   dependencies?: string[] // resource addresses (no instance keys) this instance depends on
+  // Old objects left behind by a create_before_destroy replacement whose delete failed (one per address in this lab).
+  deposed?: { key: string; attributes: Record<string, Value> }[]
 }
 export interface StateResource {
   module?: string // instance-qualified module path, as in tfstate v4: module.net or module.net["a"]; absent = root
@@ -85,16 +87,19 @@ export function stateJson(state: State): string {
       type: r.type,
       name: r.name,
       provider: r.provider,
-      instances: r.instances.map((i) => {
+      // A deposed object is its own entry next to the live one, marked with its key (as in tfstate v4).
+      instances: r.instances.flatMap((i) => {
         if (hasUnknown(i.attributes)) throw new Error(`cannot write ${instanceAddress(r, i.index_key)} to state: it holds an unknown value`)
-        return {
+        const entry = (attributes: Record<string, Value>, deposed?: string) => ({
           ...(i.index_key === undefined ? {} : { index_key: i.index_key }),
           ...(i.status ? { status: i.status } : {}),
           schema_version: 0,
-          attributes: sortedAttributes(i.attributes),
+          attributes: sortedAttributes(attributes),
           sensitive_attributes: [],
           ...(i.dependencies?.length ? { dependencies: [...i.dependencies] } : {}),
-        }
+          ...(deposed === undefined ? {} : { deposed }),
+        })
+        return [entry(i.attributes), ...(i.deposed ?? []).map((d) => entry(d.attributes, d.key))]
       }),
     })),
     check_results: null,

@@ -6,7 +6,7 @@
 // half-applied world exactly as real Terraform does.
 import { equal, hasUnknown, type Value } from './eval.ts'
 import { planConfig, resKey, type PlanInput, type PlanItem, type PlanResult } from './plan.ts'
-import { alreadyExists, dependencyViolation, fillOnCreate, fillOnUpdate, referencedBy, seconds } from './provider.ts'
+import { alreadyExists, dependencyViolation, fillOnCreate, fillOnUpdate, hex, referencedBy, seconds } from './provider.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
@@ -31,6 +31,7 @@ export interface ApplyStep {
   address: string
   op: 'create' | 'update' | 'delete' | 'forget' | 'import'
   id?: string
+  deposed?: string // the delete of a deposed object (key); address is its instance's
   seconds: number
   ok: boolean
 }
@@ -48,15 +49,19 @@ const res = resKey
 const destroyPhase = (i: PlanItem) => i.action === 'destroy' || i.action === 'replace'
 const pending = (i: PlanItem) => destroyPhase(i) || i.action === 'create' || i.action === 'update' || i.action === 'forget' || i.importing !== undefined
 
+// A create_before_destroy replacement: created first, its old object deleted (as a deposed one) after its dependents moved over.
+const cbd = (i: PlanItem) => i.action === 'replace' && i.createBeforeDestroy === true
+
 const opOf = (i: PlanItem): ApplyStep['op'] =>
   i.importing !== undefined ? 'import' : i.action === 'forget' ? 'forget' : destroyPhase(i) ? 'delete' : i.action === 'create' ? 'create' : 'update'
 
 // done holds `${address}:${op}` for every successful step: an op never runs twice
 // on one address, and a created or updated instance is settled for this run, so
 // a plan that never converges (e.g. a value that stays unknown) cannot loop.
+const doneKey = (i: PlanItem) => `${i.address}${i.deposed ? `#${i.deposed}` : ''}:${opOf(i)}`
 function todoOf(items: PlanItem[], done: Set<string>): PlanItem[] {
   const settled = (a: string) => done.has(`${a}:create`) || done.has(`${a}:update`)
-  return items.filter((i) => pending(i) && !settled(i.address) && !done.has(`${i.address}:${opOf(i)}`))
+  return items.filter((i) => pending(i) && (i.deposed !== undefined || !settled(i.address)) && !done.has(doneKey(i)))
 }
 
 // failed holds instance addresses (an instance is never retried in this run) and
@@ -68,9 +73,12 @@ function pickNext(todo: PlanItem[], state: State, failed: Set<string>, strict: b
   const tier1 = todo.find(
     (i) =>
       destroyPhase(i) &&
+      !cbd(i) &&
       i.importing === undefined &&
       !failed.has(i.address) &&
-      !todo.some((o) => o !== i && ((destroyPhase(o) && o.dependsOn.includes(res(i))) || (strict && i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
+      // a deposed object goes first; its own delete also waits for every create/update that still moves dependents off it
+      !todo.some((o) => o !== i && !i.deposed && o.deposed !== undefined && o.address === i.address) &&
+      !todo.some((o) => o !== i && ((destroyPhase(o) && !cbd(o) && o.dependsOn.includes(res(i))) || (i.deposed !== undefined && o.action !== 'destroy' && o.dependsOn.includes(res(i))) || (strict && i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
   )
   if (tier1) return tier1
   const tier2 = todo.find((i) => i.action === 'forget' || i.importing !== undefined)
@@ -78,8 +86,9 @@ function pickNext(todo: PlanItem[], state: State, failed: Set<string>, strict: b
   // Plain destroys never hold up a create/update: the updates they matter to already go first.
   return todo.find(
     (i) =>
-      (i.action === 'create' || i.action === 'update') &&
+      (i.action === 'create' || i.action === 'update' || cbd(i)) &&
       !failed.has(i.address) &&
+      !(cbd(i) && todo.some((o) => o.deposed !== undefined && o.address === i.address)) &&
       i.dependsOn.every((d) => !failed.has(d) && !todo.some((o) => o !== i && o.action !== 'destroy' && res(o) === d)),
   )
 }
@@ -144,7 +153,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
     return undefined
   }
   const fail = (i: PlanItem, op: ApplyStep['op'], secs: number, summary: string, id?: string) => {
-    steps.push({ address: i.address, op, ...(id === undefined ? {} : { id }), seconds: secs, ok: false })
+    steps.push({ address: i.address, op, ...(id === undefined ? {} : { id }), ...(i.deposed ? { deposed: i.deposed } : {}), seconds: secs, ok: false })
     errors.push({ severity: 'error', summary, detail: '', file: i.block?.file ?? '', line: i.block?.line ?? 0, col: i.block?.col ?? 0, context: `resource "${i.type}" "${i.name}"`, address: i.address })
     failed.add(i.address).add(res(i))
   }
@@ -179,29 +188,43 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       removeInstance(state, i.address)
       steps.push({ address: i.address, op: 'forget', seconds: 0, ok: true })
       done.add(`${i.address}:forget`)
-    } else if (destroyPhase(i)) {
-      const attrs = prior ?? {}
+    } else if (destroyPhase(i) && !cbd(i)) {
+      const gone = i.deposed === undefined ? undefined : inst?.deposed?.find((d) => d.key === i.deposed)
+      const attrs = gone ? gone.attributes : (prior ?? {})
       const id = typeof attrs.id === 'string' ? attrs.id : ''
       const secs = seconds(i.type, 'delete')
       const ref = referencedBy(Object.fromEntries(reality), i.type, id)
       const error = faultFor(i, 'delete', attrs) ?? (ref ? dependencyViolation(i.type, id, seed) : undefined)
       if (error) fail(i, 'delete', secs, error, id)
       else {
-        removeInstance(state, i.address)
+        if (gone) {
+          inst!.deposed = inst!.deposed!.filter((d) => d !== gone)
+          if (!inst!.deposed.length) delete inst!.deposed
+        } else {
+          removeInstance(state, i.address)
+          skipImports.add(i.address)
+        }
         reality.delete(realityKey(i.type, id))
-        skipImports.add(i.address)
-        steps.push({ address: i.address, op: 'delete', id, seconds: secs, ok: true })
-        done.add(`${i.address}:delete`)
+        steps.push({ address: i.address, op: 'delete', id, ...(gone ? { deposed: gone.key } : {}), seconds: secs, ok: true })
+        done.add(doneKey(i))
         counts.destroyed++
       }
-    } else if (i.action === 'create') {
-      const attrs = fillOnCreate(i.type, i.address, Object.fromEntries(i.changes.map((c) => [c.name, c.after])), seed)
+    } else if (i.action === 'create' || cbd(i)) {
+      // A replacement's changes hold only what differs from the old object (and what is recomputed): the rest carries over.
+      const attrs = fillOnCreate(i.type, i.address, { ...(cbd(i) ? i.unchanged : {}), ...Object.fromEntries(i.changes.map((c) => [c.name, c.after])) }, seed)
       const secs = seconds(i.type, 'create')
       const error = faultFor(i, 'create', attrs) ?? alreadyExists(i.type, attrs, Object.fromEntries(reality), seed)
       if (error) fail(i, 'create', secs, error)
       else {
         const id = attrs.id as string
-        addInstance(state, i, attrs)
+        if (cbd(i) && inst) {
+          // The old object moves aside; the instance now holds the new one.
+          inst.deposed = [{ key: hex(`${seed}:deposed`, 8), attributes: inst.attributes }]
+          inst.attributes = attrs
+          delete inst.status
+          if (i.dependsOn.length) inst.dependencies = [...i.dependsOn]
+          else delete inst.dependencies
+        } else addInstance(state, i, attrs)
         reality.set(realityKey(i.type, id), structuredClone(attrs))
         steps.push({ address: i.address, op: 'create', id, seconds: secs, ok: true })
         done.add(`${i.address}:create`)

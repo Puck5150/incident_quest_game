@@ -478,6 +478,8 @@ Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `sta
 
 Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
 
+`lifecycle { create_before_destroy = true }` orders a replacement create, update of dependents, delete. If the old object's delete fails (a `faults` entry, or a `DependencyViolation` from something that still refers to it), the new object stays and the old one is kept in state as a deposed object: `terraform state list` shows an extra `ADDR (deposed object KEY)` row, the next `plan` shows `ADDR (deposed object KEY) will be destroyed`, and the next `apply` or `destroy` retries the delete (a fault with `until_actions` is the way to let it succeed). A failed create changes nothing. At most one deposed object per address; `state_has`/`state_lacks` do not see it.
+
 ### Modules (local) and module refactors
 
 `module` blocks work in `terraform.files` like any other block. Sources are local (`./modules/net`) or authored registry modules (see Registry modules below), a call may use `count` or `for_each` (see Keyed module instances below), and modules may call other local modules (see Nested modules below). The module directory must be among `files` and be listed in `modules.installed` (or the player runs `terraform init` first).
