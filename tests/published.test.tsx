@@ -50,7 +50,7 @@ afterEach(() => {
 })
 
 // Real content currently shipping dark (TF6c, released by deleting each `published: false`).
-const DARK = ['terraform-destroy-dependency-violation', 'terraform-destroy-nonempty-bucket', 'terraform-module-key-removed', 'terraform-module-refactor', 'terraform-module-upgrade', 'terraform-provider-lock-drift', 'terraform-remote-state-rename']
+const DARK = ['terraform-deleted-out-of-band', 'terraform-destroy-dependency-violation', 'terraform-destroy-nonempty-bucket', 'terraform-module-key-removed', 'terraform-module-refactor', 'terraform-module-upgrade', 'terraform-provider-lock-drift', 'terraform-remote-state-rename']
 
 describe('schema and loader', () => {
   const doc = parse(fullDisk)

@@ -620,3 +620,13 @@
   alternatives:
     - { command: "VPC console > Network interfaces", note: "The same list with filters and the attached resource." }
   docs: { title: "AWS CLI: describe-network-interfaces", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-network-interfaces.html" }
+
+- id: aws-sqs-get-queue-url
+  match: "^aws sqs get-queue-url"
+  summary: "Looks up a queue's URL by name."
+  parts:
+    - { token: "--queue-name app-jobs", meaning: "The queue to look up." }
+  why: "A quick way to ask AWS whether a queue exists: it answers with the URL, or with NonExistentQueue if the queue is gone."
+  alternatives:
+    - { command: "aws sqs list-queues --queue-name-prefix app-", note: "Every queue whose name starts with the prefix." }
+  docs: { title: "AWS CLI: sqs get-queue-url", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-url.html" }
