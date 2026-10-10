@@ -101,6 +101,17 @@ stage reopens the incident into the next one (see below).
   command (`kubectl rollout undo …`, `sudo reboot`); leave multi-step fixes as
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.
+- **Judging a policy document:** a regex cannot tell a least-privilege IAM policy
+  from a lookalike. For an `aws iam put-role-policy` fix give the action
+  `iam_policy: { verdict: ok|wildcard|overwrite, role, profile, reserved_policy,
+  allowed_actions, required_actions, resource }` instead of `match_regex`. The
+  engine parses the line and `--policy-document` (`src/game/awsPolicyCheck.ts`):
+  `ok` needs every statement to be an Allow on exactly `resource`, actions inside
+  `allowed_actions` (case-insensitive) including `required_actions`, one aws command
+  and no shell operators; `wildcard` (any `*`) and `overwrite` (reusing
+  `reserved_policy`) are judged first. Use three actions (a fix and two wrong ones)
+  sharing the same spec; the document must be inline (`file://` is not readable).
+
 - **Every investigation command is discoverable.** A `match_regex` command needs an
   `example`: one concrete command its pattern accepts (the validator checks it
   matches). `help` lists `match` commands as written and pattern commands by their

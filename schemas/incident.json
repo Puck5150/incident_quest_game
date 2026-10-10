@@ -1238,6 +1238,61 @@
             "type": "string",
             "minLength": 1
           },
+          "iam_policy": {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "wildcard",
+                  "overwrite"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reserved_policy": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "resource": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "verdict",
+              "role",
+              "profile",
+              "reserved_policy",
+              "allowed_actions",
+              "required_actions",
+              "resource"
+            ],
+            "additionalProperties": false
+          },
           "file": {
             "type": "object",
             "properties": {
@@ -3177,6 +3232,61 @@
                 "match_regex": {
                   "type": "string",
                   "minLength": 1
+                },
+                "iam_policy": {
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "wildcard",
+                        "overwrite"
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "profile": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reserved_policy": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "allowed_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "resource": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "role",
+                    "profile",
+                    "reserved_policy",
+                    "allowed_actions",
+                    "required_actions",
+                    "resource"
+                  ],
+                  "additionalProperties": false
                 },
                 "file": {
                   "type": "object",

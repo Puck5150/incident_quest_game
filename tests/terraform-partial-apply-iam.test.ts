@@ -121,20 +121,25 @@ describe('terraform-partial-apply-iam on the simulator', () => {
   })
 
   it('(e) the typed put-role-policy takes the grant only as the admin profile, as an additional policy, with the specific action on the specific database; mistyped or as the pipeline role it does not', () => {
-    const grant = scenario.actions.find((a) => a.id === 'grant-rds-permission')!
     const ok = [
       GRANT,
       put(GOOD_DOC, ' --profile platform-admin').replace('--profile platform-admin --role', '--role'),
       put(doc('"rds:CreateDBInstance"', `"${ARN}"`)),
       put(doc('["rds:CreateDBInstance"]', `["${ARN}"]`)),
-      put(doc('["rds:CreateDBInstance"]', '"arn:aws:rds:us-east-1:123456789012:db:orders-*"')),
       put(GOOD_DOC.replace('"Effect":"Allow"', '"Effect": "Allow"').replace('"Action":', '"Action" :')),
       put(GOOD_DOC, '', 'ci-rds-create'),
+      // reachability: another key order, double-quoted JSON, a Condition that only narrows, case-insensitive action names
+      put(`'{"Statement":[{"Resource":"${ARN}","Action":["rds:CreateDBInstance"],"Effect":"Allow"}],"Version":"2012-10-17"}'`),
+      put(`"{\\"Version\\":\\"2012-10-17\\",\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":[\\"rds:CreateDBInstance\\"],\\"Resource\\":\\"${ARN}\\"}]}"`),
+      put(`'{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:CreateDBInstance"],"Resource":"${ARN}","Condition":{"StringEquals":{"aws:RequestedRegion":"us-east-1"}}}]}'`),
+      put(doc('["RDS:createdbinstance","rds:AddTagsToResource"]', `"${ARN}"`)),
       `AWS_PROFILE=platform-admin aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document ${GOOD_DOC}`,
       `aws --profile platform-admin iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document ${GOOD_DOC}`,
       `aws iam put-role-policy --role-name=orders-ci-deploy --policy-name=orders-rds --policy-document=${GOOD_DOC} --profile=platform-admin`,
     ]
-    for (const cmd of ok) expect(actionFor(scenario, cmd), cmd).toBe(grant)
+    for (const cmd of ok) expect(actionFor(scenario, cmd)?.id, cmd).toBe('grant-rds-permission')
+    const stmt = (action: string, resource: string) => `{"Effect":"Allow","Action":${action},"Resource":${resource}}`
+    const two = (a: string, b: string) => `'{"Version":"2012-10-17","Statement":[${a},${b}]}'`
     const none = [
       // as the pipeline role, mistyped role or profile
       put(GOOD_DOC).replace('--profile platform-admin ', ''),
@@ -146,16 +151,34 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       // the action is missing, misspelt, or only a read
       put(doc('"rds:DescribeDBInstances"', `"${ARN}"`)),
       put(doc('"rds:CreateDBCluster"', `"${ARN}"`)),
-      // the resource is unbounded or another account / database
-      put(doc('["rds:CreateDBInstance"]', '"arn:aws:rds:us-east-1:123456789012:db:*"')),
+      put(doc('["rds:AddTagsToResource"]', `"${ARN}"`)),
+      // more than the least privilege, however it is spelt
+      put(doc('["rds:CreateDBInstance","rds:DeleteDBInstance"]', `"${ARN}"`)),
+      put(doc('["rds:CreateDBInstance","rds:ModifyDBInstance"]', `"${ARN}"`)),
+      put(doc('["rds:CreateDBInstance","iam:PassRole"]', `"${ARN}"`)),
+      put(doc('["rds:CreateDBInstance","iam:AttachRolePolicy"]', `"${ARN}"`)),
+      put(two(stmt('["rds:CreateDBInstance"]', `"${ARN}"`), stmt('["iam:*"]', `"${ARN}"`))),
+      put(two(stmt('["rds:CreateDBInstance"]', `"${ARN}"`), stmt('["rds:DeleteDBInstance"]', '"arn:aws:rds:us-east-1:123456789012:db:prod-orders"'))),
+      put(two(stmt('["rds:CreateDBInstance"]', `"${ARN}"`), stmt('["iam:AttachRolePolicy"]', `"${ARN}"`))),
+      // the resource is unbounded or another database / account / list
+      put(doc('["rds:CreateDBInstance"]', '"arn:aws:rds:us-east-1:123456789012:db:orders-*"')),
       put(doc('["rds:CreateDBInstance"]', '"arn:aws:rds:us-east-1:123456789012:db:other-db"')),
       put(doc('["rds:CreateDBInstance"]', '"arn:aws:rds:us-east-1:999999999999:db:orders-db"')),
-      // not an Allow
+      put(doc('["rds:CreateDBInstance"]', `["${ARN}","arn:aws:rds:us-east-1:123456789012:db:other-db"]`)),
+      put(two(stmt('["rds:CreateDBInstance"]', `"${ARN}"`), stmt('["rds:CreateDBInstance"]', '"arn:aws:rds:us-east-1:123456789012:db:other-db"'))),
+      // not an Allow, or Not*
       put(doc('["rds:CreateDBInstance"]', `"${ARN}"`, 'Deny')),
-      // the policy document is a file the lab cannot read: not credited
+      put(`'{"Version":"2012-10-17","Statement":[{"Effect":"Allow","NotAction":["rds:DeleteDBInstance"],"Resource":"${ARN}"}]}'`),
+      put(`'{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:CreateDBInstance"],"NotResource":"${ARN}"}]}'`),
+      // a second command on the line
+      `${GRANT} && aws iam attach-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-arn arn:aws:iam::aws:policy/AdministratorAccess`,
+      `${GRANT}; aws iam attach-role-policy --role-name orders-ci-deploy --policy-arn arn:aws:iam::aws:policy/AdministratorAccess`,
+      `${GRANT} | cat`,
+      `${GRANT} || true`,
+      `${GRANT} $(whoami)`,
+      `${GRANT} \`whoami\``,
+      // a file the lab cannot read
       put('file://orders-rds.json'),
-      // overwrites the existing policy
-      put(GOOD_DOC, '', 'terraform-deploy'),
     ]
     for (const cmd of none) expect(actionFor(scenario, cmd)?.id, cmd).not.toBe('grant-rds-permission')
     // the scripted denial never answers a command that takes the grant, and vice versa
@@ -186,12 +209,16 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       put(doc('"rds:Create*"', `"${ARN}"`)),
       put(doc('["rds:CreateDBInstance"]', '["*"]')),
       put(doc('["rds:CreateDBInstance"]', `["${ARN}","*"]`)),
+      put(doc('"RDS:*"', `"${ARN}"`)),
+      put(doc('["rds:CreateDBInstance","rds:Delete*"]', `"${ARN}"`)),
+      put(doc('["rds:CreateDBInstance","iam:*"]', `"${ARN}"`)),
+      `${put(doc('"rds:*"', '"*"'))} && echo done`,
     ])
       expect(actionFor(scenario, cmd)?.id, cmd).toBe('grant-wildcard')
     // reusing the existing policy's name replaces it: flagged wrong, whatever the document
     const over = scenario.actions.find((a) => a.id === 'overwrite-deploy-policy')!
     expect(over.kind).toBe('wrong')
-    expect(actionFor(scenario, put(GOOD_DOC, '', 'terraform-deploy'))?.id).toBe('overwrite-deploy-policy')
+    for (const n of ['terraform-deploy', 'Terraform-Deploy']) expect(actionFor(scenario, put(GOOD_DOC, '', n))?.id, n).toBe('overwrite-deploy-policy')
     expect(['grant-wildcard', 'overwrite-deploy-policy']).toContain(actionFor(scenario, put(doc('"rds:*"', '"*"'), '', 'terraform-deploy'))?.id)
   })
 

@@ -182,6 +182,19 @@ const ActionsSchema = z
       feedback: z.string().min(1),
       // Typing a matching command in the terminal takes this action too.
       match_regex: z.string().min(1).optional(),
+      // Typing an `aws iam put-role-policy` whose parsed --policy-document earns this verdict takes the action
+      // (src/game/awsPolicyCheck.ts). Instead of a regex, which cannot judge a JSON document.
+      iam_policy: z
+        .strictObject({
+          verdict: z.enum(['ok', 'wildcard', 'overwrite']),
+          role: z.string().min(1),
+          profile: z.string().min(1),
+          reserved_policy: z.string().min(1),
+          allowed_actions: z.array(z.string().min(1)).min(1),
+          required_actions: z.array(z.string().min(1)).min(1),
+          resource: z.string().min(1),
+        })
+        .optional(),
       // A fix made by editing a file (PLAN_TERMINAL.md T4): the action is taken
       // once the file on disk matches `matches`; the button writes `after`.
       file: z

@@ -10,7 +10,7 @@ export type Line = { id: number; prompt: string; input: string; output: string; 
 // The terminal's welcome line.
 export const hint = (scenario: Scenario) =>
   "Type help to see some commands. It's a real shell: pipes, files, cd and variables work. Tab completes, ↑/↓ for history." +
-  ([scenario, ...(scenario.stages ?? [])].some((x) => x.actions.some((a) => a.match_regex)) ? ' Once you have named the root cause, you can type fixes here too.' : '')
+  ([scenario, ...(scenario.stages ?? [])].some((x) => x.actions.some((a) => a.match_regex || a.iam_policy)) ? ' Once you have named the root cause, you can type fixes here too.' : '')
 
 // The prompt on another host: "ops@media-01:~$" after ssh db-01 is "ops@db-01:~$".
 const onHost = (prompt: string, host: string | undefined) => (host ? prompt.replace(/^([\w.-]+@)[\w.-]+/, `$1${host}`) : prompt)
