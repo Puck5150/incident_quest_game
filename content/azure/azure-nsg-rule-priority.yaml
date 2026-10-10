@@ -88,6 +88,10 @@ actions:
     kind: fix
     match_regex: "^az network nsg rule update (-g|--resource-group) rg-batch --nsg-name nsg-batch (-n|--name) Allow-SSH-Office --priority (1[0-9][0-9])$"
     feedback: "Rules are processed lowest number first and processing stops at the first match. At 150 the office SSH allow is checked before the baseline deny at 200, so SSH from the VPN works and everything else is still denied."
+  - id: nsg-in-iac
+    label: "Put the priority layout (team allows 100-199, baseline deny 200) in the NSG's IaC and agree it with the security team, so the hand edit survives the next apply and the baseline rollout"
+    kind: fix
+    feedback: "A CLI edit on an NSG that security automation and IaC also manage is overwritten at the next apply. With the layout in code and agreed, allows stay below the deny, and leaving gaps lets rules be slotted in later."
   - id: allow-at-400
     label: "Add a new rule allowing SSH from the office at priority 400"
     kind: wrong
@@ -106,7 +110,7 @@ actions:
     feedback: "SSH works again, for the whole internet if this VM is ever reachable from it. Scope the allow to the office range, and just give it a lower number than the deny."
 
 solution_paths:
-  - [reprioritize]
+  - [reprioritize, nsg-in-iac]
 
 key_evidence: [flow-denied, rule-order, baseline-added]
 

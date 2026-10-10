@@ -144,13 +144,19 @@ hypotheses:
     feedback: "The probe and backend settings use plain HTTP on port 80, so there's no backend certificate involved."
 
 actions:
+  - id: widen-probe
+    label: "Loosen the probe so it passes (widen --match-status-codes, change --host, or lower --min-servers)"
+    kind: destructive
+    match_regex: "^az network application-gateway probe update(?=.*--(match-status-codes|host|min-servers|match-body)).*$"
+    feedback: "A probe that accepts 404 (or forces traffic to servers that fail it) hides the next real outage: the gateway would keep sending customers to a broken server. Fix the path the probe asks for, not what counts as healthy."
   - id: update-probe
     label: "az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path /healthz"
     kind: fix
-    match_regex: "^az network application-gateway probe update .*--path /healthz( .*)?$"
+    # Flag grammar, each once, any order; nothing else (no status-code, host, body or threshold changes), no shell operators.
+    match_regex: "^az network application-gateway probe update(?!.*( -g | --resource-group ).*( -g | --resource-group ))(?!.*--gateway-name.*--gateway-name)(?!.*( -n | --name ).*( -n | --name ))(?!.*--path.*--path)(?=.*( -g | --resource-group )rg-portal( |$))(?=.* --gateway-name agw-portal( |$))(?=.*( -n | --name )probe-portal( |$))(?=.* --path /healthz( |$))(( -g| --resource-group) rg-portal| --gateway-name agw-portal|( -n| --name) probe-portal| --path /healthz)+$"
     feedback: "The next probes get 200 from /healthz. Both servers turn Healthy and the gateway starts forwarding traffic again."
   - id: probe-in-iac
-    label: "Move the gateway config (including the probe) into the same Bicep repo and pipeline as the app"
+    label: "Move the gateway config (including the probe) into the same Bicep repo and pipeline as the app, so the CLI edit is not the only copy of the fix"
     kind: fix
     feedback: "Now a change to the health endpoint and the probe that depends on it ship together, in one reviewed pull request."
   - id: restart-vms

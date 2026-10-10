@@ -112,7 +112,8 @@ actions:
     feedback: "That removes a data-residency control for every subscription in the company, agreed with legal, to unblock one deployment. Someone else's audit will find it."
 
 solution_paths:
-  - [allowed-region, exemption-process]
+  - [allowed-region]
+  - [exemption-process]
 
 key_evidence: [disallowed, allowed-list, westus]
 

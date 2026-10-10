@@ -248,8 +248,12 @@ stages:
         label: "Switch kv-shared to the Azure RBAC permission model"
         kind: destructive
         feedback: "Every other app that reads kv-shared through an access policy loses access at once, because access policies stop applying. That move needs planning, not an incident."
+      - id: revoke-staging-prod
+        label: "Revoke the staging slot identity's standing access to the production payment secrets (kv-payments, kv-shared) and give staging its own non-production secrets"
+        kind: fix
+        feedback: "Staging was granted production's payment key and the shared vault 'before testing' and still holds them. A test slot should never read live payment secrets; remove the grants and point staging at test credentials, or give each slot its own identity with separate secrets."
     solution_paths:
-      - [add-policy]
+      - [add-policy, revoke-staging-prod]
     key_evidence: [webhook-fail, webhook-ref-failed, shared-policies, policy-staging-only]
     evidence_labels:
       webhook-fail: "Checkout works, but webhooks fail signature verification"

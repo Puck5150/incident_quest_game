@@ -88,9 +88,17 @@ actions:
     match_regex: "^az cosmosdb sql container throughput update (-a|--account-name) cosmos-iot (-g|--resource-group) rg-iot (-d|--database-name) iot (-n|--name) telemetry --throughput 40000$"
     feedback: "Throughput is split evenly across physical partitions, so the hot one gets 10,000 RU/s instead of 5,000 and ingestion catches up. It's a stopgap: you're paying for four partitions to help one."
   - id: new-partition-key
-    label: "Long term: migrate to a new container partitioned by /deviceId (or deviceId plus date), then lower the RU/s"
+    label: "Long term: migrate to a new container partitioned by /deviceId (or deviceId plus date) and switch ingestion over"
     kind: fix
     feedback: "Partition keys can't be changed in place, so this means a new container and a data migration. With 40,000 devices as keys, writes spread across every partition and the provisioned RU/s are actually usable."
+  - id: lower-rus
+    label: "After the migration, bring the new container's RU/s back down to what the spread load actually needs"
+    kind: fix
+    feedback: "The 40,000 RU/s was a stopgap paid for to help one partition. With writes spread evenly, you size for real usage; leaving the stopgap in place keeps paying four times over."
+  - id: alert-hot-partition
+    label: "Alert on per-partition normalized RU consumption (and 429s) so a skewed key is caught before ingestion falls behind"
+    kind: fix
+    feedback: "Total RU/s looked fine while one partition was at 100%. Normalized RU consumption per partition key range is the metric that shows skew, so alert on that."
   - id: autoscale
     label: "Switch the container to autoscale with a 20,000 RU/s maximum"
     kind: wrong
@@ -105,7 +113,7 @@ actions:
     feedback: "That deletes all the telemetry history to fix a key choice. Migrate the data to a new container instead, then switch over."
 
 solution_paths:
-  - [raise-rus, new-partition-key]
+  - [raise-rus, new-partition-key, lower-rus, alert-hot-partition]
 
 key_evidence: [one-range-hot, throttled, date-key]
 
