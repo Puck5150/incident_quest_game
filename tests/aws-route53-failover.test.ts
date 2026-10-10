@@ -11,8 +11,11 @@ describe('aws-route53-failover', () => {
     `${A} --protocol tcp --port 443 --cidr 15.177.0.0/18`,
     `${A} --port 443 --cidr 54.239.98.0/24 --protocol tcp`,
     `sudo ${A} --protocol 6 --port 443 --cidr 54.240.217.160/29`,
-    `${A} --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=${PL}}]`,
-    `${A} --ip-permissions IpProtocol=tcp,ToPort=443,FromPort=443,PrefixListIds=[{PrefixListId=${PL}}]`,
+    `${A} --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=${PL}}]'`,
+    `${A} --ip-permissions 'IpProtocol=tcp,ToPort=443,FromPort=443,PrefixListIds=[{PrefixListId=${PL}}]'`,
+    `${A} --protocol tcp --port 443 --cidr "15.177.0.0/18"`,
+    `aws ec2 authorize-security-group-ingress --group-id "sg-0usw2alb" --protocol tcp --port 443 --cidr '15.177.0.0/18' --region us-west-2 --output json --no-cli-pager`,
+    `aws ec2 authorize-security-group-ingress --group-id=sg-0usw2alb --protocol=tcp --port=443 --cidr=15.177.0.0/18`,
     `${A} --ip-permissions '[{"IpProtocol":"tcp","FromPort":443,"ToPort":443,"PrefixListIds":[{"PrefixListId":"${PL}"}]}]'`,
   ])('credits %s as the health-checker rule', (c) => expect(credit(c)?.id).toBe('allow-health-checkers'))
 
@@ -24,13 +27,42 @@ describe('aws-route53-failover', () => {
     `${V} && ${A} --protocol -1 --cidr 0.0.0.0/0`,
     `${V}; ${A} --protocol tcp --port 22 --cidr 0.0.0.0/0`,
     `${V} --cidr 0.0.0.0/0`,
-    `${A} --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=${PL}}],IpRanges=[{CidrIp=0.0.0.0/0}]`,
-    `${A} --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0}],PrefixListIds=[{PrefixListId=${PL}}]`,
+    `${A} --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=${PL}}],IpRanges=[{CidrIp=0.0.0.0/0}]'`,
+    `${A} --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0}],PrefixListIds=[{PrefixListId=${PL}}]'`,
     `${A} --ip-permissions '[{"IpProtocol":"tcp","FromPort":443,"ToPort":443,"IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]'`,
   ])('never credits a loosened line: %s', (c) => {
     expect(credit(c)?.id).not.toBe('allow-health-checkers')
     expect(['wrong', 'destructive']).toContain(credit(c)?.kind ?? 'wrong')
   })
+
+  it.each([
+    `${V} --port 22`,
+    `${V} --group-id sg-0evil`,
+    `${V} --group-id=sg-0evil`,
+    `${V} --group-name x`,
+    `${V} --protocol udp`,
+    `${V} --port=22`,
+    `${V} --description x`,
+    `${V} --region us-east-1`,
+    `${V} --dry-run`,
+    `${A} --protocol tcp --port 443 --cidr $CIDR`,
+    `${A} --protocol tcp --port 443 --cidr 15.177.0.0/1\\8`,
+    `${A} --protocol tcp --port 443 --cidr 15.177.0.0/18*`,
+    `${A} --protocol tcp --port 443 --cidr ~15.177.0.0/18`,
+    `${A} --protocol tcp --port 443 --cidr $'15.177.0.0/18'`,
+    `${A} --protocol tcp --port 443 --cidr 15.177.0.0/18 #x`,
+    `${A} --protocol tcp --port 443 --cidr "15.177.0.0/18'`,
+    `${A} --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,PrefixListIds=[{PrefixListId=${PL}}]`,
+    `${A} --ip-permissions '[{"IpProtocol":"tcp","FromPort":443,"ToPort":443,"PrefixListIds":[{"PrefixListId":"${PL}"}]}]' --ip-permissions '[{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"PrefixListIds":[{"PrefixListId":"${PL}"}]}]'`,
+    `${A} --ip-permissions '[{"IpProtocol":"tcp","FromPort":443,"ToPort":443,"PrefixListIds":[{"PrefixListId":"${PL}"}]},{"IpProtocol":"udp","FromPort":443,"ToPort":443,"PrefixListIds":[{"PrefixListId":"${PL}"}]}]'`,
+  ])('rejects a repeated, unknown or shell-active form: %s', (c) => expect(credit(c)?.id).not.toBe('allow-health-checkers'))
+
+  it.each([
+    'aws ec2 modify-security-group-rules --group-id sg-0usw2alb --security-group-rules SecurityGroupRuleId=sgr-1,SecurityGroupRule={IpProtocol=tcp,FromPort=443,ToPort=443,CidrIpv4=0.0.0.0/0}',
+    'aws ec2 authorize-security-group-egress --group-id sg-0usw2alb --protocol tcp --port 443 --cidr 0.0.0.0/0',
+    'aws ec2 authorize-security-group-ingress --group-id "sg-0usw2alb" --protocol tcp --port 443 --cidr 0.0.0.0/0',
+    "aws ec2 authorize-security-group-ingress --group-id='sg-0usw2alb' --protocol tcp --port 443 --cidr 0.0.0.0/0",
+  ])('flags the weak form %s', (c) => expect(credit(c)).toMatchObject({ kind: 'wrong' }))
 
   it.each([
     `${A} --protocol tcp --port 443 --cidr 8.8.8.0/24`,
