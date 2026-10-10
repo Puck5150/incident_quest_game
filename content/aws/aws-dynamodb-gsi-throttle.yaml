@@ -87,17 +87,21 @@ hypotheses:
 
 actions:
   - id: raise-gsi
-    label: "Raise customer-index's provisioned write capacity to match the table (update-table --global-secondary-index-updates, WriteCapacityUnits 2000)"
+    label: "Raise customer-index's provisioned write capacity to a sensible floor now (update-table --global-secondary-index-updates, WriteCapacityUnits 2000), and register it for auto scaling so it is not a fixed over-provision"
     kind: fix
     feedback: "A table write only succeeds if the table and every global secondary index it updates have capacity for it. With the index at 2,000 WCU, the throttles stop and orders go through."
   - id: autoscale-gsi
     label: "Register customer-index with Application Auto Scaling, with the same target as the table"
     kind: fix
-    feedback: "Now the index scales with the table instead of sitting at a number someone typed months ago. AWS recommends an index's write capacity be at least the table's."
+    feedback: "Now the index scales with the table instead of sitting at a number someone typed months ago (set a minimum near the baseline and a maximum at or above the table's peak, so you pay for what you use). AWS recommends an index's write capacity be at least the table's. If the table is in Terraform, put the scaling there and ignore capacity drift on the index, or the next apply resets it."
   - id: on-demand
     label: "Switch the orders table to on-demand capacity mode"
     kind: fix
-    feedback: "Global secondary indexes inherit the table's capacity mode, so the table and its index both scale with demand. A valid alternative: it changes how you pay, so check the cost for steady traffic later."
+    feedback: "Global secondary indexes inherit the table's capacity mode, so the table and its index both scale with demand. A valid alternative, but it changes how you pay: steady high traffic is often cheaper provisioned with auto scaling, and you can switch modes only once every 24 hours, so compare the cost before choosing it."
+  - id: alarm-gsi-throttle
+    label: "Alarm on WriteThrottleEvents per index (table orders, GlobalSecondaryIndexName customer-index), paging the on-call"
+    kind: fix
+    feedback: "The throttles looked like they came from the table, and nothing alerted on the index. A per-index throttle alarm names the real culprit the first minute it happens."
   - id: raise-table
     label: "Raise the table's write capacity to 4,000 WCU"
     kind: wrong
@@ -112,8 +116,8 @@ actions:
     feedback: "Writes recover, and the support team's orders-by-customer screen breaks until an index is rebuilt over every existing order. You'd delete a feature to avoid changing a number."
 
 solution_paths:
-  - [raise-gsi, autoscale-gsi]
-  - [on-demand]
+  - [raise-gsi, autoscale-gsi, alarm-gsi-throttle]
+  - [on-demand, alarm-gsi-throttle]
 
 key_evidence: [gsi-capped, gsi-throttles, gsi-100, no-gsi-scaling]
 
@@ -126,7 +130,7 @@ evidence_labels:
 hints:
   nudge: "The table has spare capacity. What else must have capacity for an order write to succeed?"
   direction: "Compare write capacity used and provisioned for the table and for its global secondary index, and check what auto scaling manages."
-  answer: "Each order also writes to customer-index, provisioned at 100 WCU with no auto scaling, so the index throttles table writes. Raise the index's WCU and add it to auto scaling (or move the table to on-demand)."
+  answer: "Each order also writes to customer-index, provisioned at 100 WCU with no auto scaling, so the index throttles table writes. Raise the index's WCU, add it to auto scaling (or move the table to on-demand after comparing the cost), and alarm on throttle events per index."
 
 analogy:
   title: "The second form that has to be filed too"
@@ -152,7 +156,8 @@ debrief:
     - "Compare capacity per index: customer-index pinned at 100 WCU with all the throttle events."
     - "Check auto scaling: only the table is registered."
     - "Raise the index's write capacity to match the table, and register it for auto scaling."
-    - "Or switch the table (and so its indexes) to on-demand."
+    - "Or switch the table (and so its indexes) to on-demand, after checking the cost for steady traffic."
+    - "Alarm on WriteThrottleEvents for each index, and keep the capacity settings in the infrastructure code."
   real_world: |
     Under-provisioned global secondary indexes are a classic DynamoDB
     surprise because the throttles look like they come from the table.
