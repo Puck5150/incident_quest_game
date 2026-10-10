@@ -100,8 +100,12 @@ actions:
     feedback: "SMB now travels through the VPN tunnel to a private address, not across the internet, so the baseline rule stays in place. This is one of Microsoft's documented solutions, and keeps the share off the internet entirely."
   - id: open-445-azure
     label: "Ask security to allow outbound 445 only to Azure's published IP ranges for this region's storage"
+    kind: wrong
+    feedback: "It works, but it sends SMB across the public internet from every office PC, needs a permanent exception in a deliberate baseline deny, and someone must keep chasing the changing service-tag ranges. The storage account stays reachable from the whole internet too. Use the VPN you already have and a private endpoint instead."
+  - id: disable-public-access
+    label: "Set the storage account's public network access to Disabled (or limit it to selected networks) once the private endpoint works, so the share is reachable only over the private path"
     kind: fix
-    feedback: "Microsoft lists this as a solution too: it works and is narrow. It does send SMB across the internet, which is why the baseline blocks it, so security has to accept the exception and keep the IP ranges updated."
+    feedback: "The private endpoint gives the office a safe path, but until the public endpoint is turned off the finance data stays reachable from anywhere that can authenticate. Disabling it (and requiring SMB 3.x with encryption in transit) leaves one door, the private one."
   - id: reboot-pcs
     label: "Restart the office PCs"
     kind: wrong
@@ -116,8 +120,7 @@ actions:
     feedback: "That lets every office PC speak SMB to any server on the internet, which is how credential-leak and worm attacks spread. It was blocked on purpose; route SMB over the VPN instead."
 
 solution_paths:
-  - [vpn-private-endpoint]
-  - [open-445-azure]
+  - [vpn-private-endpoint, disable-public-access]
 
 key_evidence: [error-53, tcp-445-fails, fw-blocks-smb]
 
@@ -129,7 +132,7 @@ evidence_labels:
 hints:
   nudge: "It works from Azure and not from the office. What does a file share need from the network that a website doesn't?"
   direction: "Test port 445 from an office PC, then read the office firewall's outbound rules."
-  answer: "Azure Files uses SMB on port 445, and the office firewall denies outbound 445 to the internet. Reach the share over the site-to-site VPN through a private endpoint (or get a narrow 445 exception to Azure's IP ranges)."
+  answer: "Azure Files uses SMB on port 445, and the office firewall denies outbound 445 to the internet. Reach the share over the site-to-site VPN through a private endpoint (with the private DNS zone), then disable public network access on the account. Do not open 445 to the internet, even to Azure ranges."
 
 analogy:
   title: "The loading bay door that's bricked up"
@@ -148,14 +151,16 @@ debrief:
     so the share worked there, but office PCs couldn't open a connection,
     and Windows reported System error 53. Microsoft's documented options are
     to route SMB over a VPN or ExpressRoute to a private endpoint, use Azure
-    File Sync (which uses 443), open 445 only to Azure's IP ranges, or use
-    REST-based tools.
+    File Sync (which uses 443), or use REST-based tools. Opening 445 to the
+    internet, even only to Azure's ranges, works but weakens a deliberate
+    baseline and leaves the account publicly reachable, so it is a stopgap.
   ideal_path:
     - "Read the error: 53 is \"network path not found\", a connectivity failure."
     - "Test port 445 from an office PC: fails, while 443 to the same name succeeds."
     - "Find what filters it: the office firewall's baseline denies outbound 445."
-    - "Use the existing VPN: a private endpoint for the storage account, with DNS for the office."
-    - "Or, with security's agreement, a narrow 445 exception to Azure's ranges."
+    - "Use the existing VPN: a private endpoint for the storage account, with the privatelink.file.core.windows.net DNS zone for the office."
+    - "Disable public network access on the account so the share is reachable only privately; require SMB 3.x with encryption."
+    - "Put the endpoint, DNS and network settings in IaC. Keep the 445 baseline deny."
   real_world: |
     Port 445 is blocked outbound by many ISPs and corporate firewalls, so
     "works from Azure, not from the office" is the most common Azure Files
