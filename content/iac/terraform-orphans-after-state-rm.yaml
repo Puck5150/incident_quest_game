@@ -348,7 +348,7 @@ hypotheses:
     feedback: "A missing permission comes back as UnauthorizedOperation. The error is DependencyViolation: EC2 understood the request and refused it because something still uses them. get-caller-identity shows an admin role."
   - id: slow-delete
     text: "DeleteSubnet is just slow here: Marta's destroy only needed more time (the provider keeps retrying a subnet delete for a long while)."
-    feedback: "Her log shows the subnet still 'destroying' after three minutes, and a fresh destroy fails with DependencyViolation. Retrying longer changes nothing while a running instance and database still sit in the subnet and security group."
+    feedback: "Her log shows the subnet still 'destroying' after three minutes, and a destroy eventually fails with DependencyViolation. Waiting longer changes nothing while a running instance and database still sit in the subnet and security group."
 
 actions:
   - id: unlock-and-import
@@ -357,10 +357,10 @@ actions:
     done_when:
       all:
         - lock_free: true
-        - state_has: aws_instance.worker
-        - state_has: aws_db_instance.reports
+        - applied: { op: import, address: aws_instance.worker }
+        - applied: { op: import, address: aws_db_instance.reports }
         - not: { lock_bypassed: true }
-    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. Importing wrote the state under a proper lock."
+    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. The imports were written under a proper lock."
   - id: destroy-environment
     label: "Run terraform destroy: the worker and database go first, then the group, subnet and VPC"
     kind: fix
@@ -442,6 +442,7 @@ debrief:
     - "Compare terraform state list (no worker, no db) with describe-instances and describe-db-instances (both running)."
     - "terraform force-unlock the lock, then terraform plan: two creates for things that already exist."
     - "terraform import aws_instance.worker i-0c7f3a9d1e5b24680 and terraform import aws_db_instance.reports reports-db."
+    - "Real Terraform 1.9.8 needs one more step here: the imported database must get skip_final_snapshot = true applied to its state (terraform apply) before the destroy, or the delete fails; the lab does not enforce this."
     - "terraform destroy: the worker and database go first, then the group, subnet and VPC."
   real_world: |
     The import IDs are the instance id for aws_instance and the identifier for

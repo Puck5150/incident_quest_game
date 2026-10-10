@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { atStage } from '../src/schema/stages.ts'
+import { detectAction } from '../src/components/terminal/detect.ts'
 import { evidenceSeen } from '../src/game/engine.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
@@ -67,12 +68,26 @@ describe('terraform-orphans-after-state-rm', () => {
       expect(out[7].output).toContain('Destroy complete! Resources: 5 destroyed.')
       expect(out[8].output).toContain('Destroy complete! Resources: 0 destroyed.')
       expect(out[9].output.trim()).toBe('')
-      // unlock-and-import is a state_has check: the engine latches it once seen, the helper re-reads the final (empty) world
-      expect(await detectedAll(sh)).toEqual({ ...NONE, 'destroy-environment': true })
+      // both fix steps are history-based, so they stay detected after the destroy empties the state
+      expect(await detectedAll(sh)).toEqual({ ...NONE, 'unlock-and-import': true, 'destroy-environment': true })
       // the scripted describes follow the world
       const r = await sh.run('aws rds describe-db-instances', atStage(scenario, 0), new Set(['destroy-environment']))
       expect(r.output).toContain('"DBInstances": []')
     })
+
+  it('late naming: after the destroy, the terminal check still takes both fix steps (checkFixes loop)', async () => {
+    const takenAfter = async (...lines: string[]) => {
+      const { sh } = await play(CD, ...lines)
+      const taken = new Set<string>()
+      const opts = { taken, fileMatches: async () => false, doneWhen: (p: Parameters<typeof sh.doneWhen>[0]) => sh.doneWhen(p) }
+      for (const a of scenario.actions) if (await detectAction(a, opts)) taken.add(a.id)
+      return taken
+    }
+    expect([...(await takenAfter(UNLOCK, IMP_W, IMP_D, D))].sort()).toEqual(['destroy-environment', 'unlock-and-import'])
+    expect([...(await takenAfter(UNLOCK, IMP_W, IMP_D, D, D))].sort()).toEqual(['destroy-environment', 'unlock-and-import'])
+    // a bypassed import refuses the fix and the trap shows
+    expect([...(await takenAfter(`${IMP_W} -lock=false`, `${IMP_D} -lock=false`, UNLOCK, D))].sort()).toEqual(['bypass-lock'])
+  })
 
   it('imports credit the first fix step before the destroy', async () => {
     const { sh } = await play(CD, UNLOCK, IMP_W, IMP_D)
@@ -86,7 +101,7 @@ describe('terraform-orphans-after-state-rm', () => {
     const { sh, out } = await play(CD, UNLOCK, add, A, D)
     expect(out[3].exitCode).toBe(0)
     expect(out[4].exitCode).toBe(0)
-    expect(await detectedAll(sh)).toEqual({ ...NONE, 'destroy-environment': true })
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'unlock-and-import': true, 'destroy-environment': true })
   })
 
   it('trap: -lock=false on import, state rm or destroy-that-succeeds is a recorded bypass and the fix is never credited', async () => {
@@ -114,7 +129,7 @@ describe('terraform-orphans-after-state-rm', () => {
     const more = await play(CD, UNLOCK, A, 'terraform destroy -target=aws_instance.worker -auto-approve', IMP_W, IMP_D, D)
     expect(more.out[3].exitCode).toBe(0)
     expect(more.out[6].exitCode).toBe(0)
-    expect(await detectedAll(more.sh)).toEqual({ ...NONE, 'destroy-environment': true, 'apply-recreate': true })
+    expect(await detectedAll(more.sh)).toEqual({ ...NONE, 'unlock-and-import': true, 'destroy-environment': true, 'apply-recreate': true })
   })
 
   it('trap: state rm of the network after unlock orphans it', async () => {
@@ -122,11 +137,11 @@ describe('terraform-orphans-after-state-rm', () => {
     expect(out[2].exitCode).toBe(0)
     expect(out[3].exitCode).toBe(0)
     // the worker and db are gone but the network stays in AWS, unmanaged: the fix is not earned
-    expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-rm-rest': true })
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-rm-rest': true, 'unlock-and-import': true })
     // recoverable: import the network back, destroy again
     const back = await play(CD, UNLOCK, 'terraform state rm aws_vpc.main aws_subnet.app aws_security_group.app', 'terraform import aws_vpc.main vpc-07c1e4a9d2b36f850', 'terraform import aws_subnet.app subnet-0a5d9c3f7e12b8460', 'terraform import aws_security_group.app sg-0b8e2d6a4c1f97350', IMP_W, IMP_D, D)
     expect(back.out[7].exitCode).toBe(0)
-    expect(await detectedAll(back.sh)).toEqual({ ...NONE, 'destroy-environment': true })
+    expect(await detectedAll(back.sh)).toEqual({ ...NONE, 'unlock-and-import': true, 'destroy-environment': true })
   })
 
   it('unlock alone, or import without unlock, is not the whole fix', async () => {
