@@ -519,34 +519,54 @@ hypotheses:
   - id: aws-rejects-circular-rules
     text: "AWS doesn't allow two security groups to reference each other, so the rules have to go."
     feedback: "AWS allows it: a rule's source can be any security group in the VPC, including one whose own rules point back. The error is Terraform's, printed by validate and plan without calling AWS. The two rules can exist; they just can't both be written inline in the two group resources."
+  - id: swap-for-cidr
+    text: "Replace one of the two group references with the other tier's subnet CIDR; then only one group reads the other and the loop is gone."
+    feedback: "The loop does go away, but the rule gets wider: a CIDR admits every host in the range, not only the members of the other tier's group, and it no longer follows the group as instances come and go. The cycle comes from writing the rules inside the group resources, not from using group ids. Keep both rules by group id and move them out of the groups."
 
 actions:
   - id: break-the-cycle
-    label: "Break the loop in security.tf: keep one rule by group id and write the other by the source subnet's CIDR, then plan (only the in-place rule changes) and apply"
+    label: "Split both groups' rules into their own rule resources, each pointing at its peer group by id, clear the old inline rules, then plan clean and apply"
     kind: fix
     done_when:
       all:
         - plan_clean: true
         - state_has: aws_security_group.web
         - state_has: aws_security_group.app
-        # Line-anchored so commented-out lines don't count; each callback/API rule must still exist with a real source.
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*security_groups\s*=\s*\[\s*aws_security_group\.(web|app)\.id\s*\]' }
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*8080\b)(?=[^{}]*\n[ \t]*(cidr_blocks|security_groups)\s*=\s*\[\s*[^\s\]])[^{}]*\}' }
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*8443\b)(?=[^{}]*\n[ \t]*(cidr_blocks|security_groups)\s*=\s*\[\s*[^\s\]])[^{}]*\}' }
-        - not: { file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*(8080|8443)\b)(?=[^{}]*\n[ \t]*(cidr_blocks\s*=\s*\[[^\]\n]*"0\.0\.0\.0/0"|ipv6_cidr_blocks\s*=\s*\[[^\]\n]*"::/0"))[^{}]*\}' } }
+        # World state, not text: what AWS holds for the two groups right now (inline rules and separate rule resources alike).
+        - { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: ingress, port: 8080, exact: true, source_group_id: sg-0a4d7e21c9b3f5068 } }
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, exact: true, source_group_id: sg-07c3e9a1d5b2f4e86 } }
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 443, exact: true, cidr: "0.0.0.0/0" } }
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: egress, port: 443, cidr: "*" } }
+        - { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: egress, port: 443, cidr: "*" } }
+        - not: { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: ingress, port: 8080, cidr: "*" } }
+        - not: { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, cidr: "*" } }
+        - not: { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 22 } }
+        - not: { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: ingress, port: 22 } }
         - not: { applied: { op: delete, address: aws_security_group.web } }
         - not: { applied: { op: delete, address: aws_security_group.app } }
         - not: { applied: { op: create, address: aws_security_group.web } }
         - not: { applied: { op: create, address: aws_security_group.app } }
-    feedback: "One direction still names the other group by id, the other names the source subnet's CIDR, so there's one reference between the groups and the graph has an order again. Both groups were updated in place: their ids stayed the same, and the instances using them never lost a rule."
+    feedback: "Neither group names the other any more: each rule is its own resource that depends on both groups, and nothing depends on the rules, so the graph has an order again. Both directions are still scoped to the peer group by id (only members of web reach app on 8080, only members of app reach web on 8443), the public HTTPS rule and the egress rules were carried over, and the groups were updated in place: same ids, the hosts never lost their group."
+  - id: widen-callbacks-to-cidr
+    label: "Break the loop by writing one rule from the source subnet's or the VPC's CIDR instead of the other group's id, then apply"
+    kind: wrong
+    done_when:
+      any:
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, cidr: "10.60.11.0/24" } }
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, cidr: "10.60.1.0/24" } }
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, cidr: "10.60.0.0/16" } }
+        - { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: ingress, port: 8080, cidr: "10.60.0.0/16" } }
+    feedback: "That does remove the cycle, but it also widens the rule: a CIDR admits every host in that range, not only the members of the other tier's group. Anything else that gets an address in the subnet (a new instance, a jump box, another team's workload) can now reach the port, and the rule no longer follows the group as hosts come and go. Scoping by security group was the point of the PR. Keep both rules by group id and take them out of the group resources instead."
   - id: open-callbacks-to-internet
     label: "Drop the group reference and open the rule to any address (cidr_blocks = [\"0.0.0.0/0\"]), then apply"
     kind: destructive
     done_when:
-      all:
-        - file_contains: { path: /home/you/checkout-infra/security.tf, matches: '^[ \t]*ingress\s*\{(?=[^{}]*\n[ \t]*(from|to)_port\s*=\s*(8080|8443)\b)(?=[^{}]*\n[ \t]*(cidr_blocks\s*=\s*\[[^\]\n]*"0\.0\.0\.0/0"|ipv6_cidr_blocks\s*=\s*\[[^\]\n]*"::/0"))[^{}]*\}' }
-        - plan_clean: true
-    feedback: "The cycle went away because that rule no longer reads the other group's id, but the rule now admits the whole internet: a private port meant for one tier is open to every address. Plan and apply were happy; the damage was in AWS the moment it applied. Close it again: keep one rule by group id and write the other by the source subnet's CIDR."
+      any:
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, cidr: "0.0.0.0/0" } }
+        - { sg_rule: { group_id: sg-0a4d7e21c9b3f5068, direction: ingress, port: 8443, cidr: "::/0" } }
+        - { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: ingress, port: 8080, cidr: "0.0.0.0/0" } }
+        - { sg_rule: { group_id: sg-07c3e9a1d5b2f4e86, direction: ingress, port: 8080, cidr: "::/0" } }
+    feedback: "The cycle went away because that rule no longer reads the other group's id, but the rule now admits the whole internet: a private port meant for one tier is open to every address. Plan and apply were happy; the damage was in AWS the moment it applied. Close it again: write the rule from the other group's id, as its own rule resource."
   # Button only: every terminal route (destroy, -replace, state rm then apply) is refused by AWS in this world
   # (DependencyViolation while the hosts use the groups and subnets, InvalidGroup.Duplicate for a second group of the same name).
   - id: recreate-groups
@@ -573,8 +593,8 @@ evidence_labels:
 
 hints:
   nudge: "validate gives the same error as plan, and it never talks to AWS. What do the two things it names have in common in this PR?"
-  direction: "Compare the PR with main (git diff main). Each group's new ingress rule refers to the other group's id. Terraform has to know a value before it can use it, so each group would have to exist before the other."
-  answer: "Keep one rule by group id (app's 8080 rule from aws_security_group.web.id) and write the other by CIDR: web's 8443 rule with cidr_blocks = [aws_subnet.app.cidr_block] instead of security_groups = [aws_security_group.app.id]. terraform plan shows both groups updated in place (0 to add, 2 to change, 0 to destroy); apply it."
+  direction: "Compare the PR with main (git diff main). Each group's new ingress rule refers to the other group's id. Terraform has to know a value before it can use it, so each group would have to exist before the other. The loop only exists because the rules are written inside the group resources: a rule can be its own resource (aws_vpc_security_group_ingress_rule) that points at both groups by id."
+  answer: "Take every rule out of the two group resources and write each as its own resource: aws_vpc_security_group_ingress_rule / aws_vpc_security_group_egress_rule with security_group_id = the group and referenced_security_group_id = the peer group (app 8080 from web, web 8443 from app), plus web's 443 from 0.0.0.0/0 (cidr_ipv4) and an allow-all egress rule (ip_protocol = \"-1\", cidr_ipv4 = \"0.0.0.0/0\") for each group. Groups hold their old inline rules in AWS even after you delete the blocks, and AWS refuses a duplicate rule, so in the first apply set ingress = [] and egress = [] in both groups (they are cleared before the rules are created); apply, then delete those two lines from each group so rules are managed one way only, and terraform plan should say No changes with no warning."
 
 analogy:
   title: "The two signatures"
@@ -583,9 +603,12 @@ analogy:
     and Finance won't sign the budget until it has the signed order to
     attach. Each office is right on its own terms, and the paperwork will
     sit there forever. Adding a third form that says "Finance goes first"
-    doesn't help: Finance still needs the order. One of the two has to
-    stop asking for the other's signature, say Finance approves against
-    the department's budget line instead, and then both can sign in turn.
+    doesn't help: Finance still needs the order. Swapping in
+    a department-wide pre-approval gets the paperwork moving, but now
+    anyone in the department can get a signature. The tidy fix is to take
+    each signature off the forms themselves and put it on a separate
+    approval slip that names both offices: neither form waits for the
+    other, and each approval still names exactly who it is for.
 
 debrief:
   root_cause: |
@@ -603,21 +626,31 @@ debrief:
     - "terraform plan and terraform validate: Error: Cycle: aws_security_group.app, aws_security_group.web. validate doesn't talk to AWS, so this is about the configuration."
     - "git diff main: the PR adds a web rule from app's group id and changes app's rule to come from web's group id. Each group now refers to the other."
     - "terraform state list: both groups exist from main (aws ec2 describe-security-groups shows them with main's CIDR rules); nothing needs creating."
-    - "Edit security.tf: keep app's 8080 rule by web's group id, and give web's 8443 rule cidr_blocks = [aws_subnet.app.cidr_block] instead of app's group id."
-    - "terraform plan: 0 to add, 2 to change, 0 to destroy, both groups updated in place (~ ingress). terraform apply."
+    - "Edit security.tf: remove the inline ingress and egress blocks from both groups and write each rule as its own aws_vpc_security_group_ingress_rule / _egress_rule: app 8080 and web 8443 by referenced_security_group_id (the peer group's id, never a CIDR), web 443 from 0.0.0.0/0, and the allow-all egress for each group."
+    - "terraform validate: the cycle is gone. terraform apply: AWS still holds the groups' old inline rules and refuses the duplicates (InvalidPermission.Duplicate on the 443 and egress rules), and the old 10.60.1.0/24 rule on app would stay open next to the new one."
+    - "Set ingress = [] and egress = [] in both groups and apply again: the groups are updated in place first (old rules revoked, ids unchanged), then the rules are created. Delete those two lines from each group, because the provider warns against inline rules and rule resources on one group: terraform plan is No changes, with no warning."
+    - "aws ec2 describe-security-groups: app allows 8080 only from the web group, web allows 8443 only from the app group and 443 from anywhere."
   real_world: |
-    The idiomatic fix is to take rules out of the group resources: declare
-    the groups with no inline rules and write each rule as its own
-    resource (aws_vpc_security_group_ingress_rule, or the older
-    aws_security_group_rule), which depends on both groups but neither
-    group depends on it. That keeps both directions by group id, which is
-    tighter than a subnet CIDR (anything in the subnet, not only members of
-    the group, now gets 8443). The provider docs warn not to mix inline
-    rules with separate rule resources for the same group: they overwrite
-    each other. Changing a group's rules is an in-place update, so the
-    group keeps its id; recreating it would cut off everything that uses
-    it. depends_on adds edges and can never break a cycle. terraform graph
-    draws a configuration's dependency graph.
+    This is the provider's own recommendation: declare the groups with no
+    inline rules and write each rule as its own resource
+    (aws_vpc_security_group_ingress_rule and _egress_rule; the older
+    aws_security_group_rule also works). A rule resource depends on both
+    groups, but neither group depends on it, so mutually referencing
+    groups are no problem. It keeps every rule scoped to the peer group
+    by id. Swapping one reference for the subnet's CIDR also breaks the
+    loop, but it admits every host in that range, drifts as the subnet
+    fills with other workloads, and is the exact loosening the PR was
+    meant to remove. The provider docs warn not to mix inline rules with
+    rule resources for the same group (rule conflicts, perpetual
+    differences, overwritten rules), and say that removing the ingress or
+    egress arguments does not revoke the rules already there: set them to
+    [] to clear them, then drop them. Doing this to a live group has a
+    short gap while the old rules are revoked and the new ones created;
+    when that matters, import the existing rules by their sgr- ids into
+    the new resources instead. Changing a group's rules is an in-place
+    update, so the group keeps its id; recreating it would cut off
+    everything that uses it. depends_on adds edges and can never break a
+    cycle. terraform graph draws a configuration's dependency graph.
 
 concepts:
   - term: "Resource dependencies"
@@ -627,11 +660,11 @@ concepts:
     text: "Declares extra dependencies on other resources or modules. It only ever adds to the graph."
     url: "https://developer.hashicorp.com/terraform/language/meta-arguments/depends_on"
   - term: "aws_security_group inline rules"
-    text: "ingress and egress blocks are written inline in the group. The provider docs recommend separate rule resources instead, and say not to mix the two for one group."
+    text: "ingress and egress blocks are written inline in the group. The provider docs warn against mixing them with rule resources for one group, and say removing the arguments does not revoke the rules; set them to [] to clear them."
     url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group"
-  - term: "Security group rules"
-    text: "A rule's source can be a CIDR range or another security group; a group can reference a group that references it back."
-    url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  - term: "aws_vpc_security_group_ingress_rule"
+    text: "One ingress rule as its own resource: security_group_id, ip_protocol, ports, and exactly one source (cidr_ipv4, cidr_ipv6, prefix_list_id or referenced_security_group_id)."
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule"
 
 sources:
   - title: "Terraform: Resource behavior (resource dependencies)"
@@ -648,7 +681,13 @@ sources:
     retrieved: 2026-10-09
   - title: "AWS provider: aws_security_group"
     url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group"
-    retrieved: 2026-10-09
+    retrieved: 2026-10-10
+  - title: "AWS provider: aws_vpc_security_group_ingress_rule"
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule"
+    retrieved: 2026-10-10
+  - title: "AWS provider: aws_security_group_rule"
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/security_group_rule"
+    retrieved: 2026-10-10
   - title: "Amazon VPC User Guide: Security group rules"
     url: "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
     retrieved: 2026-10-09
