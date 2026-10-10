@@ -277,6 +277,8 @@ describe('done_when in the scenario schema', () => {
       { state_has: 'aws_vpc.main' },
       { state_lacks: 'data.aws_ami.x' },
       { lock_free: true },
+      { lock_bypassed: true },
+      { not: { lock_bypassed: true } },
       { reality_has: { type: 'aws_vpc', id: 'vpc-1', attr: 'cidr_block', equals: '10.0.0.0/16' } },
       { reality_has: { type: 'aws_s3_bucket', id: 'b' } },
       { reality_lacks: { type: 'aws_vpc', id: 'vpc-2' } },
@@ -301,6 +303,9 @@ describe('done_when in the scenario schema', () => {
     expect(dw({ plan_clear: true })).not.toEqual([])
     expect(dw({ plan_clean: true, lock_free: true })).not.toEqual([])
     expect(dw({ plan_clean: false })).not.toEqual([])
+    expect(dw({ lock_bypassed: false })).not.toEqual([])
+    expect(dw({ all: [{ all: [{ lock_bypassed: true }] }] })).not.toEqual([])
+    expect(dw({ not: { not: { lock_bypassed: true } } })).not.toEqual([])
     expect(dw({ all: [] })).not.toEqual([])
     expect(dw({ all: [{ all: [{ plan_clean: true }] }] })).not.toEqual([])
     expect(dw({ not: { not: { plan_clean: true } } })).not.toEqual([])

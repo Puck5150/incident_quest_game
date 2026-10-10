@@ -1341,6 +1341,19 @@
                       {
                         "type": "object",
                         "properties": {
+                          "lock_bypassed": {
+                            "type": "boolean",
+                            "const": true
+                          }
+                        },
+                        "required": [
+                          "lock_bypassed"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
                           "reality_has": {
                             "type": "object",
                             "properties": {
@@ -1545,6 +1558,19 @@
                             },
                             "required": [
                               "lock_free"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "lock_bypassed": {
+                                "type": "boolean",
+                                "const": true
+                              }
+                            },
+                            "required": [
+                              "lock_bypassed"
                             ],
                             "additionalProperties": false
                           },
@@ -1774,6 +1800,19 @@
                             {
                               "type": "object",
                               "properties": {
+                                "lock_bypassed": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "lock_bypassed"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "reality_has": {
                                   "type": "object",
                                   "properties": {
@@ -1978,6 +2017,19 @@
                                   },
                                   "required": [
                                     "lock_free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "lock_bypassed": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "lock_bypassed"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -2214,6 +2266,19 @@
                             {
                               "type": "object",
                               "properties": {
+                                "lock_bypassed": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "lock_bypassed"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "reality_has": {
                                   "type": "object",
                                   "properties": {
@@ -2418,6 +2483,19 @@
                                   },
                                   "required": [
                                     "lock_free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "lock_bypassed": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "lock_bypassed"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -3179,6 +3257,19 @@
                             {
                               "type": "object",
                               "properties": {
+                                "lock_bypassed": {
+                                  "type": "boolean",
+                                  "const": true
+                                }
+                              },
+                              "required": [
+                                "lock_bypassed"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "reality_has": {
                                   "type": "object",
                                   "properties": {
@@ -3383,6 +3474,19 @@
                                   },
                                   "required": [
                                     "lock_free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "lock_bypassed": {
+                                      "type": "boolean",
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [
+                                    "lock_bypassed"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -3612,6 +3716,19 @@
                                   {
                                     "type": "object",
                                     "properties": {
+                                      "lock_bypassed": {
+                                        "type": "boolean",
+                                        "const": true
+                                      }
+                                    },
+                                    "required": [
+                                      "lock_bypassed"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
                                       "reality_has": {
                                         "type": "object",
                                         "properties": {
@@ -3816,6 +3933,19 @@
                                         },
                                         "required": [
                                           "lock_free"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "lock_bypassed": {
+                                            "type": "boolean",
+                                            "const": true
+                                          }
+                                        },
+                                        "required": [
+                                          "lock_bypassed"
                                         ],
                                         "additionalProperties": false
                                       },
@@ -4052,6 +4182,19 @@
                                   {
                                     "type": "object",
                                     "properties": {
+                                      "lock_bypassed": {
+                                        "type": "boolean",
+                                        "const": true
+                                      }
+                                    },
+                                    "required": [
+                                      "lock_bypassed"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
                                       "reality_has": {
                                         "type": "object",
                                         "properties": {
@@ -4256,6 +4399,19 @@
                                         },
                                         "required": [
                                           "lock_free"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "lock_bypassed": {
+                                            "type": "boolean",
+                                            "const": true
+                                          }
+                                        },
+                                        "required": [
+                                          "lock_bypassed"
                                         ],
                                         "additionalProperties": false
                                       },

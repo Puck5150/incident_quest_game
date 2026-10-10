@@ -139,7 +139,7 @@ describe('a held state lock', () => {
     expect(w.lab.state.resources).toEqual([])
     expect(w.lab.lock?.id).toBe(LOCK_ID)
     // the destroy ran past the held lock: its history lines say so
-    expect(w.lab.history).toEqual(['delete aws_s3_bucket.b (lock bypassed)', 'delete aws_vpc.main (lock bypassed)'])
+    expect(w.lab.history.slice(-2)).toEqual(['delete aws_s3_bucket.b (lock bypassed)', 'delete aws_vpc.main (lock bypassed)'])
   })
 
   it('marks nothing as bypassed when there is no lock to bypass', async () => {

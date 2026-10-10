@@ -159,6 +159,7 @@ const LeafSchema = z.union([
   z.strictObject({ state_has: tfAddrOrModule }),
   z.strictObject({ state_lacks: tfAddrOrModule }),
   z.strictObject({ lock_free: z.literal(true) }),
+  z.strictObject({ lock_bypassed: z.literal(true) }),
   z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
   z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
   z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),

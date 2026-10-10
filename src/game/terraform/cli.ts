@@ -274,6 +274,11 @@ function checkLock(ctx: CliContext, lock: boolean): Out | undefined {
   return fail(box('error', 'Error acquiring the state lock', `Error message: ${l.message}\n${info.join('\n')}\n\n\n${tail}`, true))
 }
 
+// Remember a state-writing command in the lab history; -lock=false past a held lock leaves the marker.
+export function recordWrite(ctx: CliContext, op: string, target: string, lock: boolean): void {
+  ctx.lab.history.push(`${op} ${target}${!lock && ctx.lab.lock ? LOCK_BYPASSED : ''}`)
+}
+
 function cmdVersion(ctx: CliContext, cfg: Config): Out {
   const lines = [`Terraform v${ctx.lab.version}`, 'on linux_amd64']
   for (const [p, e] of [...parseLock(cfg.lockText)].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) if (e.version !== undefined) lines.push(`+ provider ${p} v${e.version}`)
@@ -909,6 +914,7 @@ function cmdStateMv(args: string[], ctx: CliContext): Out {
   const lines = r.moved.map((m) => `${dry ? 'Would move' : 'Move'} "${m.from}" to "${m.to}"`)
   if (dry) return ok(lines.join('\n'))
   commit(ctx, r)
+  recordWrite(ctx, 'state-mv', a.pos[0], a.lock)
   return ok([...lines, `Successfully moved ${r.moved.length} object(s).`].join('\n'))
 }
 
@@ -927,6 +933,7 @@ function cmdStateRm(args: string[], ctx: CliContext): Out {
   const lines = r.removed.map((x) => `${dry ? 'Would remove' : 'Removed'} ${x}`)
   if (dry) return ok(lines.join('\n'))
   commit(ctx, r)
+  for (const x of a.pos) recordWrite(ctx, 'state-rm', x, a.lock)
   return ok([...lines, `Successfully removed ${r.removed.length} resource instance(s).`].join('\n'))
 }
 
@@ -944,6 +951,7 @@ function cmdTaint(args: string[], ctx: CliContext, verb: 'taint' | 'untaint'): O
   const r = verb === 'taint' ? taintInstance(ctx.lab.state, addr) : untaintInstance(ctx.lab.state, addr)
   if (!r.ok) return allowMissing && r.summary === NO_SUCH_INSTANCE ? ok('') : opFail(r)
   commit(ctx, r)
+  recordWrite(ctx, verb, addr, a.lock)
   return ok(verb === 'taint' ? `Resource instance ${addr} has been marked as tainted.` : `Resource instance ${addr} has been successfully untainted.`)
 }
 
@@ -972,6 +980,7 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const r = importObject(ctx.lab.state, ctx.lab.reality, addr, id, declared)
   if (!r.ok) return withWarn(s.warning, opFail(r))
   commit(ctx, r)
+  recordWrite(ctx, 'import', addr, a.lock)
   const type = t.ok ? t.type : ''
   return withWarn(
     s.warning,
@@ -1077,7 +1086,10 @@ function cmdWorkspace(args: string[], ctx: CliContext): Out {
   const exists = name === lab.workspace || lab.workspaces.has(name)
   if (sub === 'new') {
     if (exists) return fail(`Workspace "${name}" already exists`)
-    return checkLock(ctx, a.lock) || newWorkspace(lab, name)
+    const locked = checkLock(ctx, a.lock)
+    if (locked) return locked
+    recordWrite(ctx, 'workspace-new', name, a.lock)
+    return newWorkspace(lab, name)
   }
   if (sub === 'select') {
     if (exists) {
@@ -1104,6 +1116,7 @@ function cmdWorkspace(args: string[], ctx: CliContext): Out {
       ),
     )
   lab.workspaces.delete(name)
+  recordWrite(ctx, 'workspace-delete', name, a.lock)
   return ok(`Deleted workspace "${name}"!`)
 }
 

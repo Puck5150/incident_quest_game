@@ -67,6 +67,16 @@ describe('predicates', () => {
     expect(await ev({ lock_free: true })).toBe(true)
     expect(await ev({ lock_free: true }, world({ lock: { id: 'l' } }))).toBe(false)
   })
+  it('lock_bypassed: any history line carrying the marker', async () => {
+    expect(await ev({ lock_bypassed: true })).toBe(false)
+    expect(await ev({ lock_bypassed: true }, world({ history: ['state-rm aws_x.y', 'create aws_vpc.main'] }))).toBe(false)
+    expect(await ev({ lock_bypassed: true }, world({ history: ['create aws_vpc.main', 'state-rm aws_x.y (lock bypassed)'] }))).toBe(true)
+    expect(await ev({ lock_bypassed: true }, world({ history: ['delete aws_vpc.main (lock bypassed)'] }))).toBe(true)
+    expect(await ev({ not: { lock_bypassed: true } }, world({ history: ['taint aws_x.y (lock bypassed)'] }))).toBe(false)
+    expect(await ev({ all: [{ lock_free: true }, { not: { lock_bypassed: true } }] })).toBe(true)
+    // the new ops are not apply steps
+    expect(await ev({ applied: { op: 'create', address: 'aws_x.y' } }, world({ history: ['state-rm aws_x.y (lock bypassed)'] }))).toBe(false)
+  })
   it('reality_has / reality_lacks', async () => {
     expect(await ev({ reality_has: { type: 'aws_vpc', id: 'vpc-1' } })).toBe(true)
     expect(await ev({ reality_has: { type: 'aws_vpc', id: 'vpc-2' } })).toBe(false)
