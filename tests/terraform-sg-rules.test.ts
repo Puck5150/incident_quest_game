@@ -7,7 +7,8 @@ import { evalPredicate, type World } from '../src/game/terraform/predicates.ts'
 import { realityKey, type Reality } from '../src/game/terraform/refresh.ts'
 import { effectiveRules } from '../src/game/terraform/sgrules.ts'
 import { emptyState, findInstance, type State } from '../src/game/terraform/state.ts'
-import type { Predicate } from '../src/schema/scenario.ts'
+import { ScenarioSchema, type Predicate } from '../src/schema/scenario.ts'
+import { loadIncident } from './helpers/terraform-incident.ts'
 
 const ctx = (): ApplyContext => ({ faults: [], taken: new Set(), attempts: new Map(), seed: '1' })
 const apply = (tf: string, state: State = emptyState(), reality: Reality = {}) => executeApply({ files: [{ name: 'main.tf', text: tf }], state, reality, vars: {} }, ctx())
@@ -265,6 +266,28 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   })
 })
 
+describe('protocol aliases', () => {
+  it('"6" is tcp, "17" udp, "all" and -1 every protocol, in rules, duplicates and the predicate', async () => {
+    const tf = SPLIT.replaceAll('ip_protocol                  = "tcp"', 'ip_protocol                  = "6"')
+    const r = apply(tf)
+    const app = idOf(r.state, 'aws_security_group.app')
+    const web = idOf(r.state, 'aws_security_group.web')
+    expect(effectiveRules(r.reality, app, 'ingress')[0].proto).toBe('tcp')
+    const w = world(tf, r)
+    expect(await evalPredicate({ sg_rule: { group_id: app, direction: 'ingress', port: 8080, exact: true, source_group_id: web } }, w)).toBe(true)
+    expect(await evalPredicate({ sg_rule: { group_id: app, direction: 'ingress', port: 8080, protocol: '6', source_group_id: web } }, w)).toBe(true)
+    expect(await evalPredicate({ sg_rule: { group_id: app, direction: 'ingress', port: 8080, protocol: 'udp' } }, w)).toBe(false)
+    // an inline tcp rule and the same rule as protocol "6" are duplicates
+    const inline = BASE + 'resource "aws_security_group" "web" {\n  name = "web"\n  vpc_id = aws_vpc.main.id\n  ingress {\n    from_port = 443\n    to_port = 443\n    protocol = "tcp"\n    cidr_blocks = ["0.0.0.0/0"]\n  }\n}\n'
+    const first = apply(inline)
+    const dup = BASE + 'resource "aws_security_group" "web" {\n  name = "web"\n  vpc_id = aws_vpc.main.id\n}\nresource "aws_vpc_security_group_ingress_rule" "https" {\n  security_group_id = aws_security_group.web.id\n  cidr_ipv4 = "0.0.0.0/0"\n  from_port = 443\n  to_port = 443\n  ip_protocol = "6"\n}\n'
+    const second = executeApply({ files: [{ name: 'main.tf', text: dup }], state: first.state, reality: first.reality, vars: {} }, ctx())
+    expect(second.errors[0].summary).toContain('InvalidPermission.Duplicate')
+    const all = apply(SPLIT.replace('ip_protocol                  = "tcp"', 'ip_protocol                  = "all"'))
+    expect(effectiveRules(all.reality, idOf(all.state, 'aws_security_group.app'), 'ingress')[0]).toMatchObject({ proto: '-1', from: 0, to: 65535 })
+  })
+})
+
 describe('sg_rule exact', () => {
   it('a wide rule covers a port but is not exact for it', async () => {
     const tf = SPLIT.replace('from_port                    = 8080\n  to_port                      = 8080', 'from_port                    = 8000\n  to_port                      = 9000')
@@ -320,5 +343,23 @@ describe('the value helper', () => {
   it('ignores objects of other groups and rules of other types', () => {
     const reality: Reality = { 'aws_vpc:vpc-1': { id: 'vpc-1' } as Record<string, Value> }
     expect(effectiveRules(reality, 'sg-x', 'ingress')).toEqual([])
+  })
+})
+
+describe('sg_rule in scenario validation', () => {
+  const base = loadIncident('terraform-sg-cycle')
+  const withLeaf = (sg_rule: object) => {
+    const s = structuredClone(base)
+    s.actions.find((a) => a.id === 'break-the-cycle')!.done_when = { all: [{ plan_clean: true }, { sg_rule } as never] }
+    return ScenarioSchema.safeParse(s)
+  }
+  const ok = { group_id: 'sg-07c3e9a1d5b2f4e86', direction: 'ingress', port: 8080, source_group_id: 'sg-0a4d7e21c9b3f5068' }
+  it('accepts the lab groups and refuses unknown ones or both a CIDR and a peer group', () => {
+    expect(base.difficulty).toBe(3)
+    expect(withLeaf(ok).success).toBe(true)
+    expect(withLeaf({ ...ok, group_id: 'sg-nope' }).success).toBe(false)
+    expect(withLeaf({ ...ok, source_group_id: 'sg-nope' }).success).toBe(false)
+    expect(withLeaf({ ...ok, cidr: '10.0.0.0/8' }).success).toBe(false)
+    expect(withLeaf({ ...ok, source_group_id: undefined, cidr: '*' }).success).toBe(true)
   })
 })

@@ -177,7 +177,7 @@ const LeafSchema = z.union([
       exact: z.literal(true).optional(),
       source_group_id: z.string().min(1).optional(),
       cidr: z.string().min(1).optional(),
-    }),
+    }).refine((r) => r.cidr === undefined || r.source_group_id === undefined, 'give cidr or source_group_id, not both'),
   }),
   z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
@@ -768,6 +768,20 @@ export const ScenarioSchema = z
         if (typeof a.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'cloud', 'add', i, 'attrs'])
         else known.add(`${a.type}:${a.attrs.id}`)
       })
+      // sg_rule names a security group of the lab, and peer groups must exist too.
+      ;[s, ...stages].forEach((part, k) =>
+        part.actions.forEach((act, i) => {
+          if (!act.done_when) return
+          const p = act.done_when
+          const leaves = 'all' in p ? p.all : 'any' in p ? p.any : [p]
+          for (const l of leaves) {
+            const x = 'not' in l ? l.not : l
+            if (!('sg_rule' in x)) continue
+            for (const [field, id] of [['group_id', x.sg_rule.group_id], ['source_group_id', x.sg_rule.source_group_id]] as const)
+              if (id !== undefined && !known.has(`aws_security_group:${id}`)) issue(`sg_rule ${field} "${id}" is not a security group in state or cloud.add`, k === 0 ? ['actions', i, 'done_when'] : ['stages', k - 1, 'actions', i, 'done_when'])
+          }
+        }),
+      )
       ;(['patch', 'delete', 'release'] as const).forEach((w) =>
         tf.cloud?.[w]?.forEach((c, i) => {
           if (!known.has(`${c.type}:${c.id}`)) issue(`no object with id "${c.id}" in state or cloud.add`, ['terraform', 'cloud', w, i, 'id'])

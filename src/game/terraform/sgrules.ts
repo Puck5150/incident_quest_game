@@ -26,10 +26,17 @@ const isObj = (v: Value | undefined): v is Record<string, Value> => typeof v ===
 const strs = (v: Value | undefined): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 const num = (v: Value | undefined, d: number) => (typeof v === 'number' ? v : typeof v === 'string' && /^-?\d+$/.test(v) ? Number(v) : d)
 
+// Protocol numbers and names mean one thing: 6 is tcp, 17 udp, 1 icmp, 58 icmpv6; -1 and all are every protocol.
+const PROTO_NUMBERS: Record<string, string> = { '6': 'tcp', '17': 'udp', '1': 'icmp', '58': 'icmpv6', all: '-1' }
+export const normProto = (p: Value | undefined): string => {
+  const x = typeof p === 'number' ? String(p) : typeof p === 'string' ? p.trim().toLowerCase() : 'tcp'
+  return Object.hasOwn(PROTO_NUMBERS, x) ? PROTO_NUMBERS[x] : x
+}
+
 function make(dir: Direction, protocol: Value | undefined, from: Value | undefined, to: Value | undefined, srcs: SgRule['src'][]): SgRule[] {
-  const p = typeof protocol === 'number' ? String(protocol) : typeof protocol === 'string' ? protocol.toLowerCase() : 'tcp'
-  const all = p === '-1' || p === 'all'
-  return srcs.map((src) => ({ dir, proto: all ? '-1' : p, from: all ? 0 : num(from, 0), to: all ? 65535 : num(to, 0), src }))
+  const p = normProto(protocol)
+  const all = p === '-1'
+  return srcs.map((src) => ({ dir, proto: p, from: all ? 0 : num(from, 0), to: all ? 65535 : num(to, 0), src }))
 }
 
 // The rules one object grants: an inline ingress/egress entry of group `owner`, or a separate rule resource.
@@ -98,7 +105,7 @@ export function ruleDuplicate(type: string, o: Record<string, Value>, reality: R
 
 // Does any rule on the group match? port is covered by the rule's range (exact: the rule is for that one port and protocol); source_group_id / cidr ('*': any CIDR) narrow the peer.
 export function groupHasRule(reality: Reality, q: { group_id: string; direction: Direction; port: number; protocol?: string; exact?: boolean; source_group_id?: string; cidr?: string }): boolean {
-  const proto = (q.protocol ?? 'tcp').toLowerCase()
+  const proto = normProto(q.protocol)
   return effectiveRules(reality, q.group_id, q.direction).some(
     (r) =>
       (q.exact ? r.proto === proto && r.from === q.port && r.to === q.port : (r.proto === '-1' || r.proto === proto) && r.from <= q.port && q.port <= r.to) &&
@@ -133,7 +140,7 @@ export function mixedRules(nodes: Map<string, GNode>): Diagnostic[] {
     out.push({
       severity: 'warning',
       summary: MIXED_SUMMARY,
-      detail: `${addr} defines ingress or egress rules inline, and ${owned.map((n) => n.address).join(', ')} also manage${owned.length === 1 ? 's' : ''} rules for it. The AWS provider treats the inline rules as the group's complete rule set, so applying one overwrites what the other created. Manage each group's rules one way only: all inline, or all as separate rule resources with no ingress or egress in the group.`,
+      detail: `${addr} defines ingress or egress rules inline, and ${owned.map((n) => n.address).join(', ')} also manage${owned.length === 1 ? 's' : ''} rules for it. The AWS provider treats the inline rules as the group's complete rule set, so applying one overwrites what the other created. Manage each group's rules one way only: all inline, or all as separate rule resources with no ingress or egress in the group. Rules already on a group are not revoked just because its ingress or egress arguments are deleted from the configuration: set ingress = [] and egress = [] and apply to clear them, then remove those arguments.`,
       file: g.file,
       line: g.block.pos.line,
       col: g.block.pos.col,
