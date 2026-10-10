@@ -125,11 +125,12 @@ export function updateLock(text: string, entries: LockEntry[]): string {
 }
 
 const nameOf = (source: string) => source.split('/').pop() ?? source
+const DEFAULT_VERSIONS: Record<string, string> = { random: '3.6.3' } // providers whose version should not look like AWS's
 // The versions the lab's registry offers for a provider: the scenario's list, else only the one it locks
-// (the default 5.67.0). Providers without an entry offer 5.67.0.
+// (the default 5.67.0; random 3.6.3). Other providers without an entry offer 5.67.0.
 export const availableOf = (info: Map<string, ProviderInfo>, source: string): string[] => {
   const p = info.get(nameOf(source))
-  return p?.available ?? [p?.lock ?? PROVIDER_VERSION]
+  return p?.available ?? [p?.lock ?? (Object.hasOwn(DEFAULT_VERSIONS, nameOf(source)) ? DEFAULT_VERSIONS[nameOf(source)] : PROVIDER_VERSION)]
 }
 
 // The lock file a lab starts with when it is initialised: AWS only, at the scenario's locked version (else the

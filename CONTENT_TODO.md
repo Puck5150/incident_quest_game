@@ -964,3 +964,5 @@ terraform-sg-cycle:
 
 - [ ] Unverified: `random_password` argument set from memory of the random provider v3.x docs (every configurable argument is `RequiresReplace`; `id` is the literal `none`; `result` sensitive; default special alphabet `!@#$%&*()-_=+[]{}<>:?`; no `min_*`, `bcrypt_hash`). Could not fetch the provider docs offline. The provider version printed on `init` follows the lab default (5.67.0), not a real random provider version.
 - Known limit: resource blocks do not reject arguments missing from the schema (`min_special = 2` is accepted and shown as an attribute); this is true for every type, not only `random_password`.
+- Note: an initialised lab's mounted lock is AWS-only, so `random_password` needs `initialized: false` or a shipped `.terraform.lock.hcl` with a random block (AUTHORING). The `random` provider defaults to 3.6.3 (unverified as the current release).
+- Note: the at-least-one-key refine on `plan_has` (`no_destroy` or `no_change`) is not representable in schemas/incident.json; zod enforces it.

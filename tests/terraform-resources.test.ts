@@ -247,7 +247,7 @@ describe('diffInstance: forced replacement', () => {
 
 describe('random_password', () => {
   const LAB = '/home/you/infra'
-  const cfg = (args = '  length = 32\n') => `terraform {\n  required_providers {\n    random = {\n      source = "hashicorp/random"\n    }\n  }\n}\n\nresource "random_password" "db" {\n${args}}\n`
+  const cfg = (args = '  length = 32\n', ver = '') => `terraform {\n  required_providers {\n    random = {\n      source = "hashicorp/random"\n${ver}    }\n  }\n}\n\nresource "random_password" "db" {\n${args}}\n`
   function world(main: string) {
     const block = { files: [{ path: 'main.tf', content: main }], state: [] } as unknown as TerraformBlock
     const lab = labFromScenario(block, LAB, '/home/you')
@@ -264,8 +264,9 @@ describe('random_password', () => {
       readFile: async (p) => disk[p],
       write: async (dir, name, text) => void (disk[`${dir}/${name}`] = text),
     }
-    return { run: (...a: string[]) => runTerraform(a, ctx), set: (t: string) => void (disk[`${LAB}/main.tf`] = t) }
+    return { run: (...a: string[]) => runTerraform(a, ctx), read: async (n: string) => disk[`${LAB}/${n}`], set: (t: string) => void (disk[`${LAB}/main.tf`] = t) }
   }
+  const lock = async (w: ReturnType<typeof world>) => (await w.read('.terraform.lock.hcl')) ?? ''
   const result = async (w: ReturnType<typeof world>) => /"result": "([^"]*)"/.exec((await w.run('state', 'pull')).stdout)?.[1]
 
   it('has the provider-documented schema', () => {
@@ -280,7 +281,9 @@ describe('random_password', () => {
   it('init installs the random provider; plan creates with a sensitive result', async () => {
     const w = world(cfg())
     const init = await w.run('init')
-    expect(init.stdout).toMatch(/- Installed hashicorp\/random v[\d.]+ \(signed by HashiCorp\)/)
+    expect(init.stdout).toContain('- Installed hashicorp/random v3.6.3 (signed by HashiCorp)')
+    expect(await lock(w)).toMatch(/provider "registry.terraform.io\/hashicorp\/random" \{\n  version = "3.6.3"/)
+    expect((await w.run('providers')).stdout).toContain('hashicorp/random')
     const plan = (await w.run('plan')).stdout
     expect(plan).toContain('# random_password.db will be created')
     expect(plan).toContain('+ result  = (sensitive value)')
@@ -328,5 +331,15 @@ describe('random_password', () => {
     expect(third).not.toBe(first)
     await w.run('taint', 'random_password.db')
     expect((await w.run('plan')).stdout).toContain('# random_password.db is tainted, so must be replaced')
+  })
+
+  it('constraints are checked against the default random version', async () => {
+    const ok = world(cfg('  length = 32\n', '      version = "~> 3.6"\n'))
+    expect((await ok.run('init')).exitCode).toBe(0)
+    expect(await lock(ok)).toContain('constraints = "~> 3.6"')
+    const bad = world(cfg('  length = 32\n', '      version = "~> 5.0"\n'))
+    const r = await bad.run('init')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('no available releases match the given constraints ~> 5.0')
   })
 })
