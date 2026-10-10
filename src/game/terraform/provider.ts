@@ -1,6 +1,7 @@
 // Simulated cloud provider: deterministic ids, arns, durations and error texts.
 import { UNKNOWN, type Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
+import { isRuleType, ruleDuplicate } from './sgrules.ts'
 
 const ACCOUNT = '123456789012'
 const REGION = 'us-east-1'
@@ -50,6 +51,13 @@ function password(c: Ctx): string {
   return chars ? Array.from({ length: n }, (_, i) => chars[parseInt(bytes.slice(2 * i, 2 * i + 2), 16) % chars.length]).join('') : ''
 }
 
+const SG_RULE_TYPE: TypeInfo = {
+  id: (c) => `sgr-0${c.h('sgr', 16)}`,
+  arn: ec2('security-group-rule'),
+  defaults: (id) => ({ security_group_rule_id: id }),
+  seconds: [1, 1, 1],
+}
+
 const TYPES: Record<string, TypeInfo> = {
   random_password: {
     id: () => 'none',
@@ -74,6 +82,13 @@ const TYPES: Record<string, TypeInfo> = {
     arn: ec2('security-group'),
     defaults: (_i, c) => ({ name: `terraform-${c.h('name', 20)}`, vpc_id: `vpc-0${c.h('dvpc', 8)}`, ingress: [], egress: [] }),
     seconds: [2, 2, 1],
+  },
+  aws_vpc_security_group_ingress_rule: SG_RULE_TYPE,
+  aws_vpc_security_group_egress_rule: SG_RULE_TYPE,
+  aws_security_group_rule: {
+    // ponytail: the real id is a hash of the rule's fields (sgrule-<digits>); unique digits per rule are enough here.
+    id: (c) => `sgrule-${c.h('sgrule', 10).replace(/[a-f]/g, (x) => String(x.charCodeAt(0) % 10))}`,
+    seconds: [1, 1, 1],
   },
   aws_instance: {
     id: (c) => `i-0${c.h('i', 16)}`,
@@ -166,6 +181,7 @@ export function fillOnUpdate(prior: Attrs, next: Attrs): Attrs {
 }
 
 export function alreadyExists(type: string, attrs: Attrs, reality: Reality, seed: string): string | undefined {
+  if (isRuleType(type)) return ruleDuplicate(type, attrs, reality, requestId(seed))
   const nat = info(type)?.natural
   if (!nat) return undefined
   const name = str(attrs[nat.key])
@@ -184,6 +200,8 @@ export function referencedBy(reality: Reality, type: string, id: string): { type
   for (const k of Object.keys(reality).sort()) {
     if (k === self || !mentions(reality[k], id)) continue
     const i = k.indexOf(':')
+    // A group's own rules go with it; only another group's rule that names it holds it.
+    if (isRuleType(k.slice(0, i)) && reality[k].security_group_id === id) continue
     return { type: k.slice(0, i), id: k.slice(i + 1) }
   }
   return undefined

@@ -24,7 +24,7 @@ describe('resource schemas', () => {
   it('gives every schema a read-only id and arn, and marks secrets', () => {
     for (const [t, s] of Object.entries(SCHEMAS)) {
       expect(s.attrs.id?.readOnly, `${t}.id`).toBe(true)
-      if (t === 'random_password') continue // not an AWS resource: no arn
+      if (t === 'random_password' || t === 'aws_security_group_rule') continue // random_password is not an AWS resource, and the older rule resource has no arn
       expect(s.attrs.arn?.readOnly, `${t}.arn`).toBe(true)
     }
     expect(schemaFor('aws_db_instance')!.attrs.password.sensitive).toBe(true)

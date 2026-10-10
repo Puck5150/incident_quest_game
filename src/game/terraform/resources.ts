@@ -24,6 +24,20 @@ const RO: AttrSpec = { readOnly: true }
 const TAGS_ALL: AttrSpec = { computed: true, copyOf: 'tags' }
 const NEW: AttrSpec = { forceNew: true }
 const NEWC: AttrSpec = { forceNew: true, computed: true }
+const SG_RULE: Record<string, AttrSpec> = {
+  security_group_id: NEW,
+  ip_protocol: {},
+  from_port: {},
+  to_port: {},
+  cidr_ipv4: {},
+  cidr_ipv6: {},
+  prefix_list_id: {},
+  referenced_security_group_id: {},
+  description: {},
+  security_group_rule_id: RO,
+  tags: {},
+  tags_all: TAGS_ALL,
+}
 const aws = (attrs: Record<string, AttrSpec>): ResourceSchema => ({ provider: AWS, attrs: { id: RO, arn: RO, ...attrs } })
 
 export const SCHEMAS: Record<string, ResourceSchema> = {
@@ -46,6 +60,28 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
     tags: {},
     tags_all: TAGS_ALL,
   }),
+  // Separate rule resources. security_group_id pins the rule to its group; the peer and the ports change in place.
+  // ponytail: attribute names from memory of the provider docs and which attributes force replacement are unverified (CONTENT_TODO).
+  aws_vpc_security_group_ingress_rule: aws(SG_RULE),
+  aws_vpc_security_group_egress_rule: aws(SG_RULE),
+  // The older resource: everything except the description forces a new rule, and it has no arn.
+  aws_security_group_rule: {
+    provider: AWS,
+    attrs: {
+      id: RO,
+      type: NEW,
+      security_group_id: NEW,
+      from_port: NEW,
+      to_port: NEW,
+      protocol: NEW,
+      cidr_blocks: { forceNew: true, set: true },
+      ipv6_cidr_blocks: { forceNew: true, set: true },
+      prefix_list_ids: { forceNew: true, set: true },
+      source_security_group_id: NEWC,
+      self: { forceNew: true, default: false },
+      description: {},
+    },
+  },
   aws_instance: aws({
     ami: NEW,
     instance_type: {},

@@ -15,6 +15,7 @@ import { destroyScope, targetScope, type TargetScope, type Target } from './targ
 import { applyMoves, movesOf } from './moves.ts'
 import type { ModuleTree } from './modules.ts'
 import { realityKey, refresh as refreshState, type Drift, type Reality } from './refresh.ts'
+import { mixedRules } from './sgrules.ts'
 import { diffInstance, schemaFor, unsupportedType, type Action, type AttrChange, type ResourceSchema } from './resources.ts'
 import { findInstance, instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
 import { NO_IMPORT_CONFIG, NO_REMOTE_OBJECT, noImportConfigDetail, noRemoteObjectDetail } from './state-ops.ts'
@@ -588,6 +589,7 @@ export function planConfig(input: PlanInput): PlanResult {
       if (inst.deposed?.length && !(scope && !scope.includes(r, inst.index_key))) result.items.push(...deposedItems(r, inst, g.nodes))
     }
   }
+  result.warnings.push(...mixedRules(g.nodes))
   // Real Terraform only warns when a keyless address names a count/for_each resource.
   for (const a of new Set(input.replace ?? [])) {
     if (a.includes('[')) continue

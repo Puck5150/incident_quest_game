@@ -4,6 +4,7 @@ import type { PlanResult } from './plan.ts'
 import { hasChanges } from './render.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { addressCovers } from './address.ts'
+import { groupHasRule, MIXED_SUMMARY } from './sgrules.ts'
 import { listAddresses, type State } from './state.ts'
 
 import type { Leaf, Predicate } from '../../schema/scenario.ts'
@@ -28,7 +29,7 @@ const covers = addressCovers // a key-less address names every instance of the r
 async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Promise<boolean> {
   if (has(l, 'plan_clean')) {
     const p = plan()
-    return p !== undefined && p.diagnostics.length === 0 && !hasChanges(p)
+    return p !== undefined && p.diagnostics.length === 0 && !p.warnings.some((x) => x.summary === MIXED_SUMMARY) && !hasChanges(p)
   }
   if (has(l, 'plan_has')) {
     const p = plan()
@@ -49,6 +50,7 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
     const obj = w.reality[key]
     return typeof obj === 'object' && obj !== null && !Array.isArray(obj) && Object.hasOwn(obj, attr) && (equals === undefined || equal(obj[attr], equals))
   }
+  if (has(l, 'sg_rule')) return groupHasRule(w.reality, l.sg_rule)
   if (has(l, 'reality_lacks')) return !Object.hasOwn(w.reality, realityKey(l.reality_lacks.type, l.reality_lacks.id))
   if (has(l, 'applied')) {
     const { op, address, lock_bypassed } = l.applied

@@ -33,7 +33,7 @@ export interface Graph {
   diagnostics: Diagnostic[]
 }
 
-function exprRefs(e: Expr, out: Ref[]): void {
+export function exprRefs(e: Expr, out: Ref[]): void {
   switch (e.kind) {
     case 'lit':
       return
