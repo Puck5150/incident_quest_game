@@ -224,7 +224,7 @@ actions:
     label: "Apply the plan once the error is gone, even though it replaces orders-app"
     kind: destructive
     done_when: { applied: { op: delete, address: aws_instance.app } }
-    feedback: "Terraform destroyed orders-app and built a new instance in a different subnet: the server was down for the duration, anything on its instance store is gone, and its private IP changed, so anything that connected to the old address is broken. The plan showed '-/+ ... forces replacement' next to subnet_id before this."
+    feedback: "Terraform destroyed orders-app (and, on apply, built a new instance in a different subnet): the server was down for the duration, anything on its instance store is gone, and its private IP changed, so anything that connected to the old address is broken. The plan showed '-/+ ... forces replacement' next to subnet_id before this."
 
 solution_paths:
   - [use-the-new-output]
