@@ -48,4 +48,37 @@ describe('iamPolicyVerdict', () => {
     expect(v('ls')).toBeNull()
     expect(v("aws iam put-role-policy --role-name r --policy-document '{")).toBeNull()
   })
+
+  it('does not credit a policy name a real shell would rewrite or expand (overwrite evasion)', () => {
+    const doc1 = doc(st('"rds:CreateDBInstance"'))
+    const mk = (nameWord: string) => `aws iam put-role-policy --profile p --role-name r --policy-name ${nameWord} --policy-document ${doc1}`
+    for (const n of ['$N', '${N}', 'main\\x', 'ma\\in', 'ma{in,x}', 'ma*', 'm?in', '~main', '"$N"', '"ma$(id)"', '"ma`id`"', '$\'main\'', '!main', 'ma#in', '"ma\\in"']) expect(v(mk(n)), n).toBeNull()
+    expect(v(`N=main ${mk('$N')}`)).toBeNull()
+    // plain and quoted-literal names still work, and so do odd characters inside the quoted document
+    expect(v(mk("'new'"))).toBe('ok')
+    expect(v(mk('"new"'))).toBe('ok')
+    expect(v(mk('new-1.x_y'))).toBe('ok')
+    expect(v(cmd(`'{"Statement":[{"Sid":"a$b{c}~d!e#f\\\\g","Effect":"Allow","Action":"rds:CreateDBInstance","Resource":"${ARN}"}]}'`))).toBe('ok')
+    expect(v(cmd(`"{\\"Statement\\":[{\\"Sid\\":\\"a{b}~c#d\\",\\"Effect\\":\\"Allow\\",\\"Action\\":\\"rds:CreateDBInstance\\",\\"Resource\\":\\"${ARN}\\"}]}"`))).toBe('ok')
+    expect(v(cmd(`"{\\"Statement\\":[{\\"Sid\\":\\"$x\\",\\"Effect\\":\\"Allow\\",\\"Action\\":\\"rds:CreateDBInstance\\",\\"Resource\\":\\"${ARN}\\"}]}"`))).toBeNull()
+    // the reserved name is still caught when it is spelt plainly or quoted
+    for (const n of ['main', "'main'", '"MAIN"', '--policy-name=main']) expect(v(mk(n.replace('--policy-name=main', 'main'))), n).toBe('overwrite')
+  })
+  it('rejects repeated JSON keys (JSON.parse would keep the last) and unknown top-level shapes', () => {
+    const q = (d: string) => cmd(`'${d}'`)
+    const good = `{"Effect":"Allow","Action":"rds:CreateDBInstance","Resource":"${ARN}"}`
+    for (const d of [
+      `{"Statement":[{"Effect":"Allow","Action":"rds:DeleteDBInstance","Action":"rds:CreateDBInstance","Resource":"${ARN}"}]}`,
+      `{"Statement":[{"Effect":"Deny","Effect":"Allow","Action":"rds:CreateDBInstance","Resource":"${ARN}"}]}`,
+      `{"Statement":[{"Effect":"Allow","Action":"rds:CreateDBInstance","Resource":"${ARN}","Resource":"${ARN}"}]}`,
+      `{"Statement":[{"Effect":"Allow","Action":"rds:DeleteDBInstance","Resource":"${ARN}"}],"Statement":[${good}]}`,
+      `{"Statement":[${good}],"Statement":[{"Effect":"Allow","Action":"iam:PassRole","Resource":"${ARN}"}]}`,
+      `{"Version":"2008-10-17","Statement":[${good}]}`,
+      `{"Statement":[${good}],"Extra":1}`,
+    ])
+      expect(v(q(d)), d).toBeNull()
+    // a key that merely repeats in different objects, or as a value, is fine
+    expect(v(q(`{"Version":"2012-10-17","Statement":[${good},${good.replace('"Effect"', '"Sid":"Effect","Effect"')}]}`))).toBe('ok')
+    expect(v(q(`{"Statement":[{"Effect":"Allow","Action":"rds:CreateDBInstance","Resource":"${ARN}","Condition":{"StringEquals":{"a":"Effect","Effect":"x"}}}]}`))).toBe('ok')
+  })
 })

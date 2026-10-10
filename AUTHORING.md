@@ -104,14 +104,21 @@ stage reopens the incident into the next one (see below).
 - **Judging a policy document:** a regex cannot tell a least-privilege IAM policy
   from a lookalike. For an `aws iam put-role-policy` fix give the action
   `iam_policy: { verdict: ok|wildcard|overwrite, role, profile, reserved_policy,
-  allowed_actions, required_actions, resource }` instead of `match_regex`. The
+  allowed_actions, required_actions, resource, example }` instead of `match_regex`.
+  The field is hard-wired to `aws iam put-role-policy` and to service-prefixed
+  action names (`rds:CreateDBInstance`); another command needs a new helper. The
   engine parses the line and `--policy-document` (`src/game/awsPolicyCheck.ts`):
   `ok` needs every statement to be an Allow on exactly `resource`, actions inside
-  `allowed_actions` (case-insensitive) including `required_actions`, one aws command
-  and no shell operators; `wildcard` (any `*`) and `overwrite` (reusing
-  `reserved_policy`) are judged first. Use three actions (a fix and two wrong ones)
-  sharing the same spec; the document must be inline (`file://` is not readable).
-
+  `allowed_actions` (ASCII case-insensitive) including `required_actions`, one aws
+  command, no shell operators, and no other top-level or statement keys (NotAction,
+  NotResource and Principal are rejected). Evasion rules: every token outside the
+  document must be plain (no `$ \ { } * ? ~ ! #`, no `$'…'`, no expansion in double
+  quotes), the document may not repeat a key, and `wildcard` (any `*`) and
+  `overwrite` (reusing `reserved_policy`) are judged first. Use three actions (a fix
+  and two wrong ones) with an IDENTICAL spec apart from `verdict` and `example`. The
+  validator checks that `required_actions` are inside `allowed_actions`, that each
+  `example` earns its verdict, that the specs match, and that no scripted terminal
+  command is also matched. The document must be inline (`file://` is not readable).
 - **Every investigation command is discoverable.** A `match_regex` command needs an
   `example`: one concrete command its pattern accepts (the validator checks it
   matches). `help` lists `match` commands as written and pattern commands by their

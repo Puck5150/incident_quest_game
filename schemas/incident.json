@@ -1280,6 +1280,10 @@
               "resource": {
                 "type": "string",
                 "minLength": 1
+              },
+              "example": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
@@ -1289,7 +1293,8 @@
               "reserved_policy",
               "allowed_actions",
               "required_actions",
-              "resource"
+              "resource",
+              "example"
             ],
             "additionalProperties": false
           },
@@ -3275,6 +3280,10 @@
                     "resource": {
                       "type": "string",
                       "minLength": 1
+                    },
+                    "example": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   },
                   "required": [
@@ -3284,7 +3293,8 @@
                     "reserved_policy",
                     "allowed_actions",
                     "required_actions",
-                    "resource"
+                    "resource",
+                    "example"
                   ],
                   "additionalProperties": false
                 },

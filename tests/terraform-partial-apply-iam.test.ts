@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { actionFor, engineHandles, evidenceSeen, newSession, step, terminalOutput, type GameEvent } from '../src/game/engine.ts'
 import type { IncidentShell } from '../src/game/shell.ts'
+import { ScenarioSchema } from '../src/schema/scenario.ts'
 import { atStage } from '../src/schema/stages.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
@@ -177,6 +178,14 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       `${GRANT} || true`,
       `${GRANT} $(whoami)`,
       `${GRANT} \`whoami\``,
+      // names a real shell would rewrite, and repeated JSON keys
+      put(GOOD_DOC).replace('--policy-name orders-rds', '--policy-name $N'),
+      put(GOOD_DOC).replace('orders-rds', 'terraform-\\deploy'),
+      put(GOOD_DOC).replace('orders-rds', 'terraform-{deploy,x}'),
+      put(GOOD_DOC).replace('orders-rds', "$'terraform-deploy'"),
+      put(GOOD_DOC).replace('orders-rds', 'terraform-d*'),
+      put(`'{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"rds:DeleteDBInstance","Action":"rds:CreateDBInstance","Resource":"${ARN}"}]}'`),
+      put(`'{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Effect":"Allow","Action":"rds:CreateDBInstance","Resource":"${ARN}"}]}'`),
       // a file the lab cannot read
       put('file://orders-rds.json'),
     ]
@@ -280,5 +289,15 @@ describe('terraform-partial-apply-iam on the simulator', () => {
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
     // the CI log on its own also shows the denial
     expect(evidenceSeen(scenario, log).has('access-denied')).toBe(true)
+  })
+
+  it('the iam_policy specs are validated: the example must earn its verdict and the specs must match', () => {
+    const bad = structuredClone(scenario)
+    bad.actions.find((a) => a.id === 'grant-rds-permission')!.iam_policy!.example = put(doc('"rds:*"', '"*"'))
+    expect(ScenarioSchema.safeParse(bad).success).toBe(false)
+    const drift = structuredClone(scenario)
+    drift.actions.find((a) => a.id === 'grant-wildcard')!.iam_policy!.resource = 'arn:aws:rds:us-east-1:123456789012:db:other'
+    expect(ScenarioSchema.safeParse(drift).success).toBe(false)
+    expect(ScenarioSchema.safeParse(scenario).success).toBe(true)
   })
 })

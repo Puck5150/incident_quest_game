@@ -437,6 +437,7 @@ actions:
     kind: fix
     iam_policy:
       verdict: ok
+      example: 'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document ''{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:CreateDBInstance"],"Resource":"arn:aws:rds:us-east-1:123456789012:db:orders-db"}]}'''
       role: orders-ci-deploy
       profile: platform-admin
       reserved_policy: terraform-deploy
@@ -449,18 +450,20 @@ actions:
     kind: wrong
     iam_policy:
       verdict: wildcard
+      example: 'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document ''{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:*"],"Resource":"*"}]}'''
       role: orders-ci-deploy
       profile: platform-admin
       reserved_policy: terraform-deploy
       allowed_actions: [rds:CreateDBInstance, rds:AddTagsToResource]
       required_actions: [rds:CreateDBInstance]
       resource: "arn:aws:rds:us-east-1:123456789012:db:orders-db"
-    feedback: "In a real account that would unblock the apply, but it hands the pipeline every RDS action (delete, restore, modify, snapshot sharing) on every database in the account, so any compromised or careless pipeline run can destroy production data. This lab keeps the denial until the least-privilege grant, so the wrong route earns nothing. The error named one action on one resource: grant rds:CreateDBInstance on arn:aws:rds:us-east-1:123456789012:db:orders-db, nothing wider. Least privilege means granting only what the failed call needed; widen it later only when a later denial names more."
+    feedback: "A wildcard (rds:*, Resource \"*\", Delete*) is wider than the failed call needed. In a real account it would unblock the apply, but it hands the pipeline every matching action (delete, restore, modify, snapshot sharing) on every database in the account, so any compromised or careless pipeline run can destroy production data. This lab keeps the denial until the least-privilege grant, so the wrong route earns nothing. The error named one action on one resource: grant rds:CreateDBInstance on arn:aws:rds:us-east-1:123456789012:db:orders-db, nothing wider. Least privilege means granting only what the failed call needed; widen it later only when a later denial names more."
   - id: overwrite-deploy-policy
     label: "Replace the role's terraform-deploy policy with a document that includes the RDS statement"
     kind: wrong
     iam_policy:
       verdict: overwrite
+      example: 'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name terraform-deploy --policy-document ''{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:CreateDBInstance"],"Resource":"arn:aws:rds:us-east-1:123456789012:db:orders-db"}]}'''
       role: orders-ci-deploy
       profile: platform-admin
       reserved_policy: terraform-deploy

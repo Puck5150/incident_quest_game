@@ -9,6 +9,7 @@
 import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
+import { asciiLower, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
 import { filesOnDisk } from '../game/paths.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
@@ -193,6 +194,8 @@ const ActionsSchema = z
           allowed_actions: z.array(z.string().min(1)).min(1),
           required_actions: z.array(z.string().min(1)).min(1),
           resource: z.string().min(1),
+          // One concrete command that earns `verdict` (the validator checks it does).
+          example: z.string().min(1),
         })
         .optional(),
       // A fix made by editing a file (PLAN_TERMINAL.md T4): the action is taken
@@ -572,6 +575,24 @@ export const ScenarioSchema = z
       if (!s.terraform && !(v.terminal?.commands ?? []).some((c) => c.when_actions?.some((a) => fixIds.has(a))))
         issue("no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix", at('solution_paths'))
 
+      const iamSpecs = v.actions.filter((a) => a.iam_policy)
+      v.actions.forEach((a, i) => {
+        const p = a.iam_policy
+        if (!p) return
+        if (!v.terminal) issue('iam_policy needs a terminal to type into', at('actions', i, 'iam_policy'))
+        const allowed = new Set(p.allowed_actions.map(asciiLower))
+        if (!p.required_actions.every((r) => allowed.has(asciiLower(r)))) issue('required_actions must be inside allowed_actions', at('actions', i, 'iam_policy', 'required_actions'))
+        if (iamPolicyVerdict(p.example, p) !== p.verdict) issue(`example doesn't earn the "${p.verdict}" verdict`, at('actions', i, 'iam_policy', 'example'))
+        const { verdict: _v, example: _e, ...core } = p
+        iamSpecs.forEach((o) => {
+          const { verdict: _w, example: _x, ...oc } = o.iam_policy!
+          if (JSON.stringify(oc) !== JSON.stringify(core)) issue(`iam_policy of "${o.id}" differs from "${a.id}": actions that share the check must share an identical spec`, at('actions', i, 'iam_policy'))
+        })
+        v.terminal?.commands.forEach((c) => {
+          const text = c.match ?? c.example
+          if (text !== undefined && iamPolicyVerdict(text, p) !== null) issue(`also matches the scripted command "${text}"`, at('actions', i, 'iam_policy'))
+        })
+      })
       v.actions.forEach((a, i) => {
         if (a.match_regex === undefined) return
         if (!v.terminal) issue('match_regex needs a terminal to type into', at('actions', i, 'match_regex'))
