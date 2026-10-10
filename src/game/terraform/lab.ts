@@ -9,6 +9,7 @@ import { join, labDir, labFiles, normalizeRegistry, type RegistryModule } from '
 import type { ModuleTree } from './modules.ts'
 import type { RemoteState } from './plan.ts'
 import type { Target } from './target.ts'
+import { backendOf, type BackendRec } from './statefile.ts'
 import { cacheFromLock, mountedLock, type ProviderCache, type ProviderInfo } from './providers.ts'
 import { emptyState, type State, type StateResource } from './state.ts'
 
@@ -32,6 +33,8 @@ export interface Lab {
   remoteStates: RemoteState[] // the authored upstream states data "terraform_remote_state" reads
   providers: Map<string, ProviderInfo> // authored provider versions by provider name (aws)
   providerCache?: ProviderCache // the packages `init` installed in .terraform/providers; absent outside the lab directory (not modelled there)
+  stateFile: boolean // terraform.state_file: terraform.tfstate on the disk is a view of the default workspace's state
+  savedBackend?: BackendRec // the backend init last recorded; with stateFile, absent means the state is the local file
   hasState: boolean
   state: State
   workspace: string
@@ -121,6 +124,10 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
 
   const initialized = tf.initialized ?? true
   const files = labFiles(tf, startDir, home)
+  const stateFile = tf.state_file === true
+  // An initialised lab starts with the backend its configuration names already recorded.
+  const root = files.filter((f) => f.path.startsWith(`${dir}/`) && f.path.endsWith('.tf') && !f.path.slice(dir.length + 1).includes('/')).map((f) => ({ name: f.path.slice(dir.length + 1), text: f.content }))
+  const savedBackend = stateFile && initialized ? backendOf(root) : undefined
   return {
     dir,
     version,
@@ -130,6 +137,8 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     remoteStates: (tf.remote_states ?? []).map((r) => ({ backend: r.backend, config: structuredClone(r.config) as Record<string, Value>, workspace: r.workspace ?? 'default', outputs: structuredClone(r.outputs) as Record<string, Value> })),
     providers: new Map(Object.entries(structuredClone(tf.providers ?? {}))),
     providerCache: initialized ? cacheFromLock(files.find((f) => f.path === join(dir, '.terraform.lock.hcl'))?.content ?? mountedLock(tf, files)) : new Map(),
+    stateFile,
+    ...(savedBackend ? { savedBackend } : {}),
     hasState,
     state,
     workspace,

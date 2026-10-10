@@ -239,6 +239,8 @@ export const TerraformSchema = z.strictObject({
   dir: z.string().min(1).optional(),
   version: z.string().regex(/^\d+\.\d+\.\d+$/, 'must look like 1.9.8').optional(),
   initialized: z.boolean().optional(),
+  // true: `terraform.tfstate` (and after the first change `.backup`) is on the disk, a view of the default workspace's state; see AUTHORING.md.
+  state_file: z.boolean().optional(),
   files: z
     .array(
       z.strictObject({

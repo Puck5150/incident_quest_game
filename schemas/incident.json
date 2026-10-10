@@ -177,6 +177,9 @@
         "initialized": {
           "type": "boolean"
         },
+        "state_file": {
+          "type": "boolean"
+        },
         "files": {
           "minItems": 1,
           "type": "array",

@@ -73,6 +73,8 @@ export function filesOnDisk(scenario: Scenario): Map<string, string> {
   if (tf) {
     const files = labFiles(tf, cwd, home)
     for (const f of files) if (!out.has(f.path)) out.set(f.path, f.content)
+    // The state file's text is the lab's to say (the shell mounts it); here it only exists, so readers of it run on the disk.
+    if (tf.state_file && tf.state !== undefined && !files.some((f) => /^\s*backend\s+"/m.test(f.content))) out.set(`${labDir(tf, cwd, home)}/terraform.tfstate`, '')
     const lock = `${labDir(tf, cwd, home)}/.terraform.lock.hcl`
     if (tf.initialized !== false) {
       if (!out.has(lock)) out.set(lock, mountedLock(tf, files))

@@ -26,6 +26,7 @@ import { cachedPackage, lockFile, PROVIDER_CACHE_DIR, providerHash, type LockEnt
 import { formatManifest, loadModuleTree, MANIFEST_PATH, parseManifest, type LoadedModules, type ModuleTree } from './modules.ts'
 import { LOCK_BYPASSED } from './predicates.ts'
 import { availableOf, coreDiagnostics, modulesOf, parseLock, providerNeeds, updateLock } from './providers.ts'
+import { backendRequired, initBackend, localState, stateFileText, syncStateFile } from './statefile.ts'
 import { newestSatisfying, parseVersion, satisfies } from './versions.ts'
 
 export { LOCK_FILE } from './layout.ts'
@@ -369,7 +370,10 @@ async function cmdInit(args: string[], ctx: CliContext, cfg: Config): Promise<Ou
   const lockMap = parseLock(cfg.lockText)
   const { needs } = providerNeeds(modulesOf(mods.tree), providersOf(mods.files))
   const readonly = args.includes('-lockfile=readonly')
-  const lines = [...(mods.calls ? [header, ...mods.lines] : []), '', 'Initializing the backend...', '', 'Initializing provider plugins...']
+  const backend = await initBackend(args, ctx, cfg.tf)
+  const initial = [...(mods.calls ? [header, ...mods.lines] : []), '', 'Initializing the backend...']
+  if ('stderr' in backend) return { stdout: initial.join('\n'), stderr: backend.stderr, exitCode: 1 }
+  const lines = [...initial, ...backend.lines, '', 'Initializing provider plugins...']
   const errs: { summary: string; msg: string }[] = []
   const queryFail = (msg: string) => errs.push({ summary: 'Failed to query available provider packages', msg })
   const entries: LockEntry[] = []
@@ -1167,8 +1171,13 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
   if (Object.hasOwn(HELP, sub) && more.some((a) => a === '-help' || a === '--help')) return ok(`Usage: terraform [global options] ${sub} [options]\n\n${HELP[sub]}`)
   // State lives per directory, on the host the scenario is about: anywhere else there is none.
   const here = ctx.mainHost && dir === resolvePath('/', ctx.lab.dir)
-  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, providerCache: undefined, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), history: [], lock: undefined, workspace: 'default', workspaces: new Map() } }
+  if (!here) ctx = { ...ctx, lab: { ...ctx.lab, providerCache: undefined, hasState: false, state: emptyState(ctx.lab.version), reality: {}, vars: {}, faults: [], attempts: new Map(), savedPlans: new Map(), history: [], lock: undefined, workspace: 'default', workspaces: new Map(), stateFile: false } }
   const cfg = await loadConfig(ctx, dir)
+  // A backend block that is not the one init recorded stops every command that opens the backend.
+  if (here && (['plan', 'apply', 'destroy', 'refresh', 'import', 'state', 'output', 'show', 'taint', 'untaint', 'force-unlock', 'providers'].includes(sub) || (sub === 'workspace' && more[0] !== 'show'))) {
+    const required = backendRequired(ctx.lab, cfg.tf)
+    if (required) return fail(box('error', required.summary, required.detail, true))
+  }
   // Every command that opens the backend first checks the provider cache against the lock file.
   if (['state', 'output', 'show', 'taint', 'untaint', 'force-unlock'].includes(sub) || (sub === 'workspace' && more[0] !== 'show')) {
     const plugins = pluginsError(cfg, ctx)
@@ -1217,9 +1226,13 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
 
 export async function runTerraform(args: string[], ctx: CliContext): Promise<CliResult> {
   applyReleases(ctx.lab, ctx.taken)
+  // Only a run in the lab directory on the main host can verify a fix or match evidence.
+  const here = ctx.mainHost && (args[0]?.startsWith('-chdir=') ? resolvePath(ctx.cwd, args[0].slice(7)) : ctx.cwd) === resolvePath('/', ctx.lab.dir)
+  const before = here && localState(ctx.lab) ? stateFileText(ctx.lab) : undefined
   let out: Out
   try {
     out = await dispatch(args, ctx)
+    if (here) await syncStateFile(ctx, before)
   } catch {
     out = boxFail('Terraform could not complete the command', 'The simulator hit an unexpected problem reading the working directory or state. Check the files and try again.')
   }
@@ -1227,8 +1240,6 @@ export async function runTerraform(args: string[], ctx: CliContext): Promise<Cli
   const second = first[1]
   const command = (first[0] === 'state' || first[0] === 'workspace') && second !== undefined && !second.startsWith('-') ? `${first[0]} ${second}` : (first[0] ?? '')
   const text = out.stdout + out.stderr
-  // Only a run in the lab directory on the main host can verify a fix or match evidence.
-  const here = ctx.mainHost && (args[0]?.startsWith('-chdir=') ? resolvePath(ctx.cwd, args[0].slice(7)) : ctx.cwd) === resolvePath('/', ctx.lab.dir)
   const evidence = here ? ctx.lab.evidence.filter((e) => e.command === command && text.includes(e.contains)).map((e) => `evidence:${e.evidence}`) : []
   const helped = first.some((a) => a === '-help' || a === '--help')
   const verifies = ['init', 'validate', 'plan', 'apply', 'destroy', 'show', 'output', 'state list', 'state show']

@@ -13,6 +13,7 @@ import { diskPath, filesOnDisk, homeOf, impliedFile, resolveFrom, startDir } fro
 import { runTerraform, worldPlan, type CliContext } from './terraform/cli.ts'
 import { evalPredicate, type Leaf, type Predicate } from './terraform/predicates.ts'
 import { applyReleases, labFromScenario, type Lab } from './terraform/lab.ts'
+import { stateFileText } from './terraform/statefile.ts'
 
 export { diskPath }
 
@@ -243,7 +244,7 @@ export class IncidentShell {
     for (const [path, content] of filesOnDisk(scenario)) {
       if (this.mounted.has(path)) continue
       this.mounted.add(path)
-      await put(path, content) // the incident's version wins over the skeleton's
+      await put(path, this.lab?.stateFile && path === `${this.lab.dir}/terraform.tfstate` ? stateFileText(this.lab) : content) // the incident's version wins over the skeleton's
     }
     for (const a of scenario.actions) {
       const key = 'action:' + a.id
@@ -326,6 +327,7 @@ export class IncidentShell {
     const [sub, ...rest] = args
     const paths = rest.filter((a) => a !== '--' && !(sub === 'restore' && /^(--source=HEAD|--worktree|-W|-s|HEAD)$/.test(a)))
     const committed = filesOnDisk(this.context.scenario)
+    if (this.lab?.stateFile) committed.delete(`${this.lab.dir}/terraform.tfstate`) // never committed: a view of the state
     const files = paths.map((a) => ctx.fs.resolvePath(ctx.cwd, a))
     if ((sub === 'checkout' || sub === 'restore') && files.length && !paths.some((a) => a.startsWith('-')) && files.every((f) => committed.has(f))) {
       for (const f of files) await ctx.fs.writeFile(f, withNewline(committed.get(f)!))
