@@ -22,69 +22,86 @@ environment: |
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "terraform plan"
-      when_actions: [codify]
+    - match: "git log --oneline -3"
       output: |
-        aws_security_group.payments: Refreshing state... [id=sg-0payments]
+        c3f81a7 payments: tag the worker with its cost center
+        9be40d2 payments: security group and worker
+        51d7e08 infra: provider pin
 
-        Terraform will perform the following actions:
-
-          # aws_instance.payments_worker will be updated in-place
-          ~ resource "aws_instance" "payments_worker" {
-              ~ tags = {
-                  + "cost-center" = "payments"
-                }
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
             }
+          }
+        }
 
-        Plan: 0 to add, 1 to change, 0 to destroy.
-    - match: "terraform plan"
-      evidence: plan-removes-rule
-      output: |
-        aws_security_group.payments: Refreshing state... [id=sg-0payments]
+        provider "aws" {
+          region = "us-east-1"
+        }
 
-        Terraform will perform the following actions:
+        resource "aws_security_group" "payments" {
+          name        = "payments"
+          description = "Payments service"
+          vpc_id      = "vpc-0payments"
 
-          # aws_instance.payments_worker will be updated in-place
-          ~ resource "aws_instance" "payments_worker" {
-              ~ tags = {
-                  + "cost-center" = "payments"
-                }
-            }
+          ingress {
+            description = "internal clients"
+            from_port   = 443
+            to_port     = 443
+            protocol    = "tcp"
+            cidr_blocks = ["10.20.0.0/16"]
+          }
+        }
 
-          # aws_security_group.payments will be updated in-place
-          ~ resource "aws_security_group" "payments" {
-              ~ ingress = [
-                  - {
-                      - cidr_blocks = ["198.51.100.0/24"]
-                      - from_port   = 8443
-                      - to_port     = 8443
-                      - protocol    = "tcp"
-                      - description = "partner hotfix"
-                    },
-                    # (1 unchanged element hidden)
-                ]
-            }
+        resource "aws_instance" "payments_worker" {
+          ami           = "ami-0abc1234def567890"
+          instance_type = "t3.small"
 
-        Plan: 0 to add, 2 to change, 0 to destroy.
-    - match: "terraform plan -refresh-only"
-      evidence: drift
-      output: |
-        Note: Objects have changed outside of Terraform
-
-        Terraform detected the following changes made outside of Terraform since the last "terraform apply":
-
-          # aws_security_group.payments has changed
-          ~ resource "aws_security_group" "payments" {
-              ~ ingress = [
-                  + {
-                      + cidr_blocks = ["198.51.100.0/24"]
-                      + description = "partner hotfix"
-                      + from_port   = 8443
-                      + protocol    = "tcp"
-                      + to_port     = 8443
-                    },
-                ]
-            }
+          tags = {
+            cost-center = "payments"
+          }
+        }
+  state:
+    - type: aws_security_group
+      name: payments
+      attrs:
+        id: sg-0payments
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0payments"
+        name: payments
+        description: "Payments service"
+        vpc_id: vpc-0payments
+        ingress: [{ cidr_blocks: ["10.20.0.0/16"], description: "internal clients", from_port: 443, protocol: tcp, to_port: 443 }]
+        egress: []
+        tags_all: {}
+    - type: aws_instance
+      name: payments_worker
+      attrs:
+        id: i-0payments
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0payments"
+        ami: ami-0abc1234def567890
+        instance_type: t3.small
+        tags: {}
+        tags_all: {}
+  cloud:
+    patch:
+      - type: aws_security_group
+        id: sg-0payments
+        set:
+          ingress: [{ cidr_blocks: ["10.20.0.0/16"], description: "internal clients", from_port: 443, protocol: tcp, to_port: 443 }, { cidr_blocks: ["198.51.100.0/24"], description: "partner hotfix", from_port: 8443, protocol: tcp, to_port: 8443 }]
+  evidence:
+    - evidence: plan-removes-rule
+      command: plan
+      contains: "ingress"
+    - evidence: drift
+      command: plan
+      contains: "has changed"
 
 logs:
   - name: "#incidents (last night)"
@@ -111,10 +128,16 @@ actions:
   - id: codify
     label: "Add the 198.51.100.0/24 rule on 8443 to the security group in code (reviewed), so the plan no longer removes it"
     kind: fix
+    done_when:
+      all:
+        - file_contains: { path: /home/you/infra/main.tf, matches: 'cidr_blocks\s*=\s*\[[^\]]*198\.51\.100\.0/24' }
+        - plan_has: { no_change: [aws_security_group.payments] }
+        - not: { applied: { op: update, address: aws_security_group.payments } }
     feedback: "The code now matches what's really needed, the plan shows only the tag change, and the hotfix is reviewed and recorded."
   - id: apply-anyway
     label: "Apply the plan as it is"
     kind: destructive
+    done_when: { applied: { op: update, address: aws_security_group.payments } }
     feedback: "Terraform removes the rule, and the partner's callbacks fail again, recreating last night's outage."
   - id: target-instance
     label: "Apply with -target=aws_instance.payments_worker to skip the security group"
@@ -180,3 +203,6 @@ sources:
   - title: "Terraform: terraform plan (-refresh-only, -target)"
     url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
     retrieved: 2026-10-02
+
+command_notes:
+  "git log --oneline -3": "The top commit added tonight's tag; the others are what main last applied."

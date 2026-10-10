@@ -2,7 +2,7 @@
 // attributes the provider computes, which are secret, and which force the
 // resource to be destroyed and re-created when they change ("forces
 // replacement" in a plan). Types not listed here are not modeled.
-import { equal, hasUnknown, UNKNOWN, type Value } from './eval.ts'
+import { equal, equalSet, hasUnknown, UNKNOWN, type Value } from './eval.ts'
 
 export interface AttrSpec {
   forceNew?: boolean // changing it replaces the resource
@@ -199,7 +199,7 @@ export function diffInstance(
       if (before === undefined || before === null) continue
       d = null // removed from the configuration
     }
-    if (!hasUnknown(d) && equal(before ?? null, d)) continue
+    if (!hasUnknown(d) && (spec.set ? equalSet : equal)(before ?? null, d)) continue
     changes.push(change(n, before, d, !!spec.forceNew))
     next.set(n, d)
   }

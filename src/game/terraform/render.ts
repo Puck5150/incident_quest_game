@@ -165,6 +165,26 @@ const boxed = (list: PlanResult['diagnostics'], sources: Record<string, string>)
 // A failed plan's warnings and errors, boxed.
 export const renderPlanErrors = (r: PlanResult, sources: Record<string, string> = {}): string => [...boxed(r.warnings, sources), ...boxed(r.diagnostics, sources)].join('\n')
 
+// `plan -refresh-only`: every difference refresh found (not only what a change refers to), and nothing to undo.
+export function renderRefreshOnly(r: PlanResult): string {
+  if (!r.drift.length)
+    return 'No changes. Your infrastructure still matches the configuration.\n\nTerraform has checked that the real remote objects still match the result of your most recent changes, and found no differences.'
+  return [
+    'Note: Objects have changed outside of Terraform',
+    '',
+    'Terraform detected the following changes made outside of Terraform since the',
+    'last "terraform apply" which may have affected this plan:',
+    '',
+    r.drift.map((d) => driftBlock(r, d)).join('\n\n'),
+    '',
+    '',
+    'This is a refresh-only plan, so Terraform will not take any actions to undo',
+    'these. If you were expecting these changes then you can apply this plan to',
+    'record the updated values in the Terraform state without changing any remote',
+    'objects.',
+  ].join('\n')
+}
+
 // A plan that failed with a configuration error renders only its errors. A
 // partial plan (prevent_destroy) renders what was planned; its errors come
 // from renderPlanErrors.

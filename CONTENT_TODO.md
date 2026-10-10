@@ -968,7 +968,7 @@ terraform-sg-cycle:
 
 ## terraform migrations (TF7b)
 
-Batch status: Task 4 done (terraform-count-index-shift). Tasks 5 to 10 pending.
+Batch status: Tasks 4 and 5 done (terraform-count-index-shift, terraform-drift-hotfix). Tasks 6 to 10 pending.
 
 ### terraform-count-index-shift (Task 4)
 
@@ -980,3 +980,13 @@ Batch status: Task 4 done (terraform-count-index-shift). Tasks 5 to 10 pending.
 - Evidence `count-list` is earned by the first `plan` (`is out of range for count`), not by a file read, so `cat queues.tf` is the real live file (a scripted `cat` would go stale after edits). The only scripted command is `git log --oneline -3` (invented commit subjects, unverified). `state-rm` followed by `import` of the three live queues under for_each keys plans clean but leaves `returns` in the cloud, so it is not credited (the old incident called state surgery error-prone but "can be made to work").
 - Command library: none of the scripted entries were library entries; nothing removed.
 - [ ] Unverified: the exact `QueueNameExists` text for a re-create after `state rm` (modelled in the simulator, TF4).
+
+### terraform-drift-hotfix (Task 5)
+
+- Migrated onto the simulator; same id, learning goal, hypotheses, hints, analogy, debrief, concepts, sources, `#incidents` log (evidence `hotfix-note`), action ids/kinds and `solution_paths`. Scripted `terraform plan`, `plan -refresh-only` and their `when_actions` variants are gone. The only scripted command is an invented `git log --oneline -3` (commit hashes and subjects invented; unverified).
+- Engine gaps found and closed here (the brief assumed them): (1) `plan -refresh-only` / `apply -refresh-only` were "not simulated yet"; now implemented (`cmdRefreshOnly` in cli.ts, `renderRefreshOnly` in render.ts). (2) `set` attributes (`ingress`) were compared in order, so a codified rule written before the existing one showed a bogus SG change; now order-insensitive (`equalSet`, used by the plan diff and by refresh).
+- [ ] Unverified against real Terraform 1.9: the refresh-only plan text (the `This is a refresh-only plan, so Terraform will not take any actions to undo these...` paragraph; the no-drift sentence `No changes. Your infrastructure still matches the configuration.`), the `Would you like to update the Terraform state to reflect these detected changes?` prompt text, and `Apply complete! Resources: 0 added, 0 changed, 0 destroyed.` after a refresh-only apply. Written from memory. Flag combinations rejected: `-destroy` (not simulated), `-replace`, `-refresh=false` (messages from memory); `-target` or a plan file with `-refresh-only` answer "not simulated".
+- Deviation: a plain `terraform plan` here prints NO "Objects have changed outside of Terraform" note. The engine (like real Terraform) reports drift only for objects the planned change refers to, and the security group is the object being changed. Evidence `drift` therefore comes only from `plan -refresh-only` (output contains `has changed`), as the old text intended. `plan-removes-rule` is the plain plan (contains `ingress`).
+- Fix credited by world state: `codify` = `main.tf` holds the CIDR inside a `cidr_blocks` list AND `plan_has.no_change` for the SG AND no `update` ever applied to the SG. Routes accepted: the rule added in main.tf in either block order, any attribute order, CIDR list spacing; before or after a refresh-only apply. Not credited on purpose: `ignore_changes = [ingress]` (clean plan, but the hotfix stays undocumented in code), a comment with the CIDR, a rule whose description or port differs from the console change (plan still updates the group). The rule must live in `main.tf` (the lab's only file); moving the group to another file is not credited.
+- Traps: `apply-anyway` (destructive) = any applied `update` of the SG; a codified rule written after that applies as an update too, so the fix is unearnable (tested). `target-instance` and `refresh-apply` stay button-only wrong actions (no typed predicate: the instance update also happens on the ideal path; a refresh-only apply is not visible to `done_when`). Their typed forms are tested to leave the group alone / keep removing the rule.
+- Known limit: a player who codifies with a different description (e.g. "partner") sees the group still change; applying it then updates only the description but flags `apply-anyway` (the history leaf cannot tell the harmless update from the rule removal).

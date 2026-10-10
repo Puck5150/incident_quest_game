@@ -13,7 +13,7 @@ import { parseHcl } from './parse.ts'
 import { planConfig, type PlanResult } from './plan.ts'
 import { hex } from './provider.ts'
 import { refresh as refreshState } from './refresh.ts'
-import { renderPlan, renderPlanErrors } from './render.ts'
+import { renderPlan, renderPlanErrors, renderRefreshOnly } from './render.ts'
 import { destroyScope, parseTargetArg, targetScope, type Target, type TargetScope } from './target.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
 import { schemaFor } from './resources.ts'
@@ -630,6 +630,7 @@ interface PlanFlags {
   lock: boolean
   planFile?: string
   targets: Target[]
+  refreshOnly: boolean
 }
 const PLAN_VALUE_FLAGS = new Set(['-var', '-var-file', '-replace', '-out', '-lock-timeout', '-parallelism', '-target'])
 const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warnings', '-refresh', '-detailed-exitcode', '-destroy', '-refresh-only', '-auto-approve'])
@@ -637,7 +638,7 @@ const PLAN_BOOL_FLAGS = new Set(['-no-color', '-input', '-lock', '-compact-warni
 const NOT_FOR: Record<Cmd, string[]> = { plan: ['-auto-approve'], apply: ['-out', '-detailed-exitcode'], destroy: ['-out', '-detailed-exitcode', '-replace'] }
 
 function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
-  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false, lock: true, targets: [] }
+  const f: PlanFlags = { sources: [], replace: [], refresh: true, detailed: false, autoApprove: false, lock: true, targets: [], refreshOnly: false }
   const rawTargets: string[] = []
   for (let i = 0; i < args.length; i++) {
     const raw = args[i]
@@ -668,13 +669,20 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
       else if (name === '-lock') f.lock = value !== 'false'
       else if (name === '-detailed-exitcode') f.detailed = true
       else if (name === '-auto-approve') f.autoApprove = value !== 'false'
-      else if (name === '-destroy' || name === '-refresh-only') return notYet(`${cmd} ${name}`)
+      else if (name === '-refresh-only') f.refreshOnly = value !== 'false'
+      else if (name === '-destroy') return notYet(`${cmd} ${name}`)
     } else return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
   }
   // Terraform parses -target before anything else runs; a bad address is an error with the address quoted.
   const badTargets = rawTargets.filter((t) => parseTargetArg(t) === undefined)
   if (badTargets.length) return fail(badTargets.map((t) => box('error', `Invalid target ${JSON.stringify(t)}`, 'Resource specification must include a resource type and name.')).join('\n'))
   f.targets = rawTargets.flatMap((t) => parseTargetArg(t) ?? [])
+  if (f.refreshOnly) {
+    if (cmd === 'destroy') return boxFail('Incompatible refresh-only and destroy', 'The -refresh-only option is not available for terraform destroy.')
+    if (f.replace.length) return boxFail('Incompatible refresh-only and replace options', 'The -refresh-only option is incompatible with -replace, because Terraform would be unable to refresh the replaced objects.')
+    if (!f.refresh) return boxFail('Incompatible refresh-only and refresh options', 'Terraform cannot skip refreshing in refresh-only mode. Using -refresh=false with -refresh-only makes no sense, because it would never update the state.')
+    if (f.targets.length || f.planFile !== undefined) return notYet(`${cmd} -refresh-only with -target or a plan file`)
+  }
   const bad = f.replace.find((a) => parseResAddr(a)?.mode !== 'managed')
   if (bad !== undefined) return boxFail(`Invalid force-replace address "${bad}"`, `The force-replace address "${bad}" is not a valid resource instance address.`)
   return f
@@ -768,9 +776,36 @@ const TARGETED_APPLY_WARNING = box(
 
 const planId = (lineage: string, serial: number, name: string) => `p${hex(`${lineage}:${serial}:${name}`, 8)}`
 
+// plan/apply -refresh-only: report what changed outside Terraform; apply records it in state (no remote object changes).
+async function cmdRefreshOnly(f: PlanFlags, ctx: CliContext, cfg: Config, apply: boolean): Promise<Out> {
+  const s = await prepare(f.sources, ctx, cfg)
+  if (!('vars' in s)) return s
+  const locked = !s.graph.diagnostics.length && checkLock(ctx, f.lock)
+  if (locked) return locked
+  const result = planConfig({ tree: cfg.modules.tree, state: ctx.lab.state, reality: ctx.lab.reality, vars: s.vars, workspace: ctx.lab.workspace, remoteStates: ctx.lab.remoteStates, replace: [], refresh: true })
+  if (result.diagnostics.length) return withWarn(s.warning, { stdout: '', stderr: renderPlanErrors(result, sourcesOf(allFiles(cfg))), exitCode: 1 })
+  const before = ctx.lab.state
+  let stdout = `${refreshLines(before, true).join('\n')}\n\n${renderRefreshOnly(result)}`
+  if (!apply) {
+    if (result.drift.length) stdout += `\n\n${RULE}\n\nNote: You didn't use the -out option to save this plan, so Terraform can't\nguarantee to take exactly these actions if you run "terraform apply" now.`
+    return { ...withWarn(s.warning, ok(stdout)), exitCode: f.detailed && result.drift.length ? 2 : 0 }
+  }
+  if (result.drift.length && !f.autoApprove) {
+    const prompt = "\nWould you like to update the Terraform state to reflect these detected changes?\n  Terraform will write these changes to the state without modifying any real infrastructure.\n  There is no undo. Only 'yes' will be accepted to confirm.\n\n  Enter a value: "
+    const answer = ctx.stdin !== undefined ? ctx.stdin.split('\n')[0].trim() : ctx.confirm ? await ctx.confirm(withWarn(s.warning, ok(`${stdout}\n${prompt}`)).stdout) : undefined
+    stdout += `\n${prompt}${answer ?? ''}\n`
+    if (answer !== 'yes') return { ...withWarn(s.warning, ok(`${stdout}\nApply cancelled.`)), exitCode: 1 }
+  }
+  const refreshed = refreshState(before, ctx.lab.reality).state
+  const content = (x: State) => JSON.stringify({ ...x, serial: 0 })
+  if (content(refreshed) !== content(before)) commit(ctx, { ok: true, state: { ...refreshed, serial: before.serial + 1 } })
+  return withWarn(s.warning, ok(`${stdout}\n\nApply complete! Resources: 0 added, 0 changed, 0 destroyed.`))
+}
+
 async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boolean): Promise<Out> {
   const f = parsePlanFlags(args)
   if (!('sources' in f)) return f
+  if (f.refreshOnly) return cmdRefreshOnly(f, ctx, cfg, false)
   const p = await makePlan(f, ctx, cfg, false)
   if (!('result' in p)) return p
   let stdout = p.stdout
@@ -811,6 +846,7 @@ async function loadSavedPlan(ctx: CliContext, cfg: Config, name: string): Promis
 async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'apply' | 'destroy'): Promise<Out> {
   const f = parsePlanFlags(args, mode)
   if (!('sources' in f)) return f
+  if (f.refreshOnly) return cmdRefreshOnly(f, ctx, cfg, true)
   const destroy = mode === 'destroy'
   let input: { tree: ModuleTree; vars: Record<string, Value>; replace: string[]; destroy: boolean; targets: Target[] }
   let head: string
