@@ -75,3 +75,15 @@
   alternatives:
     - { command: "terraform version", note: "The version side: what the lock file selected." }
   docs: { title: "terraform providers", url: "https://developer.hashicorp.com/terraform/cli/commands/providers" }
+
+- id: terraform-state-rm
+  match: "^terraform state rm"
+  summary: "Removes objects from Terraform's state without destroying them."
+  parts:
+    - { token: "state rm", meaning: "Forget the named resource, or every object under a module or module instance." }
+    - { token: "'module.NAME[\"key\"]'", meaning: "(Quote the address) one instance of a module with for_each." }
+  why: "The real objects keep running but nothing manages them any more, and a later plan wants to create them again if the code still declares them. It moves work, it does not do it."
+  alternatives:
+    - { command: "terraform state rm -dry-run ADDRESS", note: "Show what would be removed first." }
+    - { command: "removed block with lifecycle { destroy = false }", note: "Reviewed-in-code way to stop managing an object (Terraform 1.7+)." }
+  docs: { title: "terraform state rm", url: "https://developer.hashicorp.com/terraform/cli/commands/state/rm" }
