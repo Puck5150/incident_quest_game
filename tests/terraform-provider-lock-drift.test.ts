@@ -193,10 +193,9 @@ describe('terraform-provider-lock-drift on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
-  it('the engine path: the fix is recorded once through the real engine, key evidence earns the methodical bonus', async () => {
+  it('the fix action is the only solution path', () => {
     const stage = atStage(scenario, 0)
     expect(stage.actions.find((a) => a.id === 'refresh-lock')!.kind).toBe('fix')
     expect(scenario.solution_paths).toEqual([['refresh-lock']])
-    expect(typeof runCommand).toBe('function')
   })
 })

@@ -718,10 +718,6 @@ function planDestroy(nodes: Map<string, GNode>, result: PlanResult, fail: (file:
   return result
 }
 
-// Terraform reports drift only for objects that something changing in this plan
-// refers to (directly or through other values), and only the attributes it
-// refers to. What a changing resource's own configuration points at counts; the
-// resource itself does not.
 // refresh limited to the targets: objects outside them keep their recorded state and report no drift.
 function refreshScoped(state: State, reality: Reality, scope?: TargetScope): { state: State; drift: Drift[] } {
   const full = refreshState(state, reality)
@@ -736,6 +732,10 @@ function refreshScoped(state: State, reality: Reality, scope?: TargetScope): { s
   return { state: kept, drift }
 }
 
+// Terraform reports drift only for objects that something changing in this plan
+// refers to (directly or through other values), and only the attributes it
+// refers to. What a changing resource's own configuration points at counts; the
+// resource itself does not.
 function relevantDrift(nodes: Map<string, GNode>, result: PlanResult, drift: Drift[]): Drift[] {
   const before = result.refreshed.outputs
   const start = [
