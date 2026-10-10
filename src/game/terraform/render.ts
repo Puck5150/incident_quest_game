@@ -168,7 +168,7 @@ export const renderPlanErrors = (r: PlanResult, sources: Record<string, string> 
 // `plan -refresh-only`: every difference refresh found (not only what a change refers to), and nothing to undo.
 export function renderRefreshOnly(r: PlanResult): string {
   if (!r.drift.length)
-    return 'No changes. Your infrastructure still matches the configuration.\n\nTerraform has checked that the real remote objects still match the result of your most recent changes, and found no differences.'
+    return 'No changes. Your infrastructure still matches the configuration.\n\nTerraform has checked that the real remote objects still match the result of\nyour most recent changes, and found no differences.'
   return [
     'Note: Objects have changed outside of Terraform',
     '',

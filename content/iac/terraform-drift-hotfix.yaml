@@ -130,7 +130,15 @@ actions:
     kind: fix
     done_when:
       all:
-        - file_contains: { path: /home/you/infra/main.tf, matches: 'cidr_blocks\s*=\s*\[[^\]]*198\.51\.100\.0/24' }
+        - state_has: aws_security_group.payments
+        - reality_has:
+            type: aws_security_group
+            id: sg-0payments
+            attr: ingress
+            equals:
+              - { cidr_blocks: ["10.20.0.0/16"], description: "internal clients", from_port: 443, protocol: tcp, to_port: 443 }
+              - { cidr_blocks: ["198.51.100.0/24"], description: "partner hotfix", from_port: 8443, protocol: tcp, to_port: 8443 }
+        - not: { file_contains: { path: /home/you/infra/main.tf, matches: 'ignore_changes' } }
         - plan_has: { no_change: [aws_security_group.payments] }
         - not: { applied: { op: update, address: aws_security_group.payments } }
     feedback: "The code now matches what's really needed, the plan shows only the tag change, and the hotfix is reviewed and recorded."

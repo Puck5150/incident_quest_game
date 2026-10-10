@@ -236,6 +236,25 @@ describe('terraform-drift-hotfix on the simulator', () => {
   })
 })
 
+describe('codify spelled with variables and locals', () => {
+  const CIDR_RULE = (cidr: string) => HOTFIX.replace('"198.51.100.0/24"', cidr)
+  const cases: [string, string[]][] = [
+    ['var default', ['cat > vars.tf <<\'EOF\'\nvariable "partner" {\n  default = "198.51.100.0/24"\n}\nEOF', MAIN(INTERNAL + CIDR_RULE('var.partner'))]],
+    ['local', ['cat > locals.tf <<\'EOF\'\nlocals {\n  partner = "198.51.100.0/24"\n}\nEOF', MAIN(INTERNAL + CIDR_RULE('local.partner'))]],
+    ['variables.tf', ['cat > variables.tf <<\'EOF\'\nvariable "partner_cidr" {\n  default = "198.51.100.0/24"\n}\nEOF', MAIN(INTERNAL + CIDR_RULE('var.partner_cidr'))]],
+  ]
+  for (const [name, lines] of cases)
+    it(`${name} is credited`, async () => {
+      const { sh, out } = await play('cd ~/infra', ...lines, 'terraform plan')
+      expect(out.at(-1)!.output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
+      expect(await detectedAll(sh)).toEqual(FIXED)
+    })
+  it('state rm of the group (a plan that would create it) is not credited', async () => {
+    const { sh } = await play('cd ~/infra', "terraform state rm aws_security_group.payments", 'terraform plan')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+})
+
 describe('set-valued attributes compare without order', () => {
   it('ingress rules in another order are the same set, and a different set is not', async () => {
     const { equalSet } = await import('../src/game/terraform/eval.ts')
