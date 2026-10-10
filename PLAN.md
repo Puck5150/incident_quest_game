@@ -64,7 +64,7 @@ Versions get pinned at scaffold time (Milestone 2) from each project's current o
   networking/dns-resolution-failure.yaml
   linux/full-disk.yaml
   containers/crashloopbackoff.yaml
-  iac/terraform-state-lock.yaml
+  iac/terraform-cancelled-ci-lock.yaml
   cicd/failing-github-actions.yaml
   microservices/cascading-failure.yaml
 /src

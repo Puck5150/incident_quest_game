@@ -62,16 +62,6 @@ from your own experience and tick them off.
       line: format varies by systemd version.
 - [ ] `free -h` layout: representative.
 
-## iac/terraform-state-lock
-- [ ] The `Error acquiring the state lock` block (box-drawing borders, Lock Info
-      fields, closing paragraph) isn't printed in the HashiCorp docs.
-      The behavior (lock blocks the run, force-unlock takes the lock ID, docs warn
-      against -lock=false) is sourced.
-- [ ] `aws s3 ls` output layout and the `terraform.tfstate.tflock` object name: the
-      S3 backend docs confirm the `.tflock` suffix.
-- [ ] GitHub Actions cancelled-step message `Error: The operation was canceled.`: representative.
-- [ ] terraform plan output formatting: representative.
-
 ## cicd/failing-github-actions
 - [ ] npm ci error lines (`npm error code EUSAGE`, the "can only install packages
       when your package.json and package-lock.json ... are in sync" sentence, the
@@ -749,7 +739,7 @@ terraform-sg-cycle:
 
 - [x] Done in TF7a Task 1 (was: a hypothetical engine defect; no shipped incident uses `create_before_destroy`, terraform-sg-cycle does not): `create_before_destroy` was ignored by apply ordering (src/game/terraform/apply.ts): a `+/-` replacement still deletes first. In terraform-sg-cycle a renamed group with create_before_destroy fails on the old group's DependencyViolation before creating the new one; real Terraform would create the new group, then fail deleting the old one and keep it as deposed.
 - [x] Done in TF7a Task 4 (was: lock bypass history for state-writing CLI commands): `state rm`/`mv`, `taint`, `untaint`, `import`, `workspace new`/`delete` record a history line with ` (lock bypassed)` when `-lock=false` ran past a held lock; `lock_bypassed: true` is the any-bypass leaf.
-- [ ] Retire content/iac/terraform-state-lock.yaml (scripted, S3 use_lockfile): terraform-cancelled-ci-lock supersedes it on the simulator. (It also uses the evidence tag `partial-apply`, as terraform-partial-apply-iam does; tags are per incident, so no clash.)
+- [x] Done in TF7b Task 3: content/iac/terraform-state-lock.yaml retired; terraform-cancelled-ci-lock supersedes it on the simulator. (The retired file also used the evidence tag `partial-apply`, as terraform-partial-apply-iam does; tags are per incident, so no clash.)
 - [ ] Unverified (TF7a Task 3): `NotFound` wording on a `-refresh=false` update of a vanished object: EC2 `updating EC2 Instance (ID): operation error EC2: ModifyInstanceAttribute, ... api error InvalidInstanceID.NotFound: The instance ID 'ID' does not exist` (operation name chosen, not traced), S3 `updating S3 Bucket (ID) tags: ... PutBucketTagging ... StatusCode: 404 ... NoSuchBucket: The specified bucket does not exist`, every other type a generic `updating TYPE (ID): NotFound: the object does not exist`. A delete of a vanished object succeeds silently (providers treat NotFound as gone; not checked per resource type in provider v5.70.0).
 - [ ] Limitations (TF7a Task 3): the NotFound update texts hardcode the operation (`ModifyInstanceAttribute`, `PutBucketTagging ... tags`) whatever attribute changed; a `cloud.release` and a `cloud.add`/state object with the same `type:id` act on the one cloud entry (the release deletes it once its actions are taken), and a release is applied at the next shell sync, `done_when` check or terraform command, not at the instant of the action.
 - [ ] Apply ordering is sequential and ignores `-parallelism` (see the TF5 defect list); create_before_destroy ordering landed in TF7a Task 1 without it.
