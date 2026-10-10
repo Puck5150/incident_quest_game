@@ -901,7 +901,21 @@ terraform-sg-cycle:
 
 ## terraform incidents batch 4 (TF7a)
 
-- [ ] TF7a batch status: `terraform-destroy-nonempty-bucket` and `terraform-destroy-dependency-violation` and `terraform-deleted-out-of-band` and `terraform-orphans-after-state-rm` authored (dark, `published: false`, in the DARK list of tests/published.test.tsx); batch complete pending the Task 9 sweep.
+### TF7a batch status
+
+- Four incidents, all dark (`published: false`, listed in DARK in tests/published.test.tsx), none flipped:
+  - `terraform-destroy-nonempty-bucket`: BucketNotEmpty and `force_destroy` read from state (apply it, then destroy; or empty the bucket); trap is `state rm` of the bucket.
+  - `terraform-destroy-dependency-violation`: DeleteSubnet DependencyViolation caused by a foreign network interface; release it after checking whose it is; trap is `state rm` of the network.
+  - `terraform-deleted-out-of-band`: console deletes leave state stale; the queue comes back, the retired worker's block goes; read plan and `state list` before any destroy; trap is deleting both blocks.
+  - `terraform-orphans-after-state-rm`: stale lock plus orphans missing from state; force-unlock, import both, destroy; never `-lock=false` writes; works whether the cause is named before or after the destroy.
+- Engine changes: `create_before_destroy` ordering with deposed objects, BucketNotEmpty and DependencyViolation provider errors, `cloud.release` and NotFound on vanished objects, lock-bypass history marker (`lock_bypassed`), history ops (`state-rm`, `import`, etc.), history-based `applied` import.
+- Task 9 sweep applied: relaxed `aws s3` typed regexes (flag before path, `--human-readable`), `--output json` on describe-network-interfaces, wording fixes in dependency-violation and deleted-out-of-band, `terraform refresh` in the debrief, plan/state-list-before-destroy hint, less pointed ticket. UI tests: tests/terraform-batch4-ui.test.tsx. No id, evidence-tag or command-library collisions (evidence tags are per incident; command library untouched except the earlier `--recursive` part).
+- Open items:
+  - [ ] Real provider retries DeleteSubnet on DependencyViolation for about 20 minutes, then errors with a timeout wrapper; the lab shows the immediate error (dependency-violation).
+  - [ ] Late root-cause naming vs transient fix predicates in the other incidents (see the list under orphans-after-state-rm).
+  - [ ] `terraform plan -refresh-only` (and plan -destroy) answer "not yet simulated"; `apply -refresh-only` and `terraform refresh` work.
+  - [ ] Unverified items listed per incident below.
+- TF7b: migrate the 9 scripted terraform incidents to the simulator, then retire `terraform-state-lock.yaml`; the other TF7 follow-ups are untouched.
 
 ### terraform-destroy-nonempty-bucket (task 5)
 
