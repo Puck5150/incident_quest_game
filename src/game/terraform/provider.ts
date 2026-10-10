@@ -178,6 +178,26 @@ export function dependencyViolation(type: string, id: string, seed: string): str
   const rid = requestId(seed)
   if (type === 'aws_vpc') return `deleting EC2 VPC (${id}): operation error EC2: DeleteVpc, https response error StatusCode: 400, RequestID: ${rid}, api error DependencyViolation: The vpc '${id}' has dependencies and cannot be deleted.`
   if (type === 'aws_subnet') return `deleting EC2 Subnet (${id}): operation error EC2: DeleteSubnet, https response error StatusCode: 400, RequestID: ${rid}, api error DependencyViolation: The subnet '${id}' has dependencies and cannot be deleted.`
-  if (type === 'aws_security_group') return `deleting Security Group (${id}): DependencyViolation: resource ${id} has a dependent object`
+  if (type === 'aws_security_group') return `deleting Security Group (${id}): operation error EC2: DeleteSecurityGroup, https response error StatusCode: 400, RequestID: ${rid}, api error DependencyViolation: resource ${id} has a dependent object`
   return `deleting ${type} (${id}): DependencyViolation: the object has dependencies and cannot be deleted`
+}
+
+// Reality keys of the objects in a bucket (type aws_s3_object, id "BUCKET/key").
+export function bucketObjects(reality: Reality, bucket: string): string[] {
+  return Object.keys(reality).filter((k) => k.startsWith(`aws_s3_object:${bucket}/`)).sort()
+}
+
+// ponytail: wording, 409 and HostID unverified (CONTENT_TODO); versioned buckets are not modelled.
+export function bucketNotEmpty(name: string, seed: string): string {
+  return `deleting S3 Bucket (${name}): operation error S3: DeleteBucket, https response error StatusCode: 409, RequestID: ${requestId(seed)}, HostID: ${hex(`${seed}:host`, 24)}, api error BucketNotEmpty: The bucket you tried to delete is not empty`
+}
+
+// A vanished object met by an update (-refresh=false). Updates only: a delete of a vanished object succeeds (providers treat NotFound as gone).
+// ponytail: per-type wording unverified (CONTENT_TODO); only EC2 instances and S3 buckets have SDK text, the rest is generic.
+export function notFound(type: string, id: string, seed: string): string {
+  const rid = requestId(seed)
+  const verb = 'updating'
+  if (type === 'aws_instance') return `${verb} EC2 Instance (${id}): operation error EC2: ModifyInstanceAttribute, https response error StatusCode: 400, RequestID: ${rid}, api error InvalidInstanceID.NotFound: The instance ID '${id}' does not exist`
+  if (type === 'aws_s3_bucket') return `${verb} S3 Bucket (${id}) tags: operation error S3: PutBucketTagging, https response error StatusCode: 404, RequestID: ${rid}, HostID: ${hex(`${seed}:host`, 24)}, api error NoSuchBucket: The specified bucket does not exist`
+  return `${verb} ${type} (${id}): NotFound: the object does not exist`
 }

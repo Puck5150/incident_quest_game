@@ -1,0 +1,330 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-destroy-dependency-violation
+published: false
+track: iac
+difficulty: 3
+title: "The teardown of the retired app stack stops at the subnet"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  severity: SEV4
+  body: |
+    We're retiring the old app stack (signed off by its owners). Running
+    terraform destroy from ~/app-infra gets rid of the instance and the
+    security group, then stops at the subnet with a DependencyViolation,
+    and a re-run stops in the same place. The VPC and the subnet are still
+    there and still cost us. Tomás thinks it's a Terraform ordering bug and
+    wants to add a depends_on; Priya says it's probably our role. For what
+    it's worth, the ingest team told us last week they had moved their
+    endpoint into the new VPC. Please get the stack fully torn down.
+
+environment: |
+  app-infra is the Terraform for the retired app stack: a VPC (10.70.0.0/16), one subnet
+  (10.70.1.0/24), a security group and one instance, in account 123456789012, us-east-1.
+  State is local to this checkout. Your default AWS profile is your own admin role in the
+  account. The stack has had no traffic since the cutover.
+
+terminal:
+  prompt: "you@laptop:~/app-infra$"
+  commands:
+    - match_regex: "^aws ec2 describe-network-interfaces( --region us-east-1)?( --filters ['\"]?Name=subnet-id,Values=subnet-0e92c4a7b1d38f560['\"]?| --network-interface-ids eni-0c4a8e2f6b1d97305)?( --region us-east-1)?( --output json)?$"
+      example: "aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560"
+      evidence: eni-owner
+      when_actions: [release-eni]
+      output: |
+        {
+            "NetworkInterfaces": []
+        }
+    - match_regex: "^aws ec2 describe-network-interfaces( --region us-east-1)?( --filters ['\"]?Name=subnet-id,Values=subnet-0e92c4a7b1d38f560['\"]?| --network-interface-ids eni-0c4a8e2f6b1d97305)?( --region us-east-1)?( --output json)?$"
+      example: "aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560"
+      evidence: eni-owner
+      output: |
+        {
+            "NetworkInterfaces": [
+                {
+                    "Description": "Interface for the shared ingest endpoint",
+                    "Groups": [
+                        {
+                            "GroupName": "ingest-endpoint",
+                            "GroupId": "sg-09a4c7e1d3b5f2680"
+                        }
+                    ],
+                    "InterfaceType": "interface",
+                    "NetworkInterfaceId": "eni-0c4a8e2f6b1d97305",
+                    "OwnerId": "123456789012",
+                    "PrivateIpAddress": "10.70.1.52",
+                    "RequesterManaged": false,
+                    "Status": "available",
+                    "SubnetId": "subnet-0e92c4a7b1d38f560",
+                    "TagSet": [
+                        {
+                            "Key": "Name",
+                            "Value": "ingest-endpoint-eni"
+                        },
+                        {
+                            "Key": "Team",
+                            "Value": "ingest-platform"
+                        }
+                    ],
+                    "VpcId": "vpc-04b7d1e9a3c52f860"
+                }
+            ]
+        }
+    - match: "aws sts get-caller-identity"
+      evidence: admin-role
+      output: |
+        {
+            "UserId": "AROA3XFRBF23EXAMPLE:you",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/PlatformAdmin/you"
+        }
+
+terraform:
+  dir: "~/app-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        resource "aws_vpc" "main" {
+          cidr_block = "10.70.0.0/16"
+
+          tags = {
+            Name = "app"
+          }
+        }
+
+        resource "aws_subnet" "app" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.70.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "app"
+          }
+        }
+
+        resource "aws_security_group" "app" {
+          name        = "app"
+          description = "App instances"
+          vpc_id      = aws_vpc.main.id
+        }
+
+        resource "aws_instance" "app" {
+          ami                    = "ami-05c8e2d71f9a3b640"
+          instance_type          = "t3.small"
+          subnet_id              = aws_subnet.app.id
+          vpc_security_group_ids = [aws_security_group.app.id]
+
+          tags = {
+            Name = "app"
+          }
+        }
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-04b7d1e9a3c52f860
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-04b7d1e9a3c52f860"
+        cidr_block: 10.70.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0f6b2d8a4c1e97350
+        tags: { Name: app }
+        tags_all: { Name: app }
+    - type: aws_subnet
+      name: app
+      attrs:
+        id: subnet-0e92c4a7b1d38f560
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0e92c4a7b1d38f560"
+        vpc_id: vpc-04b7d1e9a3c52f860
+        cidr_block: 10.70.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: app }
+        tags_all: { Name: app }
+    - type: aws_security_group
+      name: app
+      attrs:
+        id: sg-0d3f7a1b5c9e24860
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0d3f7a1b5c9e24860"
+        name: app
+        description: App instances
+        vpc_id: vpc-04b7d1e9a3c52f860
+        ingress: []
+        egress: []
+        tags: {}
+        tags_all: {}
+    - type: aws_instance
+      name: app
+      attrs:
+        id: i-0b5e9c2d7a4f13608
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0b5e9c2d7a4f13608"
+        ami: ami-05c8e2d71f9a3b640
+        instance_type: t3.small
+        subnet_id: subnet-0e92c4a7b1d38f560
+        vpc_security_group_ids: [sg-0d3f7a1b5c9e24860]
+        availability_zone: us-east-1a
+        private_ip: 10.70.1.18
+        tags: { Name: app }
+        tags_all: { Name: app }
+  cloud:
+    # Not in Terraform's state: another team's interface, left behind in the subnet.
+    add:
+      - type: aws_network_interface
+        attrs:
+          id: eni-0c4a8e2f6b1d97305
+          subnet_id: subnet-0e92c4a7b1d38f560
+          vpc_id: vpc-04b7d1e9a3c52f860
+          description: "Interface for the shared ingest endpoint"
+          security_groups: [sg-09a4c7e1d3b5f2680]
+          private_ip: 10.70.1.52
+          status: available
+          tags: { Name: ingest-endpoint-eni, Team: ingest-platform }
+    release:
+      - { type: aws_network_interface, id: eni-0c4a8e2f6b1d97305, when_actions: [release-eni] }
+  evidence:
+    - evidence: subnet-dependency-violation
+      command: destroy
+      contains: "DependencyViolation: The subnet"
+    - evidence: eni-not-in-state
+      command: state list
+      contains: "aws_vpc.main"
+
+hypotheses:
+  - id: foreign-interface
+    text: "Something Terraform never created still lives in the subnet (a network interface), and AWS will not delete a subnet that is in use."
+    correct: true
+  - id: ordering-bug
+    text: "Terraform deletes things in the wrong order, so the subnet is attempted while something of the stack's own still uses it (a depends_on would fix it)."
+    feedback: "Terraform already deletes in dependency order: the instance and the security group went first and were gone before the subnet was tried, and the VPC was not attempted because it depends on the subnet. The instance is gone and the error still stands, so what blocks the subnet is not in this configuration, and depends_on only changes order within it."
+  - id: stale-state
+    text: "State is out of date and still lists something that no longer exists, so Terraform is tripping over a ghost."
+    feedback: "After the destroy, state list shows only the VPC and the subnet, and both exist. A terraform refresh finds nothing changed. The state is right; it is AWS that holds something it does not know about."
+  - id: permissions
+    text: "Your role (or the CI role) lacks the permission to delete the subnet."
+    feedback: "A missing permission comes back as UnauthorizedOperation. This is DependencyViolation (400): EC2 understood the request and refused it because the subnet is in use. get-caller-identity shows an admin role, and the instance and security group were deleted in the same run."
+
+actions:
+  - id: release-eni
+    label: "Delete the orphaned interface with the AWS CLI (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), after checking whose it is"
+    kind: fix
+    match_regex: "^aws ec2 delete-network-interface( --region us-east-1)? --network-interface-id eni-0c4a8e2f6b1d97305( --region us-east-1)?( --output json)?$"
+    feedback: "The interface is deleted (no output on success). It was available, unattached, and the ingest team had already moved off this VPC. Terraform never owned it, so only now can terraform destroy remove the subnet."
+  - id: destroy-after-release
+    label: "Run terraform destroy again now that nothing is left in the subnet"
+    kind: fix
+    done_when:
+      all:
+        - state_lacks: aws_subnet.app
+        - state_lacks: aws_vpc.main
+        - reality_lacks: { type: aws_vpc, id: vpc-04b7d1e9a3c52f860 }
+        - applied: { op: delete, address: aws_subnet.app }
+    feedback: "With the interface gone, DeleteSubnet succeeds, then the VPC. The configuration was never the problem: something outside it was holding the subnet."
+  - id: state-rm-network
+    label: "Remove the subnet and the VPC from state with terraform state rm so destroy can finish"
+    kind: destructive
+    done_when:
+      all:
+        - state_lacks: aws_subnet.app
+        - reality_has: { type: aws_subnet, id: subnet-0e92c4a7b1d38f560 }
+    feedback: "Destroy 'finishes' only because Terraform has forgotten the subnet and the VPC. Both are still in AWS, still blocked by the interface, and now nothing manages them. Import them back and deal with the interface properly."
+  - id: target-the-vpc
+    label: "Run terraform destroy -target=aws_vpc.main to go straight for the VPC"
+    kind: wrong
+    feedback: "-target does not skip dependencies: the VPC's dependents come first, so it stops at the same subnet with the same DependencyViolation. Nothing was destroyed that was not going to be."
+  - id: add-depends-on
+    label: "Add depends_on to the subnet or the instance and re-run the destroy"
+    kind: wrong
+    feedback: "The order was already right (the instance and security group went first). depends_on only orders resources Terraform manages; the interface is not one of them, so the error does not change."
+  - id: grant-more-permissions
+    label: "Attach ec2:* to your role and re-run"
+    kind: wrong
+    feedback: "The role was never the problem: EC2 answered DependencyViolation, not UnauthorizedOperation. You widened a role for nothing."
+
+solution_paths:
+  - [release-eni, destroy-after-release]
+
+key_evidence: [subnet-dependency-violation, eni-owner, eni-not-in-state, admin-role]
+
+evidence_labels:
+  subnet-dependency-violation: "terraform destroy stops on the subnet with DependencyViolation after the instance and group are gone"
+  eni-owner: "A network interface from the ingest team sits in the subnet, unattached"
+  eni-not-in-state: "Terraform's state lists only the VPC and the subnet: the interface is not one of its resources"
+  admin-role: "Your role is an admin role in the account"
+
+hints:
+  nudge: "The instance and the group are gone, yet the subnet is still 'in use'. In use by what? Terraform's state does not say."
+  direction: "Ask EC2 what lives in the subnet: aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560. Read the description, status and tags to see whose interface it is. depends_on, -target and state rm will not help."
+  answer: "The interface eni-0c4a8e2f6b1d97305 belongs to the ingest team and is unattached; they confirmed they moved off. Delete it (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), then run terraform destroy again."
+
+analogy:
+  title: "The tenant's boxes in the unit"
+  text: |
+    The landlord won't take the keys back while there are boxes in the unit,
+    and nothing in your lease lists them: another tenant left them there.
+    Pushing the lease through the shredder (state rm) does not move the boxes;
+    it just stops you being able to find the unit. You check whose boxes they
+    are, get the okay to clear them, and then hand the keys back.
+
+debrief:
+  root_cause: |
+    A subnet can only be deleted when nothing in it is in use, and a network
+    interface counts. The ingest team's interface had been created in this
+    subnet outside Terraform, so it was not in state, not in the configuration
+    and invisible to a plan. Terraform destroyed the instance and security group,
+    tried DeleteSubnet, and EC2 answered DependencyViolation (400) because the
+    interface still used the subnet. The VPC depends on the subnet, so it was
+    never attempted.
+  ideal_path:
+    - "Read the error: DependencyViolation on the subnet, not UnauthorizedOperation."
+    - "Rule out ordering (the instance went first) and stale state (a refresh shows nothing)."
+    - "Ask EC2 what is in the subnet and read whose interface it is."
+    - "Delete it only once the evidence shows it is unattached and abandoned, then terraform destroy again."
+  real_world: |
+    In real life you ask the owner before deleting someone else's interface, and
+    you may be unable to: interfaces created by AWS services (VPC endpoints,
+    Lambda in a VPC, load balancers, NAT gateways) are managed by the service,
+    cannot be deleted directly, and go away only when the owning service
+    resource is deleted. The simulator lets you delete this one because it is
+    unattached and the owner has already moved off. Never use terraform state rm
+    to get past a dependency: it leaves a billed VPC and subnet in the account
+    that nothing manages.
+
+concepts:
+  - term: "DependencyViolation"
+    text: "The EC2 error returned when you delete a resource (subnet, VPC, security group) that something else still uses."
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html"
+  - term: "Elastic network interface"
+    text: "A virtual network card in a subnet. Instances, endpoints and other services each get one; an interface left behind keeps its subnet in use."
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html"
+  - term: "terraform destroy -target"
+    text: "Limits the destroy to a resource and the resources that depend on it. It does not skip dependencies outside Terraform."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/destroy"
+
+sources:
+  - title: "Amazon VPC: Delete your subnet"
+    url: "https://docs.aws.amazon.com/vpc/latest/userguide/delete-subnet.html"
+    retrieved: 2026-10-09
+  - title: "Amazon EC2: Elastic network interfaces"
+    url: "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: destroy"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/destroy"
+    retrieved: 2026-10-09
+
+command_notes:
+  "aws sts get-caller-identity": "An admin role in the stack's account: a permission problem would be UnauthorizedOperation, not DependencyViolation."
+  "aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560": "Lists what is in the subnet: one unattached interface with the ingest team's description and tags, which Terraform does not manage."

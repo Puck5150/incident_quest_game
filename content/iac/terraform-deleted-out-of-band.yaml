@@ -1,0 +1,349 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-deleted-out-of-band
+published: false
+track: iac
+difficulty: 3
+title: "The nightly plan wants to create things that were already there"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  severity: SEV4
+  body: |
+    The nightly terraform plan on the jobs stack has started proposing to
+    create an SQS queue and an instance, both of which we thought already
+    existed, and it prints a note about "changes outside of Terraform".
+    Earlier today Dev ran a targeted terraform destroy on those two
+    (-target=aws_sqs_queue.jobs -target=aws_instance.worker) to tidy up
+    and was told there was nothing to destroy. There is a thread about last
+    week's changes in this account in NOTES.md in ~/jobs-infra. Please get the stack and its configuration back in
+    agreement without breaking anything that is still in use.
+
+environment: |
+  jobs-infra is the Terraform for the jobs stack: a VPC (10.80.0.0/16), one subnet
+  (10.80.1.0/24), an SQS queue (app-jobs) and one instance (worker), in account
+  123456789012, us-east-1. State is local to this checkout. Your default AWS profile is your
+  own admin role in the account. The VPC and subnet are shared with other work in the account.
+
+terminal:
+  prompt: "you@laptop:~/jobs-infra$"
+  commands:
+    - match_regex: "^aws sqs get-queue-url( --region us-east-1| --output json)* --queue-name app-jobs( --region us-east-1| --output json)*$"
+      example: "aws sqs get-queue-url --queue-name app-jobs"
+      evidence: queue-gone-in-aws
+      when_actions: [apply-reconcile]
+      output: |
+        {
+            "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/app-jobs"
+        }
+    - match_regex: "^aws sqs get-queue-url( --region us-east-1| --output json)* --queue-name app-jobs( --region us-east-1| --output json)*$"
+      example: "aws sqs get-queue-url --queue-name app-jobs"
+      evidence: queue-gone-in-aws
+      output: |
+        An error occurred (AWS.SimpleQueueService.NonExistentQueue) when calling the GetQueueUrl operation: The specified queue does not exist.
+    - match_regex: "^aws ec2 describe-instances( --region us-east-1| --output json)* --instance-ids i-0d6a3f8b2c71e9450( --region us-east-1| --output json)*$"
+      example: "aws ec2 describe-instances --instance-ids i-0d6a3f8b2c71e9450"
+      evidence: instance-gone-in-aws
+      output: |
+        An error occurred (InvalidInstanceID.NotFound) when calling the DescribeInstances operation: The instance ID 'i-0d6a3f8b2c71e9450' does not exist
+    - match: "cat NOTES.md"
+      evidence: notes-decide
+      output: |
+        # jobs stack, cleanup thread (pasted from Slack)
+
+        Marta: Cleaned up the console on Friday, deleted the unused stuff in the jobs
+        account: the old worker instance and the app-jobs queue. Both looked idle.
+        Dev: the worker was retired last month when the batch moved to Lambda, so
+        that one is meant to be gone. Nobody is going to miss it.
+        Priya: hold on, app-jobs is NOT unused. The API still enqueues to it, the
+        Lambda reads from it, it just had nothing in it over the weekend. It needs to
+        exist, with the same name. Don't touch the VPC or the subnet, other teams'
+        things live there.
+        Marta: oh. Sorry.
+    - match: "aws sts get-caller-identity"
+      evidence: admin-role
+      output: |
+        {
+            "UserId": "AROA3XFRBF23EXAMPLE:you",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/PlatformAdmin/you"
+        }
+
+terraform:
+  dir: "~/jobs-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        resource "aws_vpc" "main" {
+          cidr_block = "10.80.0.0/16"
+
+          tags = {
+            Name = "jobs"
+          }
+        }
+
+        resource "aws_subnet" "app" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.80.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "jobs"
+          }
+        }
+
+        resource "aws_sqs_queue" "jobs" {
+          name = "app-jobs"
+        }
+
+        resource "aws_instance" "worker" {
+          ami           = "ami-05c8e2d71f9a3b640"
+          instance_type = "t3.small"
+          subnet_id     = aws_subnet.app.id
+
+          tags = {
+            Name  = "worker"
+            Queue = aws_sqs_queue.jobs.name
+          }
+        }
+    - path: NOTES.md
+      content: |
+        # jobs stack, cleanup thread (pasted from Slack)
+
+        Marta: Cleaned up the console on Friday, deleted the unused stuff in the jobs
+        account: the old worker instance and the app-jobs queue. Both looked idle.
+        Dev: the worker was retired last month when the batch moved to Lambda, so
+        that one is meant to be gone. Nobody is going to miss it.
+        Priya: hold on, app-jobs is NOT unused. The API still enqueues to it, the
+        Lambda reads from it, it just had nothing in it over the weekend. It needs to
+        exist, with the same name. Don't touch the VPC or the subnet, other teams'
+        things live there.
+        Marta: oh. Sorry.
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-0a3c7e1d9b52f4680
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0a3c7e1d9b52f4680"
+        cidr_block: 10.80.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0e5b1d7a3c9f28460
+        tags: { Name: jobs }
+        tags_all: { Name: jobs }
+    - type: aws_subnet
+      name: app
+      attrs:
+        id: subnet-0b8d2f6a4e1c73950
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0b8d2f6a4e1c73950"
+        vpc_id: vpc-0a3c7e1d9b52f4680
+        cidr_block: 10.80.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: jobs }
+        tags_all: { Name: jobs }
+    - type: aws_sqs_queue
+      name: jobs
+      attrs:
+        id: "https://sqs.us-east-1.amazonaws.com/123456789012/app-jobs"
+        arn: "arn:aws:sqs:us-east-1:123456789012:app-jobs"
+        url: "https://sqs.us-east-1.amazonaws.com/123456789012/app-jobs"
+        name: app-jobs
+        fifo_queue: false
+        visibility_timeout_seconds: 30
+        message_retention_seconds: 345600
+        tags_all: {}
+    - type: aws_instance
+      name: worker
+      attrs:
+        id: i-0d6a3f8b2c71e9450
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0d6a3f8b2c71e9450"
+        ami: ami-05c8e2d71f9a3b640
+        instance_type: t3.small
+        subnet_id: subnet-0b8d2f6a4e1c73950
+        availability_zone: us-east-1a
+        private_ip: 10.80.1.27
+        tags: { Name: worker, Queue: app-jobs }
+        tags_all: { Name: worker, Queue: app-jobs }
+  cloud:
+    # Deleted in the console last week; state does not know.
+    delete:
+      - { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/app-jobs" }
+      - { type: aws_instance, id: i-0d6a3f8b2c71e9450 }
+  evidence:
+    - evidence: drift-in-plan
+      command: plan
+      contains: "aws_sqs_queue.jobs has been deleted"
+    - evidence: state-still-lists
+      command: state list
+      contains: "aws_instance.worker"
+    - evidence: destroy-nothing
+      command: destroy
+      contains: "No objects need to be destroyed"
+
+hypotheses:
+  - id: deleted-out-of-band
+    text: "The queue and the instance were deleted outside Terraform, so state is stale: it lists objects that no longer exist, and the configuration still asks for them."
+    correct: true
+  - id: wrong-region-or-account
+    text: "The plan is looking in the wrong region or account, so it cannot see objects that really exist."
+    feedback: "The same plan finds the VPC and the subnet without trouble, and it reports the queue as deleted outside Terraform and shows the worker as a plain create. get-queue-url in us-east-1 answers that the queue does not exist, and describe-instances says InvalidInstanceID.NotFound for the worker. They are gone from this account and region, not hidden."
+  - id: config-added-them
+    text: "Someone just added these two resources to the configuration, so the plan wants to create new ones."
+    feedback: "A new resource would have no history. Here the plan first says Terraform detected that aws_sqs_queue.jobs 'has been deleted' since the last apply, and state list still lists both the queue and the worker with real ids: they were created by Terraform and have since vanished."
+  - id: corrupt-state
+    text: "The state file is corrupt or belongs to another workspace."
+    feedback: "State lists all four resources with the right ids, the VPC and subnet refresh cleanly, and nothing complains about lineage, serial or workspace. The state is an accurate record of the last apply; it is the world that moved."
+
+actions:
+  - id: remove-instance-block
+    label: "Remove the aws_instance.worker resource block from main.tf (the worker was intentionally retired)"
+    kind: fix
+    done_when:
+      all:
+        - not: { file_contains: { path: /home/you/jobs-infra/main.tf, matches: 'resource\s+"aws_instance"\s+"worker"' } }
+        - file_contains: { path: /home/you/jobs-infra/main.tf, matches: 'resource\s+"aws_sqs_queue"\s+"jobs"' }
+    feedback: "The configuration no longer asks for the worker, which matches the thread: it was retired when the batch moved to Lambda. The queue block stays, because the API and Lambda still use app-jobs."
+  - id: apply-reconcile
+    label: "Run terraform apply: recreate the queue, let the refresh forget the worker"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_sqs_queue.jobs
+        - state_lacks: aws_instance.worker
+        - state_has: aws_vpc.main
+        - state_has: aws_subnet.app
+        - plan_clean: true
+        - applied: { op: create, address: aws_sqs_queue.jobs }
+        - not: { applied: { op: delete, address: aws_vpc.main } }
+        - not: { applied: { op: delete, address: aws_subnet.app } }
+        - not: { file_contains: { path: /home/you/jobs-infra/main.tf, matches: 'resource\s+"aws_instance"\s+"worker"' } }
+    feedback: "Apply refreshed first: the worker was gone and not in the configuration, so Terraform simply dropped it from state; the queue was gone and still wanted, so it was created again (same name and URL, new object). The VPC and subnet were not touched, and the next plan is clean."
+  - id: recreate-everything
+    label: "Run terraform apply as it stands, recreating both the queue and the instance"
+    kind: wrong
+    done_when: { applied: { op: create, address: aws_instance.worker } }
+    feedback: "The worker is back, and it is a new instance, billed and running, that the team retired on purpose. Terraform did what the configuration said; the configuration was the part that was wrong for the worker. Remove the block and destroy the new instance."
+  - id: remove-both-blocks
+    label: "Delete both resource blocks from main.tf so the plan goes quiet"
+    kind: destructive
+    done_when:
+      all:
+        - not: { file_contains: { path: /home/you/jobs-infra/main.tf, matches: 'resource\s+"aws_sqs_queue"\s+"jobs"' } }
+        - plan_clean: true
+    feedback: "The plan is clean, and the queue is gone for good: the API can no longer enqueue and the Lambda has nothing to read. Priya said app-jobs must exist. Put the block back and apply to create it again."
+  - id: state-rm-both
+    label: "Remove both from state with terraform state rm so the plan stops complaining"
+    kind: wrong
+    feedback: "State forgot them, but main.tf still declares both, so the plan still wants to create them, and the queue is still missing in AWS. Nothing was fixed; the question of which of the two should exist is still open."
+  - id: refresh-false-apply
+    label: "Run terraform apply -refresh=false (or plan -refresh=false) to skip the drift"
+    kind: wrong
+    feedback: "With -refresh=false Terraform trusts the stale state: a plan says 'No changes' while the queue is missing. Applying from stale state (or a saved plan) that has to update a vanished object can fail with NotFound, and destroying an object that is already gone can quietly succeed, so none of it tells you the world is right. A clean answer from stale state is not a clean world."
+  - id: destroy-to-start-clean
+    label: "Run terraform destroy and start the stack again from scratch"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_vpc.main }
+        - applied: { op: delete, address: aws_subnet.app }
+    feedback: "After the refresh dropped the two missing objects, the only things left to destroy were the VPC and the subnet, which other teams use. That is the opposite of a tidy-up."
+
+solution_paths:
+  - [remove-instance-block, apply-reconcile]
+
+key_evidence: [drift-in-plan, state-still-lists, queue-gone-in-aws, instance-gone-in-aws, notes-decide, destroy-nothing, admin-role]
+
+evidence_labels:
+  drift-in-plan: "The plan notes that Terraform detected the queue was deleted outside of Terraform, then proposes to create the queue and the instance"
+  state-still-lists: "terraform state list still lists the queue and the instance"
+  queue-gone-in-aws: "AWS says the app-jobs queue does not exist"
+  instance-gone-in-aws: "AWS says the worker instance does not exist (InvalidInstanceID.NotFound)"
+  notes-decide: "The cleanup thread: the worker was retired on purpose, but the app-jobs queue is still in use"
+  destroy-nothing: "A targeted destroy of the two says there is nothing to destroy: they are already gone"
+  admin-role: "Your role is an admin role in the account"
+
+hints:
+  nudge: "The plan and AWS disagree about what exists, and the plan says why in a note at the top. Read it, then ask AWS about the two resources."
+  direction: "Run terraform plan and terraform state list before any destroy: a destroy saves the refresh and wipes out the evidence. terraform plan notes that aws_sqs_queue.jobs 'has been deleted' outside of Terraform, and state list still holds the worker too. aws sqs get-queue-url and aws ec2 describe-instances confirm they are gone. Do not just make the plan quiet: NOTES.md says what should exist and what should not."
+  answer: "The queue is still used, so keep its block and let terraform apply create it again. The worker was retired on purpose, so delete the aws_instance.worker block from main.tf and apply (the refresh drops it from state). Leave the VPC and subnet alone."
+
+analogy:
+  title: "The inventory sheet and the warehouse"
+  text: |
+    Your inventory sheet lists a pallet and a forklift. Someone cleared the
+    warehouse floor on Friday and both are gone, but nobody updated the sheet.
+    Counting the shelves (a refresh) shows the gap. Then you have to ask what
+    each item was supposed to be: the pallet is stock you still sell, so you
+    order it again; the forklift was sold off on purpose, so you strike it from
+    the sheet. Re-ordering both, or striking both, gets one of them wrong.
+
+debrief:
+  root_cause: |
+    The queue and the instance were deleted in the console, outside Terraform.
+    State is only a record of the last apply, so it kept listing them. On plan,
+    Terraform refreshes first, finds them missing, notes that objects changed
+    outside of Terraform, and proposes to create what the configuration still
+    asks for. A targeted destroy found nothing to destroy for the same reason:
+    after the refresh the objects were already gone. What to do about each
+    object is a decision, not a Terraform fact: the queue was still in use and
+    had to come back, while the worker was retired on purpose and had to leave
+    the configuration.
+  ideal_path:
+    - "Read the drift note in the plan: two named resources 'have been deleted' outside Terraform."
+    - "Confirm with AWS that the queue and the instance really are gone, and that state list still shows them."
+    - "Read the thread: the queue is still needed, the worker was retired."
+    - "Remove only the worker's resource block, then terraform apply: the queue is recreated and the worker is forgotten."
+    - "Check the next plan is clean and the VPC and subnet were not touched."
+  real_world: |
+    A recreated queue is a new object: messages and redrive policies in the old
+    one are gone, and anything holding the old ARN needs checking. Here the URL
+    is the same because SQS builds it from the queue name. Run terraform plan and
+    terraform state list before any destroy, even a targeted one: a destroy
+    persists the refresh, so the drift note and the state-still-lists evidence
+    are gone afterwards. To record drift in state without touching
+    infrastructure, use terraform refresh. Avoid -refresh=false as a habit: it makes a stale state look like
+    a clean one. Deleting things in the console that Terraform owns is the root
+    problem; a deny on console deletes for these resources, or a drift check in
+    CI, catches it sooner.
+
+concepts:
+  - term: "Drift"
+    text: "The difference between what state records and what really exists. Terraform finds it by refreshing before a plan, and reports it as 'changes outside of Terraform'."
+    url: "https://developer.hashicorp.com/terraform/tutorials/state/resource-drift"
+  - term: "terraform refresh"
+    text: "Reads real objects and updates state to match, without changing infrastructure."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+  - term: "-refresh=false"
+    text: "Skips reading real objects and trusts state. A vanished object is invisible to the plan; an apply from stale state that has to update it can fail with NotFound, while a destroy of an already-gone object can silently succeed."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+
+sources:
+  - title: "Terraform: Manage resource drift"
+    url: "https://developer.hashicorp.com/terraform/tutorials/state/resource-drift"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: plan"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: destroy"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/destroy"
+    retrieved: 2026-10-09
+
+command_notes:
+  "aws sqs get-queue-url --queue-name app-jobs": "The queue does not exist: NonExistentQueue. (After the fix it returns the recreated queue's URL.)"
+  "aws ec2 describe-instances --instance-ids i-0d6a3f8b2c71e9450": "The worker does not exist: InvalidInstanceID.NotFound."
+  "cat NOTES.md": "The cleanup thread: the worker was retired on purpose, the app-jobs queue is still used by the API and the Lambda."
+  "aws sts get-caller-identity": "An admin role in the stack's account: nothing here is a permissions problem."

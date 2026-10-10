@@ -8,7 +8,7 @@ import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
 import { buildGraph } from './graph.ts'
-import type { Lab, SavedPlan } from './lab.ts'
+import { applyReleases, type Lab, type SavedPlan } from './lab.ts'
 import { parseHcl } from './parse.ts'
 import { planConfig, type PlanResult } from './plan.ts'
 import { hex } from './provider.ts'
@@ -272,6 +272,11 @@ function checkLock(ctx: CliContext, lock: boolean): Out | undefined {
   const tail =
     'Terraform acquires a state lock to protect the state from being written\nby multiple users at the same time. Please resolve the issue above and try\nagain. For most commands, you can disable locking with the "-lock=false"\nflag, but this is not recommended.'
   return fail(box('error', 'Error acquiring the state lock', `Error message: ${l.message}\n${info.join('\n')}\n\n\n${tail}`, true))
+}
+
+// Remember a state-writing command in the lab history; -lock=false past a held lock leaves the marker.
+export function recordWrite(ctx: CliContext, op: string, target: string, lock: boolean): void {
+  ctx.lab.history.push(`${op} ${target}${!lock && ctx.lab.lock ? LOCK_BYPASSED : ''}`)
 }
 
 function cmdVersion(ctx: CliContext, cfg: Config): Out {
@@ -909,6 +914,7 @@ function cmdStateMv(args: string[], ctx: CliContext): Out {
   const lines = r.moved.map((m) => `${dry ? 'Would move' : 'Move'} "${m.from}" to "${m.to}"`)
   if (dry) return ok(lines.join('\n'))
   commit(ctx, r)
+  recordWrite(ctx, 'state-mv', a.pos[0], a.lock)
   return ok([...lines, `Successfully moved ${r.moved.length} object(s).`].join('\n'))
 }
 
@@ -927,6 +933,7 @@ function cmdStateRm(args: string[], ctx: CliContext): Out {
   const lines = r.removed.map((x) => `${dry ? 'Would remove' : 'Removed'} ${x}`)
   if (dry) return ok(lines.join('\n'))
   commit(ctx, r)
+  for (const x of a.pos) recordWrite(ctx, 'state-rm', x, a.lock)
   return ok([...lines, `Successfully removed ${r.removed.length} resource instance(s).`].join('\n'))
 }
 
@@ -944,6 +951,7 @@ function cmdTaint(args: string[], ctx: CliContext, verb: 'taint' | 'untaint'): O
   const r = verb === 'taint' ? taintInstance(ctx.lab.state, addr) : untaintInstance(ctx.lab.state, addr)
   if (!r.ok) return allowMissing && r.summary === NO_SUCH_INSTANCE ? ok('') : opFail(r)
   commit(ctx, r)
+  recordWrite(ctx, verb, addr, a.lock)
   return ok(verb === 'taint' ? `Resource instance ${addr} has been marked as tainted.` : `Resource instance ${addr} has been successfully untainted.`)
 }
 
@@ -972,6 +980,7 @@ async function cmdImport(args: string[], ctx: CliContext, cfg: Config): Promise<
   const r = importObject(ctx.lab.state, ctx.lab.reality, addr, id, declared)
   if (!r.ok) return withWarn(s.warning, opFail(r))
   commit(ctx, r)
+  recordWrite(ctx, 'import', addr, a.lock)
   const type = t.ok ? t.type : ''
   return withWarn(
     s.warning,
@@ -1017,7 +1026,8 @@ function cmdState(args: string[], ctx: CliContext): Out {
         return boxFail('Unknown resource', `The current state contains no resource ${w}. If you've just added this resource to the configuration, you must run "terraform apply" first to create the resource's entry in the state.`)
       }
     }
-    return ok((wanted.length ? all.filter((a) => wanted.some((w) => matches(a, w))) : all).join('\n'))
+    const deposed = (a: string) => (findInstance(lab.state, a)?.instance.deposed ?? []).map((d) => `${a} (deposed object ${d.key})`)
+    return ok((wanted.length ? all.filter((a) => wanted.some((w) => matches(a, w))) : all).flatMap((a) => [a, ...deposed(a)]).join('\n'))
   }
   if (sub === 'show') {
     if (!lab.hasState) return fail(NO_STATE)
@@ -1076,7 +1086,10 @@ function cmdWorkspace(args: string[], ctx: CliContext): Out {
   const exists = name === lab.workspace || lab.workspaces.has(name)
   if (sub === 'new') {
     if (exists) return fail(`Workspace "${name}" already exists`)
-    return checkLock(ctx, a.lock) || newWorkspace(lab, name)
+    const locked = checkLock(ctx, a.lock)
+    if (locked) return locked
+    recordWrite(ctx, 'workspace-new', name, a.lock)
+    return newWorkspace(lab, name)
   }
   if (sub === 'select') {
     if (exists) {
@@ -1103,6 +1116,7 @@ function cmdWorkspace(args: string[], ctx: CliContext): Out {
       ),
     )
   lab.workspaces.delete(name)
+  recordWrite(ctx, 'workspace-delete', name, a.lock)
   return ok(`Deleted workspace "${name}"!`)
 }
 
@@ -1202,6 +1216,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
 }
 
 export async function runTerraform(args: string[], ctx: CliContext): Promise<CliResult> {
+  applyReleases(ctx.lab, ctx.taken)
   let out: Out
   try {
     out = await dispatch(args, ctx)

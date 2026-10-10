@@ -7,7 +7,7 @@ import { outputsText } from './views.ts'
 const WORD = { create: 'creating', update: 'modifying', delete: 'destroying' } as const
 
 function stepLines(s: ApplyStep): string[] {
-  const a = s.address
+  const a = s.deposed ? `${s.address} (deposed object ${s.deposed})` : s.address
   const id = s.id === undefined ? '' : ` [id=${s.id}]`
   if (s.op === 'forget') return []
   if (s.op === 'import') return [`${a}: Importing...${id}`, ...(s.ok ? [`${a}: Import complete${id}`] : [])]

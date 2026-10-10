@@ -38,6 +38,7 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   if (has(l, 'state_has')) return listAddresses(w.state).some((a) => covers(l.state_has, a))
   if (has(l, 'state_lacks')) return !listAddresses(w.state).some((a) => covers(l.state_lacks, a))
   if (has(l, 'lock_free')) return w.lock === undefined
+  if (has(l, 'lock_bypassed')) return w.history.some((h) => h.endsWith(LOCK_BYPASSED))
   if (has(l, 'reality_has')) {
     const { type, id, attr, equals } = l.reality_has
     const key = realityKey(type, id)

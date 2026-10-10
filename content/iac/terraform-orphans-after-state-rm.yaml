@@ -1,0 +1,492 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-orphans-after-state-rm
+published: false
+track: iac
+difficulty: 4
+title: "The teardown leaves things behind and the bill has not dropped"
+par_minutes: 15
+
+ticket:
+  from: "Platform team"
+  severity: SEV3
+  body: |
+    We are tearing down the reports dev environment (signed off by its
+    owners). Marta started a terraform destroy from ~/reports-infra
+    yesterday afternoon; it hung on the subnet and she killed it before
+    going on leave. Today nothing will run on that stack, it complains
+    about the state lock, and the environment's monthly bill has not
+    gone down at all. Dmitri says to add -lock=false so it goes through.
+    Her terminal capture is saved as marta-destroy.txt and the sprint
+    notes are in NOTES.md. Please get the environment fully torn down.
+    (Reading things with terraform plan -lock=false only reads; it is
+    writing with -lock=false that is the question.)
+
+environment: |
+  reports-infra is the Terraform for the reports dev environment: a VPC (10.90.0.0/16), a
+  subnet (10.90.1.0/24), a security group, a worker instance and a PostgreSQL database
+  (reports-db), in account 123456789012, us-east-1. State is in S3 (acme-terraform-state,
+  key reports/terraform.tfstate) with the DynamoDB lock table terraform-locks. Your default
+  AWS profile is your own admin role in the account. It is 10:45 UTC.
+
+terminal:
+  prompt: "you@laptop:~/reports-infra$"
+  commands:
+    - match_regex: "^(cat|less|more|tail|head)( -[nN]? ?\\d+| -n ?\\+\\d+| -[NRSfF]+| \\+G)* marta-destroy\\.txt$"
+      example: "cat marta-destroy.txt"
+      evidence: marta-dead
+      output: |
+        marta@laptop-mk:~/reports-infra$ terraform destroy
+        (Marta's note: I ran this at the end of the day, the plan said 3 to destroy)
+        aws_security_group.app: Destroying... [id=sg-0b8e2d6a4c1f97350]
+        aws_subnet.app: Destroying... [id=subnet-0a5d9c3f7e12b8460]
+        aws_security_group.app: Still destroying... [id=sg-0b8e2d6a4c1f97350, 10s elapsed]
+        aws_subnet.app: Still destroying... [id=subnet-0a5d9c3f7e12b8460, 10s elapsed]
+        aws_security_group.app: Still destroying... [id=sg-0b8e2d6a4c1f97350, 3m0s elapsed]
+        aws_subnet.app: Still destroying... [id=subnet-0a5d9c3f7e12b8460, 3m0s elapsed]
+        ^C
+        Interrupt received.
+        Please wait for Terraform to exit or data loss may occur.
+        Gracefully shutting down...
+
+        Stopping operation...
+        ^C
+        Two interrupts received. Exiting immediately. Note that data loss may have
+        occurred.
+        marta@laptop-mk:~/reports-infra$ exit
+        (Marta's note: closed the laptop, I'm on leave until the 20th. Nothing of mine is running.)
+    - match_regex: "^(cat|less|more|tail|head)( -[nN]? ?\\d+| -n ?\\+\\d+| -[NRSfF]+| \\+G)* NOTES\\.md$"
+      example: "cat NOTES.md"
+      evidence: sprint-notes
+      output: |
+        # reports env, sprint notes
+
+        Sprint 41, Dmitri: the apply kept hanging on the worker and the reports db,
+        so I did some state surgery to get it moving. It went through after that.
+        Can't remember exactly what I touched.
+        Sprint 42, Marta: dev env is going away, owners signed off. I'll run the destroy.
+    - match_regex: "^aws ec2 describe-instances(?: --region us-east-1| --output json| --instance-ids i-0c7f3a9d1e5b24680| --filters ['\"]?Name=tag:Name,Values=worker['\"]?)*$"
+      example: "aws ec2 describe-instances --instance-ids i-0c7f3a9d1e5b24680"
+      evidence: worker-running
+      when_actions: [destroy-environment]
+      output: |
+        {
+            "Reservations": []
+        }
+    - match_regex: "^aws ec2 describe-instances(?: --region us-east-1| --output json| --instance-ids i-0c7f3a9d1e5b24680| --filters ['\"]?Name=tag:Name,Values=worker['\"]?)*$"
+      example: "aws ec2 describe-instances --instance-ids i-0c7f3a9d1e5b24680"
+      evidence: worker-running
+      output: |
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0c7f3a9d1e5b24680",
+                            "InstanceType": "t3.small",
+                            "PrivateIpAddress": "10.90.1.34",
+                            "SecurityGroups": [
+                                {
+                                    "GroupId": "sg-0b8e2d6a4c1f97350",
+                                    "GroupName": "reports"
+                                }
+                            ],
+                            "State": {
+                                "Code": 16,
+                                "Name": "running"
+                            },
+                            "SubnetId": "subnet-0a5d9c3f7e12b8460",
+                            "Tags": [
+                                {
+                                    "Key": "Name",
+                                    "Value": "worker"
+                                }
+                            ],
+                            "VpcId": "vpc-07c1e4a9d2b36f850"
+                        }
+                    ]
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances(?: --region us-east-1| --output json| --db-instance-identifier reports-db)*$"
+      example: "aws rds describe-db-instances --db-instance-identifier reports-db"
+      evidence: db-running
+      when_actions: [destroy-environment]
+      output: |
+        {
+            "DBInstances": []
+        }
+    - match_regex: "^aws rds describe-db-instances(?: --region us-east-1| --output json| --db-instance-identifier reports-db)*$"
+      example: "aws rds describe-db-instances --db-instance-identifier reports-db"
+      evidence: db-running
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "reports-db",
+                    "DBInstanceClass": "db.t3.micro",
+                    "Engine": "postgres",
+                    "EngineVersion": "15.4",
+                    "DBInstanceStatus": "available",
+                    "MasterUsername": "reports",
+                    "AllocatedStorage": 20,
+                    "MultiAZ": false,
+                    "VpcSecurityGroups": [
+                        {
+                            "VpcSecurityGroupId": "sg-0b8e2d6a4c1f97350",
+                            "Status": "active"
+                        }
+                    ]
+                }
+            ]
+        }
+    - match: "aws sts get-caller-identity"
+      evidence: admin-role
+      output: |
+        {
+            "UserId": "AROA3XFRBF23EXAMPLE:you",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/PlatformAdmin/you"
+        }
+
+terraform:
+  dir: "~/reports-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+
+          backend "s3" {
+            bucket         = "acme-terraform-state"
+            key            = "reports/terraform.tfstate"
+            region         = "us-east-1"
+            dynamodb_table = "terraform-locks"
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        variable "db_password" {
+          type      = string
+          sensitive = true
+          default   = "dev-only-not-a-secret"
+        }
+
+        resource "aws_vpc" "main" {
+          cidr_block = "10.90.0.0/16"
+
+          tags = {
+            Name = "reports"
+          }
+        }
+
+        resource "aws_subnet" "app" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.90.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "reports"
+          }
+        }
+
+        resource "aws_security_group" "app" {
+          name        = "reports"
+          description = "Reports dev"
+          vpc_id      = aws_vpc.main.id
+        }
+
+        resource "aws_instance" "worker" {
+          ami                    = "ami-05c8e2d71f9a3b640"
+          instance_type          = "t3.small"
+          subnet_id              = aws_subnet.app.id
+          vpc_security_group_ids = [aws_security_group.app.id]
+
+          tags = {
+            Name = "worker"
+          }
+        }
+
+        resource "aws_db_instance" "reports" {
+          identifier          = "reports-db"
+          engine              = "postgres"
+          instance_class      = "db.t3.micro"
+          username            = "reports"
+          password            = var.db_password
+          skip_final_snapshot = true
+        }
+    - path: marta-destroy.txt
+      content: |
+        marta@laptop-mk:~/reports-infra$ terraform destroy
+        (Marta's note: I ran this at the end of the day, the plan said 3 to destroy)
+        aws_security_group.app: Destroying... [id=sg-0b8e2d6a4c1f97350]
+        aws_subnet.app: Destroying... [id=subnet-0a5d9c3f7e12b8460]
+        aws_security_group.app: Still destroying... [id=sg-0b8e2d6a4c1f97350, 10s elapsed]
+        aws_subnet.app: Still destroying... [id=subnet-0a5d9c3f7e12b8460, 10s elapsed]
+        aws_security_group.app: Still destroying... [id=sg-0b8e2d6a4c1f97350, 3m0s elapsed]
+        aws_subnet.app: Still destroying... [id=subnet-0a5d9c3f7e12b8460, 3m0s elapsed]
+        ^C
+        Interrupt received.
+        Please wait for Terraform to exit or data loss may occur.
+        Gracefully shutting down...
+
+        Stopping operation...
+        ^C
+        Two interrupts received. Exiting immediately. Note that data loss may have
+        occurred.
+        marta@laptop-mk:~/reports-infra$ exit
+        (Marta's note: closed the laptop, I'm on leave until the 20th. Nothing of mine is running.)
+    - path: NOTES.md
+      content: |
+        # reports env, sprint notes
+
+        Sprint 41, Dmitri: the apply kept hanging on the worker and the reports db,
+        so I did some state surgery to get it moving. It went through after that.
+        Can't remember exactly what I touched.
+        Sprint 42, Marta: dev env is going away, owners signed off. I'll run the destroy.
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-07c1e4a9d2b36f850
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-07c1e4a9d2b36f850"
+        cidr_block: 10.90.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0d4a8f2c6e1b93570
+        tags: { Name: reports }
+        tags_all: { Name: reports }
+    - type: aws_subnet
+      name: app
+      attrs:
+        id: subnet-0a5d9c3f7e12b8460
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0a5d9c3f7e12b8460"
+        vpc_id: vpc-07c1e4a9d2b36f850
+        cidr_block: 10.90.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: reports }
+        tags_all: { Name: reports }
+    - type: aws_security_group
+      name: app
+      attrs:
+        id: sg-0b8e2d6a4c1f97350
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0b8e2d6a4c1f97350"
+        name: reports
+        description: Reports dev
+        vpc_id: vpc-07c1e4a9d2b36f850
+        ingress: []
+        egress: []
+  cloud:
+    # Dropped from state last sprint, still running: Terraform does not know them.
+    add:
+      - type: aws_instance
+        attrs:
+          id: i-0c7f3a9d1e5b24680
+          arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0c7f3a9d1e5b24680"
+          ami: ami-05c8e2d71f9a3b640
+          instance_type: t3.small
+          subnet_id: subnet-0a5d9c3f7e12b8460
+          vpc_security_group_ids: [sg-0b8e2d6a4c1f97350]
+          availability_zone: us-east-1a
+          private_ip: 10.90.1.34
+          tags: { Name: worker }
+          tags_all: { Name: worker }
+      - type: aws_db_instance
+        attrs:
+          id: reports-db
+          arn: "arn:aws:rds:us-east-1:123456789012:db:reports-db"
+          identifier: reports-db
+          engine: postgres
+          engine_version: "15.4"
+          instance_class: db.t3.micro
+          allocated_storage: 20
+          username: reports
+          multi_az: false
+          storage_encrypted: false
+          vpc_security_group_ids: [sg-0b8e2d6a4c1f97350]
+          endpoint: "reports-db.c3a9f1e7b2.us-east-1.rds.amazonaws.com:5432"
+  # The S3 backend's DynamoDB lock, as Marta's killed destroy left it (Terraform 1.9).
+  lock:
+    id: 7e3b9d41-5c2a-8f06-b1d7-a94e2c60f385
+    who: marta@laptop-mk
+    operation: OperationTypeDestroy
+    created: "2026-10-08 16:12:41.274610392 +0000 UTC"
+    path: acme-terraform-state/reports/terraform.tfstate
+    info: ""
+    message: "operation error DynamoDB: PutItem, https response error StatusCode: 400, RequestID: 5KQ3N0TD8GV2M4HE7PBA1LRC9JVV4KQNSO5AEMVJF66Q9ASUAAJG, ConditionalCheckFailedException: The conditional request failed"
+  evidence:
+    - evidence: lock-holder
+      command: plan
+      contains: "Who:       marta@laptop-mk"
+    - evidence: orphans-not-in-state
+      command: state list
+      contains: "aws_vpc.main"
+    - evidence: plan-wants-create
+      command: plan
+      contains: "Plan: 2 to add, 0 to change, 0 to destroy."
+    - evidence: destroy-blocked
+      command: destroy
+      contains: "DependencyViolation"
+
+hypotheses:
+  - id: dropped-from-state
+    text: "The worker and the database were dropped from Terraform's state but still run in AWS. Terraform only manages what is in state, so destroy cannot see them, and they keep the subnet and security group in use. The stale lock is a separate leftover."
+    correct: true
+  - id: only-the-lock
+    text: "The stale lock is the whole problem: once it is cleared, terraform destroy will tear everything down."
+    feedback: "The lock is real (Marta's killed destroy, Created yesterday 16:12 UTC), but it only explains why nothing runs. After it is cleared, destroy still deletes nothing: it stops with DependencyViolation on the subnet and the security group, and describe-instances and describe-db-instances show a running worker and database that state list does not."
+  - id: permissions
+    text: "Your role (or Marta's) cannot delete the subnet and security group."
+    feedback: "A missing permission comes back as UnauthorizedOperation. The error is DependencyViolation: EC2 understood the request and refused it because something still uses them. get-caller-identity shows an admin role."
+  - id: slow-delete
+    text: "DeleteSubnet is just slow here: Marta's destroy only needed more time (the provider keeps retrying a subnet delete for a long while)."
+    feedback: "Her log shows the subnet still 'destroying' after three minutes, and a destroy eventually fails with DependencyViolation. Waiting longer changes nothing while a running instance and database still sit in the subnet and security group."
+
+actions:
+  - id: unlock-and-import
+    label: "Confirm Marta's destroy is dead, terraform force-unlock the lock, then terraform import the worker and the database back into state"
+    kind: fix
+    done_when:
+      all:
+        - lock_free: true
+        - applied: { op: import, address: aws_instance.worker }
+        - applied: { op: import, address: aws_db_instance.reports }
+        - not: { lock_bypassed: true }
+    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. The imports were written under a proper lock."
+  - id: destroy-environment
+    label: "Run terraform destroy: the worker and database go first, then the group, subnet and VPC"
+    kind: fix
+    done_when:
+      all:
+        - lock_free: true
+        - applied: { op: delete, address: aws_instance.worker }
+        - applied: { op: delete, address: aws_db_instance.reports }
+        - state_lacks: aws_vpc.main
+        - reality_lacks: { type: aws_db_instance, id: reports-db }
+        - reality_lacks: { type: aws_vpc, id: vpc-07c1e4a9d2b36f850 }
+        - not: { lock_bypassed: true }
+    feedback: "With the worker and database in state, destroy deletes them first, then the security group and subnet they were holding, then the VPC. Nothing is left in the account and nothing is left running up the bill."
+  - id: bypass-lock
+    label: "Push it through: terraform import, state rm or destroy with -lock=false while Marta's lock is still held"
+    kind: destructive
+    done_when: { lock_bypassed: true }
+    feedback: "That wrote the state with no lock at all, and the stale lock is still there blocking everyone else. It happened to be safe only because Marta's session is dead, which you had not established: if her destroy had still been running, two processes would have written the same state. -lock=false does not remove a lock; it ignores every lock, including a live one."
+  - id: apply-recreate
+    label: "Run terraform apply to recreate the worker and the database from the configuration"
+    kind: destructive
+    done_when: { applied: { op: create, address: aws_instance.worker } }
+    feedback: "The configuration asks for a worker and the state has none, so Terraform created a second one: two workers now run and bill, and the original is still unmanaged. The database create is refused (DBInstanceAlreadyExists: reports-db exists), so apply stops with half of what you asked for. Destroy the new worker and import the original."
+  - id: state-rm-rest
+    label: "Remove the remaining resources from state with terraform state rm so the plan goes quiet"
+    kind: destructive
+    done_when:
+      all:
+        - state_lacks: aws_vpc.main
+        - reality_has: { type: aws_vpc, id: vpc-07c1e4a9d2b36f850 }
+    feedback: "The state is now empty and a plan looks tidy, and the VPC, subnet and security group are still in the account, still billed, now with nothing managing them. That is the same mistake that created the worker and database orphans. Import them back before destroying."
+  - id: lock-timeout
+    label: "Re-run with -lock-timeout=30m so Terraform waits for the lock to be released"
+    kind: wrong
+    feedback: "-lock-timeout retries for a lock a live run is about to release. Marta's process no longer exists, so nothing will ever release this one and the command just fails after the wait."
+
+solution_paths:
+  - [unlock-and-import, destroy-environment]
+
+key_evidence: [lock-holder, marta-dead, orphans-not-in-state, worker-running, db-running, admin-role]
+
+evidence_labels:
+  lock-holder: "The lock was taken by marta@laptop-mk at 16:12 UTC yesterday for a destroy"
+  marta-dead: "Marta's capture shows her destroy killed with two interrupts, and she is on leave"
+  orphans-not-in-state: "terraform state list holds the VPC, subnet and security group only: no worker, no database"
+  worker-running: "The worker instance is running in the subnet, but Terraform does not list it"
+  db-running: "The reports database is available in AWS, but Terraform does not list it"
+  admin-role: "Your role is an admin role in the account"
+
+hints:
+  nudge: "Two things are wrong at once: a lock nobody holds, and a bill that did not drop. What does state list contain, and what does AWS say is running?"
+  direction: "Read marta-destroy.txt to decide whether the lock holder is alive, then compare terraform state list with aws ec2 describe-instances and aws rds describe-db-instances. Reading with terraform plan -lock=false is safe; writing with it is not. Do not run apply to 'recreate' what is already running."
+  answer: "Marta's destroy is dead: terraform force-unlock 7e3b9d41-5c2a-8f06-b1d7-a94e2c60f385. The worker and database run in AWS but are missing from state: terraform import aws_instance.worker i-0c7f3a9d1e5b24680, terraform import aws_db_instance.reports reports-db. Then terraform destroy."
+
+analogy:
+  title: "The inventory sheet and the storage unit"
+  text: |
+    You are clearing out a storage unit using a list of what is in it. Someone
+    crossed two big items off the list last sprint to get a stuck move moving,
+    but never took them out. Clearing the unit by the list leaves them where
+    they are, and the landlord won't take back the unit while they sit there.
+    The fix is to write them back on the list first, then clear everything.
+
+debrief:
+  root_cause: |
+    Last sprint the worker and the database were removed from state with
+    terraform state rm to get an apply moving. state rm only edits state; both
+    kept running in AWS. Terraform manages what is in state, so a destroy plans
+    only the VPC, subnet and security group, then the security group and subnet
+    fail with DependencyViolation because the unmanaged worker and database still
+    use them, and the bill never drops. A plan wants to create the worker and
+    database again (they are in the configuration), and an apply would create a
+    second worker and fail on the database name (DBInstanceAlreadyExists).
+    Separately, Marta's destroy was killed with two interrupts and left the
+    state lock behind.
+  ideal_path:
+    - "terraform plan: Error acquiring the state lock; read the holder (marta@laptop-mk, destroy, yesterday)."
+    - "Read marta-destroy.txt: killed with two interrupts, she is on leave, nothing of hers is running. The holder is dead."
+    - "Compare terraform state list (no worker, no db) with describe-instances and describe-db-instances (both running)."
+    - "terraform force-unlock the lock, then terraform plan: two creates for things that already exist."
+    - "terraform import aws_instance.worker i-0c7f3a9d1e5b24680 and terraform import aws_db_instance.reports reports-db."
+    - "Real Terraform 1.9.8 needs one more step here: the imported database must get skip_final_snapshot = true applied to its state (terraform apply) before the destroy, or the delete fails; the lab does not enforce this."
+    - "terraform destroy: the worker and database go first, then the group, subnet and VPC."
+  real_world: |
+    The import IDs are the instance id for aws_instance and the identifier for
+    aws_db_instance. You can also use import blocks in configuration and run
+    plan and apply. In real Terraform an imported database has no
+    skip_final_snapshot in state, so apply that change (or set
+    final_snapshot_identifier) before destroying, or the delete fails; this lab
+    does not model that. Never use -lock=false to get past someone else's lock
+    without proving the holder is dead, and never use state rm to get a hung
+    apply moving: it leaves billed, unmanaged infrastructure behind. Newer
+    Terraform (1.10 and later) can lock with a file in the S3 bucket
+    (use_lockfile); force-unlock works the same way.
+
+concepts:
+  - term: "terraform import"
+    text: "Adds an existing object to state at a resource address that is already in the configuration. It does not create or change infrastructure."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/import"
+  - term: "terraform state rm"
+    text: "Removes objects from state without destroying them. They keep running, and Terraform no longer plans anything for them."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/rm"
+  - term: "State locking"
+    text: "Terraform locks the state for every operation that could write it. Disabling it with -lock=false is not recommended; terraform force-unlock removes a lock that was left behind."
+    url: "https://developer.hashicorp.com/terraform/language/state/locking"
+
+sources:
+  - title: "Terraform: Command: import"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/import"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: state rm"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/rm"
+    retrieved: 2026-10-09
+  - title: "Terraform: State locking"
+    url: "https://developer.hashicorp.com/terraform/language/state/locking"
+    retrieved: 2026-10-09
+  - title: "Terraform AWS provider v5.70.0: aws_instance (import by id)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/v5.70.0/website/docs/r/instance.html.markdown"
+    retrieved: 2026-10-09
+  - title: "Terraform AWS provider v5.70.0: aws_db_instance (import by identifier, skip_final_snapshot)"
+    url: "https://github.com/hashicorp/terraform-provider-aws/blob/v5.70.0/website/docs/r/db_instance.html.markdown"
+    retrieved: 2026-10-09
+
+command_notes:
+  "cat marta-destroy.txt": "Marta's saved terminal: her destroy hung on the subnet, was interrupted twice and exited; she is on leave. (less, more, tail and head read the same file.)"
+  "cat NOTES.md": "Sprint notes: Dmitri did unspecified state surgery on the worker and database last sprint; Marta ran the destroy."
+  "aws ec2 describe-instances --instance-ids i-0c7f3a9d1e5b24680": "The worker is running in the subnet and uses the security group, and Terraform's state does not list it."
+  "aws rds describe-db-instances --db-instance-identifier reports-db": "The database is available and uses the security group, and Terraform's state does not list it."
+  "aws sts get-caller-identity": "An admin role in the stack's account: nothing here is a permissions problem."

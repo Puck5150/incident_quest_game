@@ -178,7 +178,7 @@ describe('terraform modules: replace and taint', () => {
     const plan = await w.run('plan')
     expect(plan.stdout).toContain('# module.net.aws_vpc.main is tainted, so must be replaced')
     expect((await w.run('apply', '-auto-approve')).exitCode).toBe(0)
-    expect(w.lab.history).toEqual(['delete aws_subnet.a', 'delete module.net.aws_vpc.main', 'create module.net.aws_vpc.main', 'create aws_subnet.a'])
+    expect(w.lab.history).toEqual(['taint module.net.aws_vpc.main', 'delete aws_subnet.a', 'delete module.net.aws_vpc.main', 'create module.net.aws_vpc.main', 'create aws_subnet.a'])
     expect(w.lab.state.resources.find((x) => x.type === 'aws_vpc')!.instances[0].status).toBeUndefined()
   })
 })

@@ -39,12 +39,13 @@ export interface Lab {
   workspacesCreated: number // by `workspace new`: numbers their lineages, never reused after a delete
   lock?: { id: string; who: string; operation: string; created: string; path: string; info: string; message: string }
   reality: Reality
+  releases: NonNullable<NonNullable<TerraformBlock['cloud']>['release']> // blockers the player's actions remove from reality
   vars: Record<string, Value>
   evidence: NonNullable<TerraformBlock['evidence']>
   faults: Fault[]
   attempts: Map<number, number>
   savedPlans: Map<string, SavedPlan>
-  history: string[] // "OP ADDRESS" per step that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
+  history: string[] // "OP ADDRESS" per apply step or state-writing command (state-rm, state-mv, taint, untaint, import, workspace-new/delete) that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
 }
 
 const depKey = (r: StateResource) => staticKey({ module: stepsOf(r.module), mode: r.mode, type: r.type, name: r.name })
@@ -136,6 +137,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     workspacesCreated: 0,
     ...(tf.lock ? { lock: { operation: 'OperationTypeApply', path: 'terraform.tfstate', info: '', message: 'resource temporarily unavailable', ...tf.lock } } : {}),
     reality,
+    releases: structuredClone(tf.cloud?.release ?? []),
     vars: structuredClone(tf.vars ?? {}) as Record<string, Value>,
     evidence: tf.evidence ?? [],
     faults: structuredClone(tf.faults ?? []) as Fault[],
@@ -143,4 +145,9 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     savedPlans: new Map(),
     history: [],
   }
+}
+
+// The cloud after the player's own actions: every release whose actions are all taken is gone. Idempotent.
+export function applyReleases(lab: Lab, taken: Set<string>): void {
+  for (const r of lab.releases) if (r.when_actions.every((a) => taken.has(a))) delete lab.reality[realityKey(r.type, r.id)]
 }

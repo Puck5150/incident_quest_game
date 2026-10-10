@@ -15,7 +15,7 @@ const specOf = (type: string, n: string): AttrSpec | undefined => {
 const hasVal = (v: Value | undefined) => v !== null && v !== undefined
 
 function headerLines(item: PlanItem): string[] {
-  const a = item.address
+  const a = item.deposed ? `${item.address} (deposed object ${item.deposed})` : item.address
   const out: string[] = []
   switch (item.action) {
     case 'create':
@@ -37,6 +37,10 @@ function headerLines(item: PlanItem): string[] {
       break
     case 'destroy':
       out.push(`${a} will be destroyed`)
+      if (item.deposed) {
+        out.push('(left over from a partially-failed replacement of this instance)')
+        break
+      }
       // A destroy-mode plan gives no reason: everything goes.
       if (item.destroyReason === undefined) break
       out.push(
