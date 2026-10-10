@@ -609,3 +609,14 @@
   alternatives:
     - { command: "CloudTrail console > Event history", note: "The same search, with filters." }
   docs: { title: "AWS CLI: cloudtrail lookup-events", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/cloudtrail/lookup-events.html" }
+
+- id: aws-ec2-network-interfaces
+  match: "^aws ec2 describe-network-interfaces"
+  summary: "Lists elastic network interfaces."
+  parts:
+    - { token: "--filters Name=subnet-id,Values=SUBNET", meaning: "Only the interfaces in this subnet." }
+    - { token: "--network-interface-ids eni-...", meaning: "Only this interface." }
+  why: "Whatever sits in a subnet, whether an instance's, a service's or a leftover, has an interface; its description, status and tags show whose it is and whether it is attached."
+  alternatives:
+    - { command: "VPC console > Network interfaces", note: "The same list with filters and the attached resource." }
+  docs: { title: "AWS CLI: describe-network-interfaces", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/describe-network-interfaces.html" }

@@ -901,7 +901,7 @@ terraform-sg-cycle:
 
 ## terraform incidents batch 4 (TF7a)
 
-- [ ] TF7a batch status: `terraform-destroy-nonempty-bucket` authored (dark, `published: false`, in the DARK list of tests/published.test.tsx); the other three incidents are pending.
+- [ ] TF7a batch status: `terraform-destroy-nonempty-bucket` and `terraform-destroy-dependency-violation` authored (dark, `published: false`, in the DARK list of tests/published.test.tsx); the other two incidents are pending.
 
 ### terraform-destroy-nonempty-bucket (task 5)
 
@@ -914,3 +914,13 @@ terraform-sg-cycle:
 - Wrong actions `grant-more-permissions` and `retry-without-lock` are button-only. Editing the config without applying is not an action (it is a step of route A and teaches state-vs-config via the debrief and the failing second destroy).
 - Known limits: after route A the scripted `aws s3 ls` still lists the objects (the bucket is gone; real AWS would say NoSuchBucket); versioned buckets not modelled.
 - Added a `--recursive` part to the existing `aws-s3-ls` command-library entry (coverage test required it).
+
+### terraform-destroy-dependency-violation (task 6)
+
+- [ ] Unverified: the AWS docs pages in `sources` (delete-subnet, using-eni) and the error docs link were not read for this task; the retrieved dates record the pages, not a read of their text. The DeleteSubnet DependencyViolation wording is from "terraform destroy errors (TF7a)" (SDK wrapper from memory).
+- [ ] Unverified: the `aws ec2 describe-network-interfaces` output shape (fields shown, ordering, `Status: available`, `TagSet`). Invented: the ingest team's interface (description is from the brief), account/role names, vpc/subnet/sg/eni ids, the ticket story (ingest team moved off, platform sign-off). The "other team's interface" is illustrative; real endpoint/Lambda/ELB interfaces are service-managed and cannot be deleted directly (said in the debrief).
+- [ ] Unverified: `aws ec2 delete-network-interface` (no output on success; the real command also has `--dry-run`, which the action regex refuses). Accepted spellings: optional `--region us-east-1` before or after `--network-interface-id eni-...`.
+- Design: state is vpc, subnet, SG, instance; one destroy deletes the instance and SG then stops at the subnet. The ENI is a `cloud.add` object that mentions the subnet and vpc ids (not the stack's SG id, otherwise the SG would block too); `cloud.release` removes it when `release-eni` is taken. `release-eni` has no `done_when`: the predicate language cannot see `aws_network_interface` objects as a world check beyond the typed command, so the typed command is the evidence (test helper `detectedAll` shows it false). `destroy-after-release` is world-based (state lacks subnet and vpc, vpc gone from reality, applied delete of the subnet).
+- Decisions: the sim lets the player delete the interface once evidence shows it is unattached (`Status: available`) and the ticket says the owner moved off; the methodical bonus is lost if deleted before reading whose it is (no trap). Trap `state-rm-network` (destructive): `state_lacks` subnet and `reality_has` subnet; the fix is not earned afterwards unless the player imports both back. `-target=aws_vpc.main`, `depends_on` and permissions are button-only wrong actions. The `eni-not-in-state` evidence is a `state list` containing `aws_vpc.main` (the list shows no interface).
+- Known limits: the VPC's own default security group/route table/NACL are not modelled. After the fix the scripted describe returns an empty list (matches world).
+- Added an `aws-ec2-network-interfaces` command-library entry.
