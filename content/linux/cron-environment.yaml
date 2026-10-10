@@ -107,7 +107,15 @@ actions:
   - id: crontab-path
     label: "Add PATH=/usr/local/bin:/usr/bin:/bin as the first line of ops's crontab"
     kind: fix
-    feedback: "cron passes that PATH to every job in this crontab, so the script finds /usr/local/bin/aws at 01:30 just like in your shell. (Using the full path, /usr/local/bin/aws, in the script works too.)"
+    feedback: "cron passes that PATH to every job in this crontab, so the script finds /usr/local/bin/aws at 01:30 just like in your shell."
+  - id: fullpath-script
+    label: "Call /usr/local/bin/aws by its full path in backup.sh"
+    kind: fix
+    feedback: "The script no longer depends on cron's PATH at all, and keeps working if someone runs it from systemd or another scheduler."
+  - id: backup-alert
+    label: "Make a missing backup loud: have backup.sh fail on error (set -euo pipefail) and report to a dead-man's-switch/monitor that alerts if no backup succeeds within 26 hours"
+    kind: fix
+    feedback: "The backups failed silently for three nights because the only output was a log nobody read. Now a failure (or silence) pages someone the same day, and set -euo pipefail stops the script from deleting its temp file and reporting success after a failed upload."
   - id: chmod-script
     label: "chmod +x /home/ops/bin/backup.sh"
     kind: wrong
@@ -122,7 +130,8 @@ actions:
     feedback: "That mixes hand-installed tools into the directory the package manager owns, where a future upgrade can overwrite or conflict with them. Set the job's PATH instead."
 
 solution_paths:
-  - [crontab-path]
+  - [crontab-path, backup-alert]
+  - [fullpath-script, backup-alert]
 
 key_evidence: [not-found, aws-local-bin, cron-path]
 
@@ -134,7 +143,7 @@ evidence_labels:
 hints:
   nudge: "Same script, same user, different result. What's different about the environment it runs in?"
   direction: "Compare where aws lives with the PATH a cron job actually gets."
-  answer: "cron's PATH is /usr/bin:/bin and aws is in /usr/local/bin. Set PATH at the top of the crontab (or call /usr/local/bin/aws)."
+  answer: "cron's PATH is /usr/bin:/bin and aws is in /usr/local/bin. Set PATH at the top of the crontab (or call /usr/local/bin/aws), then make sure a failed or missing backup alerts someone."
 
 analogy:
   title: "The night shift has a shorter phone list"
@@ -157,6 +166,7 @@ debrief:
     - "Find where aws lives: /usr/local/bin."
     - "Check the environment a cron job really gets: PATH=/usr/bin:/bin."
     - "Set PATH in the crontab (or use the full path), then confirm the next run."
+    - "Add monitoring so a failed or missing backup alerts within a day: three nights went unnoticed."
   real_world: |
     "Works in my shell, not in cron" is almost always environment: PATH,
     variables set in .bashrc, or the working directory. Use full paths in
