@@ -31,7 +31,7 @@ terminal:
   prompt: "alice@web-01:~$"
   commands:
     - match: "curl -sI http://promo.example.com/"
-      when_actions: [chmod-dir]
+      when_actions: [chown-dir]
       output: |
         HTTP/1.1 200 OK
         Server: nginx
@@ -43,14 +43,14 @@ terminal:
         Server: nginx
         Content-Type: text/html
     - match: "namei -l /srv/www/promo/index.html"
-      when_actions: [chmod-dir]
+      when_actions: [chown-dir]
       output: |
         f: /srv/www/promo/index.html
         drwxr-xr-x root  root  /
         drwxr-xr-x root  root  srv
         drwxr-xr-x root  root  www
-        drwxr-xr-x alice alice promo
-        -rw-r--r-- alice alice index.html
+        drwx------ www-data www-data promo
+        -rw-r--r-- www-data www-data index.html
     - match: "namei -l /srv/www/promo/index.html"
       evidence: dir-700
       output: |
@@ -60,6 +60,13 @@ terminal:
         drwxr-xr-x root  root  www
         drwx------ alice alice promo
         -rw-r--r-- alice alice index.html
+    - match: "ls -l /srv/www/promo"
+      when_actions: [chown-dir]
+      output: |
+        total 24
+        drwxr-xr-x 2 www-data www-data 4096 Oct  2 09:02 css
+        -rw-r--r-- 1 www-data www-data 8812 Oct  2 09:02 index.html
+        drwxr-xr-x 2 www-data www-data 4096 Oct  2 09:02 img
     - match: "ls -l /srv/www/promo"
       output: |
         total 24
@@ -94,14 +101,22 @@ hypotheses:
     feedback: "nginx is answering: the 403 comes from it. Its workers are running as www-data."
 
 actions:
-  - id: chmod-dir
-    label: "sudo chmod 755 /srv/www/promo"
+  - id: chown-dir
+    label: "sudo chown -R www-data:www-data /srv/www/promo"
     kind: fix
-    match_regex: "^(sudo )?chmod (755|o\\+rx|o\\+x|a\\+rx|go\\+rx) /srv/www/promo/?$"
-    feedback: "Other users, including www-data, can now enter the folder. nginx opens index.html and the site loads. Only Alice can still change the files."
+    # chown -R [www-data|www-data:|www-data:www-data] path, optional sudo and trailing slash.
+    # The group-only route (chgrp www-data + chmod 750) is deliberately not credited: one tool, one answer.
+    match_regex: "^(sudo )?chown (-R )?www-data(:(www-data)?)? /srv/www/promo/?$"
+    feedback: "The folder now belongs to www-data, the user nginx runs as, so its workers can enter it and read index.html. The site loads, and the mode stays private: no other local user gets in."
+  - id: chmod-open
+    label: "sudo chmod 755 /srv/www/promo"
+    kind: wrong
+    match_regex: "^(sudo )?chmod (-R )?(755|o\\+rx|o\\+x|a\\+rx|go\\+rx) /srv/www/promo/?$"
+    feedback: "It works, but it opens the folder to every local user on the server. The real problem is who owns it: hand the folder to www-data instead of loosening its mode."
   - id: chmod-777
     label: "sudo chmod -R 777 /srv/www/promo"
     kind: destructive
+    match_regex: "^(sudo )?chmod -R 777 /srv/www/promo/?$"
     feedback: "The site loads, and now anyone on the server, including a compromised process, can rewrite the site's pages. Read and enter is all nginx needs."
   - id: restart-nginx
     label: "sudo systemctl restart nginx"
@@ -110,10 +125,10 @@ actions:
   - id: nginx-as-root
     label: "Change nginx to run its workers as root"
     kind: destructive
-    feedback: "Then every request is handled with full control of the server. Fix the folder's permissions instead."
+    feedback: "Then every request is handled with full control of the server. Fix the folder's ownership instead."
 
 solution_paths:
-  - [chmod-dir]
+  - [chown-dir]
 
 key_evidence: [http-403, eacces, dir-700]
 
@@ -125,15 +140,15 @@ evidence_labels:
 hints:
   nudge: "The file is readable. What else does nginx need to get to it?"
   direction: "Check the permissions of every directory on the way to index.html, not just the file."
-  answer: "/srv/www/promo is mode 700, so www-data can't enter it. chmod 755 /srv/www/promo."
+  answer: "/srv/www/promo is mode 700, so www-data can't enter it. sudo chown -R www-data:www-data /srv/www/promo. Change who owns it; don't open the mode to everyone."
 
 analogy:
   title: "A readable letter in a locked room"
   text: |
     The letter on the desk isn't sealed, so anyone could read it. But it's
     inside a room only Alice has the key to, and the courier who's supposed
-    to deliver it can't get through the door. Unlock the door, not the
-    letter.
+    to deliver it can't get through the door. Don't
+    copy the key for every passer-by: hand the room to the courier.
 
 debrief:
   root_cause: |
@@ -141,21 +156,28 @@ debrief:
     umask made it private to her). Opening a file needs search (x)
     permission on every directory in its path, so nginx's worker, running as
     www-data, got "Permission denied" opening index.html even though the file
-    itself was world-readable, and returned 403.
+    itself was world-readable, and returned 403. The right fix is ownership:
+    the folder should belong to the user nginx runs as. chmod 755 also lets
+    nginx in, but it opens the folder to every local user.
   ideal_path:
     - "Read nginx's error log: open() failed, 13: Permission denied."
     - "Check every directory on the path with namei -l: promo is drwx------."
-    - "Give others read and search on the folder: chmod 755."
+    - "Give the folder to the web user: sudo chown -R www-data:www-data /srv/www/promo."
     - "Fetch the page again: 200."
   real_world: |
     Most "403 but the file is there" cases are a directory on the path,
-    not the file. namei -l shows the whole path at once. Deploy tools that
-    set ownership and modes explicitly avoid it entirely.
+    not the file. namei -l shows the whole path at once. Deploys avoid it by
+    setting ownership explicitly: a deploy user and a shared group (or
+    www-data), a deliberate umask, or install -d -o www-data -g www-data -m 750
+    to create the folder with the right owner and mode in one step.
 
 concepts:
   - term: "Search (execute) permission on a directory"
     text: "To reach a file, a process needs x permission on every directory in its path. Read (r) only lets you list a directory's names."
     url: "https://man7.org/linux/man-pages/man7/path_resolution.7.html"
+  - term: "chown"
+    text: "Changes a file's owner and group. -R applies it to everything below a directory. Ownership decides which of the owner, group or other mode bits apply to a process."
+    url: "https://man7.org/linux/man-pages/man1/chown.1.html"
   - term: "File mode bits"
     text: "Each file has read, write and execute permission for its owner, its group and everyone else, shown as rwx in ls -l."
     url: "https://man7.org/linux/man-pages/man1/chmod.1.html"
@@ -170,6 +192,9 @@ sources:
   - title: "Linux man-pages: chmod(1)"
     url: "https://man7.org/linux/man-pages/man1/chmod.1.html"
     retrieved: 2026-10-02
+  - title: "Linux man-pages: chown(1)"
+    url: "https://man7.org/linux/man-pages/man1/chown.1.html"
+    retrieved: 2026-10-10
   - title: "Linux man-pages: namei(1)"
     url: "https://man7.org/linux/man-pages/man1/namei.1.html"
     retrieved: 2026-10-02
