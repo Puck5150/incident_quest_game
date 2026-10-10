@@ -92,10 +92,16 @@ terminal:
       evidence: not-mounted
       output: ""
     - match: "df -h / /srv/media"
-      when_actions: [fix-fstab, recover-hidden]
+      when_actions: [fix-fstab, recover-hidden, cleanup-hidden]
       output: |
         Filesystem      Size  Used Avail Use% Mounted on
         /dev/nvme0n1p1   40G   24G   16G  60% /
+        /dev/nvme1n1p1  984G  332G  602G  36% /srv/media
+    - match: "df -h / /srv/media"
+      when_actions: [fix-fstab, recover-hidden]
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/nvme0n1p1   40G   36G  3.7G  91% /
         /dev/nvme1n1p1  984G  332G  602G  36% /srv/media
     - match: "df -h / /srv/media"
       when_actions: [fix-fstab]
@@ -173,7 +179,7 @@ actions:
   - id: drop-nofail
     label: "Remove nofail from the fstab entry so a missing disk is noticed"
     kind: wrong
-    feedback: "With the wrong UUID that only stops the boot at the missing mount instead; it doesn't mount anything. The UUID is the fault."
+    feedback: "With the wrong UUID that only stops the boot at the missing mount instead (an emergency-mode boot for the whole host); it doesn't mount anything. The UUID is the fault. The targeted guard is RequiresMountsFor=/srv/media on the services that need the data."
   - id: mkfs
     label: "sudo mkfs.ext4 /dev/nvme1n1p1 and copy the images again"
     kind: destructive
@@ -349,7 +355,7 @@ stages:
         - match: "sudo mount --bind / /mnt/rootfs"
           output: ""
         - match: "sudo du -sh /mnt/rootfs/srv/media"
-          when_actions: [recover-hidden]
+          when_actions: [cleanup-hidden]
           output: |
             4.0K	/mnt/rootfs/srv/media
         - match: "sudo du -sh /mnt/rootfs/srv/media"
@@ -357,7 +363,7 @@ stages:
           output: |
             12G	/mnt/rootfs/srv/media
         - match: "ls /mnt/rootfs/srv/media/2026/09 /mnt/rootfs/srv/media/2026/10"
-          when_actions: [recover-hidden]
+          when_actions: [cleanup-hidden]
           output: |
             /mnt/rootfs/srv/media/2026/09:
 
@@ -382,10 +388,28 @@ stages:
         feedback: "The 12 GB under /srv/media on the root filesystem accounts for the jump since Saturday: 4,108 images saved while the disk wasn't mounted."
     actions:
       - id: recover-hidden
-        label: "With / bind-mounted at /mnt/rootfs, sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/, check, then delete the copies under /mnt/rootfs/srv/media and unmount /mnt/rootfs"
+        label: "With / bind-mounted at /mnt/rootfs, sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/"
         kind: fix
         match_regex: "^sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/?$"
-        feedback: "The weekend uploads are on the new disk with their owners and times, and 12 GB of root disk is free. No downtime: the bind mount let you reach them without unmounting."
+        feedback: "The weekend uploads are on the new disk with their owners and times, and the site never went down: the bind mount reached them without unmounting. The 12 GB is still on the root filesystem though: copy is not move, so check the copy and then remove the originals."
+      - id: cleanup-hidden
+        label: "Verify the copy (diff -r shows nothing missing from /srv/media), then delete the originals under /mnt/rootfs/srv/media (not /srv/media)"
+        kind: fix
+        feedback: "The 4,108 weekend images now exist once, on the new disk, and the root filesystem has its 12 GB back (91% to 60%). You deleted under the bind mount, the root filesystem's own directory, and only after confirming the copy was complete."
+      - id: umount-rootfs
+        label: "sudo umount /mnt/rootfs"
+        kind: fix
+        match_regex: "^sudo umount /mnt/rootfs/?$"
+        feedback: "The temporary bind mount is gone, so nothing is left aliasing the root filesystem, and a later cleanup script can't walk into it by mistake."
+      - id: verify-fstab
+        label: "findmnt --verify"
+        kind: fix
+        match_regex: "^(sudo )?findmnt --verify( --verbose)?$"
+        feedback: "findmnt --verify checks fstab for unknown UUIDs, missing mount points and typos. It would have caught the swapped digits before the reboot: run it after every fstab edit."
+      - id: guard-service
+        label: "Add RequiresMountsFor=/srv/media to media-api and nginx (systemctl edit drop-ins), daemon-reload"
+        kind: fix
+        feedback: "The services now refuse to start unless /srv/media is really mounted, so a missing disk produces a failed unit and an alert instead of a service silently writing a new empty tree onto the root filesystem. Keeping nofail means the host itself still boots."
       - id: umount-copy
         label: "Unmount /srv/media, copy the weekend files to the new disk, mount it again"
         kind: wrong
@@ -393,9 +417,14 @@ stages:
       - id: rm-root-files
         label: "Free the root disk: delete everything under /mnt/rootfs/srv/media"
         kind: destructive
-        feedback: "Those are 4,108 customer uploads that exist nowhere else. Copy them first."
+        feedback: "Those are 4,108 customer uploads that exist nowhere else. Copy them and verify the copy first, and only delete under the bind mount."
+      - id: rm-new-disk
+        label: "sudo rm -rf /srv/media/*"
+        kind: destructive
+        match_regex: "^(sudo )?rm -(rf|fr|r) /srv/media(/\\*)?/?$"
+        feedback: "/srv/media is the new disk now: this deletes the live catalogue. The 12 GB to remove is the old copy under /mnt/rootfs/srv/media, on the root filesystem."
     solution_paths:
-      - [recover-hidden]
+      - [recover-hidden, cleanup-hidden, umount-rootfs, verify-fstab, guard-service]
     key_evidence: [weekend-404, root-still-full, hidden-12g, weekend-dirs]
     evidence_labels:
       weekend-404: "An image from 09-29 worked this morning and 404s since the mount"
@@ -405,7 +434,7 @@ stages:
     hints:
       nudge: "Weekend images worked before you mounted the disk. Where were they?"
       direction: "Mounting hides what's underneath. A bind mount of / lets you see under /srv/media without unmounting."
-      answer: "Bind-mount / at /mnt/rootfs, rsync -a the 12 GB under srv/media onto /srv/media, then delete the copies on the root filesystem."
+      answer: "Bind-mount / at /mnt/rootfs, rsync -a the 12 GB under srv/media onto /srv/media, verify with diff -r, delete the originals under /mnt/rootfs/srv/media, umount /mnt/rootfs. Then guard against a repeat: findmnt --verify and RequiresMountsFor=/srv/media on media-api and nginx."
     debrief:
       root_cause: |
         From Saturday until today media-api saved uploads into /srv/media
@@ -417,5 +446,6 @@ stages:
       ideal_path:
         - "Notice weekend images broke exactly when the disk was mounted, and the root disk didn't shrink."
         - "Bind-mount / elsewhere and look under srv/media: 12 GB, 09-27 to 10-02."
-        - "rsync -a them onto the new disk, verify, then delete them from the root filesystem."
-        - "Check an image from the weekend and df."
+        - "rsync -a them onto the new disk, verify with diff -r, then delete the originals under /mnt/rootfs/srv/media (the root filesystem's copy, not /srv/media) and umount /mnt/rootfs."
+        - "Check an image from the weekend and df: root back to about 60%."
+        - "Prevent a repeat: findmnt --verify after fstab edits, and RequiresMountsFor=/srv/media on media-api and nginx so they won't start (and write onto /) without the disk."
