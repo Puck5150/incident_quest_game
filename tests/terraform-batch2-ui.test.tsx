@@ -87,8 +87,9 @@ const NOT_YET = /Not run: that changes the system\. Declare a root cause first/g
 
 describe('terraform-partial-apply-iam through the UI', () => {
   const ROOT = /isn't allowed rds:CreateDBInstance/
-  const GRANT = 'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json'
-  const GRANT_BUTTON = /^Add rds:CreateDBInstance to the orders-ci-deploy role's policy/
+  const GRANT =
+    `aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:CreateDBInstance"],"Resource":"arn:aws:rds:us-east-1:123456789012:db:orders-db"}]}'`
+  const GRANT_BUTTON = /^Grant orders-ci-deploy only rds:CreateDBInstance/
   const DENIED = /not authorized to perform: rds:CreateDBInstance/g
   const ADDED = /Apply complete! Resources: 1 added, 0 changed, 0 destroyed\./
 

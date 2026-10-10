@@ -264,6 +264,13 @@ terminal:
 
         An error occurred (AccessDenied) when calling the PutRolePolicy operation: User: arn:aws:sts::123456789012:assumed-role/orders-ci-deploy/you-laptop is not authorized to perform: iam:PutRolePolicy on resource: role orders-ci-deploy because no identity-based policy allows the iam:PutRolePolicy action
 
+    - match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--policy-document[ =]file://)"
+      example: "aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json"
+      output: |
+        (lab) This lab's AWS CLI does not read policy files, and a policy you cannot see in the command is one nobody reviews.
+        Pass the document inline: --policy-document '{"Version":"2012-10-17","Statement":[...]}'
+        Nothing was changed.
+
 terraform:
   dir: "~/orders-infra"
   vars:
@@ -426,10 +433,20 @@ hypotheses:
 
 actions:
   - id: grant-rds-permission
-    label: "Add rds:CreateDBInstance to the orders-ci-deploy role's policy (aws iam put-role-policy, with your platform-admin profile)"
+    label: "Grant orders-ci-deploy only rds:CreateDBInstance (and tagging) on the orders-db instance ARN, as a new inline policy beside terraform-deploy (aws iam put-role-policy, platform-admin profile)"
     kind: fix
-    match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy(\\s|$))(?=.*--policy-name[ =]\\S)(?=.*--policy-document[ =]\\S)"
-    feedback: "The orders-ci-deploy role may now call rds:CreateDBInstance. Nothing in AWS or in Terraform's state changed; the next apply only has the database left to create."
+    match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy(\\s|$))(?=.*--policy-name[ =](?!terraform-deploy(\\s|$))\\S)(?=.*--policy-document[ =]'?\\{)(?=.*\"Effect\"\\s*:\\s*\"Allow\")(?=.*\"rds:CreateDBInstance\")(?=.*\"Resource\"\\s*:\\s*\\[?\\s*\"arn:aws:rds:us-east-1:123456789012:db:orders-(db|\\*)\"\\s*[\\]}])(?!.*\"\\*\")(?!.*\"rds:(\\*|Create\\*)\")(?!.*Not(Action|Resource))"
+    feedback: "The orders-ci-deploy role may now call rds:CreateDBInstance on orders-db and nothing more: a separate inline policy, so the network and state-bucket permissions it already had are untouched, and a role that creates one database cannot create or delete others. Nothing in AWS or in Terraform's state changed; the next apply only has the database left to create."
+  - id: grant-wildcard
+    label: "Give orders-ci-deploy rds:* (or Resource \"*\") so the pipeline can do anything with RDS"
+    kind: wrong
+    match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy(\\s|$))(?=.*--policy-document[ =]'?\\{)(?=.*(\"\\*\"|\"rds:(\\*|Create\\*)\"))"
+    feedback: "In a real account that would unblock the apply, but it hands the pipeline every RDS action (delete, restore, modify, snapshot sharing) on every database in the account, so any compromised or careless pipeline run can destroy production data. This lab keeps the denial until the least-privilege grant, so the wrong route earns nothing. The error named one action on one resource: grant rds:CreateDBInstance on arn:aws:rds:us-east-1:123456789012:db:orders-db, nothing wider. Least privilege means granting only what the failed call needed; widen it later only when a later denial names more."
+  - id: overwrite-deploy-policy
+    label: "Replace the role's terraform-deploy policy with a document that includes the RDS statement"
+    kind: wrong
+    match_regex: "^(AWS_PROFILE=platform-admin aws |aws (?=.*--profile[ =]platform-admin(\\s|$))(--profile[ =]platform-admin )?)iam put-role-policy (?=.*--role-name[ =]orders-ci-deploy(\\s|$))(?=.*--policy-name[ =]terraform-deploy(\\s|$))(?=.*--policy-document[ =]\\S)"
+    feedback: "aws iam put-role-policy replaces the whole document of a policy with the same name. Reusing terraform-deploy overwrites the state-bucket and network statements the pipeline depends on with whatever you typed, and the next plan or apply fails somewhere else. Add the new permission as a second inline policy with its own name and leave the working one alone."
   - id: finish-apply
     label: "Run terraform apply again so it creates only the missing database"
     kind: fix
@@ -470,7 +487,7 @@ evidence_labels:
 hints:
   nudge: "Before deciding anything, find out what this morning's run actually left behind. Ask Terraform."
   direction: "terraform state list and terraform plan show what exists and what's left. Then read the error box: which resource does \"with\" name, and what does AWS say was refused?"
-  answer: "The network was created and is in state; the database create was denied because orders-ci-deploy has no rds:CreateDBInstance. Grant it (aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://...), then terraform apply again: 1 to add."
+  answer: "The network was created and is in state; the database create was denied because orders-ci-deploy has no rds:CreateDBInstance. Grant exactly that and no more: a new inline policy (a name other than terraform-deploy, which put-role-policy would overwrite) allowing rds:CreateDBInstance on arn:aws:rds:us-east-1:123456789012:db:orders-db, with your platform-admin profile and the document inline: aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"rds:CreateDBInstance\"],\"Resource\":\"arn:aws:rds:us-east-1:123456789012:db:orders-db\"}]}'. Not rds:* and not Resource \"*\". Then terraform apply again: 1 to add."
 
 analogy:
   title: "The flat-pack delivery"
@@ -498,7 +515,9 @@ debrief:
     - "terraform state list and terraform plan: the network is in state and the plan only adds the database (1 to add)."
     - "Reproduce with terraform apply in the same role: the same error, and nothing else changes."
     - "aws sts get-caller-identity: you are assumed-role/orders-ci-deploy, the role named in the error. Its policy has rds:Describe* but no rds:CreateDBInstance."
-    - "Grant the action with your admin profile (aws iam put-role-policy), then terraform apply again: Resources: 1 added. The plan is clean."
+    - "Read the role's existing policy: it has the network and state-bucket statements and rds:Describe*. Leave it alone: put-role-policy replaces a policy that has the same name."
+    - "Grant only what the error named, with your admin profile and the document inline, as a new policy: rds:CreateDBInstance on arn:aws:rds:us-east-1:123456789012:db:orders-db. Not rds:* and not Resource \"*\"."
+    - "terraform apply again: Resources: 1 added. The plan is clean."
   real_world: |
     A failed apply is not a transaction. Whatever succeeded stays, in the
     cloud and in state; the next plan shows exactly what's left. The fix
@@ -508,7 +527,12 @@ debrief:
     and an AWS AccessDenied names the caller, the action and the
     resource. Change the role's permissions the way your team changes
     them (often its own Terraform or a pull request to an IAM repo); a
-    one-off put-role-policy fixes today but drifts from the code. A
+    one-off put-role-policy fixes today but drifts from the code, so
+    follow it with that change. Grant least privilege: the action the
+    error names, on the resource it names, as an additional policy
+    rather than a rewrite of the existing one. rds:* or Resource \"*\"
+    gets the pipeline unblocked and gives a CI role the power to delete
+    every database in the account. A
     deploy role also needs the delete and modify actions for what it
     manages, and the RDS describe calls Terraform uses while it waits for
     the instance to become available. IAM changes can take a few seconds
@@ -523,7 +547,7 @@ concepts:
     text: "IAM denies any action no policy allows. The error says \"because no identity-based policy allows\" the action, as opposed to \"with an explicit deny\"."
     url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html"
   - term: "Inline role policy"
-    text: "A policy embedded in one role. aws iam put-role-policy creates it or replaces the document of one with the same name."
+    text: "A policy embedded in one role. aws iam put-role-policy creates it, or replaces the whole document of one with the same name, so a new permission goes in a new policy name."
     url: "https://docs.aws.amazon.com/cli/latest/reference/iam/put-role-policy.html"
   - term: "Caller identity"
     text: "aws sts get-caller-identity shows which user or assumed role your credentials belong to, with no permissions needed."
@@ -556,3 +580,4 @@ command_notes:
   "aws iam list-attached-role-policies --role-name orders-ci-deploy": "No managed policies are attached: the inline policy is everything the role may do."
   "aws iam get-role-policy --role-name orders-ci-deploy --policy-name terraform-deploy": "Network create and delete, state bucket access, and read-only RDS (rds:Describe*). Nothing allows rds:CreateDBInstance."
   "aws iam put-role-policy --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json": "Without --profile this runs as the pipeline role, which can't change IAM (and shouldn't be able to). Use your platform-admin profile."
+  "aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json": "This lab's CLI does not read policy files: pass the document inline with --policy-document '{...}'. Nothing is changed or credited from a file."
