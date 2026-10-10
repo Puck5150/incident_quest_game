@@ -466,6 +466,7 @@
   summary: "Lists objects under a bucket or prefix."
   parts:
     - { token: "s3://bucket/prefix/", meaning: "What to list." }
+    - { token: "--recursive", meaning: "List every object under the prefix, not just the top level." }
   why: "Shows what's actually in the bucket (or that listing is allowed while reading isn't)."
   alternatives:
     - { command: "aws s3api list-objects-v2 --bucket B --prefix P", note: "Full metadata, paginated." }

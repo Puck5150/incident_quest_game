@@ -1,0 +1,275 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-destroy-nonempty-bucket
+published: false
+track: iac
+difficulty: 2
+title: "The teardown of the retired reporting stack stops on its log bucket"
+par_minutes: 10
+
+ticket:
+  from: "Platform team"
+  severity: SEV4
+  body: |
+    We're retiring the old reporting stack. The teardown job (terraform
+    destroy -auto-approve, run from CI) fails at the end and the log bucket,
+    acme-reports-logs, is still there; a re-run fails the same way. The logs
+    in it were copied to the archive account last quarter and the reporting
+    team signed off on deleting the stack, so nothing in the bucket needs
+    keeping. Somebody suggested the CI role is missing a permission. The
+    repo is checked out in ~/reporting-infra. Please get the stack fully
+    torn down.
+
+environment: |
+  reporting-infra is the Terraform for the retired reporting stack: an S3 bucket for
+  access logs (acme-reports-logs), an SQS queue and a security group, in account
+  123456789012, us-east-1. State is local to this checkout. Your default AWS profile is
+  your own admin role in the account. The stack has had no traffic since the cutover.
+
+terminal:
+  prompt: "you@laptop:~/reporting-infra$"
+  commands:
+    - match_regex: "^aws s3 ls s3://acme-reports-logs/? --recursive$"
+      example: "aws s3 ls s3://acme-reports-logs --recursive"
+      evidence: bucket-has-objects
+      when_actions: [empty-bucket]
+      output: ""
+    - match_regex: "^aws s3 ls s3://acme-reports-logs/? --recursive$"
+      example: "aws s3 ls s3://acme-reports-logs --recursive"
+      evidence: bucket-has-objects
+      output: |
+        2026-08-30 02:00:14      48213 logs/2026-08-29-access.log.gz
+        2026-08-31 02:00:09      51877 logs/2026-08-30-access.log.gz
+        2026-09-01 02:00:11      50342 logs/2026-08-31-access.log.gz
+    - match_regex: "^aws s3 ls s3://acme-reports-logs/?$"
+      example: "aws s3 ls s3://acme-reports-logs"
+      evidence: bucket-has-objects
+      when_actions: [empty-bucket]
+      output: ""
+    - match_regex: "^aws s3 ls s3://acme-reports-logs/?$"
+      example: "aws s3 ls s3://acme-reports-logs"
+      evidence: bucket-has-objects
+      output: |
+                                   PRE logs/
+    - match: "aws sts get-caller-identity"
+      evidence: admin-role
+      output: |
+        {
+            "UserId": "AROA3XFRBF23EXAMPLE:you",
+            "Account": "123456789012",
+            "Arn": "arn:aws:sts::123456789012:assumed-role/PlatformAdmin/you"
+        }
+
+terraform:
+  dir: "~/reporting-infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        resource "aws_s3_bucket" "logs" {
+          bucket        = "acme-reports-logs"
+          force_destroy = false
+        }
+
+        resource "aws_sqs_queue" "jobs" {
+          name = "reports-jobs"
+        }
+
+        resource "aws_security_group" "worker" {
+          name        = "reports-worker"
+          description = "Reporting workers"
+        }
+  state:
+    - type: aws_s3_bucket
+      name: logs
+      attrs:
+        id: acme-reports-logs
+        arn: "arn:aws:s3:::acme-reports-logs"
+        bucket: acme-reports-logs
+        bucket_domain_name: acme-reports-logs.s3.amazonaws.com
+        force_destroy: false
+        tags: {}
+        tags_all: {}
+    - type: aws_sqs_queue
+      name: jobs
+      attrs:
+        id: "https://sqs.us-east-1.amazonaws.com/123456789012/reports-jobs"
+        arn: "arn:aws:sqs:us-east-1:123456789012:reports-jobs"
+        url: "https://sqs.us-east-1.amazonaws.com/123456789012/reports-jobs"
+        name: reports-jobs
+        fifo_queue: false
+        visibility_timeout_seconds: 30
+        message_retention_seconds: 345600
+        tags: {}
+        tags_all: {}
+    - type: aws_security_group
+      name: worker
+      attrs:
+        id: sg-0b8e4c2a6d1f93057
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0b8e4c2a6d1f93057"
+        name: reports-worker
+        description: Reporting workers
+        vpc_id: vpc-0a1c5e7b9d3f24681
+        ingress: []
+        egress: []
+        tags: {}
+        tags_all: {}
+  cloud:
+    add:
+      - type: aws_s3_object
+        attrs: { id: "acme-reports-logs/logs/2026-08-29-access.log.gz", bucket: acme-reports-logs, key: logs/2026-08-29-access.log.gz }
+      - type: aws_s3_object
+        attrs: { id: "acme-reports-logs/logs/2026-08-30-access.log.gz", bucket: acme-reports-logs, key: logs/2026-08-30-access.log.gz }
+      - type: aws_s3_object
+        attrs: { id: "acme-reports-logs/logs/2026-08-31-access.log.gz", bucket: acme-reports-logs, key: logs/2026-08-31-access.log.gz }
+    release:
+      - { type: aws_s3_object, id: "acme-reports-logs/logs/2026-08-29-access.log.gz", when_actions: [empty-bucket] }
+      - { type: aws_s3_object, id: "acme-reports-logs/logs/2026-08-30-access.log.gz", when_actions: [empty-bucket] }
+      - { type: aws_s3_object, id: "acme-reports-logs/logs/2026-08-31-access.log.gz", when_actions: [empty-bucket] }
+  evidence:
+    - evidence: bucket-not-empty
+      command: destroy
+      contains: "BucketNotEmpty"
+    - evidence: force-destroy-false
+      command: state show
+      contains: "force_destroy"
+
+hypotheses:
+  - id: objects-and-force-destroy
+    text: "The bucket still holds objects and its force_destroy setting, as Terraform last applied it, is false, so S3 refuses to delete it."
+    correct: true
+  - id: missing-permission
+    text: "The CI role (or your own role) lacks the permission to delete the bucket."
+    feedback: "A missing permission would come back as AccessDenied (403). This is BucketNotEmpty (409): S3 got the request and refused it because of the bucket's contents. get-caller-identity shows an admin role, and the queue and security group in the same run were deleted without a complaint."
+  - id: dependency
+    text: "Something else still depends on the bucket, or the bucket depends on a resource that was not destroyed first."
+    feedback: "Terraform deleted the other resources first and the error is not a DependencyViolation. Nothing else in the configuration refers to the bucket. The refusal is about what is inside it."
+  - id: state-lock
+    text: "A stale state lock is blocking the run."
+    feedback: "A held lock stops the command before any work with Error acquiring the state lock. This run planned, deleted the queue and the group and reached the bucket, so it held the lock fine."
+
+actions:
+  - id: force-destroy-route
+    label: "Set force_destroy = true on the bucket in main.tf, terraform apply it so state records the change, then terraform destroy"
+    kind: fix
+    done_when:
+      all:
+        - state_lacks: aws_s3_bucket.logs
+        - reality_lacks: { type: aws_s3_bucket, id: acme-reports-logs }
+        - file_contains: { path: /home/you/reporting-infra/main.tf, matches: '^[ \t]*force_destroy[ \t]*=[ \t]*true[ \t]*$' }
+    feedback: "Terraform deleted the objects with the bucket: force_destroy only counts once an apply has written it into state, which is why editing the file alone changed nothing. The stack is gone. Remember that force_destroy is a data-loss switch; here the logs were disposable."
+  - id: empty-bucket
+    label: "Empty the bucket with the AWS CLI (aws s3 rm s3://acme-reports-logs --recursive)"
+    kind: fix
+    match_regex: "^aws s3 rm s3://acme-reports-logs/? (--recursive|--quiet|--region us-east-1)( (--recursive|--quiet|--region us-east-1))*$"
+    feedback: "delete: s3://acme-reports-logs/logs/2026-08-29-access.log.gz (and the two others). The bucket is empty. Terraform still holds it, so now run terraform destroy to remove it for good."
+  - id: destroy-after-emptying
+    label: "Run terraform destroy again now that the bucket is empty"
+    kind: fix
+    done_when:
+      all:
+        - state_lacks: aws_s3_bucket.logs
+        - reality_lacks: { type: aws_s3_bucket, id: acme-reports-logs }
+        - not: { file_contains: { path: /home/you/reporting-infra/main.tf, matches: '^[ \t]*force_destroy[ \t]*=[ \t]*true[ \t]*$' } }
+    feedback: "With nothing in it, DeleteBucket succeeds and Terraform removes the bucket. The configuration was never changed: the objects were the only problem."
+  - id: state-rm-bucket
+    label: "Remove the bucket from state with terraform state rm so destroy can finish the other resources"
+    kind: destructive
+    done_when:
+      all:
+        - state_lacks: aws_s3_bucket.logs
+        - reality_has: { type: aws_s3_bucket, id: acme-reports-logs }
+    feedback: "Destroy finishes, but only because Terraform no longer knows the bucket exists. It is still in AWS with its objects, now unmanaged, and nothing in the repo will ever clean it up. Import it back (terraform import aws_s3_bucket.logs acme-reports-logs) and handle the contents properly."
+  - id: grant-more-permissions
+    label: "Attach s3:* to the CI role and re-run the teardown job"
+    kind: wrong
+    feedback: "The role was never the problem: S3 answered BucketNotEmpty, not AccessDenied. The re-run fails the same way and you have widened the CI role for nothing."
+  - id: retry-without-lock
+    label: "Re-run terraform destroy with -lock=false in case a lock is in the way"
+    kind: wrong
+    feedback: "There is no lock held, and the error was never about locking. The destroy fails on the bucket again, the same way."
+
+solution_paths:
+  - [force-destroy-route]
+  - [empty-bucket, destroy-after-emptying]
+
+key_evidence: [bucket-not-empty, force-destroy-false, bucket-has-objects, admin-role]
+
+evidence_labels:
+  bucket-not-empty: "terraform destroy stops with BucketNotEmpty on the bucket"
+  force-destroy-false: "The bucket's state records force_destroy = false"
+  bucket-has-objects: "The bucket still holds log objects"
+  admin-role: "Your role is an admin role in the account"
+
+hints:
+  nudge: "Read the error code S3 returned. What does it say about the bucket, and what did Terraform delete before it got there?"
+  direction: "BucketNotEmpty means the bucket has objects. Check what is in it (aws s3 ls) and what Terraform's state records for force_destroy (terraform state show aws_s3_bucket.logs). Terraform acts on the state, not on the file."
+  answer: "Either set force_destroy = true in main.tf, run terraform apply (so state records it), then terraform destroy; or empty the bucket yourself with aws s3 rm s3://acme-reports-logs --recursive and run terraform destroy again."
+
+analogy:
+  title: "The locked storage unit"
+  text: |
+    The landlord will not take the keys back while there is still furniture in
+    the unit. You can sign a form saying the movers may clear it out (but the
+    landlord only acts on the form once it is filed, not while it sits on your
+    desk), or you can clear it yourself. Handing the keys to a friend and
+    forgetting about the unit just keeps the bill running.
+
+debrief:
+  root_cause: |
+    S3 only deletes an empty bucket. The aws_s3_bucket resource has force_destroy,
+    default false, which tells the provider to empty the bucket before deleting it.
+    Terraform reads that setting from state when it deletes, so editing the file
+    does nothing until an apply has recorded it. The bucket held three log objects
+    and force_destroy was false in state, so the delete came back BucketNotEmpty
+    (409) after everything else in the stack was gone.
+  ideal_path:
+    - "Read the error: BucketNotEmpty, not AccessDenied or a dependency error."
+    - "List the bucket and check state show for force_destroy."
+    - "Confirm the data is disposable (the ticket says the logs were archived)."
+    - "Either set force_destroy = true, apply, destroy, or empty the bucket and destroy."
+  real_world: |
+    force_destroy on a bucket with production data is a data-loss switch: set it
+    only when the contents are disposable, and prefer removing it again afterwards.
+    Versioned buckets also need every version and delete marker removed, which
+    aws s3 rm does not do; force_destroy handles versions, a manual cleanup needs
+    list-object-versions. Never use terraform state rm to get past this: it leaves a
+    bucket and its data in the account that nothing manages.
+
+concepts:
+  - term: "force_destroy"
+    text: "An aws_s3_bucket argument that makes Terraform delete all objects in the bucket before deleting the bucket, so the destroy can succeed. Applies only once it is in state."
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket"
+  - term: "DeleteBucket"
+    text: "The S3 API call that deletes a bucket. All objects (including versions and delete markers) must be deleted first."
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html"
+  - term: "terraform destroy"
+    text: "Plans and deletes every object recorded in state; a failure on one object stops that object, not the unrelated ones."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/destroy"
+
+sources:
+  - title: "Amazon S3 API: DeleteBucket"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html"
+    retrieved: 2026-10-09
+  - title: "Terraform AWS provider: aws_s3_bucket (force_destroy)"
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: destroy"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/destroy"
+    retrieved: 2026-10-09
+
+command_notes:
+  "aws sts get-caller-identity": "An admin role in the stack's account: a permission problem would be AccessDenied, not BucketNotEmpty."
+  "aws s3 ls s3://acme-reports-logs --recursive": "Lists every object in the bucket: three log files, which is why S3 refuses to delete it."
+  "aws s3 ls s3://acme-reports-logs": "Top level of the bucket: there is a logs/ prefix, so it is not empty."

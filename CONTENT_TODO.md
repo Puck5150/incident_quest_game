@@ -898,3 +898,19 @@ terraform-sg-cycle:
 - [ ] Unverified: a versioned bucket in real AWS adds `You must delete all versions in the bucket.`; bucket versions and delete markers are not modelled.
 - [ ] `force_destroy` is read from the state attribute (as the provider reads it from the resource data at delete); objects count when their reality key is `aws_s3_object:BUCKET/...`. Any other thing mentioning a bucket name does not block it.
 - [ ] Lock bypass marker (TF7a): `terraform refresh -lock=false` past a held lock commits state but records no marker (not in the brief's command list); `state mv` of a whole module records one line, not one per moved object.
+
+## terraform incidents batch 4 (TF7a)
+
+- [ ] TF7a batch status: `terraform-destroy-nonempty-bucket` authored (dark, `published: false`, in the DARK list of tests/published.test.tsx); the other three incidents are pending.
+
+### terraform-destroy-nonempty-bucket (task 5)
+
+- [x] Verified 2026-10-09 against the S3 API reference (DeleteBucket): all objects, including versions and delete markers, must be deleted before the bucket.
+- [ ] Unverified: the Terraform registry page for `aws_s3_bucket` (5.70.0) could not be read (JavaScript page), so `force_destroy` semantics ("delete all objects so the bucket can be destroyed, applies only once in state") are from memory of the provider docs and source; the source entry in the YAML records the page, not a read of its text.
+- [ ] Unverified: BucketNotEmpty text/409/HostID (see "terraform destroy errors (TF7a)"), the `aws s3 ls` output shapes (`PRE logs/` line, `DATE TIME SIZE KEY` rows), the `delete: s3://...` lines named in the empty-bucket feedback, and the `aws s3 rm` flag set accepted by the action regex. Invented: account/role names (`PlatformAdmin`), sg/vpc ids, object keys and sizes, the ticket story (archive copy, sign-off).
+- Design: state starts with all three resources (bucket, queue, SG), so one `destroy` deletes queue and SG and stops on the bucket. Fixes: `force-destroy-route` (world: bucket gone from state and reality, `force_destroy = true` line in main.tf), and a two-step path `empty-bucket` + `destroy-after-emptying`. `empty-bucket` is taken by typing `aws s3 rm s3://acme-reports-logs --recursive` (optional `--quiet`, `--region us-east-1`, trailing slash) and has no `done_when`: the predicate language cannot see `aws_s3_object` objects (`reality_lacks` takes only modelled resource types), so a typed command is the only evidence; its `cloud.release` entries (one per object) empty the bucket. `destroy-after-emptying` is world-based (bucket gone, no `force_destroy = true` in the file). Deviation from the brief: no `done_when` on the empty step, hence the test helper `detectedAll` shows it false; the engine takes it from the typed command.
+- Decision: `aws s3 rb --force` is NOT accepted (it would also remove the bucket from the cloud, which `cloud.release` of objects does not model; it answers "no simulated output"). Partial deletes (`rm` without `--recursive`, with `--exclude`, of one key) do not match and do not release anything.
+- Trap `state-rm-bucket` (destructive): `state_lacks` bucket and `reality_has` bucket. The fix stays earnable afterwards (`terraform import aws_s3_bucket.logs acme-reports-logs`, then route A), the mistake stays on the score; tested.
+- Wrong actions `grant-more-permissions` and `retry-without-lock` are button-only. Editing the config without applying is not an action (it is a step of route A and teaches state-vs-config via the debrief and the failing second destroy).
+- Known limits: after route A the scripted `aws s3 ls` still lists the objects (the bucket is gone; real AWS would say NoSuchBucket); versioned buckets not modelled.
+- Added a `--recursive` part to the existing `aws-s3-ls` command-library entry (coverage test required it).
