@@ -100,9 +100,13 @@ hypotheses:
 
 actions:
   - id: grant-decrypt
-    label: "Add kms:Decrypt on the alias/reports key's ARN to report-viewer-role's read-reports policy"
+    label: "Add kms:Decrypt on the alias/reports key's ARN to report-viewer-role's read-reports policy (in the infrastructure code that owns the role, ideally with a kms:ViaService condition for s3.us-east-1.amazonaws.com)"
     kind: fix
     feedback: "Downloading an SSE-KMS object needs kms:Decrypt on the key as well as s3:GetObject. The default key policy lets IAM grant it, so the viewer reads new reports, and still only this key."
+  - id: reencrypt-existing
+    label: "Re-encrypt the existing SSE-S3 reports under the alias/reports key (S3 Batch Operations copy in place), then check one old report reads as aws:kms"
+    kind: fix
+    feedback: "Changing the default encryption only affects new objects. The compliance requirement was that reports be encrypted with the customer managed key, and every report from before Tuesday is still AES256. Copying them in place with SSE-KMS makes the requirement true for the whole bucket (the viewer's new kms:Decrypt grant already covers them)."
   - id: back-to-sse-s3
     label: "Switch the bucket's default encryption back to SSE-S3"
     kind: wrong
@@ -117,7 +121,7 @@ actions:
     feedback: "Once the waiting period ends, every object encrypted under that key is unrecoverable, a week of reports included. Deleting keys is irreversible; granting a permission isn't."
 
 solution_paths:
-  - [grant-decrypt]
+  - [grant-decrypt, reencrypt-existing]
 
 key_evidence: [kms-denied, new-sse-kms, old-sse-s3, no-kms-permission]
 
@@ -130,7 +134,7 @@ evidence_labels:
 hints:
   nudge: "Old objects work, new ones don't. What changed about the new objects themselves?"
   direction: "Compare how an old and a new object are encrypted, and read which action the error says was denied."
-  answer: "New objects are SSE-KMS with a customer managed key; reading them needs kms:Decrypt on that key. Add kms:Decrypt for that key's ARN to report-viewer-role's policy."
+  answer: "New objects are SSE-KMS with a customer managed key; reading them needs kms:Decrypt on that key. Add kms:Decrypt for that key's ARN to report-viewer-role's policy, and re-encrypt the older SSE-S3 objects so the compliance requirement actually holds."
 
 analogy:
   title: "The safe inside the filing cabinet"
@@ -155,12 +159,16 @@ debrief:
     - "Read the error: the denied action is kms:Decrypt, not an S3 action."
     - "Compare objects: old ones are AES256 (SSE-S3), new ones aws:kms with alias/reports."
     - "Check where KMS access can be granted: the default key policy enables IAM policies."
-    - "Add kms:Decrypt on that key to the viewer's role; verify a new report opens."
+    - "Add kms:Decrypt on that key to the viewer's role (in code, scoped to the one key); verify a new report opens."
+    - "Re-encrypt the existing SSE-S3 reports under the key: the default encryption change only covered new objects, so the compliance requirement is not met until you do."
   real_world: |
     Switching a bucket to SSE-KMS is a common compliance change, and every
     reader then needs kms:Decrypt (and every writer kms:GenerateDataKey).
     Inventory the bucket's readers and writers before switching, grant on
     the specific key, and treat key deletion as the irreversible step it is.
+    A default-encryption change does not touch existing objects; re-encrypt
+    them (Batch Operations copy) and consider S3 Bucket Keys to cut KMS
+    request costs.
 
 concepts:
   - term: "SSE-S3 vs SSE-KMS"
