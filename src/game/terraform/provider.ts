@@ -192,11 +192,11 @@ export function bucketNotEmpty(name: string, seed: string): string {
   return `deleting S3 Bucket (${name}): operation error S3: DeleteBucket, https response error StatusCode: 409, RequestID: ${requestId(seed)}, HostID: ${hex(`${seed}:host`, 24)}, api error BucketNotEmpty: The bucket you tried to delete is not empty`
 }
 
-// A vanished object met by an update (-refresh=false). A delete never gets here: providers treat NotFound as gone.
+// A vanished object met by an update (-refresh=false). Updates only: a delete of a vanished object succeeds (providers treat NotFound as gone).
 // ponytail: per-type wording unverified (CONTENT_TODO); only EC2 instances and S3 buckets have SDK text, the rest is generic.
-export function notFound(type: string, id: string, op: 'update' | 'delete', seed: string): string {
+export function notFound(type: string, id: string, seed: string): string {
   const rid = requestId(seed)
-  const verb = op === 'update' ? 'updating' : 'deleting'
+  const verb = 'updating'
   if (type === 'aws_instance') return `${verb} EC2 Instance (${id}): operation error EC2: ModifyInstanceAttribute, https response error StatusCode: 400, RequestID: ${rid}, api error InvalidInstanceID.NotFound: The instance ID '${id}' does not exist`
   if (type === 'aws_s3_bucket') return `${verb} S3 Bucket (${id}) tags: operation error S3: PutBucketTagging, https response error StatusCode: 404, RequestID: ${rid}, HostID: ${hex(`${seed}:host`, 24)}, api error NoSuchBucket: The specified bucket does not exist`
   return `${verb} ${type} (${id}): NotFound: the object does not exist`

@@ -12,7 +12,7 @@ import { normalize } from './engine.ts'
 import { diskPath, filesOnDisk, homeOf, impliedFile, resolveFrom, startDir } from './paths.ts'
 import { runTerraform, worldPlan, type CliContext } from './terraform/cli.ts'
 import { evalPredicate, type Leaf, type Predicate } from './terraform/predicates.ts'
-import { labFromScenario, type Lab } from './terraform/lab.ts'
+import { applyReleases, labFromScenario, type Lab } from './terraform/lab.ts'
 
 export { diskPath }
 
@@ -234,6 +234,7 @@ export class IncidentShell {
   // action is taken its effect on files is applied (a fix's `after`, or the
   // post-fix output of a scripted `cat`), so the disk shows what the game says.
   private async sync(scenario: Scenario, taken: Set<string>) {
+    if (this.lab) applyReleases(this.lab, taken)
     const fs = this.hosts.get(this.mainHost)!.fs
     const put = async (path: string, content: string) => {
       await fs.mkdir(path.replace(/\/[^/]*$/, '') || '/', { recursive: true })
@@ -472,6 +473,7 @@ export class IncidentShell {
     try {
       await this.ready
       const lab = this.lab
+      applyReleases(lab, this.context.taken)
       const bash = this.hosts.get(this.mainHost)!
       const env = this.envs.get(this.mainHost) ?? {}
       // terraform sees only exported variables; the saved env has every shell variable.

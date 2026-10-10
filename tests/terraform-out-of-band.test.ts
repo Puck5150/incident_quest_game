@@ -138,3 +138,41 @@ describe('console-deleted object through the shell', () => {
     expect(d.output).toContain('Destroy complete! Resources: 1 destroyed')
   })
 })
+
+describe('release is visible to predicates and plans without a terraform command', () => {
+  const lacks = { reality_lacks: { type: 'aws_network_interface', id: 'eni-1' } } as const
+  const has = { reality_has: { type: 'aws_network_interface', id: 'eni-1' } } as const
+  it('reality_lacks flips right after the action, also after a fresh remount', async () => {
+    const s = scenario()
+    const taken = new Set([fixId])
+    const sh = new IncidentShell(s)
+    expect(await sh.doneWhen(has)).toBe(true)
+    await sh.update(s, taken)
+    expect(await sh.doneWhen(lacks)).toBe(true)
+    const fresh = new IncidentShell(s)
+    await fresh.update(s, taken)
+    expect(await fresh.doneWhen(lacks)).toBe(true)
+  })
+  it('plan_clean sees the released world too', async () => {
+    const s = scenario(tfBlock({ cloud: { add: [{ type: 'aws_network_interface', attrs: { id: 'eni-1', subnet_id: 'subnet-1' } }, { type: 'aws_subnet', attrs: { id: 'subnet-x', vpc_id: 'vpc-1' } }], release: [{ type: 'aws_subnet', id: 'subnet-x', when_actions: [fixId] }] } }))
+    const sh = new IncidentShell(s)
+    expect(await sh.doneWhen({ reality_lacks: { type: 'aws_subnet', id: 'subnet-x' } })).toBe(false)
+    await sh.update(s, new Set([fixId]))
+    expect(await sh.doneWhen({ reality_lacks: { type: 'aws_subnet', id: 'subnet-x' } })).toBe(true)
+  })
+})
+
+describe('-refresh=false apply through the shell', () => {
+  it('plans clean, then fails with the NotFound error box', async () => {
+    const s = scenario(tfBlock({ files: [{ path: 'main.tf', content: 'resource "aws_subnet" "s" {\n  vpc_id     = "vpc-1"\n  cidr_block = "10.0.1.0/24"\n  tags = { a = "b" }\n}\n' }], cloud: { delete: [{ type: 'aws_subnet', id: 'subnet-1' }] } }))
+    const [a] = await runWith(new IncidentShell(s), s, new Set(), 'terraform apply -refresh=false -auto-approve')
+    expect(a.exitCode).toBe(1)
+    expect(a.output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
+    expect(a.output).toContain('Error: updating aws_subnet (subnet-1): NotFound: the object does not exist')
+  })
+  it('destroy of an already-deleted object ends with the explanatory sentence', async () => {
+    const s = scenario(tfBlock({ cloud: { delete: [{ type: 'aws_subnet', id: 'subnet-1' }] } }))
+    const [d] = await runWith(new IncidentShell(s), s, new Set(), 'terraform destroy -auto-approve')
+    expect(d.output).toContain('Either you have not created any objects yet or the existing objects were already deleted outside of Terraform.')
+  })
+})

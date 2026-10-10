@@ -8,11 +8,11 @@ import { executeApply, type ApplyResult } from './apply.ts'
 import { evalExpr, EvalError, type Value } from './eval.ts'
 import { formatDiagnostic } from './diag.ts'
 import { buildGraph } from './graph.ts'
-import type { Lab, SavedPlan } from './lab.ts'
+import { applyReleases, type Lab, type SavedPlan } from './lab.ts'
 import { parseHcl } from './parse.ts'
 import { planConfig, type PlanResult } from './plan.ts'
 import { hex } from './provider.ts'
-import { realityKey, refresh as refreshState } from './refresh.ts'
+import { refresh as refreshState } from './refresh.ts'
 import { renderPlan, renderPlanErrors } from './render.ts'
 import { destroyScope, parseTargetArg, targetScope, type Target, type TargetScope } from './target.ts'
 import { renderApplyEnd, renderApplyErrors, renderProgress } from './render-apply.ts'
@@ -1203,8 +1203,7 @@ async function dispatch(args: string[], ctx: CliContext): Promise<Out> {
 }
 
 export async function runTerraform(args: string[], ctx: CliContext): Promise<CliResult> {
-  // The cloud the player has changed by their own actions: applied here once, before any command (idempotent).
-  for (const r of ctx.lab.releases) if (r.when_actions.every((a) => ctx.taken.has(a))) delete ctx.lab.reality[realityKey(r.type, r.id)]
+  applyReleases(ctx.lab, ctx.taken)
   let out: Out
   try {
     out = await dispatch(args, ctx)

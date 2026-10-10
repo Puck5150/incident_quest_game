@@ -146,3 +146,8 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     history: [],
   }
 }
+
+// The cloud after the player's own actions: every release whose actions are all taken is gone. Idempotent.
+export function applyReleases(lab: Lab, taken: Set<string>): void {
+  for (const r of lab.releases) if (r.when_actions.every((a) => taken.has(a))) delete lab.reality[realityKey(r.type, r.id)]
+}

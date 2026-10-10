@@ -247,7 +247,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       const secs = seconds(i.type, 'update')
       const uid = typeof attrs.id === 'string' ? attrs.id : ''
       // With -refresh=false state is trusted, so an object deleted out of band surfaces here.
-      const error = faultFor(i, 'update', attrs) ?? (inst && !reality.has(realityKey(i.type, uid)) ? notFound(i.type, uid, 'update', seed) : undefined)
+      const error = faultFor(i, 'update', attrs) ?? (inst && !reality.has(realityKey(i.type, uid)) ? notFound(i.type, uid, seed) : undefined)
       if (error) fail(i, 'update', secs, error, typeof attrs.id === 'string' ? attrs.id : undefined)
       else {
         const id = attrs.id as string
