@@ -96,15 +96,33 @@ hypotheses:
     feedback: "No crashes: each worker finishes and sends the invoice. The first one even deletes the message. The others got it because it reappeared at 30 seconds, while the first was still working."
 
 actions:
+  - id: timeout-too-low
+    label: "aws sqs set-queue-attributes ... --attributes VisibilityTimeout=<under 90> (for example 31 or 45)"
+    kind: wrong
+    match_regex: "^aws sqs set-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/111122223333/invoice-jobs --attributes VisibilityTimeout=(\\d|[1-8]\\d)$"
+    feedback: "Jobs take 44 to 50 seconds at p95 and a busy worker can be slower, so a timeout under about 90 seconds still lets messages reappear mid-job and the duplicates continue. Set it from measured processing time with real headroom."
+  - id: timeout-too-high
+    label: "aws sqs set-queue-attributes ... --attributes VisibilityTimeout=<over 600> (for example 43200)"
+    kind: wrong
+    match_regex: "^aws sqs set-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/111122223333/invoice-jobs --attributes VisibilityTimeout=(60[1-9]|6[1-9]\\d|[7-9]\\d{2}|\\d{4,})$"
+    feedback: "A very long timeout hides a message for that whole time whenever a worker crashes or is redeployed mid-job: one failure delays that invoice for hours. Pick a few multiples of the real job time (180 to 300 seconds here) and extend it for long jobs with ChangeMessageVisibility."
   - id: raise-timeout
     label: "aws sqs set-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/111122223333/invoice-jobs --attributes VisibilityTimeout=180"
     kind: fix
-    match_regex: "^aws sqs set-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/111122223333/invoice-jobs --attributes VisibilityTimeout=(\\d+)$"
-    feedback: "Messages now stay invisible well past the slowest job, so only one worker handles each invoice. Received drops back to match sent."
+    match_regex: "^aws sqs set-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/111122223333/invoice-jobs --attributes VisibilityTimeout=(9\\d|[1-5]\\d{2}|600)$"
+    feedback: "Messages now stay invisible well past the slowest job (180 seconds, about four times the p95), so only one worker handles each invoice. Received drops back to match sent. If jobs ever run longer, extend the timeout from the worker (ChangeMessageVisibility) instead of raising it for everyone."
   - id: idempotent
-    label: "Make invoice-worker idempotent: skip sending if INV-<order> was already emailed"
+    label: "Make invoice-worker idempotent atomically: claim INV-<order> with a conditional write (unique key, fails if already claimed), send, then mark it sent; an expired claim can be retaken after a crash"
     kind: fix
-    feedback: "SQS standard queues deliver at least once, so a message can still arrive twice occasionally, and a worker can still crash mid-job. Checking whether this invoice was already sent makes a duplicate delivery harmless."
+    feedback: "SQS standard queues deliver at least once, so a message can still arrive twice occasionally, and a worker can still crash mid-job. Because the claim is a single atomic conditional write, two workers can never both pass it, and a crash leaves an expired claim that a retry can take, so the invoice is neither duplicated nor lost."
+  - id: check-then-send
+    label: "Make invoice-worker idempotent by reading first: if INV-<order> is not in the sent table, send, then record it"
+    kind: wrong
+    feedback: "Check-then-send is a race: two workers can both read 'not sent' before either records it, and both send. Idempotency needs an atomic claim (a conditional write or a unique constraint), not a separate read and write."
+  - id: dlq
+    label: "Give invoice-jobs a dead-letter queue with a redrive policy (maxReceiveCount 5) and alarm on the DLQ depth"
+    kind: fix
+    feedback: "A message that keeps failing or timing out is now parked with its receive count intact instead of cycling forever, and an alarm tells someone. Duplicates like this one would also have shown up as rising ApproximateReceiveCount."
   - id: more-workers
     label: "Scale invoice-worker from 4 to 10 containers"
     kind: wrong
@@ -119,7 +137,7 @@ actions:
     feedback: "No more duplicates, and any worker that crashes or is redeployed mid-job loses that invoice for good: the message is gone and nothing will retry it."
 
 solution_paths:
-  - [raise-timeout, idempotent]
+  - [raise-timeout, idempotent, dlq]
 
 key_evidence: [same-message-twice, processing-time, timeout-30, received-vs-sent]
 
@@ -132,7 +150,7 @@ evidence_labels:
 hints:
   nudge: "The same message reaches three workers about 30 seconds apart. What happens to a message 30 seconds after it's received?"
   direction: "Compare how long a job takes now with the queue's visibility timeout."
-  answer: "Since the PDF change, jobs take ~45 s but the visibility timeout is 30 s, so each message reappears and another worker takes it. Raise the visibility timeout above the slowest job, and make the worker skip invoices it already sent."
+  answer: "Since the PDF change, jobs take ~45 s but the visibility timeout is 30 s, so each message reappears and another worker takes it. Raise the visibility timeout to a few times the slowest job (not 31, not hours), make the worker claim each invoice with an atomic conditional write (check-then-send is racy), and add a dead-letter queue."
 
 analogy:
   title: "The task on the shared board"
@@ -141,7 +159,8 @@ analogy:
     for 30 seconds. Jobs used to take 5 seconds. Now each takes 45, so after
     30 seconds the slot looks free again, a second worker takes a copy of the
     same card, then a third. Give each card a longer cover, and have workers
-    check the "done" list before starting.
+    claim the card on the "done" list in one step (not look, then write,
+    which two workers can do at once).
 
 debrief:
   root_cause: |
@@ -155,8 +174,9 @@ debrief:
     - "Spot the pattern: messages received more than doubled while messages sent stayed the same."
     - "Follow one message: three workers, 30 seconds apart, rising receive count."
     - "Compare: jobs take ~45 s since v3.0; the queue's visibility timeout is 30 s."
-    - "Raise the visibility timeout well above the slowest job (or extend it while working)."
-    - "Make the worker idempotent, because standard queues can deliver a message more than once anyway."
+    - "Raise the visibility timeout well above the slowest job but not absurdly (here 180 s), or extend it from the worker for long jobs."
+    - "Make the worker idempotent with an atomic claim (conditional write on a unique key), because standard queues can deliver a message more than once anyway. Check-then-send is racy."
+    - "Add a dead-letter queue with a redrive policy and an alarm, so repeated failures are parked and noticed."
   real_world: |
     Duplicate processing after a change that makes jobs slower is a classic
     SQS incident. Set the visibility timeout from measured processing time
