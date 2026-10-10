@@ -61,6 +61,13 @@ terminal:
             ]
         }
     - match: "aws ec2 describe-security-groups --group-ids sg-0reports --query SecurityGroups[0].IpPermissions"
+      when_actions: [allow-from-alb, remove-443-world]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] },
+            { "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "UserIdGroupPairs": [ { "GroupId": "sg-0alb", "Description": "from the ALB" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0reports --query SecurityGroups[0].IpPermissions"
       when_actions: [allow-from-alb]
       output: |
         [
@@ -113,6 +120,11 @@ actions:
     kind: fix
     match_regex: "^aws ec2 authorize-security-group-ingress --group-id sg-0reports --protocol tcp --port 8080 --source-group sg-0alb$"
     feedback: "Only things with the load balancer's security group can now reach port 8080. Health checks pass after the healthy threshold, and the targets go healthy."
+  - id: remove-443-world
+    label: "aws ec2 revoke-security-group-ingress --group-id sg-0reports --protocol tcp --port 443 --cidr 0.0.0.0/0"
+    kind: fix
+    match_regex: "^aws ec2 revoke-security-group-ingress --group-id sg-0reports --protocol tcp --port 443 --cidr 0\\.0\\.0\\.0/0$"
+    feedback: "Nothing on these instances listens on 443 (ss -ltn shows only 22 and 8080), so the copied template rule did nothing except leave a world-open door on a backend that sits behind the load balancer. Revoking it leaves exactly two ways in: SSH from the office VPN and 8080 from the load balancer. Make the same change in the infrastructure code, or the next apply restores it."
   - id: allow-from-anywhere
     label: "aws ec2 authorize-security-group-ingress --group-id sg-0reports --protocol tcp --port 8080 --cidr 0.0.0.0/0"
     kind: wrong
@@ -132,7 +144,7 @@ actions:
     feedback: "That opens every port on these instances, SSH included, to anything that can reach them. Diagnosing by switching off the firewall tends to stay switched off. Read the rules instead: there's no rule for 8080."
 
 solution_paths:
-  - [allow-from-alb]
+  - [allow-from-alb, remove-443-world]
 
 key_evidence: [target-timeout, no-8080-rule, hc-port]
 
@@ -144,7 +156,7 @@ evidence_labels:
 hints:
   nudge: "The app answers locally but the load balancer gets no answer at all. What sits between them?"
   direction: "Compare the port the health check uses with the ports the instances' security group lets in."
-  answer: "sg-0reports came from the web servers' template: 22 and 443, no 8080. Allow TCP 8080 in, with the load balancer's security group (sg-0alb) as the source."
+  answer: "sg-0reports came from the web servers' template: 22 and 443, no 8080. Allow TCP 8080 in, with the load balancer's security group (sg-0alb) as the source, and revoke the copied 443-from-anywhere rule nothing listens on."
 
 analogy:
   title: "The guest list at the side door"
@@ -169,6 +181,8 @@ debrief:
     - "Check what the instances' security group allows in: 22 and 443, nothing on 8080."
     - "Allow TCP 8080 with the load balancer's security group as the source."
     - "Watch the targets turn healthy after the healthy threshold."
+    - "Clean up the template's leftovers: revoke 443 from 0.0.0.0/0 (nothing listens on 443), and make the change in the infrastructure code."
+    - "Later hardening: restrict the load balancer's all-egress rule to 8080 toward sg-0reports, and prefer SSM Session Manager over SSH from an office range."
   real_world: |
     "Unhealthy: request timed out" on a new target almost always means a
     security group or network ACL, not the app. Reference the load
