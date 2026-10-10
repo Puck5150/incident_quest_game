@@ -887,6 +887,7 @@ Leaves (one key each):
 | `lock_bypassed: true` | Some command ran with `-lock=false` while someone else's lock was held and left the marker: an apply or destroy step, `state mv`, `state rm`, `taint`, `untaint`, `import` or `workspace new`/`delete`. It stays true after a later `force-unlock`. Reads (`plan`, `show`, `state list`) and commands that failed record nothing. Use it when a trap should not have to list addresses. |
 | `reality_has: { type, id, attr?, equals? }` | The cloud holds that object. With `attr` it must have the attribute, and with `equals` the value must match. `type` must be a supported resource type. |
 | `reality_lacks: { type, id }` | The cloud no longer holds it. |
+| `sg_rule: { group_id, direction, port, protocol?, exact?, source_group_id?, cidr? }` | Some rule on the security group `group_id` (an id in `state` or `cloud.add`), `direction` `ingress` or `egress`, covers `port`. It reads the group's inline rules and the separate rule resources (`aws_vpc_security_group_{ingress,egress}_rule`, `aws_security_group_rule`) together. `port` counts when it falls inside the rule's range (and an all-protocols rule covers every port) unless `exact: true`, which wants a rule for exactly that one port and protocol. `protocol` defaults to `tcp`; `6`, `17`, `1`, `58` and `all`/`-1` are normalised. `source_group_id` (another group's id) or `cidr` narrows the peer; `cidr: "*"` means any CIDR (IPv4 or IPv6), any other value must match exactly; give one, not both. With neither, any peer counts. Wrap in `not` to require that no such rule exists. |
 | `applied: { op, address, lock_bypassed? }` | An apply did `op` (`create`, `update`, `delete`, `import`, `forget`) to the address at some point in this lab. It survives a recreate, so it catches "destroyed at some point". Only apply steps count (including `import` and `removed` blocks); the CLI's `terraform import` and `terraform state rm` leave their own history lines (`import ADDR`, `state-rm ADDR`), so `state-rm` never matches `applied`, but an `applied: { op: import }` leaf also matches a CLI `terraform import` of that address. The history is not per workspace: an apply in any workspace counts. With `lock_bypassed: true` only a step applied with `-lock=false` while someone else's lock was held counts; without it, bypassed steps count like any other. |
 | `file_contains: { path, matches }` | The file at the absolute `path` matches the regex (multiline). |
 
@@ -896,6 +897,7 @@ done_when: { reality_has: { type: aws_s3_bucket, id: logs, attr: versioning, equ
 done_when: { plan_has: { no_destroy: [aws_db_instance.orders] } }
 done_when: { plan_has: { no_change: [aws_security_group.payments] } }
 done_when: { lock_free: true }
+done_when: { all: [{ sg_rule: { group_id: sg-0app, direction: ingress, port: 8080, exact: true, source_group_id: sg-0web } }, { not: { sg_rule: { group_id: sg-0app, direction: ingress, port: 8080, cidr: "*" } } }] }
 done_when: { applied: { op: create, address: aws_instance.reconciler, lock_bypassed: true } }
 done_when: { file_contains: { path: /home/you/infra/db.tf, matches: 'ignore_changes\s*=\s*\[[^\]]*storage_encrypted' } }
 ```
