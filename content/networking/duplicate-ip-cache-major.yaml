@@ -114,7 +114,11 @@ actions:
     label: "Over the management network, take cache-01's data interface down (ssh cache-01-mgmt sudo ip link set eth0 down), leaving it running"
     kind: fix
     match_regex: "^ssh cache-01-mgmt sudo ip link set eth0 down$"
-    feedback: "Only cache-02 answers for 10.20.5.10 now. cache-01 keeps running, so what's in its memory isn't lost."
+    feedback: "Only cache-02 answers for 10.20.5.10 now. cache-01 keeps running, so what's in its memory isn't lost. But this is a runtime change: the next power cycle brings eth0 back up with 10.20.5.10, so it must also be made permanent."
+  - id: persist-isolation
+    label: "On cache-01, remove 10.20.5.10 from its saved network configuration (netplan/NetworkManager) and keep only the management interface, so a power-on can never bring the address back"
+    kind: fix
+    feedback: "The address is gone from cache-01's saved config, not just its running state. A BIOS power-on after the next outage brings it up without 10.20.5.10, so this duplicate cannot return. The management address stays so the baskets can still be copied off."
   - id: power-off-old
     label: "Power cache-01 off from its BMC"
     kind: destructive
@@ -129,7 +133,7 @@ actions:
     feedback: "It hides the problem on the hosts you remember, and cache-01 still claims the address for everything else, such as the router."
 
 solution_paths:
-  - [isolate-old]
+  - [isolate-old, persist-isolation]
 
 key_evidence: [app01-old-mac, two-macs, old-up]
 
@@ -146,7 +150,7 @@ red_herrings:
 hints:
   nudge: "Both app servers talk to 10.20.5.10. Are they talking to the same machine?"
   direction: "Compare the MAC address each app server has for 10.20.5.10, and ask the network who answers for it."
-  answer: "cache-01 came back with the same IP. Take its data interface down over the management network, without powering it off."
+  answer: "cache-01 came back with the same IP. Take its data interface down over the management network, without powering it off, and remove 10.20.5.10 from its saved network config so it cannot come back after the next power cycle."
 
 analogy:
   title: "Two shops with the same address"
@@ -170,10 +174,14 @@ debrief:
     - "Confirm with duplicate address detection: two MACs reply."
     - "Find why: cache-01 is up again since the power maintenance."
     - "Take cache-01's data interface down (keep it running), then check ARP again."
+    - "Remove 10.20.5.10 from cache-01's saved network config, so the fix survives the next power-on."
   real_world: |
     Decommissioning means removing the address too: wipe the network config
     or unpatch the port, not just shut down the OS. Many hypervisors and
-    some switches can also alert on duplicate addresses.
+    some switches can also alert on duplicate addresses. Firewall rules
+    belong in the saved ruleset, not only the live chain, and an
+    unauthenticated Redis protected only by a firewall is one rule away from
+    exposure: use ACLs/requirepass and, where you can, TLS.
 
 concepts:
   - term: "ARP and the neighbour table"
@@ -265,10 +273,14 @@ stages:
         feedback: "app-01 and app-02 use it fine over the network. Only the new subnet fails."
     actions:
       - id: allow-subnet
-        label: "Add 'ip saddr 10.20.6.0/24 tcp dport 6379 accept' to cache-02's input chain (and to its saved ruleset)"
+        label: "Add 'ip saddr 10.20.6.0/24 tcp dport 6379 accept' to cache-02's live input chain"
         kind: fix
         match_regex: "^ssh cache-02-mgmt sudo nft add rule inet filter input ip saddr 10\\.20\\.6\\.0/24 tcp dport 6379 accept$"
-        feedback: "app-03's subnet may reach Redis, and nothing else changes."
+        feedback: "app-03's subnet may reach Redis, and nothing else changes. This is the live ruleset only: a reboot of cache-02 reloads /etc/nftables.conf and app-03 is dropped again until the rule is saved there too."
+      - id: persist-nft
+        label: "Add the same rule to /etc/nftables.conf on cache-02 (through config management) and check it with nft -c -f /etc/nftables.conf"
+        kind: fix
+        feedback: "The rule now lives in the file the firewall loads at boot, so it survives a reboot or a reload, and the syntax check means a typo can't leave cache-02 with no firewall. Still one subnet, one port."
       - id: policy-accept
         label: "Set cache-02's input policy to accept"
         kind: destructive
@@ -278,7 +290,7 @@ stages:
         kind: wrong
         feedback: "The new subnet was planned for the new app servers. The firewall rule is the missing piece, not app-03's address."
     solution_paths:
-      - [allow-subnet]
+      - [allow-subnet, persist-nft]
     key_evidence: [app03-timeout, app03-subnet, nft-4-only]
     evidence_labels:
       app03-timeout: "app-03's connection to 6379 times out"
@@ -287,7 +299,7 @@ stages:
     hints:
       nudge: "A timeout, not a refusal, from one subnet only. What drops packets silently?"
       direction: "Compare app-03's address with what cache-02's firewall accepts on 6379."
-      answer: "cache-02's nftables accepts 6379 only from 10.20.4.0/24. Add a rule for 10.20.6.0/24."
+      answer: "cache-02's nftables accepts 6379 only from 10.20.4.0/24. Add a rule for 10.20.6.0/24 to the live chain and to /etc/nftables.conf so it survives a reboot."
     debrief:
       root_cause: |
         cache-02 was built with an nftables policy of drop and a 6379 rule
@@ -299,7 +311,7 @@ stages:
         - "Test from app-03: a timeout on 6379."
         - "Note app-03's subnet, 10.20.6.0/24."
         - "Read cache-02's input chain: 6379 only from 10.20.4.0/24, policy drop."
-        - "Add a rule for 10.20.6.0/24 and test again."
+        - "Add a rule for 10.20.6.0/24 to the live chain, test again, then save it in /etc/nftables.conf (check with nft -c) so a reboot keeps it."
 
   - id: stranded-carts
     update: |
@@ -332,7 +344,15 @@ stages:
         label: "From cache-01's Redis, MIGRATE every cart:* key to 10.99.0.12 with COPY and without REPLACE (./migrate-carts.sh 10.99.0.11 10.99.0.12)"
         kind: fix
         match_regex: "^\\./migrate-carts\\.sh 10\\.99\\.0\\.11 10\\.99\\.0\\.12$"
-        feedback: "1,790 baskets copied; 52 already existed on cache-02 and were left as they are. Then cache-01 can be wiped and removed for good."
+        feedback: "1,790 baskets copied; 52 already existed on cache-02 and were left as they are. cache-01 can now be decommissioned properly."
+      - id: redis-auth
+        label: "Require authentication on cache-02's Redis: an ACL user for the app servers with a password from the secret store (not default), rolled out to app-01, app-02 and app-03"
+        kind: fix
+        feedback: "Redis no longer answers anyone who can merely reach port 6379: a request needs the app's credentials. The firewall rule limits where traffic comes from; authentication limits who may use it, so one misconfigured subnet rule no longer exposes every basket."
+      - id: decommission-old
+        label: "Retire cache-01: wipe its disks, remove its network config and unpatch its switch port, remove it from inventory and monitoring"
+        kind: fix
+        feedback: "Nothing about cache-01 can answer for 10.20.5.10 again: its data is wiped after the copy was verified, its port is unpatched and the address belongs to cache-02 alone. Shutting an OS down is not decommissioning."
       - id: replace-all
         label: "MIGRATE with REPLACE"
         kind: wrong
@@ -342,7 +362,7 @@ stages:
         kind: destructive
         feedback: "Those 1,842 baskets exist nowhere else: Redis here has no persistence."
     solution_paths:
-      - [copy-carts]
+      - [copy-carts, redis-auth, decommission-old]
     key_evidence: [cart-missing, stranded-1842, no-persistence]
     evidence_labels:
       cart-missing: "A customer's weekend basket isn't on cache-02"
@@ -351,7 +371,7 @@ stages:
     hints:
       nudge: "Where did weekend writes go, and is that machine still running?"
       direction: "Count cart keys on cache-01 over the management network, and check whether they'd survive a restart."
-      answer: "MIGRATE the cart:* keys from cache-01 to cache-02 with COPY and without REPLACE, then retire cache-01."
+      answer: "MIGRATE the cart:* keys from cache-01 to cache-02 with COPY and without REPLACE, require authentication on cache-02's Redis, then properly retire cache-01 (wipe it, remove its network config, unpatch the port)."
     debrief:
       root_cause: |
         From Saturday until it was isolated, cache-01 took the writes of
@@ -365,3 +385,5 @@ stages:
         - "Count cart keys on cache-01 over the management network: 1,842."
         - "Confirm they're only in memory (no save configured)."
         - "MIGRATE with COPY, no REPLACE, then check the basket again."
+        - "Add authentication to cache-02's Redis (ACL user, secret from the vault) so reaching the port is not enough."
+        - "Decommission cache-01 completely: wipe, remove network config, unpatch the port, drop it from inventory."
