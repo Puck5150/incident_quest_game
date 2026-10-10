@@ -178,6 +178,16 @@ export function dependencyViolation(type: string, id: string, seed: string): str
   const rid = requestId(seed)
   if (type === 'aws_vpc') return `deleting EC2 VPC (${id}): operation error EC2: DeleteVpc, https response error StatusCode: 400, RequestID: ${rid}, api error DependencyViolation: The vpc '${id}' has dependencies and cannot be deleted.`
   if (type === 'aws_subnet') return `deleting EC2 Subnet (${id}): operation error EC2: DeleteSubnet, https response error StatusCode: 400, RequestID: ${rid}, api error DependencyViolation: The subnet '${id}' has dependencies and cannot be deleted.`
-  if (type === 'aws_security_group') return `deleting Security Group (${id}): DependencyViolation: resource ${id} has a dependent object`
+  if (type === 'aws_security_group') return `deleting Security Group (${id}): operation error EC2: DeleteSecurityGroup, https response error StatusCode: 400, RequestID: ${rid}, api error DependencyViolation: resource ${id} has a dependent object`
   return `deleting ${type} (${id}): DependencyViolation: the object has dependencies and cannot be deleted`
+}
+
+// Reality keys of the objects in a bucket (type aws_s3_object, id "BUCKET/key").
+export function bucketObjects(reality: Reality, bucket: string): string[] {
+  return Object.keys(reality).filter((k) => k.startsWith(`aws_s3_object:${bucket}/`)).sort()
+}
+
+// ponytail: wording, 409 and HostID unverified (CONTENT_TODO); versioned buckets are not modelled.
+export function bucketNotEmpty(name: string, seed: string): string {
+  return `deleting S3 Bucket (${name}): operation error S3: DeleteBucket, https response error StatusCode: 409, RequestID: ${requestId(seed)}, HostID: ${hex(`${seed}:host`, 24)}, api error BucketNotEmpty: The bucket you tried to delete is not empty`
 }

@@ -105,7 +105,7 @@ describe('referencedBy and dependencyViolation', () => {
   it('words the refusal per type', () => {
     expect(dependencyViolation('aws_vpc', 'vpc-1', 's')).toMatch(/^deleting EC2 VPC \(vpc-1\): operation error EC2: DeleteVpc, https response error StatusCode: 400, RequestID: [0-9a-f-]{36}, api error DependencyViolation: The vpc 'vpc-1' has dependencies and cannot be deleted\.$/)
     expect(dependencyViolation('aws_subnet', 'subnet-1', 's')).toContain("The subnet 'subnet-1' has dependencies and cannot be deleted.")
-    expect(dependencyViolation('aws_security_group', 'sg-1', 's')).toBe('deleting Security Group (sg-1): DependencyViolation: resource sg-1 has a dependent object')
+    expect(dependencyViolation('aws_security_group', 'sg-1', 's')).toMatch(/^deleting Security Group \(sg-1\): operation error EC2: DeleteSecurityGroup, https response error StatusCode: 400, RequestID: [0-9a-f-]{36}, api error DependencyViolation: resource sg-1 has a dependent object$/)
     expect(dependencyViolation('aws_other', 'x-1', 's')).toBe('deleting aws_other (x-1): DependencyViolation: the object has dependencies and cannot be deleted')
   })
 })

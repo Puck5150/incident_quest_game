@@ -6,7 +6,7 @@
 // half-applied world exactly as real Terraform does.
 import { equal, hasUnknown, type Value } from './eval.ts'
 import { planConfig, resKey, type PlanInput, type PlanItem, type PlanResult } from './plan.ts'
-import { alreadyExists, dependencyViolation, fillOnCreate, fillOnUpdate, hex, referencedBy, seconds } from './provider.ts'
+import { alreadyExists, bucketNotEmpty, bucketObjects, dependencyViolation, fillOnCreate, fillOnUpdate, hex, referencedBy, seconds } from './provider.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
@@ -198,10 +198,14 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       const attrs = gone ? gone.attributes : (prior ?? {})
       const id = typeof attrs.id === 'string' ? attrs.id : ''
       const secs = seconds(i.type, 'delete')
-      const ref = referencedBy(Object.fromEntries(reality), i.type, id)
-      const error = faultFor(i, 'delete', attrs) ?? (ref ? dependencyViolation(i.type, id, seed) : undefined)
+      const bucket = i.type === 'aws_s3_bucket'
+      const objects = bucket ? bucketObjects(Object.fromEntries(reality), id) : []
+      // A bucket is held only by its objects, and force_destroy is read from state (prior), not configuration.
+      const ref = bucket ? undefined : referencedBy(Object.fromEntries(reality), i.type, id)
+      const error = faultFor(i, 'delete', attrs) ?? (objects.length && attrs.force_destroy !== true ? bucketNotEmpty(id, seed) : ref ? dependencyViolation(i.type, id, seed) : undefined)
       if (error) fail(i, 'delete', secs, error, id)
       else {
+        for (const k of objects) reality.delete(k)
         if (gone) {
           inst!.deposed = inst!.deposed!.filter((d) => d !== gone)
           if (!inst!.deposed.length) delete inst!.deposed
