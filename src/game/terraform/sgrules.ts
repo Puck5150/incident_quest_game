@@ -96,14 +96,12 @@ export function ruleDuplicate(type: string, o: Record<string, Value>, reality: R
   return undefined
 }
 
-// Does any rule on the group match? port is covered by the rule's range; source_group_id / cidr ('*': any CIDR) narrow the peer.
-export function groupHasRule(reality: Reality, q: { group_id: string; direction: Direction; port: number; protocol?: string; source_group_id?: string; cidr?: string }): boolean {
+// Does any rule on the group match? port is covered by the rule's range (exact: the rule is for that one port and protocol); source_group_id / cidr ('*': any CIDR) narrow the peer.
+export function groupHasRule(reality: Reality, q: { group_id: string; direction: Direction; port: number; protocol?: string; exact?: boolean; source_group_id?: string; cidr?: string }): boolean {
   const proto = (q.protocol ?? 'tcp').toLowerCase()
   return effectiveRules(reality, q.group_id, q.direction).some(
     (r) =>
-      (r.proto === '-1' || r.proto === proto) &&
-      r.from <= q.port &&
-      q.port <= r.to &&
+      (q.exact ? r.proto === proto && r.from === q.port && r.to === q.port : (r.proto === '-1' || r.proto === proto) && r.from <= q.port && q.port <= r.to) &&
       (q.source_group_id === undefined || (r.src.kind === 'sg' && r.src.v === q.source_group_id)) &&
       (q.cidr === undefined || ((r.src.kind === 'cidr4' || r.src.kind === 'cidr6') && (q.cidr === '*' || r.src.v === q.cidr))),
   )

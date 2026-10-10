@@ -174,6 +174,7 @@ const LeafSchema = z.union([
       direction: z.enum(['ingress', 'egress']),
       port: z.number().int().min(0).max(65535),
       protocol: z.string().min(1).optional(),
+      exact: z.literal(true).optional(),
       source_group_id: z.string().min(1).optional(),
       cidr: z.string().min(1).optional(),
     }),

@@ -120,6 +120,8 @@ resource "aws_security_group" "app" {
     expect(await has({ group_id: app, direction: 'ingress', port: 8080, cidr: '*' })).toBe(false)
     expect(await has({ group_id: web, direction: 'ingress', port: 8443, source_group_id: app })).toBe(true)
     expect(await has({ group_id: web, direction: 'ingress', port: 8080 })).toBe(false)
+    expect(await has({ group_id: app, direction: 'ingress', port: 8080, exact: true, source_group_id: web })).toBe(true)
+    expect(await has({ group_id: app, direction: 'ingress', port: 8080, protocol: 'udp', source_group_id: web })).toBe(false)
     expect(await evalPredicate({ plan_clean: true }, w)).toBe(true)
   })
 
@@ -260,6 +262,18 @@ resource "aws_vpc_security_group_egress_rule" "all" {
     // an explicit empty list is still inline management
     const empty = SPLIT.replace('name   = "web"', 'name   = "web"\n  egress = []')
     expect(planConfig({ files: [{ name: 'main.tf', text: empty }], state: emptyState(), reality: {}, vars: {} }).warnings).toHaveLength(1)
+  })
+})
+
+describe('sg_rule exact', () => {
+  it('a wide rule covers a port but is not exact for it', async () => {
+    const tf = SPLIT.replace('from_port                    = 8080\n  to_port                      = 8080', 'from_port                    = 8000\n  to_port                      = 9000')
+    const r = apply(tf)
+    const app = idOf(r.state, 'aws_security_group.app')
+    const w = world(tf, r)
+    expect(await evalPredicate({ sg_rule: { group_id: app, direction: 'ingress', port: 8080 } }, w)).toBe(true)
+    expect(await evalPredicate({ sg_rule: { group_id: app, direction: 'ingress', port: 8080, exact: true } }, w)).toBe(false)
+    expect(await evalPredicate({ sg_rule: { group_id: app, direction: 'ingress', port: 22 } }, w)).toBe(false)
   })
 })
 
