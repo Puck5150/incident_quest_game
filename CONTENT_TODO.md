@@ -968,7 +968,7 @@ terraform-sg-cycle:
 
 ## terraform migrations (TF7b)
 
-Batch status: Tasks 4 and 5 done (terraform-count-index-shift, terraform-drift-hotfix). Tasks 6 to 10 pending.
+Batch status: Tasks 4 to 6 done (terraform-count-index-shift, terraform-drift-hotfix, terraform-ignore-changes-autoscaling). Tasks 7 to 10 pending.
 
 ### terraform-count-index-shift (Task 4)
 
@@ -992,3 +992,12 @@ Batch status: Tasks 4 and 5 done (terraform-count-index-shift, terraform-drift-h
 - Known limit: a player who codifies with a different description (e.g. "partner") sees the group still change; applying it then updates only the description but flags `apply-anyway` (the history leaf cannot tell the harmless update from the rule removal).
 - Unsupported spellings of the codified rule (engine limits): `dynamic "ingress"` blocks and separate `aws_security_group_rule` resources. `ignore_changes` is only detected in `main.tf`.
 - Nit fixed: the refresh-only "No changes" paragraph is wrapped at 78 columns (text itself still unverified).
+
+### terraform-ignore-changes-autoscaling (Task 6)
+
+- Migrated onto the simulator; same id, learning goal, hypotheses, hints, analogy, debrief, concepts, sources, action ids/kinds/labels and `solution_paths`. Lab: `ecs.tf` with `aws_ecs_service.checkout` (literal `cluster = "prod"`, `task_definition = "checkout:42"`, `desired_count = 2`; there is no `aws_ecs_cluster` in resources.ts); the autoscaler is `cloud.patch` setting reality to 12. Scripted `terraform plan` (both variants) and the `ecs.tf (excerpt)` file artifact are gone (a scripted read would go stale). Remaining scripted commands are the two `aws` ones (autoscaler min/max, which keeps evidence `autoscaling`, and `describe-services` = 12, which stays 12 even after an apply: known limit).
+- Evidence: `plan-reset` (plan contains `desired_count`) and `desired-fixed` (plan contains `12 -> 2`, i.e. the code's value) come from the real plan. `desired-fixed` was a file read of `ecs.tf` in the old version; its label ("The code sets desired_count = 2") still holds.
+- Fix `ignore-desired` by world state: service in state, reality still 12, `ecs.tf` matches `ignore_changes = [... desired_count ...]` (one- or multi-line list, other attributes allowed, quoted names fine), clean plan, no `update` of the service ever applied. Not credited on purpose: `ignore_changes = all` (too broad), ignoring a different attribute (plan still resets), hard-coding `desired_count = 12` (`set-12`, clean plan but no `ignore_changes`). `ignore_changes` is only detected in `ecs.tf`.
+- Deviation from the brief: `apply-at-night` (wrong, label unchanged) has `done_when: applied update` of the service, so a typed `terraform apply` while the service is at 12 is the flagged trap (it resets reality to 2, so the fix is unearnable). `set-12` and `remove-autoscaling` remain button-only (the autoscaling target is not a modelled type).
+- Engine note: the typo `ignore_change = [...]` fails the plan with `Invalid reference` (not `Unsupported argument`, which real Terraform would also report); the lifecycle block does not reject unknown arguments (see TF7b engine, task 1 limit).
+- [ ] Unverified: `task_definition = "checkout:42"` (a family:revision string is accepted by the AWS provider; the real lab would reference a task definition resource) and the autoscaler's `describe-scalable-targets` output shape (carried over from the old incident).
