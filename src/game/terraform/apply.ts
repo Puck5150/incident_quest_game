@@ -58,6 +58,8 @@ const opOf = (i: PlanItem): ApplyStep['op'] =>
 // done holds `${address}:${op}` for every successful step: an op never runs twice
 // on one address, and a created or updated instance is settled for this run, so
 // a plan that never converges (e.g. a value that stays unknown) cannot loop.
+// A deposed delete fails on its own: it must not hold up the live instance's updates or dependents.
+const fkey = (i: PlanItem) => (i.deposed ? `${i.address}#${i.deposed}` : i.address)
 const doneKey = (i: PlanItem) => `${i.address}${i.deposed ? `#${i.deposed}` : ''}:${opOf(i)}`
 function todoOf(items: PlanItem[], done: Set<string>): PlanItem[] {
   const settled = (a: string) => done.has(`${a}:create`) || done.has(`${a}:update`)
@@ -69,16 +71,18 @@ function todoOf(items: PlanItem[], done: Set<string>): PlanItem[] {
 // strict: a plain destroy also waits for updates that move off it (from their
 // state dependencies); a replace does not (its dependents wait for it instead).
 function pickNext(todo: PlanItem[], state: State, failed: Set<string>, strict: boolean): PlanItem | undefined {
+  // The live instance at a deposed object's address is itself being replaced or created: its dependents wait for it, so the deposed delete must not wait for them.
+  const live = (d: PlanItem) => todo.some((x) => x.deposed === undefined && x.address === d.address)
   const priorDeps = (o: PlanItem) => findInstance(state, o.address)?.instance.dependencies ?? []
   const tier1 = todo.find(
     (i) =>
       destroyPhase(i) &&
       !cbd(i) &&
       i.importing === undefined &&
-      !failed.has(i.address) &&
+      !failed.has(fkey(i)) &&
       // a deposed object goes first; its own delete also waits for every create/update that still moves dependents off it
       !todo.some((o) => o !== i && !i.deposed && o.deposed !== undefined && o.address === i.address) &&
-      !todo.some((o) => o !== i && ((destroyPhase(o) && !cbd(o) && o.dependsOn.includes(res(i))) || (i.deposed !== undefined && o.action !== 'destroy' && o.dependsOn.includes(res(i))) || (strict && i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
+      !todo.some((o) => o !== i && ((destroyPhase(o) && !cbd(o) && o.dependsOn.includes(res(i))) || (i.deposed !== undefined && !live(i) && o.action !== 'destroy' && o.dependsOn.includes(res(i))) || (strict && i.action === 'destroy' && o.action === 'update' && priorDeps(o).includes(res(i))))),
   )
   if (tier1) return tier1
   const tier2 = todo.find((i) => i.action === 'forget' || i.importing !== undefined)
@@ -155,7 +159,8 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   const fail = (i: PlanItem, op: ApplyStep['op'], secs: number, summary: string, id?: string) => {
     steps.push({ address: i.address, op, ...(id === undefined ? {} : { id }), ...(i.deposed ? { deposed: i.deposed } : {}), seconds: secs, ok: false })
     errors.push({ severity: 'error', summary, detail: '', file: i.block?.file ?? '', line: i.block?.line ?? 0, col: i.block?.col ?? 0, context: `resource "${i.type}" "${i.name}"`, address: i.address })
-    failed.add(i.address).add(res(i))
+    failed.add(fkey(i))
+    if (!i.deposed) failed.add(res(i))
   }
 
   for (let guard = 0; guard < 2000; guard++) {
@@ -219,7 +224,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
         const id = attrs.id as string
         if (cbd(i) && inst) {
           // The old object moves aside; the instance now holds the new one.
-          inst.deposed = [{ key: hex(`${seed}:deposed`, 8), attributes: inst.attributes }]
+          inst.deposed = [{ key: hex(`${i.address}:${seed}:deposed`, 8), attributes: inst.attributes }]
           inst.attributes = attrs
           delete inst.status
           if (i.dependsOn.length) inst.dependencies = [...i.dependsOn]

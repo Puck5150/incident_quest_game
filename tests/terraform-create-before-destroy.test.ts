@@ -131,4 +131,44 @@ describe('deposed objects in plan, destroy and state', () => {
     const rm = stateRemove(state, ['aws_security_group.web'])
     expect(rm.ok && listAddresses(rm.state)).toEqual(['aws_instance.app'])
   })
+
+  const apply = (text: string, { state, reality }: { state: State; reality: Reality }, replace?: string[]) =>
+    executeApply({ files: [{ name: 'main.tf', text }], state, reality, vars: {}, replace }, ctx())
+  const noCycle = (r: { errors: { summary: string }[] }) => expect(r.errors.map((e) => e.summary).join('\n')).not.toContain('Cycle')
+
+  it('a deposed object then -replace of the live one applies without a cycle', () => {
+    const r = apply(tf(true), left(), ['aws_security_group.web'])
+    noCycle(r)
+    expect(r.errors).toEqual([])
+    expect(r.state.resources.find((x) => x.type === 'aws_security_group')!.instances[0].deposed).toBeUndefined()
+    expect(Object.keys(r.reality).filter((k) => k.startsWith('aws_security_group:'))).toHaveLength(1)
+    expect(r.reality[realityKey('aws_security_group', 'sg-9')]).toBeUndefined()
+  })
+
+  it('a deposed object then a second config change applies without a cycle', () => {
+    const r = apply(tf(true).replace('web-v2', 'web-v3'), left())
+    noCycle(r)
+    expect(r.errors).toEqual([])
+    const inst = findInstance(r.state, 'aws_security_group.web')!.instance
+    expect(inst.attributes.name).toBe('web-v3')
+    expect(inst.deposed).toBeUndefined()
+    expect(Object.keys(r.reality).filter((k) => k.startsWith('aws_security_group:'))).toHaveLength(1)
+    expect(findInstance(r.state, 'aws_instance.app')!.instance.attributes.tags).toEqual({ sg: inst.attributes.id })
+  })
+
+  it('a deposed object then a second CBD replace does not lose the first deposed object', () => {
+    const l = left()
+    const r = apply(tf(true).replace('web-v2', 'web-v3'), l, ['aws_security_group.web'])
+    noCycle(r)
+    expect(r.errors).toEqual([])
+    expect(findInstance(r.state, 'aws_security_group.web')!.instance.deposed).toBeUndefined()
+    expect(r.reality[realityKey('aws_security_group', 'sg-9')]).toBeUndefined()
+  })
+
+  it('a still-failing deposed delete does not hold up updates of the live instance', () => {
+    const l = left()
+    const r = executeApply({ files: [{ name: 'main.tf', text: tf(true).replace('t3.micro', 't3.small') }], ...l, vars: {} }, ctx({ faults: [stuck] }))
+    expect(ops(r)).toEqual(['update aws_instance.app', '!delete aws_security_group.web'])
+    expect(findInstance(r.state, 'aws_security_group.web')!.instance.deposed).toHaveLength(1)
+  })
 })
