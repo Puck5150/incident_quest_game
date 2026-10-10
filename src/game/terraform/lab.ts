@@ -45,7 +45,7 @@ export interface Lab {
   faults: Fault[]
   attempts: Map<number, number>
   savedPlans: Map<string, SavedPlan>
-  history: string[] // "OP ADDRESS" per step that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
+  history: string[] // "OP ADDRESS" per apply step or state-writing command (state-rm, state-mv, taint, untaint, import, workspace-new/delete) that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
 }
 
 const depKey = (r: StateResource) => staticKey({ module: stepsOf(r.module), mode: r.mode, type: r.type, name: r.name })
