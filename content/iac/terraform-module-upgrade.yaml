@@ -286,7 +286,7 @@ actions:
         - plan_clean: true
         - not: { applied: { op: delete, address: module.db } }
         # the pin is in the reviewed code: an exact version (2.0.x, optionally with =), not a range
-        - file_contains: { path: /home/you/infra/main.tf, matches: '^\s*version\s*=\s*"\s*=?\s*2\.0\.\d+\s*"\s*$' }
+        - file_contains: { path: /home/you/infra/main.tf, matches: '^\s*version\s*=\s*"\s*=?\s*2\.0\.\d+\s*"\s*(#.*|//.*)?$' }
         # world-based: whatever the constraint says, 2.0.x is what init installed (manifest layout: Key, Source, Version, Dir)
         - file_contains: { path: /home/you/infra/.terraform/modules/modules.json, matches: '"Key":"db","Source":"[^"]*","Version":"2\.0\.\d+","Dir"' }
     feedback: "The same database, orders-db, is still in place, the installed module is back on a 2.0 release and the plan is empty. The version the stack runs is now decided by an exact pin in the code you review, instead of by whenever someone last ran init. This is a hold, not the end: the pin keeps the module's new, encrypted-by-default behaviour out of production only until you migrate. This database is unencrypted today, and an RDS instance can only be encrypted when it is created, so the follow-up is a planned snapshot-copy migration (snapshot, copy with a KMS key, restore, cut over), rehearsed on a copy, after which you raise the pin to 2.1.0 in a reviewed change."

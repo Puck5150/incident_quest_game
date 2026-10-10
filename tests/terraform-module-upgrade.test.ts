@@ -93,6 +93,11 @@ describe('terraform-module-upgrade on the simulator', () => {
       expect(out[4].output, v).toBe(`{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"db","Source":"${REG}","Version":"2.0.1","Dir":".terraform/modules/db"}]}`)
       expect(await detectedAll(sh), v).toEqual(PINNED)
     }
+    // an optional trailing comment after the exact pin is fine
+    for (const c of ['# last known good', '// last known good']) {
+      const { sh } = await play('cd ~/infra', `sed -i 's|version = "~> 2.0"|version = "2.0.1" ${c}|' main.tf`, 'terraform init', 'terraform plan')
+      expect(await detectedAll(sh), c).toEqual(PINNED)
+    }
     // floating or range constraints still resolve to 2.0.1 and plan clean, but a range is not a pin: no credit
     for (const v of ['~> 2.0.0', '~> 2.0.1', '>= 2.0.0, < 2.1.0', '< 2.1', '!= 2.1.0, ~> 2.0', '<2.1.0']) {
       const { sh, out } = await play('cd ~/infra', `sed -i 's/version = "~> 2.0"/version = "${v}"/' main.tf`, 'terraform init', 'terraform plan', 'cat .terraform/modules/modules.json')
