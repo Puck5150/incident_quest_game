@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: terraform-remote-state-rename
+published: false
 track: iac
 difficulty: 3
 title: "The nightly plan fails with Unsupported attribute and nobody changed the app repo"

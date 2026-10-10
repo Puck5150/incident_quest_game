@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: terraform-provider-lock-drift
+published: false
 track: iac
 difficulty: 2
 title: "The provider bump PR is red and the plan fails before it reaches the bucket"

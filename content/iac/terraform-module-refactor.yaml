@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: terraform-module-refactor
+published: false
 track: iac
 difficulty: 3
 title: "Sharing the network code as a module wants to rebuild the stack"

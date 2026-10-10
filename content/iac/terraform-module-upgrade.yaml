@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=../../schemas/incident.json
 id: terraform-module-upgrade
+published: false
 track: iac
 difficulty: 3
 title: "Nobody touched the Terraform, and the plan wants to replace the production database"
