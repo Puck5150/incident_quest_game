@@ -62,6 +62,22 @@ terminal:
         RemotePort       : 445
         TcpTestSucceeded : False
     - match: "Test-NetConnection -ComputerName stacmefiles.file.core.windows.net -Port 443"
+      when_actions: [vpn-private-endpoint, disable-public-access]
+      output: |
+        ComputerName     : stacmefiles.file.core.windows.net
+        RemoteAddress    : 10.40.2.5
+        RemotePort       : 443
+        TcpTestSucceeded : True
+    - match: "Test-NetConnection -ComputerName stacmefiles.file.core.windows.net -Port 443"
+      when_actions: [disable-public-access]
+      output: |
+        WARNING: TCP connect to stacmefiles.file.core.windows.net:443 failed
+        ComputerName     : stacmefiles.file.core.windows.net
+        RemoteAddress    : 20.38.104.68
+        RemotePort       : 443
+        TcpTestSucceeded : False
+        (Public access is disabled and there is no private endpoint yet. Azure VMs use the public endpoint today, so they lose the share too.)
+    - match: "Test-NetConnection -ComputerName stacmefiles.file.core.windows.net -Port 443"
       output: |
         ComputerName     : stacmefiles.file.core.windows.net
         RemoteAddress    : 20.38.104.68
@@ -105,7 +121,7 @@ actions:
   - id: disable-public-access
     label: "Set the storage account's public network access to Disabled (or limit it to selected networks) once the private endpoint works, so the share is reachable only over the private path"
     kind: fix
-    feedback: "The private endpoint gives the office a safe path, but until the public endpoint is turned off the finance data stays reachable from anywhere that can authenticate. Disabling it (and requiring SMB 3.x with encryption in transit) leaves one door, the private one."
+    feedback: "Do this only after the private endpoint and its DNS work: Azure VMs reach the share over the public endpoint today, so disabling it first cuts them off. Once it is in place, leaving the public endpoint on keeps the finance data reachable from anywhere that can authenticate. Disabling it (and requiring SMB 3.x with encryption in transit) leaves one door, the private one."
   - id: reboot-pcs
     label: "Restart the office PCs"
     kind: wrong

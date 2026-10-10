@@ -143,7 +143,7 @@ actions:
     label: "az storage container set-permission --name invoices --account-name shopdocsprod --public-access off"
     kind: fix
     # Flag grammar: --name invoices, --account-name shopdocsprod, --public-access off (each once, any order), optional --auth-mode login. Nothing else, no shell operators.
-    match_regex: "^az storage container set-permission(?!.*--name.*--name)(?!.*--account-name.*--account-name)(?!.*--public-access.*--public-access)(?!.*--auth-mode.*--auth-mode)(?=.* --name invoices( |$))(?=.* --account-name shopdocsprod( |$))(?=.* --public-access off( |$))( --name invoices| --account-name shopdocsprod| --public-access off| --auth-mode login)+$"
+    match_regex: "^az storage container set-permission(?!.*( -n |--name[ =]).*( -n |--name[ =]))(?!.*--account-name[ =].*--account-name[ =])(?!.*--public-access[ =].*--public-access[ =])(?!.*--auth-mode[ =].*--auth-mode[ =])(?=.*( -n |--name[ =])invoices( |$))(?=.* --account-name[ =]shopdocsprod( |$))(?=.* --public-access[ =]off( |$))( -n invoices| --name[ =]invoices| --account-name[ =]shopdocsprod| --public-access[ =]off| --auth-mode[ =]login)+$"
     feedback: "Anonymous requests to invoices are refused from now on, and the product images the website needs keep working. That stops the leak in seconds, but it is containment, not the end of the incident: you still have to find out what was already taken and close the account-level door."
   - id: fix-module
     label: "Change the Bicep module's default to publicAccess 'None', so containers are private unless a caller asks otherwise, and redeploy"
@@ -164,7 +164,7 @@ actions:
   - id: account-off-now
     label: "az storage account update -n shopdocsprod -g rg-shop-prod --allow-blob-public-access false"
     kind: wrong
-    match_regex: "^az storage account update -n shopdocsprod -g rg-shop-prod --allow-blob-public-access false$"
+    match_regex: "^az storage account update(?=.*( -n |--name[ =])shopdocsprod( |$))(?=.* --allow-blob-public-access[ =]false( |$)).*$"
     feedback: "It stops the leak, and also every anonymous request to the account: every product image on the website breaks. The container-level change is just as fast and breaks nothing. Making the account private is the right end state, after the images move to their own account."
   - id: delete-container
     label: "Delete the invoices container to remove the exposure"

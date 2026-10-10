@@ -21,4 +21,18 @@ describe('azure-orders-backlog-major', () => {
     expect(sc.solution_paths).toEqual([['grant-identity', 'remove-sas']])
     expect(sc.stages![0].solution_paths).toEqual([['cap-concurrency', 'cap-calls', 'backoff-429']])
   })
+  it.each([
+    'az functionapp scale config set -g rg-fulfil -n func-fulfil --maximum-instance-count=2',
+    'az functionapp scale config set --resource-group=rg-fulfil --name=func-fulfil --maximum-instance-count=1',
+  ])('credits the valid spelling %s', (c) => expect(credit(c)?.id).toBe('cap-concurrency'))
+  it.each([
+    'az functionapp scale config set -g rg-fulfil -n func-fulfil --maximum-instance-count=2 --maximum-instance-count=1',
+    'az functionapp scale config set -g rg-fulfil -n func-fulfil --maximum-instance-count=5',
+    'az functionapp scale config set -g rg-fulfil -n func-fulfil --maximum-instance-count=2;id',
+  ])('does not credit %s', (c) => expect(credit(c)?.id).not.toBe('cap-concurrency'))
+  it('the scale-config check flips once the cap is taken', () => {
+    const q = sc.stages![0].terminal!.commands.filter((x) => x.match === 'az functionapp scale config show -g rg-fulfil -n func-fulfil')
+    expect(q[0].when_actions).toEqual(['cap-concurrency'])
+    expect(q[0].output).toContain('"maximumInstanceCount": 2')
+  })
 })

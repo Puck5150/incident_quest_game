@@ -316,7 +316,7 @@ stages:
         label: "Cap func-fulfil at 2 instances (az functionapp scale config set ... --maximum-instance-count 2)"
         kind: fix
         # Flag grammar, each once, any order: -g|--resource-group rg-fulfil, -n|--name func-fulfil, --maximum-instance-count 1 or 2. Nothing else, no shell operators.
-        match_regex: "^az functionapp scale config set(?!.*( -g | --resource-group ).*( -g | --resource-group ))(?!.*( -n | --name ).*( -n | --name ))(?!.*--maximum-instance-count.*--maximum-instance-count)(?=.*( -g | --resource-group )rg-fulfil( |$))(?=.*( -n | --name )func-fulfil( |$))(?=.* --maximum-instance-count [12]( |$))(( -g| --resource-group) rg-fulfil|( -n| --name) func-fulfil| --maximum-instance-count [12])+$"
+        match_regex: "^az functionapp scale config set(?!.*( -g |--resource-group[ =]).*( -g |--resource-group[ =]))(?!.*( -n |--name[ =]).*( -n |--name[ =]))(?!.*--maximum-instance-count.*--maximum-instance-count)(?=.*( -g |--resource-group[ =])rg-fulfil( |$))(?=.*( -n |--name[ =])func-fulfil( |$))(?=.* --maximum-instance-count[ =][12]( |$))( -g rg-fulfil| --resource-group[ =]rg-fulfil| -n func-fulfil| --name[ =]func-fulfil| --maximum-instance-count[ =][12])+$"
         feedback: "Two instances stop the 14-way fan-out, but at the default 16 calls each that is still 32 at once, about 64 a second against a limit of 20. This is half the fix: you also have to cap the calls per instance."
       - id: cap-calls
         label: "Set maxConcurrentCalls to 4 in func-fulfil's host.json and deploy it (2 instances x 4 = 8 calls at once, about 16 a second at 0.5 s each)"

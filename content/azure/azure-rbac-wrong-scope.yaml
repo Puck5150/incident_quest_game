@@ -85,17 +85,17 @@ actions:
   - id: owner-subscription
     label: "Make the service principal Owner of the subscription so this never happens again"
     kind: destructive
-    match_regex: "^az role assignment create(?=.* --role[ =]\"?Owner\"?( |$)).*$"
-    feedback: "Owner can also grant roles to anyone, so a pipeline credential now controls the whole subscription, including who else gets in. One leaked secret and it's all gone."
+    match_regex: "^az role assignment create(?=.* --role[ =][\"\\']?(Owner|8e3af657-a8ff-443c-a75c-2fe8c4bcb635)[\"\\']?( |$)).*$"
+    feedback: "Owner can also grant roles to anyone, so a pipeline credential can now hand out access to anyone, at whatever scope Owner was granted (the whole subscription if that is the scope). One leaked secret and the attacker controls who else gets in."
   - id: subscription-contributor
     label: "Assign Contributor to the service principal on the whole subscription"
     kind: wrong
-    match_regex: "^az role assignment create(?=.* --role[ =]\"?Contributor\"?( |$))(?=.* --scope[ =]/subscriptions/[^/ ]+( |$)).*$"
+    match_regex: "^az role assignment create(?=.* --role[ =][\"\\']?(Contributor|b24988ac-6180-42a0-ab88-20f7382dd24c)[\"\\']?( |$))(?=.* --scope[ =][\"\\']?/subscriptions/[^/ \"\\']+[\"\\']?( |$)).*$"
     feedback: "Lower levels inherit from higher ones, so this grants Contributor on every resource group in sub-shop, including other teams' databases. The pipeline only needs to deploy one web app."
   - id: contributor-rg
     label: "Copy the staging grant: Contributor on the whole rg-web-prod resource group"
     kind: wrong
-    match_regex: "^az role assignment create(?=.* --role[ =]\"?Contributor\"?( |$)).*$"
+    match_regex: "^az role assignment create(?=.* --role[ =][\"\\']?(Contributor|b24988ac-6180-42a0-ab88-20f7382dd24c)[\"\\']?( |$)).*$"
     feedback: "It unblocks the deploy, but Contributor can create, change and delete every resource in rg-web-prod, not just publish to one web app. A deploy pipeline needs the narrowest role that works at the narrowest scope: Website Contributor on web-prod. Copying staging's grant is the path of least resistance, not the right answer."
   - id: rerun
     label: "Re-run the pipeline"
@@ -109,7 +109,7 @@ actions:
     label: "az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --role \"Website Contributor\" --scope /subscriptions/2222.../resourceGroups/rg-web-prod/providers/Microsoft.Web/sites/web-prod"
     kind: fix
     # Flag grammar, each once, any order: --assignee <the sp>, --role "Website Contributor", --scope <subscription>/resourceGroups/rg-web-prod/providers/Microsoft.Web/sites/web-prod, optional --assignee-principal-type ServicePrincipal. Nothing else, no shell operators.
-    match_regex: "^az role assignment create(?!.*--assignee .*--assignee )(?!.*--role .*--role )(?!.*--scope .*--scope )(?!.*--assignee-principal-type .*--assignee-principal-type )(?=.* --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b( |$))(?=.* --role (\"Website Contributor\"|'Website Contributor')( |$))(?=.* --scope /subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod( |$))( --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b| --role (\"Website Contributor\"|'Website Contributor')| --scope /subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod| --assignee-principal-type ServicePrincipal)+$"
+    match_regex: "^az role assignment create(?!.*--assignee[ =].*--assignee[ =])(?!.*--role[ =].*--role[ =])(?!.*--scope[ =].*--scope[ =])(?!.*--assignee-principal-type[ =].*--assignee-principal-type[ =])(?=.* --assignee[ =](3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b|\"3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b\"|'3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b')( |$))(?=.* --role[ =](\"Website Contributor\"|\\'Website Contributor\\'|\"?de139f84-1756-47ae-9be6-808fbbe81aa3\"?)( |$))(?=.* --scope[ =](/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod|\"/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod\"|'/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod')( |$))( --assignee[ =](3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b|\"3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b\"|'3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b')| --role[ =](\"Website Contributor\"|\\'Website Contributor\\'|\"?de139f84-1756-47ae-9be6-808fbbe81aa3\"?)| --scope[ =](/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod|\"/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod\"|'/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod')| --assignee-principal-type[ =]ServicePrincipal)+$"
     feedback: "The pipeline can now deploy to web-prod and do nothing else in production: Website Contributor on the one site, not Contributor on the group. Re-run the deploy (new assignments can take a few minutes to apply). Next, deal with the credential itself."
   - id: use-federated-credential
     label: "Replace sp-deploy-web's client secret with a federated identity credential (OIDC) for the production pipeline, then delete the secret"

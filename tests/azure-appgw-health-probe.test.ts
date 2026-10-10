@@ -20,4 +20,13 @@ describe('azure-appgw-health-probe', () => {
   ])('does not credit %s', (c) => expect(credit(c)?.id).not.toBe('update-probe'))
   it('loosening the probe is destructive', () => expect(credit(`${P} --match-status-codes 200-499`)).toMatchObject({ id: 'widen-probe', kind: 'destructive' }))
   it('needs the IaC step', () => expect(sc.solution_paths).toEqual([['update-probe', 'probe-in-iac']]))
+  it.each([
+    'az network application-gateway probe update -g rg-portal --gateway-name=agw-portal -n probe-portal --path=/healthz',
+    'az network application-gateway probe update --resource-group=rg-portal --gateway-name agw-portal --name=probe-portal --path /healthz',
+  ])('credits the valid spelling %s', (c) => expect(credit(c)?.id).toBe('update-probe'))
+  it.each([
+    'az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path=/healthz --path=/health',
+    'az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path=/healthz;id',
+    'az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path=/healthz --match-status-codes=200-499',
+  ])('does not credit %s', (c) => expect(credit(c)?.id).not.toBe('update-probe'))
 })

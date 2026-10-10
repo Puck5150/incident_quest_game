@@ -19,7 +19,29 @@ describe('azure fix-quality required paths', () => {
     const got = paths(id)
     for (let i = 0; i < want.length; i++) expect(got[i]).toEqual(want[i])
   })
-  it('a stopgap RU raise and a hand SG edit never complete alone', () => {
+  it('a stopgap RU raise never completes alone', () => {
     expect(paths('azure-cosmos-hot-partition')[0].every((p) => p.length > 1)).toBe(true)
   })
+  // Weak routes are wrong/destructive actions, never part of any solution path.
+  it.each([
+    ['azure-cosmos-hot-partition', ['autoscale', 'more-workers', 'recreate-container']],
+    ['azure-front-door-host-header', ['override-header', 'disable-waf']],
+    ['azure-nsg-rule-priority', ['ssh-from-anywhere', 'delete-baseline', 'allow-at-400']],
+    ['azure-vnet-peering-one-way', ['open-nsg', 'public-db']],
+    ['azure-slot-swap-connection-string', ['edit-prod-only', 'wipe-staging']],
+  ])('%s weak routes are not fixes and not in any path', (id, weak) => {
+    const { sc, actions } = load(id)
+    const inPath = new Set([sc, ...(sc.stages ?? [])].flatMap((p) => p.solution_paths.flat()))
+    for (const w of weak) {
+      expect(['wrong', 'destructive']).toContain(actions.find((a) => a.id === w)!.kind)
+      expect(inPath.has(w)).toBe(false)
+    }
+  })
+  it('the nsg priority matcher rejects loosened edits', () => {
+    const { credit } = load('azure-nsg-rule-priority')
+    const R = 'az network nsg rule update -g rg-batch --nsg-name nsg-batch -n Allow-SSH-Office --priority 150'
+    expect(credit(R)?.id).toBe('reprioritize')
+    for (const c of [`${R} --source-address-prefixes '*'`, `${R}; id`, R.replace('150', '250'), R.replace('150', '99')]) expect(credit(c)?.id).not.toBe('reprioritize')
+  })
+
 })

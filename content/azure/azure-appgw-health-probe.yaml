@@ -153,7 +153,7 @@ actions:
     label: "az network application-gateway probe update -g rg-portal --gateway-name agw-portal -n probe-portal --path /healthz"
     kind: fix
     # Flag grammar, each once, any order; nothing else (no status-code, host, body or threshold changes), no shell operators.
-    match_regex: "^az network application-gateway probe update(?!.*( -g | --resource-group ).*( -g | --resource-group ))(?!.*--gateway-name.*--gateway-name)(?!.*( -n | --name ).*( -n | --name ))(?!.*--path.*--path)(?=.*( -g | --resource-group )rg-portal( |$))(?=.* --gateway-name agw-portal( |$))(?=.*( -n | --name )probe-portal( |$))(?=.* --path /healthz( |$))(( -g| --resource-group) rg-portal| --gateway-name agw-portal|( -n| --name) probe-portal| --path /healthz)+$"
+    match_regex: "^az network application-gateway probe update(?!.*( -g |--resource-group[ =]).*( -g |--resource-group[ =]))(?!.*--gateway-name[ =].*--gateway-name[ =])(?!.*( -n |--name[ =]).*( -n |--name[ =]))(?!.*--path[ =].*--path[ =])(?=.*( -g |--resource-group[ =])rg-portal( |$))(?=.* --gateway-name[ =]agw-portal( |$))(?=.*( -n |--name[ =])probe-portal( |$))(?=.* --path[ =]/healthz( |$))( -g rg-portal| --resource-group[ =]rg-portal| --gateway-name[ =]agw-portal| -n probe-portal| --name[ =]probe-portal| --path[ =]/healthz)+$"
     feedback: "The next probes get 200 from /healthz. Both servers turn Healthy and the gateway starts forwarding traffic again."
   - id: probe-in-iac
     label: "Move the gateway config (including the probe) into the same Bicep repo and pipeline as the app, so the CLI edit is not the only copy of the fix"
