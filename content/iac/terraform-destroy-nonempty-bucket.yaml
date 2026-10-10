@@ -28,24 +28,24 @@ environment: |
 terminal:
   prompt: "you@laptop:~/reporting-infra$"
   commands:
-    - match_regex: "^aws s3 ls s3://acme-reports-logs/? --recursive$"
+    - match_regex: "^aws s3 ls (?=.*--recursive)((--recursive|--human-readable|--summarize|--region us-east-1) )*s3://acme-reports-logs/?( (--recursive|--human-readable|--summarize|--region us-east-1))*$"
       example: "aws s3 ls s3://acme-reports-logs --recursive"
       evidence: bucket-has-objects
       when_actions: [empty-bucket]
       output: ""
-    - match_regex: "^aws s3 ls s3://acme-reports-logs/? --recursive$"
+    - match_regex: "^aws s3 ls (?=.*--recursive)((--recursive|--human-readable|--summarize|--region us-east-1) )*s3://acme-reports-logs/?( (--recursive|--human-readable|--summarize|--region us-east-1))*$"
       example: "aws s3 ls s3://acme-reports-logs --recursive"
       evidence: bucket-has-objects
       output: |
         2026-08-30 02:00:14      48213 logs/2026-08-29-access.log.gz
         2026-08-31 02:00:09      51877 logs/2026-08-30-access.log.gz
         2026-09-01 02:00:11      50342 logs/2026-08-31-access.log.gz
-    - match_regex: "^aws s3 ls s3://acme-reports-logs/?$"
+    - match_regex: "^aws s3 ls (?!.*--recursive)((--human-readable|--summarize|--region us-east-1) )*s3://acme-reports-logs/?( (--human-readable|--summarize|--region us-east-1))*$"
       example: "aws s3 ls s3://acme-reports-logs"
       evidence: bucket-has-objects
       when_actions: [empty-bucket]
       output: ""
-    - match_regex: "^aws s3 ls s3://acme-reports-logs/?$"
+    - match_regex: "^aws s3 ls (?!.*--recursive)((--human-readable|--summarize|--region us-east-1) )*s3://acme-reports-logs/?( (--human-readable|--summarize|--region us-east-1))*$"
       example: "aws s3 ls s3://acme-reports-logs"
       evidence: bucket-has-objects
       output: |
@@ -172,7 +172,7 @@ actions:
   - id: empty-bucket
     label: "Empty the bucket with the AWS CLI (aws s3 rm s3://acme-reports-logs --recursive)"
     kind: fix
-    match_regex: "^aws s3 rm s3://acme-reports-logs/? (--recursive|--quiet|--region us-east-1)( (--recursive|--quiet|--region us-east-1))*$"
+    match_regex: "^aws s3 rm (?=.*--recursive)((--recursive|--quiet|--region us-east-1) )*s3://acme-reports-logs/?( (--recursive|--quiet|--region us-east-1))*$"
     feedback: "delete: s3://acme-reports-logs/logs/2026-08-29-access.log.gz (and the two others). The bucket is empty. Terraform still holds it, so now run terraform destroy to remove it for good."
   - id: destroy-after-emptying
     label: "Run terraform destroy again now that the bucket is empty"

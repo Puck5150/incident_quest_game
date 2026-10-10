@@ -88,8 +88,15 @@ describe('terraform-destroy-nonempty-bucket', () => {
 
   it('the empty-bucket command regex accepts spellings and refuses partial deletes', () => {
     const rx = new RegExp(scenario.actions.find((a) => a.id === 'empty-bucket')!.match_regex!)
-    for (const ok of [RM, 'aws s3 rm s3://acme-reports-logs/ --recursive', 'aws s3 rm s3://acme-reports-logs --recursive --quiet', 'aws s3 rm s3://acme-reports-logs --recursive --region us-east-1']) expect(rx.test(ok), ok).toBe(true)
-    for (const no of ['aws s3 rm s3://acme-reports-logs', 'aws s3 rm s3://acme-reports-logs --recursive --exclude "*"', 'aws s3 rm s3://acme-reports-logs/logs/2026-08-29-access.log.gz', 'aws s3 rm s3://other --recursive', 'aws s3 rb s3://acme-reports-logs --force']) expect(rx.test(no), no).toBe(false)
+    for (const ok of [RM, 'aws s3 rm s3://acme-reports-logs/ --recursive', 'aws s3 rm s3://acme-reports-logs --recursive --quiet', 'aws s3 rm s3://acme-reports-logs --recursive --region us-east-1', 'aws s3 rm --recursive s3://acme-reports-logs', 'aws s3 rm --recursive --quiet s3://acme-reports-logs/']) expect(rx.test(ok), ok).toBe(true)
+    for (const no of ['aws s3 rm s3://acme-reports-logs', 'aws s3 rm s3://acme-reports-logs --recursive --exclude "*"', 'aws s3 rm s3://acme-reports-logs/logs/2026-08-29-access.log.gz', 'aws s3 rm s3://other --recursive', 'aws s3 rb s3://acme-reports-logs --force', 'aws s3 rm --quiet s3://acme-reports-logs']) expect(rx.test(no), no).toBe(false)
+  })
+
+  it('the ls commands accept the flag before the path and --human-readable', async () => {
+    const { out } = await play('cd ~/reporting-infra', 'aws s3 ls --recursive s3://acme-reports-logs', 'aws s3 ls s3://acme-reports-logs --recursive --human-readable', 'aws s3 ls s3://acme-reports-logs --human-readable')
+    expect(out[1].output.trim().split('\n')).toHaveLength(3)
+    expect(out[2].output.trim().split('\n')).toHaveLength(3)
+    expect(out[3].output).toContain('PRE logs/')
   })
 
   it('trap: state rm then destroy orphans the bucket and its data', async () => {

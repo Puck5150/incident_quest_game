@@ -15,9 +15,8 @@ ticket:
     existed, and it prints a note about "changes outside of Terraform".
     Earlier today Dev ran a targeted terraform destroy on those two
     (-target=aws_sqs_queue.jobs -target=aws_instance.worker) to tidy up
-    and was told there was nothing to destroy. Someone did a cleanup of
-    "unused" resources in the console last week; the thread is in NOTES.md
-    in ~/jobs-infra. Please get the stack and its configuration back in
+    and was told there was nothing to destroy. There is a thread about last
+    week's changes in this account in NOTES.md in ~/jobs-infra. Please get the stack and its configuration back in
     agreement without breaking anything that is still in use.
 
 environment: |
@@ -253,7 +252,7 @@ actions:
   - id: refresh-false-apply
     label: "Run terraform apply -refresh=false (or plan -refresh=false) to skip the drift"
     kind: wrong
-    feedback: "With -refresh=false Terraform trusts the stale state: a plan says 'No changes' while the queue is missing, and an apply that has to touch a vanished object fails with a NotFound error. A clean answer from stale state is not a clean world."
+    feedback: "With -refresh=false Terraform trusts the stale state: a plan says 'No changes' while the queue is missing. Applying from stale state (or a saved plan) that has to update a vanished object can fail with NotFound, and destroying an object that is already gone can quietly succeed, so none of it tells you the world is right. A clean answer from stale state is not a clean world."
   - id: destroy-to-start-clean
     label: "Run terraform destroy and start the stack again from scratch"
     kind: destructive
@@ -279,7 +278,7 @@ evidence_labels:
 
 hints:
   nudge: "The plan and AWS disagree about what exists, and the plan says why in a note at the top. Read it, then ask AWS about the two resources."
-  direction: "terraform plan notes that aws_sqs_queue.jobs 'has been deleted' outside of Terraform, and state list still holds the worker too. aws sqs get-queue-url and aws ec2 describe-instances confirm they are gone. Do not just make the plan quiet: NOTES.md says what should exist and what should not."
+  direction: "Run terraform plan and terraform state list before any destroy: a destroy saves the refresh and wipes out the evidence. terraform plan notes that aws_sqs_queue.jobs 'has been deleted' outside of Terraform, and state list still holds the worker too. aws sqs get-queue-url and aws ec2 describe-instances confirm they are gone. Do not just make the plan quiet: NOTES.md says what should exist and what should not."
   answer: "The queue is still used, so keep its block and let terraform apply create it again. The worker was retired on purpose, so delete the aws_instance.worker block from main.tf and apply (the refresh drops it from state). Leave the VPC and subnet alone."
 
 analogy:
@@ -312,9 +311,11 @@ debrief:
   real_world: |
     A recreated queue is a new object: messages and redrive policies in the old
     one are gone, and anything holding the old ARN needs checking. Here the URL
-    is the same because SQS builds it from the queue name. Prefer a read-only
-    terraform plan -refresh-only first to see the drift without changing
-    anything. Avoid -refresh=false as a habit: it makes a stale state look like
+    is the same because SQS builds it from the queue name. Run terraform plan and
+    terraform state list before any destroy, even a targeted one: a destroy
+    persists the refresh, so the drift note and the state-still-lists evidence
+    are gone afterwards. To record drift in state without touching
+    infrastructure, use terraform refresh. Avoid -refresh=false as a habit: it makes a stale state look like
     a clean one. Deleting things in the console that Terraform owns is the root
     problem; a deny on console deletes for these resources, or a drift check in
     CI, catches it sooner.
@@ -323,11 +324,11 @@ concepts:
   - term: "Drift"
     text: "The difference between what state records and what really exists. Terraform finds it by refreshing before a plan, and reports it as 'changes outside of Terraform'."
     url: "https://developer.hashicorp.com/terraform/tutorials/state/resource-drift"
-  - term: "terraform plan -refresh-only"
-    text: "Shows the drift Terraform would record in state without proposing any change to infrastructure."
+  - term: "terraform refresh"
+    text: "Reads real objects and updates state to match, without changing infrastructure."
     url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
   - term: "-refresh=false"
-    text: "Skips reading real objects and trusts state. A vanished object is invisible to the plan, and an apply that has to update it fails with NotFound."
+    text: "Skips reading real objects and trusts state. A vanished object is invisible to the plan; an apply from stale state that has to update it can fail with NotFound, while a destroy of an already-gone object can silently succeed."
     url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
 
 sources:

@@ -28,7 +28,7 @@ environment: |
 terminal:
   prompt: "you@laptop:~/app-infra$"
   commands:
-    - match_regex: "^aws ec2 describe-network-interfaces( --region us-east-1)?( --filters ['\"]?Name=subnet-id,Values=subnet-0e92c4a7b1d38f560['\"]?| --network-interface-ids eni-0c4a8e2f6b1d97305)?( --region us-east-1)?$"
+    - match_regex: "^aws ec2 describe-network-interfaces( --region us-east-1)?( --filters ['\"]?Name=subnet-id,Values=subnet-0e92c4a7b1d38f560['\"]?| --network-interface-ids eni-0c4a8e2f6b1d97305)?( --region us-east-1)?( --output json)?$"
       example: "aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560"
       evidence: eni-owner
       when_actions: [release-eni]
@@ -36,7 +36,7 @@ terminal:
         {
             "NetworkInterfaces": []
         }
-    - match_regex: "^aws ec2 describe-network-interfaces( --region us-east-1)?( --filters ['\"]?Name=subnet-id,Values=subnet-0e92c4a7b1d38f560['\"]?| --network-interface-ids eni-0c4a8e2f6b1d97305)?( --region us-east-1)?$"
+    - match_regex: "^aws ec2 describe-network-interfaces( --region us-east-1)?( --filters ['\"]?Name=subnet-id,Values=subnet-0e92c4a7b1d38f560['\"]?| --network-interface-ids eni-0c4a8e2f6b1d97305)?( --region us-east-1)?( --output json)?$"
       example: "aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560"
       evidence: eni-owner
       output: |
@@ -212,7 +212,7 @@ hypotheses:
     feedback: "Terraform already deletes in dependency order: the instance and the security group went first and were gone before the subnet was tried, and the VPC was not attempted because it depends on the subnet. The instance is gone and the error still stands, so what blocks the subnet is not in this configuration, and depends_on only changes order within it."
   - id: stale-state
     text: "State is out of date and still lists something that no longer exists, so Terraform is tripping over a ghost."
-    feedback: "state list shows only the VPC and the subnet, and both exist. A terraform refresh finds nothing changed. The state is right; it is AWS that holds something it does not know about."
+    feedback: "After the destroy, state list shows only the VPC and the subnet, and both exist. A terraform refresh finds nothing changed. The state is right; it is AWS that holds something it does not know about."
   - id: permissions
     text: "Your role (or the CI role) lacks the permission to delete the subnet."
     feedback: "A missing permission comes back as UnauthorizedOperation. This is DependencyViolation (400): EC2 understood the request and refused it because the subnet is in use. get-caller-identity shows an admin role, and the instance and security group were deleted in the same run."
@@ -221,7 +221,7 @@ actions:
   - id: release-eni
     label: "Delete the orphaned interface with the AWS CLI (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), after checking whose it is"
     kind: fix
-    match_regex: "^aws ec2 delete-network-interface( --region us-east-1)? --network-interface-id eni-0c4a8e2f6b1d97305( --region us-east-1)?$"
+    match_regex: "^aws ec2 delete-network-interface( --region us-east-1)? --network-interface-id eni-0c4a8e2f6b1d97305( --region us-east-1)?( --output json)?$"
     feedback: "The interface is deleted (no output on success). It was available, unattached, and the ingest team had already moved off this VPC. Terraform never owned it, so only now can terraform destroy remove the subnet."
   - id: destroy-after-release
     label: "Run terraform destroy again now that nothing is left in the subnet"

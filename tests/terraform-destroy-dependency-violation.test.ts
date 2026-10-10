@@ -40,8 +40,8 @@ describe('terraform-destroy-dependency-violation', () => {
   })
 
   it('evidence is obtainable before any change, in several spellings', async () => {
-    const { out } = await play('cd ~/app-infra', DESC, "aws ec2 describe-network-interfaces --filters 'Name=subnet-id,Values=subnet-0e92c4a7b1d38f560'", 'aws ec2 describe-network-interfaces --network-interface-ids eni-0c4a8e2f6b1d97305', 'aws ec2 describe-network-interfaces --region us-east-1 --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560', 'aws sts get-caller-identity')
-    for (const i of [1, 2, 3, 4]) {
+    const { out } = await play('cd ~/app-infra', DESC, "aws ec2 describe-network-interfaces --filters 'Name=subnet-id,Values=subnet-0e92c4a7b1d38f560'", 'aws ec2 describe-network-interfaces --network-interface-ids eni-0c4a8e2f6b1d97305', 'aws ec2 describe-network-interfaces --region us-east-1 --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560', 'aws sts get-caller-identity', `${DESC} --output json`)
+    for (const i of [1, 2, 3, 4, 6]) {
       expect(out[i].output, `${i}`).toContain('Interface for the shared ingest endpoint')
       expect(out[i].output).toContain('"Status": "available"')
     }
