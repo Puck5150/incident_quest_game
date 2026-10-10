@@ -189,11 +189,20 @@ hypotheses:
     feedback: "The rule says Enabled, and S3 is attempting every object: each attempt produces a failure event with a reason."
 
 actions:
+  - id: open-key
+    label: "Set the DR key policy's principal to \"*\" for kms:Encrypt"
+    kind: destructive
+    match_regex: "^aws kms put-key-policy .*\\\\?\"Principal\\\\?\"\\s*:\\s*(\\\\?\"\\*\\\\?\"|\\{\\s*\\\\?\"AWS\\\\?\"\\s*:\\s*\\\\?\"\\*\\\\?\"\\s*\\})"
+    feedback: "That lets any AWS principal anywhere use the DR key to encrypt data under it. Name the one role that needs it, and keep the account's root statement so the key is never locked out."
   - id: grant-key
-    label: "In the DR account, add a key policy statement allowing arn:aws:iam::111122223333:role/s3-replication-orders kms:Encrypt and kms:GenerateDataKey* (aws kms put-key-policy --profile dr)"
+    label: "In the DR account, replace the key policy with the baseline plus one statement allowing only arn:aws:iam::111122223333:role/s3-replication-orders kms:Encrypt and kms:GenerateDataKey* (aws kms put-key-policy --key-id <DR key ARN> --policy-name default --policy file://<policy.json> --profile dr)"
     kind: fix
-    match_regex: "^aws kms put-key-policy --key-id \\S+ --policy-name default --policy file://\\S+ --profile dr$"
-    feedback: "The DR key now trusts the production replication role, alongside its existing statements. The next canary should replicate."
+    match_regex: "^aws kms put-key-policy --key-id arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321 --policy-name default --policy file://[A-Za-z0-9_./-]+ --profile dr$"
+    feedback: "The DR key now trusts exactly one production role, alongside its existing statements (the root EnableIAMPolicies statement must stay, or the key is locked out). The next canary should replicate. The lab cannot read the policy file, so check it yourself: one named principal, no wildcard, and consider a kms:ViaService condition for s3.us-west-2.amazonaws.com."
+  - id: codify-key-policy
+    label: "Put the same key-policy statement into the DR baseline template (Terraform) and apply it, so a rebuild or the next apply does not revert the hotfix"
+    kind: fix
+    feedback: "The DR key came from the DR baseline template, so a CLI-only change is drift: the next apply puts the old key policy back and replication breaks again. Fix the template so every DR key gets the right trust."
   - id: aws-managed-key
     label: "Change ReplicaKmsKeyID to the DR account's AWS managed key, aws/s3"
     kind: wrong
@@ -206,13 +215,9 @@ actions:
     label: "Turn off SseKmsEncryptedObjects in the replication rule so it stops failing"
     kind: destructive
     feedback: "S3 doesn't replicate SSE-KMS objects by default; turning that off doesn't fix anything, it just stops trying. Every document here is SSE-KMS, so nothing would reach DR at all."
-  - id: open-key
-    label: "Set the DR key policy's principal to \"*\" for kms:Encrypt"
-    kind: destructive
-    feedback: "That lets any AWS principal anywhere use the DR key. Name the one role that needs it."
 
 solution_paths:
-  - [grant-key]
+  - [grant-key, codify-key-policy]
 
 key_evidence: [dst-put-denied, canary-failed, role-ok, key-policy-local]
 
@@ -230,7 +235,7 @@ red_herrings:
 hints:
   nudge: "Replication reports why each attempt fails. What does the reason point at, and which account owns that piece?"
   direction: "DstPutObjectNotPermitted means writing into the destination: either its bucket policy or the destination KMS key. The role's IAM side looks right. Read the DR bucket policy and the DR key's policy."
-  answer: "The DR key's policy only trusts DR-account principals. Add a statement allowing the production role s3-replication-orders kms:Encrypt (and GenerateDataKey*)."
+  answer: "The DR key's policy only trusts DR-account principals. Add a statement allowing only the production role s3-replication-orders kms:Encrypt (and GenerateDataKey*), then fix the DR baseline template too so the change is not reverted."
 
 analogy:
   title: "The courier has a pass, but the vault won't accept the seal"
@@ -256,7 +261,8 @@ debrief:
     - "Confirm with the canary's replication status: FAILED."
     - "Check the role's side (it allows kms:Encrypt on the DR key) and the DR bucket policy (it allows the role)."
     - "Read the DR key's policy: no statement for the production role."
-    - "Add one, then check the next canary replicates."
+    - "Add one statement naming only the production replication role (never a wildcard principal, keep the root statement), then check the next canary replicates."
+    - "Put the statement in the DR baseline template and apply it, so the fix survives the next Terraform run and every future DR key is right."
   real_world: |
     The production half (role policy) and the DR half (bucket policy, key
     policy) are usually owned by different teams and different Terraform
@@ -374,14 +380,18 @@ stages:
         feedback: "The canary's status is COMPLETED and the replica is listed in the DR bucket. It arrived; it just isn't the DR account's."
     actions:
       - id: enforce-owner
-        label: "Set Object Ownership on acme-dr-orders-docs to Bucket owner enforced (aws s3api put-bucket-ownership-controls ... BucketOwnerEnforced --profile dr), and fix the module default"
+        label: "Set Object Ownership on acme-dr-orders-docs to Bucket owner enforced (aws s3api put-bucket-ownership-controls ... BucketOwnerEnforced --profile dr)"
         kind: fix
         match_regex: "^aws s3api put-bucket-ownership-controls --bucket acme-dr-orders-docs --ownership-controls (Rules=\\[\\{ObjectOwnership=BucketOwnerEnforced\\}\\]|'Rules=\\[\\{ObjectOwnership=BucketOwnerEnforced\\}\\]'|'\\{\"Rules\":\\[\\{\"ObjectOwnership\":\"BucketOwnerEnforced\"\\}\\]\\}') --profile dr$"
-        feedback: "ACLs are off and the DR account now owns every object in the bucket, including replicas already there; access is decided by its own policies."
+        feedback: "ACLs are off and the DR account now owns every object in the bucket, including replicas already there; access is decided by its own policies. Anything that still uploads with ACLs (the legacy uploader the module comment mentions) will now fail and must be retired."
+      - id: fix-module
+        label: "Change the dr-bucket Terraform module default to BucketOwnerEnforced (new version), and apply it to every DR bucket built from v1.4"
+        kind: fix
+        feedback: "The CLI change is drift: the next apply of module v1.4 puts ObjectWriter back, and every other DR bucket from that module has the same hole. Fix the module and roll it to all of them."
       - id: owner-override
         label: "Add AccessControlTranslation (owner override) to the replication rule"
         kind: wrong
-        feedback: "A valid way to make new replicas belong to the DR account, but it needs s3:ObjectOwnerOverrideToBucketOwner on both sides and doesn't change replicas already delivered. Bucket owner enforced does the same job for every object, old and new."
+        feedback: "A documented way to give new replicas to the DR account, so not wrong in general, but it is not enough here: it needs s3:ObjectOwnerOverrideToBucketOwner on both sides, it leaves the bucket on the ACL model, and it does not fix replicas already delivered. Bucket owner enforced removes the ownership problem at the root for every object."
       - id: grant-get-policy
         label: "Add s3:GetObject for dr-restore to the DR bucket policy"
         kind: wrong
@@ -391,7 +401,7 @@ stages:
         kind: destructive
         feedback: "That makes customer documents readable by anyone on the internet. Make the DR account own them instead."
     solution_paths:
-      - [enforce-owner]
+      - [enforce-owner, fix-module]
     key_evidence: [dr-read-denied, replica-owner-prod, object-writer]
     evidence_labels:
       dr-read-denied: "The DR account gets AccessDenied reading the replica"
@@ -400,7 +410,7 @@ stages:
     hints:
       nudge: "The replica arrived. Whose is it?"
       direction: "List the replica with its owner, and read the DR bucket's Object Ownership setting."
-      answer: "With Object writer, replicas belong to the production account, and the DR account's policies can't grant access to them. Set Bucket owner enforced on the DR bucket."
+      answer: "With Object writer, replicas belong to the production account, and the DR account's policies can't grant access to them. Set Bucket owner enforced on the DR bucket and fix the module that set ObjectWriter."
     debrief:
       root_cause: |
         By default a replica is owned by the source object's owner. The DR
@@ -414,7 +424,8 @@ stages:
         - "Read the replica from the DR account: AccessDenied."
         - "List it with its owner: the production account's canonical ID."
         - "Read the DR bucket's Object Ownership: ObjectWriter."
-        - "Set Bucket owner enforced (and fix the module), then read the replica again."
+        - "Set Bucket owner enforced on the DR bucket, then read the replica again."
+        - "Fix the dr-bucket module default and roll it to every DR bucket, or the next apply reverts it. Retire anything that still uploads with ACLs."
 
   - id: backfill
     update: |
@@ -482,15 +493,16 @@ stages:
         text: "Only the 18,406 failed objects are missing."
         feedback: "INV-71230 from August has no replication status at all: it predates the rule, so live replication never considered it. That's about 394,000 more."
     actions:
-      - id: batch-none-failed
-        label: "Create an S3 Batch Replication job on acme-orders-docs with an S3-generated manifest, filtered to ObjectReplicationStatuses NONE and FAILED (aws s3control create-job ...)"
-        kind: fix
-        match_regex: "^aws s3control create-job .*S3ReplicateObject.*$"
-        feedback: "Batch Replication works through every object that was never replicated or failed, using the same rule (and now-working permissions). Check the job's completion report."
       - id: batch-failed-only
         label: "Create a Batch Replication job filtered to FAILED only"
         kind: wrong
+        match_regex: "^aws s3control create-job (?!.*\\bNONE\\b).*S3ReplicateObject"
         feedback: "That catches the 18,406 since Monday, but not the ~394,000 objects from before the rule existed (status NONE). The auditor asked for every document."
+      - id: batch-none-failed
+        label: "Create an S3 Batch Replication job on acme-orders-docs with an S3-generated manifest, filtered to ObjectReplicationStatuses NONE and FAILED (aws s3control create-job ...)"
+        kind: fix
+        match_regex: "^aws s3control create-job(?!.*--account-id.*--account-id)(?!.*--manifest-generator.*--manifest-generator)(?=.* --account-id 111122223333( |$))(?=.* --operation \\S*S3ReplicateObject)(?=.*arn:aws:s3:::acme-orders-docs(\\\\?\"| |\\x27|$|,))(?=.*ObjectReplicationStatuses\\\\?\"?\\s*:\\s*\\[\\s*\\\\?\"?(NONE|FAILED)\\\\?\"?\\s*,\\s*\\\\?\"?(NONE|FAILED)\\\\?\"?\\s*\\])(?=.*\\bNONE\\b)(?=.*\\bFAILED\\b)[^;&|`$<>()\\\\*?~!#]*$"
+        feedback: "Batch Replication works through every object that was never replicated or failed, using the same rule (and now-working permissions). Check the job's completion report."
       - id: s3-sync
         label: "aws s3 sync s3://acme-orders-docs s3://acme-dr-orders-docs from a laptop"
         kind: wrong
@@ -499,8 +511,12 @@ stages:
         label: "Delete and recreate the DR bucket to restart replication from scratch"
         kind: destructive
         feedback: "Recreating the destination doesn't start replication of anything, and you'd destroy the replicas made today."
+      - id: alarm-failed-replication
+        label: "Create a CloudWatch alarm on OperationsFailedReplication (S3 replication metrics) for acme-orders-docs, paging the on-call, and have the DR canary assert COMPLETED"
+        kind: fix
+        feedback: "Replication was failing for four days with the metric climbing from 96 to 200 an hour and nobody paged. An alarm on failed operations (and a canary that checks the replica, not just the configuration) turns the next silent break into a page within minutes."
     solution_paths:
-      - [batch-none-failed]
+      - [batch-none-failed, alarm-failed-replication]
     key_evidence: [still-failed, never-replicated, failed-total]
     evidence_labels:
       still-failed: "A document from 10-01 is still FAILED after the fixes"
@@ -524,3 +540,4 @@ stages:
         - "Check an older one: no replication status."
         - "Size the gap from the failure metrics."
         - "Run Batch Replication for NONE and FAILED, then confirm the job and the statuses."
+        - "Add an alarm on OperationsFailedReplication and a canary that asserts the replica is COMPLETED, so the next break pages within minutes, not days."
