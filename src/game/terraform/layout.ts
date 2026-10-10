@@ -86,3 +86,12 @@ export const lockFile = (providers: (string | LockEntry)[]) => {
 }
 // The text mounted for an initialised lab (an AWS-only lock file).
 export const LOCK_FILE = lockFile([AWS_SOURCE])
+
+// The provider cache (providercache.Dir): HOST/NAMESPACE/TYPE/VERSION/PLATFORM/terraform-provider-TYPE_vVERSION_x5 under
+// .terraform/providers. The file is a stand-in whose text records the package hash.
+export const PROVIDER_CACHE_DIR = '.terraform/providers'
+export function cachedPackage(source: string, version: string, hash: string): { dir: string; name: string; content: string } | undefined {
+  const parts = source.split('/')
+  if (parts.length !== 3) return undefined
+  return { dir: `${PROVIDER_CACHE_DIR}/${source}/${version}/linux_amd64`, name: `terraform-provider-${parts[2]}_v${version}_x5`, content: `#!/bin/sh\n# Simulated package of provider ${source} ${version} (linux_amd64)\n# hash: ${hash}\n` }
+}

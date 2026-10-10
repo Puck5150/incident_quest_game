@@ -49,6 +49,9 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+// Real content currently shipping dark (TF6c, released by deleting each `published: false`).
+const DARK = ['terraform-module-key-removed', 'terraform-module-refactor', 'terraform-module-upgrade', 'terraform-provider-lock-drift', 'terraform-remote-state-rename']
+
 describe('schema and loader', () => {
   const doc = parse(fullDisk)
   it('accepts a boolean published on every kind and rejects other values', () => {
@@ -66,9 +69,10 @@ describe('schema and loader', () => {
     expect(errors).toEqual([])
     expect(item?.kind === 'incident' && item.scenario.published).toBe(false)
   })
-  it('the real content has no hidden items', () => {
+  it('only the listed items ship dark (remove an id here when its published: false is deleted)', () => {
     const c = loadContent(path.resolve(import.meta.dirname, '../content'))
-    expect([...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis].filter((x) => x.published === false)).toEqual([])
+    const hidden = [...c.scenarios, ...c.challenges, ...c.canvases, ...c.multis].filter((x) => x.published === false).map((x) => x.id)
+    expect(hidden.sort()).toEqual(DARK)
   })
 })
 

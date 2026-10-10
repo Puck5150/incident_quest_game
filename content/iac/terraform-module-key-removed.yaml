@@ -1,0 +1,426 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-module-key-removed
+published: false
+track: iac
+difficulty: 3
+title: "CI on a one-line cleanup PR fails with Instance cannot be destroyed"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  severity: SEV3
+  body: |
+    My PR (cleanup/drop-west) removes "west" from the regions list in
+    variables.tf. The traffic moved to east last week, so I only wanted
+    the west stack gone from our config. CI's terraform plan prints a long
+    list and then fails with "Instance cannot be destroyed". The data team
+    hasn't confirmed yet that they exported west's database. Can I take
+    prevent_destroy off for this one merge, or apply just the east part
+    with -target so the PR can go through? Branch is checked out in
+    ~/infra.
+
+environment: |
+  The orders platform runs one stack per region in account
+  123456789012, us-east-1: a VPC and a PostgreSQL database
+  (orders-east, orders-west) per stack. The stacks come from one module
+  call in ~/infra that creates an instance per region in
+  var.regions; the database sits in a nested module under the stack
+  module and has prevent_destroy set. Terraform state holds both regions;
+  main holds what was last applied.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "git log --oneline"
+      output: |
+        c3d7e90 cleanup: drop the west region
+        5be12a4 stack: nested data module with prevent_destroy on the database
+        a8f0c13 stacks per region from var.regions
+    - match: "git diff main"
+      evidence: pr-removes-west
+      output: |
+        diff --git a/variables.tf b/variables.tf
+        index 4c1d8e7..9b2a6f0 100644
+        --- a/variables.tf
+        +++ b/variables.tf
+        @@ -6,5 +6,5 @@ variable "db_password" {
+         variable "regions" {
+           type    = set(string)
+        -  default = ["east", "west"]
+        +  default = ["east"]
+         }
+    - match: "cat variables.tf"
+      output: |
+        variable "db_password" {
+          type      = string
+          sensitive = true
+        }
+
+        variable "regions" {
+          type    = set(string)
+          default = ["east"]
+        }
+    - match: "cat modules/stack/data/main.tf"
+      output: |
+        variable "name" {
+          type = string
+        }
+
+        variable "password" {
+          type      = string
+          sensitive = true
+        }
+
+        resource "aws_db_instance" "main" {
+          identifier          = "orders-${var.name}"
+          engine              = "postgres"
+          engine_version      = "15.4"
+          instance_class      = "db.r6g.large"
+          allocated_storage   = 100
+          db_name             = "orders"
+          username            = "orders_admin"
+          password            = var.password
+          multi_az            = true
+          skip_final_snapshot = true
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
+    - match: "aws rds describe-db-instances"
+      evidence: west-db-alive
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "orders-east",
+                    "DBInstanceStatus": "available",
+                    "Engine": "postgres",
+                    "MultiAZ": true
+                },
+                {
+                    "DBInstanceIdentifier": "orders-west",
+                    "DBInstanceStatus": "available",
+                    "Engine": "postgres",
+                    "MultiAZ": true
+                }
+            ]
+        }
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        module "stack" {
+          source   = "./modules/stack"
+          for_each = var.regions
+
+          name       = each.key
+          cidr_block = each.key == "east" ? "10.40.0.0/16" : "10.41.0.0/16"
+          password   = var.db_password
+        }
+    - path: variables.tf
+      content: |
+        variable "db_password" {
+          type      = string
+          sensitive = true
+        }
+
+        variable "regions" {
+          type    = set(string)
+          default = ["east"]
+        }
+    - path: modules/stack/main.tf
+      content: |
+        variable "name" {
+          type = string
+        }
+
+        variable "cidr_block" {
+          type = string
+        }
+
+        variable "password" {
+          type      = string
+          sensitive = true
+        }
+
+        resource "aws_vpc" "main" {
+          cidr_block = var.cidr_block
+
+          tags = {
+            Name = "orders-${var.name}"
+          }
+        }
+
+        module "data" {
+          source = "./data"
+
+          name     = var.name
+          password = var.password
+        }
+    - path: modules/stack/data/main.tf
+      content: |
+        variable "name" {
+          type = string
+        }
+
+        variable "password" {
+          type      = string
+          sensitive = true
+        }
+
+        resource "aws_db_instance" "main" {
+          identifier          = "orders-${var.name}"
+          engine              = "postgres"
+          engine_version      = "15.4"
+          instance_class      = "db.r6g.large"
+          allocated_storage   = 100
+          db_name             = "orders"
+          username            = "orders_admin"
+          password            = var.password
+          multi_az            = true
+          skip_final_snapshot = true
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
+  vars:
+    db_password: "orders-admin-secret"
+  modules:
+    installed:
+      - { key: stack, source: ./modules/stack, dir: modules/stack }
+      - { key: stack.data, source: ./data, dir: modules/stack/data }
+  state:
+    - module: module.stack["east"]
+      type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-0c5d8a2e6f1b47390
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0c5d8a2e6f1b47390"
+        cidr_block: 10.40.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0d2b4f6a8c1e39507
+        tags: { Name: orders-east }
+        tags_all: { Name: orders-east }
+    - module: module.stack["east"].module.data
+      type: aws_db_instance
+      name: main
+      attrs:
+        id: orders-east
+        arn: "arn:aws:rds:us-east-1:123456789012:db:orders-east"
+        identifier: orders-east
+        engine: postgres
+        engine_version: "15.4"
+        instance_class: db.r6g.large
+        allocated_storage: 100
+        db_name: orders
+        username: orders_admin
+        password: orders-admin-secret
+        multi_az: true
+        skip_final_snapshot: true
+        storage_encrypted: false
+        endpoint: "orders-east.cxyz.us-east-1.rds.amazonaws.com:5432"
+    - module: module.stack["west"]
+      type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-04e9b7d1a3c5f2860
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-04e9b7d1a3c5f2860"
+        cidr_block: 10.41.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-07c1a3e5b9d2f4680
+        tags: { Name: orders-west }
+        tags_all: { Name: orders-west }
+    - module: module.stack["west"].module.data
+      type: aws_db_instance
+      name: main
+      attrs:
+        id: orders-west
+        arn: "arn:aws:rds:us-east-1:123456789012:db:orders-west"
+        identifier: orders-west
+        engine: postgres
+        engine_version: "15.4"
+        instance_class: db.r6g.large
+        allocated_storage: 100
+        db_name: orders
+        username: orders_admin
+        password: orders-admin-secret
+        multi_az: true
+        skip_final_snapshot: true
+        storage_encrypted: false
+        endpoint: "orders-west.cxyz.us-east-1.rds.amazonaws.com:5432"
+  evidence:
+    - evidence: prevent-destroy-saved-you
+      command: plan
+      contains: "Instance cannot be destroyed"
+    - evidence: west-not-in-config
+      command: plan
+      contains: '(because module.stack["west"] is not in configuration)'
+    - evidence: west-in-state
+      command: state list
+      contains: 'module.stack["west"]'
+
+hypotheses:
+  - id: key-removed
+    text: "Removing west from var.regions removes the instance module.stack[\"west\"] from the configuration, so Terraform plans to destroy everything in it, including the production database, and prevent_destroy stops the plan."
+    correct: true
+  - id: db-setting-changed
+    text: "A setting on the west database changed (engine version, class, storage) in a way that can only be applied by replacing it."
+    feedback: "No argument of any west object is shown changing. Every destroy line says it is destroyed because module.stack[\"west\"] is not in configuration, and git diff main shows a single line in variables.tf. Replacing an object for a changed argument says 'forces replacement' next to that argument instead."
+  - id: console-deleted
+    text: "Someone deleted the west stack in the console, so Terraform wants to clean up its leftovers."
+    feedback: "describe-db-instances lists orders-west as available, with the same identifier state records. An object deleted outside Terraform would be dropped from state at refresh, with a note that objects changed outside of Terraform, not planned as a destroy of something that exists."
+  - id: guard-misconfigured
+    text: "prevent_destroy is set where it should not be, and it is what breaks the plan, so the guard is the thing to change."
+    feedback: "The guard is working as designed: the plan really would destroy the west database. The error is the correct result of the PR, and the reason lines say why. Removing the guard makes the destroy go through; it does not make the PR safe."
+
+actions:
+  - id: restore-the-key
+    label: "Put west back in var.regions (undo the removal) and confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - state_has: module.stack["west"]
+        - state_has: module.stack["east"]
+        - not: { applied: { op: delete, address: 'module.stack["west"]' } }
+        - not: { applied: { op: delete, address: 'module.stack["east"]' } }
+    feedback: "Both regions, the west VPC and the west database are in place and the plan is empty: nothing was destroyed. The PR as written cannot merge safely. Decommissioning a region is a plan of its own: confirm the data is exported or snapshotted, then take the database out of management or remove the guard in a separate reviewed change."
+  - id: stop-managing-west
+    label: "Forget west in state with terraform state rm 'module.stack[\"west\"]' (deliberately leaving its objects running in AWS to migrate separately), then confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - state_lacks: module.stack["west"]
+        - state_has: module.stack["east"]
+        - plan_clean: true
+        - reality_has: { type: aws_db_instance, id: orders-west }
+        - reality_has: { type: aws_vpc, id: vpc-04e9b7d1a3c5f2860 }
+        - not: { applied: { op: delete, address: 'module.stack["west"]' } }
+        - not: { applied: { op: delete, address: 'module.stack["east"]' } }
+    feedback: "Terraform no longer manages the west stack and the plan is empty, and the west VPC and database are still running in AWS, untouched. That is a real decision, not a cleanup: those objects are now orphaned, with nothing in code to create, change, track or eventually delete them. Write down that it was done and who owns the migration, and export or snapshot the database and delete the leftovers on purpose."
+  - id: remove-guard-and-apply
+    label: "Remove prevent_destroy from the nested data module and apply so CI goes green"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: 'module.stack["west"]' }
+    feedback: "prevent_destroy was the only thing between the PR and the west database. Without it Terraform destroyed orders-west (created with skip_final_snapshot = true, so no final snapshot) and the west VPC. The reason line under each destroy was the review the PR never had."
+  - id: destroy-everything
+    label: "Run terraform destroy to clear the plan and start over"
+    kind: wrong
+    feedback: "terraform destroy plans to destroy everything in state: both regions, not just the one the PR dropped. The guard blocks it, but the command is aimed at the wrong thing; the question is what happens to west only."
+
+solution_paths:
+  - [restore-the-key]
+  - [stop-managing-west]
+
+key_evidence: [prevent-destroy-saved-you, west-not-in-config, west-in-state, pr-removes-west, west-db-alive]
+
+evidence_labels:
+  prevent-destroy-saved-you: "The plan would destroy the west database, and prevent_destroy stops it"
+  west-not-in-config: "The plan destroys module.stack[\"west\"] objects \"because module.stack[\"west\"] is not in configuration\""
+  west-in-state: "State still holds both module.stack[\"east\"] and module.stack[\"west\"]"
+  pr-removes-west: "The PR's only change removes west from var.regions"
+  west-db-alive: "The west database exists in AWS and is available"
+
+hints:
+  nudge: "The reason line under each destroy says why Terraform wants it. Read it, then compare terraform state list with the diff."
+  direction: "The module call creates an instance per entry in var.regions. What happens to an instance whose key is no longer in that set? Try the -target the ticket suggests and see whether it changes what the plan would do to west."
+  answer: "Removing west from var.regions removes module.stack[\"west\"], and a removed instance is destroyed with everything in it. Either put west back, or deliberately stop managing it with terraform state rm 'module.stack[\"west\"]' (the objects keep running, now unmanaged) while its data is migrated. Do not remove prevent_destroy to get the PR through."
+
+analogy:
+  title: "Crossing a branch off the roster"
+  text: |
+    The depot keeps a roster of branch offices and the cleaners' schedule
+    follows it. Someone strikes "West" off the roster, meaning "we are
+    closing West", and the schedule system reads it as "stop looking after
+    everything at West: empty the building". The vault at West is locked,
+    which is the only reason the cleaners stop. Taking off the lock to
+    tidy the paperwork empties the vault. Closing a branch has its own
+    checklist; the roster is just where it gets recorded last.
+
+debrief:
+  root_cause: |
+    The stacks are one module call with for_each over var.regions, so each
+    region is an instance such as module.stack["west"], and everything in
+    it, including the nested module's database, is identified by that key.
+    The PR removed west from the set. Terraform compares state with the
+    configuration by address, found module.stack["west"] in state but not
+    in configuration, and planned to destroy every object under it. The
+    west database has prevent_destroy set, so the plan failed with
+    Instance cannot be destroyed.
+  ideal_path:
+    - 'Read the plan: the west objects are destroyed "because module.stack["west"] is not in configuration", and the east ones are untouched.'
+    - "Compare terraform state list (both regions) with git diff main (one entry removed from var.regions)."
+    - "Confirm in AWS that the west database exists and is available."
+    - "Try -target on east if you like: terraform apply -target='module.stack[\"east\"]' does nothing to west, prints the targeting warning, and the next plain plan is exactly as dangerous."
+    - "Choose deliberately: put west back until the data is exported and the decommission is planned, or terraform state rm 'module.stack[\"west\"]' to stop managing it while migrating, and record that those objects are now unmanaged."
+  real_world: |
+    Removing a key from for_each, or an element from count, is a delete
+    request for that instance and everything in it. The change looks like
+    one line of configuration, which is why it deserves the same review as
+    a destroy. prevent_destroy is a safety net that turns an accidental
+    destroy into a failed plan; it is not a plan for decommissioning, and
+    taking it out for one merge is how the net is cut. A deliberate
+    decommission is a sequence: export or snapshot the data, confirm
+    nothing depends on it, then either remove the guard in its own reviewed
+    change and destroy, or forget the objects with terraform state rm and
+    handle them outside Terraform. State rm leaves the objects running and
+    unmanaged, so it moves the work rather than doing it. -target limits
+    one plan or apply to chosen objects and their dependencies; it is meant
+    for exceptional situations, and the next ordinary plan still contains
+    the destroy.
+
+concepts:
+  - term: "for_each on a module"
+    text: "Creates one instance of the module per map key or set member, addressed module.NAME[\"key\"]. Remove a key and that instance is destroyed with all its objects."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+  - term: "prevent_destroy"
+    text: "Makes Terraform reject plans that would destroy the object. It is a guard against accidents, not a decommission procedure."
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+  - term: "terraform state rm"
+    text: "Removes objects from state without destroying them: they keep running but are no longer managed by Terraform."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/rm"
+  - term: "Resource targeting"
+    text: "-target limits a plan or apply to chosen objects and their dependencies and is meant for exceptional situations; it does not remove a pending destroy."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+
+sources:
+  - title: "Terraform: The for_each meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+    retrieved: 2026-10-09
+  - title: "Terraform: The lifecycle meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: state rm"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/rm"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: plan (-target)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+    retrieved: 2026-10-09
+
+command_notes:
+  "git log --oneline": "The top commit is the PR. The ones before it are what main last applied."
+  "git diff main": "The whole PR: west is removed from the default of var.regions."
+  "cat variables.tf": "var.regions now lists only east."
+  "cat modules/stack/data/main.tf": "The database lives in the nested module, with prevent_destroy set and skip_final_snapshot = true."
+  "aws rds describe-db-instances": "Both databases exist and are available. Nothing changed in AWS."

@@ -1,0 +1,278 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-provider-lock-drift
+published: false
+track: iac
+difficulty: 2
+title: "The provider bump PR is red and the plan fails before it reaches the bucket"
+par_minutes: 10
+ticket:
+  from: "Priya (platform)"
+  severity: SEV4
+  body: |
+    My PR #318 (bump the AWS provider to ~> 5.50 to pick up an S3 fix we
+    need) is red: the terraform plan check fails, and so does terraform
+    plan on my laptop. All I changed is the version line in main.tf. Marcus
+    says to revert the bump and try again next sprint, but the S3 fix is
+    what the artifacts bucket work is waiting on. Can you get the plan
+    green with the bump in? Repo is checked out in ~/infra on my PR branch.
+
+environment: |
+  ~/infra manages the build artifacts bucket (acme-build-artifacts) in
+  account 123456789012, us-east-1. The terraform-plan GitHub Actions check
+  runs on every PR against main, and terraform-apply runs on merge. The
+  working tree is on the PR branch bump-aws-5-50 with nothing uncommitted.
+  Nothing is wrong with the bucket itself.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "git log --oneline"
+      output: |
+        3c91e7a bump aws provider to ~> 5.50
+        f20b8d4 add build artifacts bucket
+        a4417c0 initial provider setup
+    - match: "git diff origin/main"
+      evidence: constraint-raised
+      output: |
+        diff --git a/main.tf b/main.tf
+        index 3c2a1f0..8e47b9d 100644
+        --- a/main.tf
+        +++ b/main.tf
+        @@ -2,7 +2,7 @@ terraform {
+           required_providers {
+             aws = {
+               source  = "hashicorp/aws"
+        -      version = "~> 5.31"
+        +      version = "~> 5.50"
+             }
+           }
+         }
+    - match: "git diff --stat origin/main"
+      when_actions: [refresh-lock]
+      output: |2
+         .terraform.lock.hcl | 6 +++---
+         main.tf             | 2 +-
+         2 files changed, 4 insertions(+), 4 deletions(-)
+    - match: "git diff --stat origin/main"
+      evidence: lock-not-in-pr
+      output: |2
+         main.tf | 2 +-
+         1 file changed, 1 insertion(+), 1 deletion(-)
+    - match: "git status"
+      when_actions: [refresh-lock]
+      output: |
+        On branch bump-aws-5-50
+        Your branch is up to date with 'origin/bump-aws-5-50'.
+
+        Changes not staged for commit:
+          (use "git add <file>..." to update what will be committed)
+          (use "git restore <file>..." to discard changes in working directory)
+        	modified:   .terraform.lock.hcl
+
+        no changes added to commit (use "git add" and/or "git commit -a")
+    - match: "git status"
+      output: |
+        On branch bump-aws-5-50
+        Your branch is up to date with 'origin/bump-aws-5-50'.
+
+        nothing to commit, working tree clean
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.50"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        resource "aws_s3_bucket" "artifacts" {
+          bucket = "acme-build-artifacts"
+        }
+    - path: .terraform.lock.hcl
+      content: |
+        # This file is maintained automatically by "terraform init".
+        # Manual edits may be lost in future updates.
+
+        provider "registry.terraform.io/hashicorp/aws" {
+          version     = "5.31.0"
+          constraints = "~> 5.31"
+          hashes = [
+            "h1:b5rA3vN7c2LxQ8mTkZ0yEoW4uH9sJdP1fXgR6tVaKiY=",
+          ]
+        }
+    - path: .gitignore
+      content: |
+        .terraform/
+        *.tfstate
+        *.tfstate.backup
+  providers: { aws: { lock: 5.31.0, available: [5.31.0, 5.50.0, 5.67.0] } }
+  evidence:
+    - evidence: lock-mismatch
+      command: plan
+      contains: "Inconsistent dependency lock file"
+    - evidence: lock-selects-old
+      command: version
+      contains: "provider registry.terraform.io/hashicorp/aws v5.31.0"
+    - evidence: config-wants-new
+      command: providers
+      contains: "provider[registry.terraform.io/hashicorp/aws] ~> 5.50"
+  state:
+    - type: aws_s3_bucket
+      name: artifacts
+      attrs:
+        id: acme-build-artifacts
+        arn: "arn:aws:s3:::acme-build-artifacts"
+        bucket: acme-build-artifacts
+        bucket_domain_name: acme-build-artifacts.s3.amazonaws.com
+        force_destroy: false
+hypotheses:
+  - id: lock-stale
+    text: "The PR raised the provider constraint, but the dependency lock file still records the old provider version, which the new constraint no longer allows. Nothing regenerated the lock for the change."
+    correct: true
+  - id: bad-constraint
+    text: "The new constraint line in main.tf is malformed, or names a provider version that does not exist."
+    feedback: "terraform validate says the configuration is valid, and the plan error does not complain about the constraint: it names a locked version selection that does not match it. ~> 5.50 is an ordinary constraint (5.50 up to, not including, 6.0). The mismatch is between the constraint and what was recorded earlier."
+  - id: state-problem
+    text: "Terraform's state is out of date, locked or unreadable, so the plan cannot run."
+    feedback: "terraform state list returns the bucket normally and the error says nothing about state or a state lock: the 'dependency lock file' is the provider record in .terraform.lock.hcl, which is a different thing from a state lock. The plan stops before it looks at the bucket."
+  - id: stale-ci-cache
+    text: "The CI runner (and your laptop) are using a stale cached .terraform directory, and clearing it will make the plan work."
+    feedback: "It fails the same way on a laptop and on CI, and the error compares the repository's own files: the constraint in main.tf against the selection recorded in .terraform.lock.hcl. A fresh runner reads the same two files and reaches the same conclusion."
+
+actions:
+  - id: refresh-lock
+    label: "Run terraform init -upgrade so Terraform re-selects the provider under the new constraint and rewrites the lock file, keep the ~> 5.50 bump, and confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        # the bump is still in place (a constraint with a 5.50-or-later floor)
+        - file_contains: { path: /home/you/infra/main.tf, matches: '^\s*version\s*=\s*"[^"]*\b5\.(5\d|[6-9]\d)\b[^"]*"\s*$' }
+        # the lock names a version init actually installed: its version AND the package hash init recorded for that version
+        - file_contains: { path: /home/you/infra/.terraform.lock.hcl, matches: 'version\s*=\s*"5\.67\.0"[^}]*"h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs="|version\s*=\s*"5\.50\.0"[^}]*"h1:u2oC7W8S/r1rIrWr2EaF55jSXduFsIbvhfw2M5V4YWk="' }
+    feedback: "The plan is empty with the bump still in the PR, and .terraform.lock.hcl now records a 5.50+ provider selection with the constraint and the package checksum Terraform computed itself. That file is part of the change: commit it to the PR so CI sees the same selection. The version line alone was never the whole story; the constraints and hashes beside it are what init verifies."
+  - id: revert-the-bump
+    label: "Put the constraint back to ~> 5.31 in main.tf so the old lock file is consistent again"
+    kind: wrong
+    done_when:
+      all:
+        - plan_clean: true
+        - not: { file_contains: { path: /home/you/infra/main.tf, matches: '^\s*version\s*=\s*"[^"]*\b5\.(5\d|[6-9]\d)\b[^"]*"\s*$' } }
+    feedback: "The plan goes green because the lock and the constraint agree again, but only by throwing away the change the PR exists to make: the S3 fix still is not available, and the same failure comes back the next time anyone raises the constraint without regenerating the lock. Reverting is a fine way to unblock a bad release; here the release was not the problem."
+  - id: hand-edit-lock
+    label: "Edit the version in .terraform.lock.hcl to 5.50.0 or later by hand so it matches the new constraint"
+    kind: wrong
+    done_when:
+      all:
+        - file_contains: { path: /home/you/infra/.terraform.lock.hcl, matches: 'version\s*=\s*"5\.(5\d|[6-9]\d)\.\d+"' }
+        - not: { file_contains: { path: /home/you/infra/.terraform.lock.hcl, matches: 'version\s*=\s*"5\.67\.0"[^}]*"h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs="|version\s*=\s*"5\.50\.0"[^}]*"h1:u2oC7W8S/r1rIrWr2EaF55jSXduFsIbvhfw2M5V4YWk="' } }
+    feedback: "The lock file says 5.50 or later now, but it is a generated file and the checksums beside the version still belong to the old package. Terraform refuses to run (Required plugins are not installed: no such package is cached), and terraform init refuses to install it (the package does not match the recorded checksums). git checkout -- .terraform.lock.hcl puts back the committed file, which is the stale 5.31.0 one: the original error returns. Hand-written entries cannot be right: only terraform init knows the hashes. terraform init -upgrade rewrites the whole entry when the constraint selects another version; if it picks the same version you typed, delete .terraform.lock.hcl and run terraform init."
+  - id: ignore-the-lock
+    label: "Add .terraform.lock.hcl to .gitignore so it stops getting in the way"
+    kind: wrong
+    done_when:
+      file_contains: { path: /home/you/infra/.gitignore, matches: '^\s*(?![#!])[^#\n]*terraform\.lock\.hcl' }
+    feedback: "Nothing about the failure changes (the file is still there and still stale), and every checkout and CI run would now pick whatever the newest allowed provider is at that moment. The lock file is meant to be committed: it is what makes everyone, including CI, install the same provider package."
+
+solution_paths:
+  - [refresh-lock]
+
+key_evidence: [lock-mismatch, lock-selects-old, constraint-raised, lock-not-in-pr]
+
+evidence_labels:
+  lock-mismatch: "The plan stops with Inconsistent dependency lock file: the locked version selection 5.31.0 does not match the constraint ~> 5.50"
+  lock-selects-old: "terraform version shows the aws provider still at v5.31.0, the version the lock file selected"
+  constraint-raised: "The PR changes only the provider constraint, from ~> 5.31 to ~> 5.50"
+  lock-not-in-pr: "The PR does not touch .terraform.lock.hcl: main.tf is the only changed file"
+
+hints:
+  nudge: "The error is about a file, not about the bucket. Which file does it name, and who is supposed to keep that file up to date?"
+  direction: "Compare what the PR changed (git diff origin/main) with the provider version Terraform has recorded (terraform version). Terraform has a command that re-selects providers when a constraint changes."
+  answer: "The lock file still selects 5.31.0 and the PR raised the constraint to ~> 5.50. Run terraform init -upgrade (it picks the newest version the constraint allows, 5.67.0 here, and rewrites .terraform.lock.hcl), check terraform plan says No changes, and commit the lock file with the PR."
+
+analogy:
+  title: "The shopping list and the receipt"
+  text: |
+    The recipe changes from "any flour from the 5.31 shelf" to "any flour
+    from the 5.50 shelf", but the receipt in the cupboard still says
+    "bought 5.31". The kitchen checks the receipt against the recipe
+    before cooking and refuses: what you bought is not what the recipe
+    asks for. Crossing out the number on the receipt does not put the
+    right flour in the cupboard (and the shop's bag has a barcode you
+    cannot forge). You go and buy the new flour, and the shop prints a new
+    receipt you file with the recipe.
+
+debrief:
+  root_cause: |
+    The PR raised the aws provider constraint in main.tf from ~> 5.31 to
+    ~> 5.50. The dependency lock file, .terraform.lock.hcl, still
+    recorded version 5.31.0, selected under the old constraint. Before
+    plan, apply, destroy and the other operations, Terraform checks that
+    every locked provider selection still satisfies the current
+    constraints; 5.31.0 is not in ~> 5.50, so it stopped with
+    Inconsistent dependency lock file and suggested terraform init
+    -upgrade. A plain terraform init would not have helped: it keeps a
+    locked version it already has, and says the lock does not match the
+    constraint. The PR changed the constraint but never regenerated the
+    lock file.
+  ideal_path:
+    - "Read the plan error: the locked selection for hashicorp/aws is 5.31.0 and the constraint is now ~> 5.50. It is a dependency lock file problem, not a state or bucket problem."
+    - "See that the PR changed only the constraint (git diff origin/main, git diff --stat origin/main) and that terraform version still shows 5.31.0."
+    - "Run terraform init -upgrade: Terraform finds the newest version matching ~> 5.50, installs it, and rewrites .terraform.lock.hcl with the new version, constraints and checksums."
+    - "Run terraform plan until it says No changes, then commit the updated lock file to the PR (git status shows it modified)."
+  real_world: |
+    The dependency lock file records which provider versions and
+    checksums a configuration selected, and HashiCorp's guidance is to
+    commit it to version control so that changes to it are reviewed like
+    any other change. A provider version bump is therefore always two
+    files: the constraint in your configuration and the regenerated lock
+    file. terraform init -upgrade is the command that re-selects within
+    the constraints and ignores the recorded selections. Never edit the
+    version or hashes by hand: they are generated, and a hand-written
+    entry fails Terraform's own checks. In CI, run terraform init
+    -lockfile=readonly so the pipeline verifies the committed checksums
+    and fails instead of silently rewriting the lock, and note that
+    -lockfile=readonly conflicts with -upgrade, so upgrades happen on a
+    developer machine in a reviewed change. If your team uses several
+    platforms (laptops and Linux CI), have terraform providers lock
+    record checksums for all of them before committing. If a release
+    itself is bad, a tighter constraint (for example ~> 5.50, < 5.60)
+    is a deliberate change, not a way to dodge the lock.
+
+concepts:
+  - term: "Dependency lock file"
+    text: "Records the exact provider versions Terraform selected and the checksums of their packages. Commit it to version control; Terraform maintains it, so do not edit it by hand."
+    url: "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+  - term: "terraform init -upgrade"
+    text: "Upgrades providers to the newest version that satisfies the configuration's constraints, ignoring the selections recorded in the lock file, and rewrites the lock file."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/init"
+  - term: "-lockfile=readonly"
+    text: "Makes init verify checksums against the lock file without changing it; useful in CI. It conflicts with -upgrade."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/init"
+  - term: "Provider version constraint"
+    text: "required_providers can limit the provider versions a configuration accepts; ~> 5.50 allows 5.50 and later 5.x releases but not 6.0."
+    url: "https://developer.hashicorp.com/terraform/language/expressions/version-constraints"
+
+sources:
+  - title: "Terraform: Dependency lock file"
+    url: "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: init (-upgrade, -lockfile)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/init"
+    retrieved: 2026-10-09
+
+command_notes:
+  "git log --oneline": "The top commit is the PR's bump. Nothing in the log mentions the lock file."
+  "git diff origin/main": "The only change in the PR: the provider constraint went from ~> 5.31 to ~> 5.50."
+  "git diff --stat origin/main": "Which files the PR touches. The lock file is not among them, so it still records the old selection."
+  "git status": "Whether the lock file has uncommitted changes. After init -upgrade it shows as modified: that change belongs in the PR."

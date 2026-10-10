@@ -2,8 +2,8 @@
 // Shared by the engine (which leaves reading those files to the real shell)
 // and the shell (which puts them there).
 import type { Scenario } from '../schema/scenario.ts'
-import { labDir, labFiles } from './terraform/layout.ts'
-import { mountedLock } from './terraform/providers.ts'
+import { cachedPackage, labDir, labFiles } from './terraform/layout.ts'
+import { cacheFromLock, mountedLock } from './terraform/providers.ts'
 
 // The user the terminal prompt logs in as ("ops@web-01:~$" -> ops), and home.
 export const userOf = (scenario: Scenario) => scenario.terminal?.prompt.match(/^([\w.-]+)@/)?.[1] ?? 'ops'
@@ -74,7 +74,15 @@ export function filesOnDisk(scenario: Scenario): Map<string, string> {
     const files = labFiles(tf, cwd, home)
     for (const f of files) if (!out.has(f.path)) out.set(f.path, f.content)
     const lock = `${labDir(tf, cwd, home)}/.terraform.lock.hcl`
-    if (tf.initialized !== false && !out.has(lock)) out.set(lock, mountedLock(tf, files))
+    if (tf.initialized !== false) {
+      if (!out.has(lock)) out.set(lock, mountedLock(tf, files))
+      // The provider packages that init installed for the lock's selections.
+      for (const [source, versions] of cacheFromLock(out.get(lock)!))
+        for (const [version, hash] of versions) {
+          const p = cachedPackage(source, version, hash)
+          if (p && !out.has(`${labDir(tf, cwd, home)}/${p.dir}/${p.name}`)) out.set(`${labDir(tf, cwd, home)}/${p.dir}/${p.name}`, p.content)
+        }
+    }
   }
   return out
 }

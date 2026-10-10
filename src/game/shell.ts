@@ -194,7 +194,9 @@ export class IncidentShell {
       },
       commands: getCommandNames().filter((c) => !OFF.includes(c)) as CommandName[],
       customCommands: [
-        ...[...programs].map((p) => defineCommand(p, (args) => Promise.resolve(this.program(name, p, args)))),
+        ...[...programs].map((p) =>
+          defineCommand(p, (args, c) => (p === 'git' && this.lab && name === this.mainHost ? this.git(args, c as never) : Promise.resolve(this.program(name, p, args)))),
+        ),
         ...(this.lab ? [defineCommand('terraform', (args, ctx) => this.terraform(args, ctx as never, name === this.mainHost))] : []),
         defineCommand('ssh', (args) => this.ssh(name, args)),
         // Local scripts the incident runs (./order-sync): files that call back here.
@@ -314,6 +316,21 @@ export class IncidentShell {
         await fs.writeFile(`${dir}/${name}`, text)
       },
     }
+  }
+
+  // git checkout [--] FILE... / git restore [--source=HEAD] FILE... in a terraform lab: the checkout is
+  // clean (the incident's starting files are what is committed), so these put a starting file back as it
+  // was mounted. Anything else (other git commands, files the lab did not start with) is the scripted tool.
+  private async git(args: string[], ctx: TfCtx): Promise<Out> {
+    const [sub, ...rest] = args
+    const paths = rest.filter((a) => a !== '--' && !(sub === 'restore' && /^(--source=HEAD|--worktree|-W|-s|HEAD)$/.test(a)))
+    const committed = filesOnDisk(this.context.scenario)
+    const files = paths.map((a) => ctx.fs.resolvePath(ctx.cwd, a))
+    if ((sub === 'checkout' || sub === 'restore') && files.length && !paths.some((a) => a.startsWith('-')) && files.every((f) => committed.has(f))) {
+      for (const f of files) await ctx.fs.writeFile(f, withNewline(committed.get(f)!))
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+    return this.program(this.mainHost, 'git', args)
   }
 
   // terraform: the simulator reads and writes the host's real files, so the

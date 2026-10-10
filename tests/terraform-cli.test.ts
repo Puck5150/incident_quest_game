@@ -155,7 +155,7 @@ describe('terraform plan', () => {
     const missing = await world().run('plan', '-var-file=nope.tfvars')
     expect(missing.exitCode).toBe(1)
     expect(missing.stderr).toContain('nope.tfvars')
-    for (const flag of ['-target=aws_vpc.main', '-refresh-only', '-destroy']) {
+    for (const flag of ['-refresh-only', '-destroy']) {
       const r = await world().run('plan', flag)
       expect(r.exitCode, flag).toBe(1)
       expect(r.stderr).toContain('Not available in this lab yet')

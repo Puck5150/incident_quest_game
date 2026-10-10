@@ -112,6 +112,29 @@
     - { command: "Settings > Branches (or Rules) in the repository", note: "The same settings in the browser." }
   docs: { title: "gh api", url: "https://cli.github.com/manual/gh_api" }
 
+- id: git-c-log
+  match: "^git -C \\S+ log"
+  summary: "Shows the history of a different repository without leaving the current directory."
+  parts:
+    - { token: "-C ../network", meaning: "Run git as if started in that directory, here the sibling repository." }
+    - { token: "log -p -- outputs.tf", meaning: "The commits that changed that file, with the lines they changed." }
+    - { token: "--oneline", meaning: "(With log) one short line per commit instead of the full patch." }
+  why: "When your stack depends on another repository's outputs, its history shows what the owners changed and when."
+  alternatives:
+    - { command: "cd ../network && git log --oneline", note: "The same, after changing directory." }
+  docs: { title: "git (the -C option)", url: "https://git-scm.com/docs/git" }
+
+- id: git-log-patch
+  match: "^git log -p "
+  summary: "Shows the commits that touched a file, each with the lines it changed."
+  parts:
+    - { token: "-p", meaning: "Show the patch (the added and removed lines) for each commit, not just the message." }
+    - { token: "-- main.tf", meaning: "Only commits that changed this file; -- separates paths from branch names." }
+  why: "Shows when a line such as a module's version constraint was added, and by which change, so you can tell whether the code or something outside it moved."
+  alternatives:
+    - { command: "git log --oneline -- main.tf", note: "Just the commit list for the file." }
+  docs: { title: "git log", url: "https://git-scm.com/docs/git-log" }
+
 - id: git-log-oneline
   match: "^git log --oneline"
   summary: "Lists recent commits, one line each."

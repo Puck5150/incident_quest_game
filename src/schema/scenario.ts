@@ -336,7 +336,7 @@ export const TerraformSchema = z.strictObject({
     .array(
       z.strictObject({
         evidence: id,
-        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete', 'get']),
+        command: z.enum(['plan', 'validate', 'init', 'show', 'output', 'version', 'state list', 'state show', 'state pull', 'workspace show', 'workspace list', 'apply', 'destroy', 'import', 'taint', 'untaint', 'refresh', 'force-unlock', 'providers', 'state mv', 'state rm', 'workspace new', 'workspace select', 'workspace delete', 'get']),
         contains: z.string().min(1),
       }),
     )

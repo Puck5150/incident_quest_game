@@ -701,6 +701,7 @@
                   "untaint",
                   "refresh",
                   "force-unlock",
+                  "providers",
                   "state mv",
                   "state rm",
                   "workspace new",

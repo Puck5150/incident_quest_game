@@ -1,0 +1,460 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-module-refactor
+published: false
+track: iac
+difficulty: 3
+title: "Sharing the network code as a module wants to rebuild the stack"
+par_minutes: 12
+
+ticket:
+  from: "Platform team"
+  severity: SEV3
+  body: |
+    My PR (refactor/network-module) pulls the VPC and the two private
+    subnets out of the root config into modules/network, so the data team
+    can reuse it. No settings change. CI's terraform plan fails with
+    "Instance cannot be destroyed" on the db host, and the plan above the
+    error is huge. Is it safe to apply only the new module with -target so
+    the data team can start on it, and sort out the rest afterwards?
+    Branch is checked out in ~/infra.
+
+environment: |
+  The orders platform runs in account 123456789012, us-east-1: one VPC
+  with a private subnet in each of us-east-1a and us-east-1b. An app server
+  (orders-app) runs in 1a and a self-managed Postgres host (orders-db, data
+  on the instance) in 1b. The Terraform code is in ~/infra; main holds what
+  was last applied.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "git log --oneline -3"
+      output: |
+        4be90d2 refactor: move the VPC and subnets into modules/network
+        a17c3f8 app: bump instance type to m6i.large
+        0d5e2b6 db: add prevent_destroy
+    - match: "git log --oneline"
+      output: |
+        4be90d2 refactor: move the VPC and subnets into modules/network
+        a17c3f8 app: bump instance type to m6i.large
+        0d5e2b6 db: add prevent_destroy
+        93fa1c0 network: private subnets in two AZs
+        2c8d7e1 initial VPC
+    - match: "git diff main"
+      evidence: refactor-diff
+      output: |
+        diff --git a/network.tf b/network.tf
+        deleted file mode 100644
+        index 5d2e8a3..0000000
+        --- a/network.tf
+        +++ /dev/null
+        @@ -1,22 +0,0 @@
+        -resource "aws_vpc" "main" {
+        -  cidr_block = "10.30.0.0/16"
+        -
+        -  tags = {
+        -    Name = "orders-core"
+        -  }
+        -}
+        -
+        -resource "aws_subnet" "a" {
+        -  vpc_id            = aws_vpc.main.id
+        -  cidr_block        = "10.30.1.0/24"
+        -  availability_zone = "us-east-1a"
+        -
+        -  tags = {
+        -    Name = "private-a"
+        -  }
+        -}
+        -
+        -resource "aws_subnet" "b" {
+        -  ...same, 10.30.2.0/24 in us-east-1b
+        -}
+        diff --git a/modules/network/main.tf b/modules/network/main.tf
+        new file mode 100644
+        index 0000000..c91b4f7
+        --- /dev/null
+        +++ b/modules/network/main.tf
+        @@ -0,0 +1,22 @@
+        +resource "aws_vpc" "main" {
+        +  cidr_block = "10.30.0.0/16"
+        +  ...the same VPC and the same two subnets, unchanged
+        diff --git a/main.tf b/main.tf
+        index 7a3f1d8..e04b6c2 100644
+        --- a/main.tf
+        +++ b/main.tf
+        @@ -9,3 +9,7 @@ provider "aws" {
+           region = "us-east-1"
+         }
+        +
+        +module "network" {
+        +  source = "./modules/network"
+        +}
+        diff --git a/app.tf b/app.tf
+        index 2d9c6b1..3e7a0f4 100644
+        --- a/app.tf
+        +++ b/app.tf
+        @@ -1,5 +1,5 @@
+         resource "aws_instance" "app" {
+           ami           = "ami-0c7217cdde317cfec"
+           instance_type = "m6i.large"
+        -  subnet_id     = aws_subnet.a.id
+        +  subnet_id     = module.network.subnet_ids[0]
+    - match: "aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0c5d8a2e6f1b47390"
+      evidence: subnets-exist
+      output: &subnets |
+        {
+            "Subnets": [
+                {
+                    "AvailabilityZone": "us-east-1a",
+                    "CidrBlock": "10.30.1.0/24",
+                    "State": "available",
+                    "SubnetId": "subnet-0e1f7a3c5b9d24680",
+                    "VpcId": "vpc-0c5d8a2e6f1b47390",
+                    "Tags": [ { "Key": "Name", "Value": "private-a" } ]
+                },
+                {
+                    "AvailabilityZone": "us-east-1b",
+                    "CidrBlock": "10.30.2.0/24",
+                    "State": "available",
+                    "SubnetId": "subnet-04b6d8f0a2c9e1357",
+                    "VpcId": "vpc-0c5d8a2e6f1b47390",
+                    "Tags": [ { "Key": "Name", "Value": "private-b" } ]
+                }
+            ]
+        }
+    - match: "aws ec2 describe-subnets"
+      evidence: subnets-exist
+      output: *subnets
+    - match: "aws ec2 describe-instances"
+      output: &instances |
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0a7c3e5f9b1d28460",
+                            "InstanceType": "m6i.large",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-0e1f7a3c5b9d24680",
+                            "Tags": [ { "Key": "Name", "Value": "orders-app" } ]
+                        }
+                    ]
+                },
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-0b8d4f6a0c2e39571",
+                            "InstanceType": "r6i.large",
+                            "State": { "Code": 16, "Name": "running" },
+                            "SubnetId": "subnet-04b6d8f0a2c9e1357",
+                            "Tags": [ { "Key": "Name", "Value": "orders-db" } ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        module "network" {
+          source = "./modules/network"
+        }
+    - path: app.tf
+      content: |
+        resource "aws_instance" "app" {
+          ami           = "ami-0c7217cdde317cfec"
+          instance_type = "m6i.large"
+          subnet_id     = module.network.subnet_ids[0]
+
+          tags = {
+            Name = "orders-app"
+          }
+        }
+
+        resource "aws_instance" "db" {
+          ami           = "ami-0c7217cdde317cfec"
+          instance_type = "r6i.large"
+          subnet_id     = module.network.subnet_ids[1]
+
+          tags = {
+            Name = "orders-db"
+          }
+
+          lifecycle {
+            prevent_destroy = true
+          }
+        }
+    - path: modules/network/main.tf
+      content: |
+        resource "aws_vpc" "main" {
+          cidr_block = "10.30.0.0/16"
+
+          tags = {
+            Name = "orders-core"
+          }
+        }
+
+        resource "aws_subnet" "a" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.30.1.0/24"
+          availability_zone = "us-east-1a"
+
+          tags = {
+            Name = "private-a"
+          }
+        }
+
+        resource "aws_subnet" "b" {
+          vpc_id            = aws_vpc.main.id
+          cidr_block        = "10.30.2.0/24"
+          availability_zone = "us-east-1b"
+
+          tags = {
+            Name = "private-b"
+          }
+        }
+    - path: modules/network/outputs.tf
+      content: |
+        output "vpc_id" {
+          value = aws_vpc.main.id
+        }
+
+        output "subnet_ids" {
+          value = [aws_subnet.a.id, aws_subnet.b.id]
+        }
+  modules:
+    installed:
+      - { key: network, source: ./modules/network, dir: modules/network }
+  state:
+    - type: aws_vpc
+      name: main
+      attrs:
+        id: vpc-0c5d8a2e6f1b47390
+        arn: "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0c5d8a2e6f1b47390"
+        cidr_block: 10.30.0.0/16
+        enable_dns_support: true
+        enable_dns_hostnames: false
+        default_security_group_id: sg-0d2b4f6a8c1e39507
+        tags: { Name: orders-core }
+        tags_all: { Name: orders-core }
+    - type: aws_subnet
+      name: a
+      attrs:
+        id: subnet-0e1f7a3c5b9d24680
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-0e1f7a3c5b9d24680"
+        vpc_id: vpc-0c5d8a2e6f1b47390
+        cidr_block: 10.30.1.0/24
+        availability_zone: us-east-1a
+        map_public_ip_on_launch: false
+        tags: { Name: private-a }
+        tags_all: { Name: private-a }
+    - type: aws_subnet
+      name: b
+      attrs:
+        id: subnet-04b6d8f0a2c9e1357
+        arn: "arn:aws:ec2:us-east-1:123456789012:subnet/subnet-04b6d8f0a2c9e1357"
+        vpc_id: vpc-0c5d8a2e6f1b47390
+        cidr_block: 10.30.2.0/24
+        availability_zone: us-east-1b
+        map_public_ip_on_launch: false
+        tags: { Name: private-b }
+        tags_all: { Name: private-b }
+    - type: aws_instance
+      name: app
+      attrs:
+        id: i-0a7c3e5f9b1d28460
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0a7c3e5f9b1d28460"
+        ami: ami-0c7217cdde317cfec
+        instance_type: m6i.large
+        subnet_id: subnet-0e1f7a3c5b9d24680
+        availability_zone: us-east-1a
+        private_ip: 10.30.1.24
+        tags: { Name: orders-app }
+        tags_all: { Name: orders-app }
+    - type: aws_instance
+      name: db
+      attrs:
+        id: i-0b8d4f6a0c2e39571
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0b8d4f6a0c2e39571"
+        ami: ami-0c7217cdde317cfec
+        instance_type: r6i.large
+        subnet_id: subnet-04b6d8f0a2c9e1357
+        availability_zone: us-east-1b
+        private_ip: 10.30.2.37
+        tags: { Name: orders-db }
+        tags_all: { Name: orders-db }
+  evidence:
+    - evidence: prevent-destroy-saved-you
+      command: plan
+      contains: "Instance cannot be destroyed"
+    - evidence: vpc-not-in-config
+      command: plan
+      contains: "(because aws_vpc.main is not in configuration)"
+    - evidence: root-addresses
+      command: state list
+      contains: "aws_subnet.a"
+
+hypotheses:
+  - id: addresses-changed
+    text: "Moving the VPC and subnets into the module gave each one a new address (module.network.aws_vpc.main, ...), so Terraform sees the old addresses as removed and the module's as new."
+    correct: true
+  - id: settings-changed
+    text: "The module changed a setting on the VPC or subnets (CIDR, zone, tags) that can only be applied by rebuilding them."
+    feedback: "git diff shows the same VPC and subnets moved verbatim, and the plan's reason for each destroy is not a changed argument but that the address is not in configuration. The CIDRs and zones match what describe-subnets reports."
+  - id: console-deleted
+    text: "Someone deleted the network in the console, so Terraform wants to create it again."
+    feedback: "describe-subnets finds both subnets, available, with the ids state records. A deleted object shows up as drift that refresh drops from state, not as a destroy of something still in state."
+  - id: instances-changed
+    text: "The app and db instances changed (type, AMI, tags), and that is what forces the rebuild."
+    feedback: "Their arguments are unchanged. They are replaced only because the subnet they sit in is being replaced, so subnet_id will be known after apply. Follow that back to why the subnets are being replaced."
+
+actions:
+  - id: move-into-module
+    label: "Tell Terraform the VPC and subnets moved into the module (moved blocks applied with terraform apply, or terraform state mv for each), keep prevent_destroy, then confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - state_has: module.network.aws_vpc.main
+        - state_has: module.network.aws_subnet.a
+        - state_has: module.network.aws_subnet.b
+        - state_lacks: aws_vpc.main
+        - plan_clean: true
+        - file_contains: { path: /home/you/infra/app.tf, matches: 'prevent_destroy\s*=\s*true' }
+        - not: { applied: { op: delete, address: aws_vpc.main } }
+        - not: { applied: { op: delete, address: aws_instance.app } }
+        - not: { applied: { op: delete, address: aws_instance.db } }
+        - not: { applied: { op: create, address: module.network } }
+    feedback: "The same VPC, the same two subnets and the same two instances are in place, now under module.network, and the plan is empty. The refactor can merge without touching production."
+  - id: target-the-module
+    label: "Apply only the new module with -target so the data team can start"
+    kind: wrong
+    done_when:
+      all:
+        - applied: { op: create, address: module.network }
+        - not: { applied: { op: delete, address: aws_vpc.main } }
+    feedback: "-target built a second VPC and two more subnets inside the module while the originals stay in state under their old addresses. Nothing was moved: there are now two networks, the instances still sit in the old one, and the plan still wants to destroy the originals and now points the instances at the new subnets. Removing the duplicates with terraform destroy means destroying what depends on them too, and the db host is protected; forgetting them with state rm would leave a second VPC orphaned in AWS. Terraform warned that the applied changes may be incomplete. Targeting skips the problem instead of telling Terraform where the objects went."
+  - id: revert-and-close
+    label: "Revert the PR and keep the network code in the root"
+    kind: wrong
+    feedback: "The plan goes quiet, but the data team still has nothing to reuse. The refactor was right; it only needed to tell Terraform where the objects went."
+  - id: remove-guard-and-apply
+    label: "Remove prevent_destroy from the db host and apply so CI goes green"
+    kind: destructive
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_instance.db }
+        - applied: { op: delete, address: aws_instance.app }
+        - applied: { op: delete, address: aws_vpc.main }
+    feedback: "prevent_destroy was the only thing standing between this refactor and production. Without it Terraform destroyed the database host and its data, the app server and the network, and built empty ones."
+
+solution_paths:
+  - [move-into-module]
+
+key_evidence: [prevent-destroy-saved-you, vpc-not-in-config, root-addresses, refactor-diff, subnets-exist]
+
+evidence_labels:
+  prevent-destroy-saved-you: "The plan would destroy the db host, and prevent_destroy stops it"
+  vpc-not-in-config: "The plan destroys aws_vpc.main \"because aws_vpc.main is not in configuration\" and creates module.network.aws_vpc.main"
+  root-addresses: "State still holds the VPC and subnets at root addresses"
+  refactor-diff: "The PR moves the network code into a module and changes no values"
+  subnets-exist: "Both subnets exist in AWS with the ids state records"
+
+hints:
+  nudge: "How does Terraform decide which object in state belongs to which block in the configuration?"
+  direction: "Compare terraform state list with the addresses the configuration now declares, including the module's."
+  answer: "State has aws_vpc.main, aws_subnet.a and aws_subnet.b; the configuration now has module.network.aws_vpc.main and so on. Add a moved block from each old address to its new one (or run terraform state mv for each), then plan until it says No changes."
+
+analogy:
+  title: "Moving the files to a new cabinet"
+  text: |
+    The office moves the contracts from the front desk into a new shared
+    cabinet. The register still says "contract 7: front desk". Checking the
+    new cabinet, the clerk finds contract 7 missing, orders it shredded
+    from the register's address and files a fresh copy. A note saying
+    "contract 7 is now in the shared cabinet" fixes it; shredding the
+    originals does not.
+
+debrief:
+  root_cause: |
+    Terraform matches state to configuration by resource address, and a
+    module is part of the address. Moving the VPC and subnets into
+    module.network made them module.network.aws_vpc.main and so on, so
+    state's aws_vpc.main and aws_subnet.a/b were no longer in the
+    configuration: Terraform planned to destroy them and create new ones,
+    and replaced the instances that reference the new subnets. The db host
+    sets prevent_destroy, so planning failed on it. Telling Terraform where
+    each object went (moved blocks, or terraform state mv) keeps the same
+    objects under their new addresses.
+  ideal_path:
+    - "Read the failed plan: the root VPC and subnets are destroyed \"because ... is not in configuration\", their twins in module.network are created, and the instances are replaced because their subnet changes."
+    - "Compare terraform state list (root addresses) with the PR diff (code moved into modules/network, values unchanged)."
+    - "Confirm in AWS that the subnets and instances are the ones state records."
+    - "Add a moved block from each old address to its module address, plan (three moves, nothing to add, change or destroy) and apply."
+    - "Plan again: No changes. Keep prevent_destroy."
+  real_world: |
+    Treat moving code into or out of a module as a change of identity and
+    ship moved blocks in the same PR: they are reviewed with the code and
+    travel with it to every state that uses it. terraform state mv does
+    the same on one state, outside review, and the docs warn to coordinate
+    with colleagues so nobody plans between the code change and the move. -target limits what a plan
+    or apply touches, but Terraform itself says it is for exceptional
+    situations: it does not fix the mismatch, and here it would build a
+    second network next to the first. Keep prevent_destroy on anything
+    holding data you can't recreate, and read the reason line under each
+    "will be destroyed" before deciding how to unblock a plan.
+
+concepts:
+  - term: "Resource address"
+    text: "How Terraform names an object in state, including the module path. Change the address and Terraform sees a different object."
+    url: "https://developer.hashicorp.com/terraform/cli/state/resource-addressing"
+  - term: "moved block"
+    text: "Records in configuration that the object at one address now lives at another, including into a module, so Terraform moves it in state instead of destroying and recreating it."
+    url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+  - term: "terraform state mv"
+    text: "Moves an object to a new address in state directly, without a plan or review."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/mv"
+  - term: "Resource targeting"
+    text: "The -target option limits a plan or apply to chosen objects and what they depend on, and is meant for exceptional situations."
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+
+sources:
+  - title: "Terraform: Refactoring (moved blocks)"
+    url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: state mv"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/state/mv"
+    retrieved: 2026-10-09
+  - title: "Terraform: Resource addressing"
+    url: "https://developer.hashicorp.com/terraform/cli/state/resource-addressing"
+    retrieved: 2026-10-09
+  - title: "Terraform: Command: plan (-target)"
+    url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
+    retrieved: 2026-10-09
+  - title: "Terraform: The lifecycle meta-argument"
+    url: "https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle"
+    retrieved: 2026-10-09
+
+command_notes:
+  "git log --oneline -3": "The top commit is the refactor. The ones before it are what main last applied."
+  "git log --oneline": "The top commit is the refactor. The ones before it are what main last applied."
+  "git diff main": "The VPC and both subnets are deleted from network.tf and appear unchanged in modules/network; the root gets a module call and the app's subnet_id now reads a module output. No value changes."
+  "aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0c5d8a2e6f1b47390": "Both subnets exist, available, with the ids state records. Nothing changed in AWS."
+  "aws ec2 describe-subnets": "Both subnets exist, available, with the ids state records. Nothing changed in AWS."
+  "aws ec2 describe-instances": "The app server and the Postgres host are running in those subnets, with the ids state records."

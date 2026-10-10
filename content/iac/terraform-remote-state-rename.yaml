@@ -1,0 +1,312 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: terraform-remote-state-rename
+published: false
+track: iac
+difficulty: 3
+title: "The nightly plan fails with Unsupported attribute and nobody changed the app repo"
+par_minutes: 11
+
+ticket:
+  from: "Orders team"
+  severity: SEV3
+  body: |
+    The nightly terraform plan for the orders app has been red since this
+    morning, and so is terraform plan on my laptop: "Unsupported
+    attribute". Nobody has touched the ~/infra repo (git is clean, the last
+    commit is two weeks old) and last night's run was green. The app
+    server is running fine; we just can't ship any app infra changes until
+    the plan works again. Could someone get it back to a clean plan
+    without recreating the server?
+
+environment: |
+  The orders app server (orders-app, an EC2 instance) runs in a private
+  subnet of the shared VPC in account 123456789012, us-east-1. The
+  platform team owns the shared network stack, kept in a separate
+  repository checked out next to this one in ../network; its state lives
+  in the S3 bucket acme-tf-state under network/terraform.tfstate. The app
+  stack in ~/infra reads the subnet ids from that state and has its own
+  state in the same bucket.
+
+terminal:
+  prompt: "you@laptop:~/infra$"
+  commands:
+    - match: "git status"
+      evidence: app-repo-unchanged
+      output: |
+        On branch main
+        Your branch is up to date with 'origin/main'.
+
+        nothing to commit, working tree clean
+    - match: "git log --oneline"
+      output: |
+        c41e9a7 app: bump instance type to m6i.large
+        8d02f3b app: read private subnets from the network state
+        5b7a1c4 initial app stack
+    - match: "cat ../network/outputs.tf"
+      evidence: upstream-output-renamed
+      output: |
+        output "vpc_id" {
+          value = aws_vpc.main.id
+        }
+
+        output "private_subnet_ids" {
+          value = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+        }
+
+        output "public_subnet_ids" {
+          value = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+        }
+    - match: "git -C ../network log --oneline"
+      output: |
+        e90b3d1 outputs: rename private_subnets to private_subnet_ids
+        27fc6a8 add public subnets
+        b3a5e02 shared VPC and private subnets
+    - match: "git -C ../network log -p -- outputs.tf"
+      evidence: rename-commit
+      output: |
+        commit e90b3d1c7f2a4b685e1d0c93a7f6b2e48d5c1a07
+        Author: Marcus Lindqvist <marcus@example.com>
+        Date:   Thu Oct 8 16:42:10 2026 -0500
+
+            outputs: rename private_subnets to private_subnet_ids
+
+        diff --git a/outputs.tf b/outputs.tf
+        index 4a1c9e2..b7d03f5 100644
+        --- a/outputs.tf
+        +++ b/outputs.tf
+        @@ -2,7 +2,7 @@ output "vpc_id" {
+           value = aws_vpc.main.id
+         }
+         
+        -output "private_subnets" {
+        +output "private_subnet_ids" {
+           value = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+         }
+         
+
+        commit 27fc6a8d3b915e0c7a4f28b6d1e93c05a7f4b218
+        Author: Marcus Lindqvist <marcus@example.com>
+        Date:   Tue Sep 22 11:05:33 2026 -0500
+
+            add public subnets
+
+        diff --git a/outputs.tf b/outputs.tf
+        index 91e4b0a..4a1c9e2 100644
+        --- a/outputs.tf
+        +++ b/outputs.tf
+        @@ -5,3 +5,7 @@ output "vpc_id" {
+         output "private_subnets" {
+           value = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+         }
+        +
+        +output "public_subnet_ids" {
+        +  value = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+        +}
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        data "terraform_remote_state" "network" {
+          backend = "s3"
+
+          config = {
+            bucket = "acme-tf-state"
+            key    = "network/terraform.tfstate"
+            region = "us-east-1"
+          }
+        }
+
+        resource "aws_instance" "app" {
+          ami           = "ami-0c7217cdde317cfec"
+          instance_type = "m6i.large"
+          subnet_id     = data.terraform_remote_state.network.outputs.private_subnets[0]
+
+          tags = {
+            Name = "orders-app"
+          }
+        }
+  remote_states:
+    - backend: s3
+      config: { bucket: acme-tf-state, key: network/terraform.tfstate, region: us-east-1 }
+      outputs:
+        vpc_id: vpc-0c5d8a2e6f1b47390
+        private_subnet_ids: [subnet-0e1f7a3c5b9d24680, subnet-04b6d8f0a2c9e1357]
+        public_subnet_ids: [subnet-09c3a7e1b5d84026f, subnet-0d2f6b8a4c1e93075]
+  state:
+    - mode: data
+      type: terraform_remote_state
+      name: network
+      attrs:
+        backend: s3
+        config: { bucket: acme-tf-state, key: network/terraform.tfstate, region: us-east-1 }
+        outputs:
+          vpc_id: vpc-0c5d8a2e6f1b47390
+          private_subnets: [subnet-0e1f7a3c5b9d24680, subnet-04b6d8f0a2c9e1357]
+          public_subnet_ids: [subnet-09c3a7e1b5d84026f, subnet-0d2f6b8a4c1e93075]
+    - type: aws_instance
+      name: app
+      attrs:
+        id: i-0a7c3e5f9b1d28460
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0a7c3e5f9b1d28460"
+        ami: ami-0c7217cdde317cfec
+        instance_type: m6i.large
+        subnet_id: subnet-0e1f7a3c5b9d24680
+        availability_zone: us-east-1a
+        private_ip: 10.30.1.24
+        tags: { Name: orders-app }
+        tags_all: { Name: orders-app }
+  evidence:
+    - evidence: unsupported-attribute
+      command: plan
+      contains: 'This object does not have an attribute named "private_subnets".'
+    - evidence: old-output-in-state
+      command: state show
+      contains: '"private_subnets"'
+
+hypotheses:
+  - id: upstream-output-renamed
+    text: "The network stack's state no longer has an output called private_subnets (the platform team renamed it), and this config still reads the old name."
+    correct: true
+  - id: state-backend-broken
+    text: "The S3 state bucket, the network state file or our access to it is broken, so the app stack cannot read the network stack."
+    feedback: "A state that cannot be found fails at the data block itself, with 'Unable to find remote state'. This error points at the resource's subnet_id line and says the outputs object has no attribute with that name: the state was read, and terraform state show on the data source still lists the other outputs."
+  - id: app-config-changed
+    text: "Somebody changed the app repo's Terraform and broke the reference."
+    feedback: "git status is clean and the last commit is two weeks old; the line the error points at has not changed. The configuration is the same as last night's green run, so the thing it reads must have changed."
+  - id: provider-or-version
+    text: "A new Terraform or AWS provider release changed how the remote state data source behaves."
+    feedback: "The error names an attribute of the data source's outputs object, not a provider or version problem, and the lock file and tool versions did not change. The outputs object simply has no attribute with that name."
+
+actions:
+  - id: use-the-new-output
+    label: "Change the reference in main.tf to the upstream's new output name, private_subnet_ids, and confirm the plan has no changes"
+    kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        # the new name is read from the remote state (dot or index spelling)
+        - file_contains: { path: /home/you/infra/main.tf, matches: 'outputs(\.private_subnet_ids|\["private_subnet_ids"\])' }
+        # no literal subnet id in the resource and no defaults escape hatch
+        - not: { file_contains: { path: /home/you/infra/main.tf, matches: 'subnet_id\s*=\s*"' } }
+        - not: { file_contains: { path: /home/you/infra/main.tf, matches: '^\s*defaults\s*=' } }
+        - not: { applied: { op: delete, address: aws_instance.app } }
+    feedback: "The plan is empty and orders-app is the same instance in the same private subnet: nothing was replaced. The app stack now reads the output under the name the network stack publishes. That output is the contract between the two stacks, so the better long-term arrangement is for the platform team to keep the old name alongside the new one for a release, so consumers can move on their own schedule."
+  - id: hard-code-the-ids
+    label: "Replace the reference with the subnet id written directly in main.tf"
+    kind: wrong
+    done_when: { file_contains: { path: /home/you/infra/main.tf, matches: 'subnet_id\s*=\s*"' } }
+    feedback: "The error goes away, but the app stack no longer follows the network stack: the next time the platform team changes those subnets (or you copy this config to another environment) the id is silently wrong, and if you paste the wrong one the plan wants to replace the server. The point of reading remote state is that the network stack owns those ids."
+  - id: fake-the-old-output
+    label: "Add a defaults block to the remote state data source that supplies the old output name"
+    kind: wrong
+    done_when: { file_contains: { path: /home/you/infra/main.tf, matches: '^\s*defaults\s*=' } }
+    feedback: "defaults only fills outputs the upstream lacks, so the plan can pass, but it freezes a copy of the ids in your repo under a name the upstream no longer publishes. It is the hard-coded id again, hidden in a different place, and it hides the next change the platform team makes."
+  - id: point-at-another-output
+    label: "Point the reference at whichever subnet output exists (for example public_subnet_ids) so the plan stops erroring"
+    kind: wrong
+    done_when: { file_contains: { path: /home/you/infra/main.tf, matches: 'subnet_id\s*=\s*data\.terraform_remote_state\.network\.outputs\.(public_subnet_ids|vpc_id)' } }
+    feedback: "The error is gone, but the plan now replaces orders-app because its subnet changes (an instance cannot move between subnets), and the new subnet is a public one. Read the plan, not just the absence of an error: -/+ and 'forces replacement' on subnet_id mean the server will be destroyed and rebuilt."
+  - id: apply-the-replacement
+    label: "Apply the plan once the error is gone, even though it replaces orders-app"
+    kind: destructive
+    done_when: { applied: { op: delete, address: aws_instance.app } }
+    feedback: "Terraform destroyed orders-app (and, on apply, built a new instance in a different subnet): the server was down for the duration, anything on its instance store is gone, and its private IP changed, so anything that connected to the old address is broken. The plan showed '-/+ ... forces replacement' next to subnet_id before this."
+
+solution_paths:
+  - [use-the-new-output]
+
+key_evidence: [unsupported-attribute, upstream-output-renamed, rename-commit, old-output-in-state, app-repo-unchanged]
+
+evidence_labels:
+  unsupported-attribute: "The plan fails with Unsupported attribute: the remote state's outputs have no attribute named private_subnets"
+  upstream-output-renamed: "The network stack's outputs.tf publishes private_subnet_ids, not private_subnets"
+  rename-commit: "A network-repo commit renamed the output private_subnets to private_subnet_ids"
+  old-output-in-state: "The data source recorded in the app's state still lists the old output name private_subnets, so it existed when this stack was last applied"
+  app-repo-unchanged: "The app repo has no changes: the config is what last night's green run used"
+
+hints:
+  nudge: "The config is the same as last night, so what does it read that could have changed? Look at which thing the error says is missing."
+  direction: "The reference reads a value from another stack's state. See what that stack publishes now (../network/outputs.tf, git -C ../network log) and compare it with the name in main.tf."
+  answer: "The platform team renamed the output private_subnets to private_subnet_ids. Change the reference in main.tf to data.terraform_remote_state.network.outputs.private_subnet_ids[0] and plan until it says No changes. Do not hard-code the ids and do not point at a different output: the plan must show orders-app unchanged."
+
+analogy:
+  title: "The supplier renamed the part number"
+  text: |
+    The workshop orders a part by catalogue number from the supplier's
+    published list. The supplier tidies the catalogue and the old number
+    disappears; the new number refers to the very same bolt. The workshop
+    didn't change its order form, but the next order bounces. The fix is
+    to order by the new number, not to take a bolt from somewhere else
+    that is close enough, and not to photocopy last year's catalogue page.
+    A polite supplier lists both numbers for a while.
+
+debrief:
+  root_cause: |
+    The app stack reads the shared network stack's state with
+    terraform_remote_state and uses its private_subnets output for the
+    server's subnet. The platform team renamed that output to
+    private_subnet_ids in the network repository. The data source read
+    the state fine, but its outputs object no longer had an attribute
+    named private_subnets, so the plan failed with Unsupported attribute
+    at the reference, although nothing in the app repository had changed.
+  ideal_path:
+    - "Read the error: it points at the resource's reference, not at the data block, and the outputs have no attribute named private_subnets."
+    - "Confirm the app repo is unchanged (git status, git log) so the change is on the upstream side."
+    - "Read the network stack's outputs.tf and its log: private_subnets became private_subnet_ids."
+    - "Change the reference to outputs.private_subnet_ids[0] and plan until it says No changes, with orders-app untouched."
+    - "Ask the platform team to keep both outputs for a release when they rename one, so consumers can migrate before the old name is removed."
+  real_world: |
+    With terraform_remote_state, the root module outputs of another
+    configuration are exposed to yours, and that makes each output an
+    interface other stacks depend on. Renaming or removing one is a
+    breaking change for every consumer, which is why a rename is better
+    done in two steps: publish the new name beside the old one, let
+    consumers move, then remove the old one. When you fix a consumer, fix
+    the reference rather than hard-coding the values it returned, and
+    check in the plan that nothing is replaced: a subnet_id that changes
+    replaces an instance. The Terraform documentation also notes that
+    anyone who can read the root outputs can read the whole upstream
+    state, and suggests publishing shared values to a separate place
+    (for example a parameter store or key-value store) for tighter
+    access control; that is a design choice for the platform team.
+
+concepts:
+  - term: "terraform_remote_state"
+    text: "A data source that reads another configuration's state from its backend and exposes only that configuration's root module outputs."
+    url: "https://developer.hashicorp.com/terraform/language/state/remote-state-data"
+  - term: "Root module outputs"
+    text: "The values a configuration publishes. Other configurations using remote state can read them, so they act as the configuration's public interface."
+    url: "https://developer.hashicorp.com/terraform/language/values/outputs"
+  - term: "defaults argument"
+    text: "Default values for outputs in case the state lacks them; it fills gaps, it does not follow the upstream."
+    url: "https://developer.hashicorp.com/terraform/language/state/remote-state-data"
+
+sources:
+  - title: "Terraform: The terraform_remote_state data source"
+    url: "https://developer.hashicorp.com/terraform/language/state/remote-state-data"
+    retrieved: 2026-10-09
+  - title: "Terraform: Output values"
+    url: "https://developer.hashicorp.com/terraform/language/values/outputs"
+    retrieved: 2026-10-09
+
+command_notes:
+  "git status": "Nothing is modified: the app repo is unchanged."
+  "git log --oneline": "The newest commit is two weeks old. Nothing here touched the subnet reference."
+  "cat ../network/outputs.tf": "What the network stack publishes today: private_subnet_ids, not private_subnets."
+  "git -C ../network log --oneline": "The network repo's history; the newest commit is about outputs."
+  "git -C ../network log -p -- outputs.tf": "The platform team's rename: private_subnets became private_subnet_ids yesterday."
