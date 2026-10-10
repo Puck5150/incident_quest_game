@@ -135,6 +135,20 @@ terminal:
             { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
               "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] }
         ]
+    - match: "curl https://ip-ranges.amazonaws.com/ip-ranges.json"
+      output: |
+        (excerpt: the ROUTE53_HEALTHCHECKS entries of the full file)
+        { "ip_prefix": "15.177.0.0/18", "region": "GLOBAL", "service": "ROUTE53_HEALTHCHECKS" }
+        { "ip_prefix": "54.239.98.0/24", "region": "GLOBAL", "service": "ROUTE53_HEALTHCHECKS" }
+        { "ip_prefix": "54.240.217.160/29", "region": "GLOBAL", "service": "ROUTE53_HEALTHCHECKS" }
+    - match: "aws cloudwatch describe-alarms"
+      when_actions: [alarm-standby-hc]
+      output: |
+        api-primary-unhealthy  HealthCheckStatus hc-use1  < 1  -> pager
+        api-standby-unhealthy  HealthCheckStatus hc-usw2  < 1  -> pager
+    - match: "aws cloudwatch describe-alarms"
+      output: |
+        api-primary-unhealthy  HealthCheckStatus hc-use1  < 1  -> pager
     - match: "aws ec2 describe-security-groups --group-ids sg-0use1alb --query SecurityGroups[0].IpPermissions"
       evidence: primary-sg
       output: |
@@ -170,8 +184,9 @@ logs:
       hc-usw2: (no alarm)
   - name: "change process: standby network changes"
     lines: |
-      CHG-2310 (Dana) is an approved change; changing or reverting a security-group restriction needs a new change
-      with the owner's approval, applied through the IaC pipeline. Console or CLI edits are drift and get overwritten.
+      CHG-2310 (Dana) is an approved change. Widening or reverting a security-group restriction needs a new change with the
+      owner's approval, applied through the IaC pipeline. An emergency CLI edit is allowed only if narrow (no wider than
+      the need) and must be backfilled into the IaC the same day; otherwise the next apply overwrites it.
 
 hypotheses:
   - id: standby-unhealthy-last-resort
@@ -191,13 +206,28 @@ hypotheses:
     feedback: "Route 53 only marks an endpoint unhealthy when 18% or fewer of its checkers report it healthy, which protects against partial isolation. Here every checker region times out, and has since 09-17."
 
 actions:
+  - id: open-all-ports
+    label: "Open the standby ALB's security group to 0.0.0.0/0 on every port"
+    kind: destructive
+    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb( |$))(?=.*(0\\.0\\.0\\.0/0|::/0))(?=.*( --protocol (-1|all)( |$)| --port (?!443( |$))|(From|To)Port[\"']?[=:] ?(?!443(?![0-9]))|IpProtocol[\"']?[=:] ?[\"']?(-1|all))).*$"
+    feedback: "Everything works and everything is exposed: SSH-style management ports, debug ports, anything that ever listens. A load balancer should accept 443 and nothing else. Failover needed two narrow rules, not an open door."
+  - id: open-standby-direct
+    label: "Add 0.0.0.0/0 on 443 to the standby security group straight from the CLI"
+    kind: wrong
+    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb( |$))(?=.*(0\\.0\\.0\\.0/0|::/0)).*$"
+    feedback: "It unblocks checkers and customers in one stroke, but it silently reverts Dana's approved change, adds drift the next IaC apply will undo (and fail over to a dead standby again), and skips the owner's review. Do the health-checker rule narrowly, and put real-user access through a change."
+  - id: remove-vpn-rule
+    label: "Delete the office-VPN-only rule from the standby security group"
+    kind: wrong
+    match_regex: "^(sudo )?aws ec2 revoke-security-group-ingress(?=.* --group-id sg-0usw2alb).*$"
+    feedback: "Removing a security control nobody approved the removal of isn't a fix, and it would leave the group with no way for checkers or customers in. Add what is missing through a change, don't tear down what is there."
   - id: allow-health-checkers
-    label: "Allow inbound 443 only, from the Route 53 health checker ranges (the AWS-managed prefix list or the published ROUTE53_HEALTHCHECKS CIDRs), in the us-west-2 load balancer's security group"
+    label: "Allow inbound 443 only, from the Route 53 health checker ranges (the AWS-managed prefix list, or the ROUTE53_HEALTHCHECKS CIDRs from ip-ranges.json), in the us-west-2 load balancer's security group"
     kind: fix
-    # Typed: authorize-security-group-ingress on sg-0usw2alb, tcp, port 443, from a prefix list or a public CIDR of /16 or narrower.
-    # Never 0.0.0.0/0, the office range or a private range; flags in any order.
-    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb)(?=.* --protocol tcp)(?=.* --port 443( |$))(?=.* --cidr (?!0\\.0\\.0\\.0/0|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|203\\.0\\.113\\.)[0-9]{1,3}(\\.[0-9]{1,3}){3}/(1[6-9]|2[0-9]|3[0-2])( |$)).*$|^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb)(?=.* --ip-permissions)(?=.*FromPort=443)(?=.*ToPort=443)(?=.*IpProtocol=tcp)(?=.*PrefixListId=pl-[0-9a-f]+).*$"
-    feedback: "The checkers reach /healthz on 443 and nothing else, the standby turns healthy after its failure threshold, and with only the primary unhealthy Route 53 starts answering with us-west-2. Narrow is right: a prefix list or the published ranges, one port. But look at who else arrives at us-west-2 now: real customers, and the security group still drops them."
+    # Typed, one command per line: the lab's exact prefix list (pl-0r53hc) or one CIDR listed in ip-ranges.json (ROUTE53_HEALTHCHECKS), tcp, 443 only.
+    # World-open ranges, a second range, shell operators or extra ports are rejected; wrong/destructive actions are listed (and matched) first.
+    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb( |$))(?!.*[;&|`$<>])(?!.*(0\\.0\\.0\\.0/0|::/0|IpRanges|Ipv6Ranges|UserIdGroupPairs|--source-group|--cidr.*--cidr|--ip-permissions.*--cidr|--cidr.*--ip-permissions))(((?=.* --protocol (tcp|6)( |$))(?=.* --port 443( |$))(?=.* --cidr (15\\.177\\.0\\.0/18|54\\.239\\.98\\.0/24|54\\.240\\.217\\.160/29)( |$)))|((?=.* --ip-permissions)(?!.* --(cidr|protocol|port) )(?=.*FromPort[\"']?[=:] ?443(?![0-9]))(?=.*ToPort[\"']?[=:] ?443(?![0-9]))(?!.*(From|To)Port[\"']?[=:] ?(?!443(?![0-9])))(?=.*IpProtocol[\"']?[=:] ?[\"']?(tcp|6)[\"',} ])(?=.*PrefixListId[\"']?[=:] ?[\"']?pl-0r53hc[^0-9a-z])(?!.*pl-(?!0r53hc)))).*$"
+    feedback: "The checkers reach /healthz on 443 and nothing else, the standby turns healthy after its failure threshold, and with only the primary unhealthy Route 53 starts answering with us-west-2. Narrow is right: a prefix list or the published ranges, one port. A narrow emergency edit like this must be backfilled into the IaC the same day. But look at who else arrives at us-west-2 now: real customers, and the security group still drops them."
   - id: restore-standby-ingress
     label: "Raise a change to undo CHG-2310 for real users: give the standby ALB the primary's inbound rules and WAF web ACL, approved by its owner and applied through IaC"
     kind: fix
@@ -210,21 +240,6 @@ actions:
     label: "Set the TTL on both failover records to 60 seconds"
     kind: fix
     feedback: "Route 53 recommends a TTL of 60 seconds or less for records with health checks, so clients follow changes in health quickly. Answers already cached with the old 3600 TTL still expire on their own schedule, so this mostly protects the next failover, and the recovery back to us-east-1."
-  - id: open-all-ports
-    label: "Open the standby ALB's security group to 0.0.0.0/0 on every port"
-    kind: destructive
-    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb)(?=.* --cidr (0\\.0\\.0\\.0/0|::/0))(?=.*( --protocol (-1|all)( |$)| --port (-1|0-65535|1-65535)( |$))).*$"
-    feedback: "Everything works and everything is exposed: SSH-style management ports, debug ports, anything that ever listens. A load balancer should accept 443 and nothing else. Failover needed two narrow rules, not an open door."
-  - id: open-standby-direct
-    label: "Add 0.0.0.0/0 on 443 to the standby security group straight from the CLI"
-    kind: wrong
-    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?=.* --group-id sg-0usw2alb)(?=.* --cidr 0\\.0\\.0\\.0/0)(?=.* --port 443( |$)).*$"
-    feedback: "It unblocks checkers and customers in one stroke, but it silently reverts Dana's approved change, adds drift the next IaC apply will undo (and fail over to a dead standby again), and skips the owner's review. Do the health-checker rule narrowly, and put real-user access through a change."
-  - id: remove-vpn-rule
-    label: "Delete the office-VPN-only rule from the standby security group"
-    kind: wrong
-    match_regex: "^(sudo )?aws ec2 revoke-security-group-ingress(?=.* --group-id sg-0usw2alb).*$"
-    feedback: "Removing a security control nobody approved the removal of isn't a fix, and it would leave the group with no way for checkers or customers in. Add what is missing through a change, don't tear down what is there."
   - id: restart-standby
     label: "Restart the us-west-2 app servers"
     kind: wrong
