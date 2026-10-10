@@ -179,7 +179,7 @@ actions:
     label: "kubectl rollout undo deployment/orders-api (back to v1.9)"
     kind: fix
     match_regex: "^kubectl rollout undo deployment/orders-api( -n shop)?$"
-    feedback: "Rolling back restores service fast while you fix forward. That's a valid mitigation: stop the bleeding first."
+    feedback: "Rolling back restores service fast, and that's a fair first step to stop the bleeding. But it is an imperative change that Git doesn't know about: deployment.yaml still sets DB_URL for v2.0.0, so the next kubectl apply or pipeline run redeploys the broken manifest. The incident is only closed once the manifest in Git is fixed."
   - id: delete-pods
     label: "kubectl delete pod on the crashing pods"
     kind: wrong
@@ -197,7 +197,7 @@ actions:
 
 solution_paths:
   - [fix-env]
-  - [rollback]
+  - [rollback, fix-env]
 
 key_evidence: [crashloop, exit-code-1, missing-env]
 evidence_labels:
@@ -208,7 +208,7 @@ evidence_labels:
 hints:
   nudge: "Pods that start and immediately die usually say why on the way out. Where would that be?"
   direction: "Check the pod's status details (kubectl describe pod), then the logs of the container that crashed (kubectl logs --previous)."
-  answer: "The log says DATABASE_URL is not set. The CHANGELOG says v2.0.0 renamed DB_URL to DATABASE_URL, but the manifest still sets DB_URL. Fix the manifest, or roll back first."
+  answer: "The log says DATABASE_URL is not set. The CHANGELOG says v2.0.0 renamed DB_URL to DATABASE_URL, but the manifest still sets DB_URL. Fix the manifest in Git and apply it. You can roll back first to restore service, but the rollback alone leaves the broken manifest in Git."
 
 analogy:
   title: "A new chef who needs the recipe book by a different name"
@@ -216,8 +216,9 @@ analogy:
     The restaurant hired a new head chef (v2.0.0) who insists the recipe binder
     is labelled "Recipes". The kitchen still labels it "Cookbook". Each morning
     the chef walks in, can't find "Recipes", and walks out. The manager keeps
-    re-hiring them, waiting a little longer each time. Relabel the binder, or
-    bring back yesterday's chef until you can.
+    re-hiring them, waiting a little longer each time. Bringing back
+    yesterday's chef gets the kitchen open, but the binder is still
+    mislabelled for the next hire: relabel it.
 
 debrief:
   root_cause: |
@@ -231,11 +232,16 @@ debrief:
     - "kubectl describe pod: Last State Terminated, Reason Error, Exit Code 1 (not OOMKilled, not an image pull problem)."
     - "kubectl logs --previous: the crashed container says DATABASE_URL is not set."
     - "Compare the manifest's env with the release notes: DB_URL was renamed."
-    - "Mitigate (roll back) or fix forward (rename the variable), then verify with kubectl rollout status and kubectl get pods."
+    - "Optionally mitigate first (kubectl rollout undo) to restore service."
+    - "Fix forward in Git: rename the variable in deployment.yaml, commit, apply, then verify with kubectl rollout status and kubectl get pods. A rollback alone leaves the broken manifest for the next apply."
   real_world: |
     The Kubernetes docs list "incorrect environment variables" as a classic
     CrashLoopBackOff cause. Treat breaking config changes like breaking API
     changes: call them out in release notes and check them in deploy review.
+    Git is the source of truth for the manifest: a kubectl rollout undo
+    drifts from it, and a validation step (a staging deploy, a readiness gate
+    or a config-contract test in CI) stops a renamed variable reaching
+    production.
 
 sources:
   - title: "Kubernetes: Pod Lifecycle (CrashLoopBackOff, container restarts)"
