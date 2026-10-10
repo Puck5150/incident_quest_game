@@ -161,6 +161,8 @@
   summary: "Lists VPC endpoints (gateway and interface)."
   parts:
     - { token: "--filters Name=vpc-id,Values=vpc-0shop", meaning: "Only endpoints in this VPC." }
+    - { token: "--vpc-endpoint-ids vpce-0s3gw", meaning: "(Other form) only this endpoint, by its ID." }
+    - { token: "--query VpcEndpoints[0].PolicyDocument", meaning: "Keep just the first endpoint's endpoint policy, the document that limits what can be reached through it." }
   why: "Shows whether S3 or DynamoDB traffic can bypass the NAT gateway through a gateway endpoint."
   alternatives:
     - { command: "aws ec2 describe-route-tables --route-table-ids RTB", note: "A gateway endpoint appears as a prefix-list route in the tables it's attached to." }
