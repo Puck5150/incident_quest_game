@@ -152,6 +152,28 @@ describe('terraform-provider-lock-drift on the simulator', () => {
     expect(await detectedAll(sh)).toEqual({ ...NONE, 'ignore-the-lock': true })
   })
 
+  it('(f1) a negation or comment line naming the lock file is not the mistake', async () => {
+    const { sh } = await play('cd ~/infra', "printf '!.terraform.lock.hcl\\n# terraform.lock.hcl is committed\\n' >> .gitignore")
+    expect(await detectedAll(sh)).toEqual(NONE)
+    const bare = await play('cd ~/infra', "echo 'terraform.lock.hcl' >> .gitignore")
+    expect((await detectedAll(bare.sh))['ignore-the-lock']).toBe(true)
+  })
+
+  it('(d4) git checkout / git restore put the committed (stale) lock back: the original error returns and the fix is still reachable', async () => {
+    for (const undo of ['git checkout -- .terraform.lock.hcl', 'git checkout .terraform.lock.hcl', 'git restore .terraform.lock.hcl', 'git restore --source=HEAD .terraform.lock.hcl']) {
+      const { sh, out } = await play('cd ~/infra', HAND50, 'terraform plan', undo, 'terraform plan', 'git status', 'terraform init -upgrade', 'terraform plan')
+      expect(out[2].output, undo).toContain('Required plugins are not installed')
+      expect(out[3].exitCode, undo).toBe(0)
+      expect(out[3].output, undo).toBe('')
+      expect(out[4].output, undo).toContain('Error: Inconsistent dependency lock file')
+      expect(out[5].output, undo).toContain('working tree clean')
+      expect(out[7].output, undo).toContain('No changes.')
+      expect(await detectedAll(sh), undo).toEqual(FIXED)
+    }
+    const other = await play('cd ~/infra', 'git checkout -b x', 'git checkout -- nothere.tf')
+    expect(other.out[1].output).toContain('no simulated output')
+  })
+
   it('(g) -lockfile=readonly: conflicts with -upgrade, and fails (without changing the lock) on the stale lock', async () => {
     const { sh, out } = await play('cd ~/infra', 'terraform init -upgrade -lockfile=readonly', 'terraform init -lockfile=readonly', 'cat .terraform.lock.hcl')
     expect(out[1].exitCode).toBe(1)

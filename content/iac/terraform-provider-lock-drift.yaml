@@ -2,7 +2,7 @@
 id: terraform-provider-lock-drift
 track: iac
 difficulty: 2
-title: "The provider bump PR fails CI on a lock file nobody edited"
+title: "The provider bump PR is red and the plan fails before it reaches the bucket"
 par_minutes: 10
 ticket:
   from: "Priya (platform)"
@@ -175,12 +175,12 @@ actions:
       all:
         - file_contains: { path: /home/you/infra/.terraform.lock.hcl, matches: 'version\s*=\s*"5\.(5\d|[6-9]\d)\.\d+"' }
         - not: { file_contains: { path: /home/you/infra/.terraform.lock.hcl, matches: 'version\s*=\s*"5\.67\.0"[^}]*"h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs="|version\s*=\s*"5\.50\.0"[^}]*"h1:u2oC7W8S/r1rIrWr2EaF55jSXduFsIbvhfw2M5V4YWk="' } }
-    feedback: "The lock file says 5.50 or later now, but it is a generated file and the checksums beside the version still belong to the old package. Terraform refuses to run (Required plugins are not installed: no such package is cached), and terraform init refuses to install it (the package does not match the recorded checksums). Hand-written entries cannot be right: only terraform init knows the hashes. terraform init -upgrade rewrites the whole entry when the constraint selects another version; if it picks the same version you typed, delete .terraform.lock.hcl and run terraform init."
+    feedback: "The lock file says 5.50 or later now, but it is a generated file and the checksums beside the version still belong to the old package. Terraform refuses to run (Required plugins are not installed: no such package is cached), and terraform init refuses to install it (the package does not match the recorded checksums). git checkout -- .terraform.lock.hcl puts back the committed file, which is the stale 5.31.0 one: the original error returns. Hand-written entries cannot be right: only terraform init knows the hashes. terraform init -upgrade rewrites the whole entry when the constraint selects another version; if it picks the same version you typed, delete .terraform.lock.hcl and run terraform init."
   - id: ignore-the-lock
     label: "Add .terraform.lock.hcl to .gitignore so it stops getting in the way"
     kind: wrong
     done_when:
-      file_contains: { path: /home/you/infra/.gitignore, matches: '^[^#\n]*terraform\.lock\.hcl' }
+      file_contains: { path: /home/you/infra/.gitignore, matches: '^\s*(?![#!])[^#\n]*terraform\.lock\.hcl' }
     feedback: "Nothing about the failure changes (the file is still there and still stale), and every checkout and CI run would now pick whatever the newest allowed provider is at that moment. The lock file is meant to be committed: it is what makes everyone, including CI, install the same provider package."
 
 solution_paths:
