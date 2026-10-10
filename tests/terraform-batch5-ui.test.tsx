@@ -82,7 +82,6 @@ async function mount(id: string) {
   return { run, declare, click, taken, settle, remount, closeClean, trapped, wrongCount, box }
 }
 
-
 const methodical = (s: { lines: { label: string }[] }) => expect(s.lines.map((l) => l.label).join('\n')).toMatch(/Methodical/)
 
 describe('terraform-count-index-shift through the UI', () => {

@@ -21,17 +21,11 @@ environment: |
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "cat queues.tf"
-      evidence: count-list
+    - match: "git log --oneline -3"
       output: |
-        variable "queue_names" {
-          default = ["orders", "refunds", "shipping"]   # "returns" removed
-        }
-
-        resource "aws_sqs_queue" "queue" {
-          count = length(var.queue_names)
-          name  = var.queue_names[count.index]
-        }
+        4d2e9b7 queues: retire the returns queue
+        a91c03e queues: refunds and shipping queues
+        6be5f20 queues: orders queue from a list
 
 terraform:
   dir: "~/infra"
@@ -113,6 +107,9 @@ terraform:
     - evidence: shift-plan
       command: plan
       contains: "must be replaced"
+    - evidence: count-list
+      command: plan
+      contains: "is out of range for count"
     - evidence: indexed-state
       command: state list
       contains: "aws_sqs_queue.queue[3]"
@@ -133,7 +130,7 @@ hypotheses:
 
 actions:
   - id: for-each-moved
-    label: "Change the resource to for_each = toset(var.queue_names) (keyed by name), add moved blocks from each old index to its name (queue[0] to queue[\"orders\"] and so on, with \"returns\" included in the list for this step), then remove \"returns\" in the PR"
+    label: "Change the resource to for_each = toset(var.queue_names) (keyed by name) and add moved blocks from each live index to its name (queue[0] to queue[\"orders\"], queue[2] to queue[\"refunds\"], queue[3] to queue[\"shipping\"]), so removing \"returns\" destroys only \"returns\""
     kind: fix
     done_when:
       all:
@@ -228,4 +225,4 @@ sources:
     retrieved: 2026-10-02
 
 command_notes:
-  "cat queues.tf": "The PR branch's file: the list without \"returns\", and the queues built with count = length(var.queue_names), named by count.index."
+  "git log --oneline -3": "The top commit is the PR that removes returns; the ones before it are what main last applied."

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { evidenceSeen } from '../src/game/engine.ts'
 import { atStage } from '../src/schema/stages.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
@@ -45,6 +44,7 @@ describe('terraform-count-index-shift on the simulator', () => {
     expect(scenario.terraform).toBeDefined()
     expect(scenario.terminal!.commands.some((c) => (c.match ?? c.example ?? '').startsWith('terraform'))).toBe(false)
     for (const c of scenario.terminal!.commands) expect(scenario.command_notes?.[c.match ?? c.example!], c.match ?? c.example).toBeDefined()
+    expect(scenario.terminal!.commands.some((c) => (c.match ?? '').startsWith('cat '))).toBe(false)
   })
 
   it('keeps the old action ids, kinds and solution path', () => {
@@ -79,14 +79,17 @@ describe('terraform-count-index-shift on the simulator', () => {
     const { out } = await play('cd ~/infra', 'terraform plan', 'terraform state list')
     const tags = new Set([
       ...out.flatMap((r) => r.hits).filter((h) => h.startsWith('evidence:')).map((h) => h.slice('evidence:'.length)),
-      ...evidenceSeen(scenario, [{ type: 'RUN_COMMAND', input: 'cat queues.tf', at: 0 }]),
     ])
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
-    // and the file the scripted cat shows is the lab's file at the start
-    const { out: cat } = await play('cd ~/infra', 'cat queues.tf')
-    expect(cat[1].output).toContain('count = length(var.queue_names)')
-    expect(cat[1].output).not.toContain('"returns"]')
-    expect(cat[1].output).toBe(scenario.terminal!.commands.find((c) => c.match === 'cat queues.tf')!.output.replace(/\n$/, ''))
+    expect(out[1].hits).toContain('evidence:count-list')
+  })
+
+  it('(b2) the real file is what cat shows, before and after the edit', async () => {
+    const { out } = await play('cd ~/infra', 'cat queues.tf', SED_FOR_EACH, 'cat queues.tf', 'cd / && cat ~/infra/queues.tf | grep for_each')
+    expect(out[1].output).toContain('count = length(var.queue_names)')
+    expect(out[3].output).toContain('for_each = toset(var.queue_names)')
+    expect(out[3].output).not.toContain('count = length')
+    expect(out[4].output).toContain('for_each')
   })
 
   it('(c) route a: for_each + moved blocks; plan destroys only returns; apply credits the fix', async () => {
