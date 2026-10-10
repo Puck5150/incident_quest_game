@@ -6,7 +6,7 @@
 // half-applied world exactly as real Terraform does.
 import { equal, hasUnknown, type Value } from './eval.ts'
 import { planConfig, resKey, type PlanInput, type PlanItem, type PlanResult } from './plan.ts'
-import { alreadyExists, bucketNotEmpty, bucketObjects, dependencyViolation, fillOnCreate, fillOnUpdate, hex, referencedBy, seconds } from './provider.ts'
+import { alreadyExists, bucketNotEmpty, bucketObjects, dependencyViolation, fillOnCreate, fillOnUpdate, hex, notFound, referencedBy, seconds } from './provider.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { schemaFor } from './resources.ts'
 import { findInstance, instanceAddress, type State } from './state.ts'
@@ -245,7 +245,9 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
       for (const c of i.changes) next.set(c.name, c.after)
       const attrs = fillOnUpdate(before, Object.fromEntries(next))
       const secs = seconds(i.type, 'update')
-      const error = faultFor(i, 'update', attrs)
+      const uid = typeof attrs.id === 'string' ? attrs.id : ''
+      // With -refresh=false state is trusted, so an object deleted out of band surfaces here.
+      const error = faultFor(i, 'update', attrs) ?? (inst && !reality.has(realityKey(i.type, uid)) ? notFound(i.type, uid, 'update', seed) : undefined)
       if (error) fail(i, 'update', secs, error, typeof attrs.id === 'string' ? attrs.id : undefined)
       else {
         const id = attrs.id as string

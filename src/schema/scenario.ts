@@ -330,6 +330,8 @@ export const TerraformSchema = z.strictObject({
       patch: z.array(z.strictObject({ type: z.string().min(1), id: z.string().min(1), set: TfAttrs })).optional(),
       delete: z.array(z.strictObject({ type: z.string().min(1), id: z.string().min(1) })).optional(),
       add: z.array(z.strictObject({ type: z.string().min(1), attrs: TfAttrs })).optional(),
+      // Removed from the cloud before each terraform command once ALL of when_actions are taken (a blocker the player clears).
+      release: z.array(z.strictObject({ type: z.string().min(1), id: z.string().min(1), when_actions: z.array(id).min(1) })).optional(),
     })
     .optional(),
   evidence: z
@@ -713,9 +715,14 @@ export const ScenarioSchema = z
         if (typeof a.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'cloud', 'add', i, 'attrs'])
         else known.add(`${a.type}:${a.attrs.id}`)
       })
-      ;(['patch', 'delete'] as const).forEach((w) =>
+      ;(['patch', 'delete', 'release'] as const).forEach((w) =>
         tf.cloud?.[w]?.forEach((c, i) => {
           if (!known.has(`${c.type}:${c.id}`)) issue(`no object with id "${c.id}" in state or cloud.add`, ['terraform', 'cloud', w, i, 'id'])
+        }),
+      )
+      tf.cloud?.release?.forEach((r, i) =>
+        r.when_actions.forEach((a) => {
+          if (!actionIds.has(a)) issue(`unknown action "${a}"`, ['terraform', 'cloud', 'release', i, 'when_actions'])
         }),
       )
       tf.faults?.forEach((f, i) => {

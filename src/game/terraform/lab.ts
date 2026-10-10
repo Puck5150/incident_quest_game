@@ -39,6 +39,7 @@ export interface Lab {
   workspacesCreated: number // by `workspace new`: numbers their lineages, never reused after a delete
   lock?: { id: string; who: string; operation: string; created: string; path: string; info: string; message: string }
   reality: Reality
+  releases: NonNullable<NonNullable<TerraformBlock['cloud']>['release']> // blockers the player's actions remove from reality
   vars: Record<string, Value>
   evidence: NonNullable<TerraformBlock['evidence']>
   faults: Fault[]
@@ -136,6 +137,7 @@ export function labFromScenario(tf: TerraformBlock, startDir: string, home: stri
     workspacesCreated: 0,
     ...(tf.lock ? { lock: { operation: 'OperationTypeApply', path: 'terraform.tfstate', info: '', message: 'resource temporarily unavailable', ...tf.lock } } : {}),
     reality,
+    releases: structuredClone(tf.cloud?.release ?? []),
     vars: structuredClone(tf.vars ?? {}) as Record<string, Value>,
     evidence: tf.evidence ?? [],
     faults: structuredClone(tf.faults ?? []) as Fault[],
