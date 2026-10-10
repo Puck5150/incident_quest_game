@@ -21,66 +21,101 @@ environment: |
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "terraform state list | grep aws_sqs_queue"
-      when_actions: [for-each-moved]
+    - match: "cat queues.tf"
+      evidence: count-list
       output: |
-        aws_sqs_queue.queue["orders"]
-        aws_sqs_queue.queue["refunds"]
-        aws_sqs_queue.queue["returns"]
-        aws_sqs_queue.queue["shipping"]
-    - match: "terraform state list | grep aws_sqs_queue"
-      evidence: indexed-state
-      output: |
-        aws_sqs_queue.queue[0]
-        aws_sqs_queue.queue[1]
-        aws_sqs_queue.queue[2]
-        aws_sqs_queue.queue[3]
-    - match: "terraform plan"
-      when_actions: [for-each-moved]
-      output: |2
-          # aws_sqs_queue.queue[0] has moved to aws_sqs_queue.queue["orders"]
-          # aws_sqs_queue.queue[2] has moved to aws_sqs_queue.queue["refunds"]
-          # aws_sqs_queue.queue[3] has moved to aws_sqs_queue.queue["shipping"]
-          # aws_sqs_queue.queue[1] has moved to aws_sqs_queue.queue["returns"]
+        variable "queue_names" {
+          default = ["orders", "refunds", "shipping"]   # "returns" removed
+        }
 
-          # aws_sqs_queue.queue["returns"] will be destroyed
-          - resource "aws_sqs_queue" "queue" {
-              - name = "returns"
+        resource "aws_sqs_queue" "queue" {
+          count = length(var.queue_names)
+          name  = var.queue_names[count.index]
+        }
+
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
             }
+          }
+        }
 
-        Plan: 0 to add, 0 to change, 1 to destroy.
-    - match: "terraform plan"
-      evidence: shift-plan
-      output: |2
-          # aws_sqs_queue.queue[1] must be replaced
-        -/+ resource "aws_sqs_queue" "queue" {
-              ~ name = "returns" -> "refunds" # forces replacement
-            }
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: queues.tf
+      content: |
+        variable "queue_names" {
+          default = ["orders", "refunds", "shipping"]   # "returns" removed
+        }
 
-          # aws_sqs_queue.queue[2] must be replaced
-        -/+ resource "aws_sqs_queue" "queue" {
-              ~ name = "refunds" -> "shipping" # forces replacement
-            }
-
-          # aws_sqs_queue.queue[3] will be destroyed
-          - resource "aws_sqs_queue" "queue" {
-              - name = "shipping"
-            }
-
-        Plan: 2 to add, 0 to change, 3 to destroy.
-
-files:
-  - path: "queues.tf (on the PR branch)"
-    evidence: count-list
-    content: |
-      variable "queue_names" {
-        default = ["orders", "refunds", "shipping"]   # "returns" removed
-      }
-
-      resource "aws_sqs_queue" "queue" {
-        count = length(var.queue_names)
-        name  = var.queue_names[count.index]
-      }
+        resource "aws_sqs_queue" "queue" {
+          count = length(var.queue_names)
+          name  = var.queue_names[count.index]
+        }
+  state:
+    - type: aws_sqs_queue
+      name: queue
+      key: 0
+      attrs:
+        id: "https://sqs.us-east-1.amazonaws.com/123456789012/orders"
+        arn: "arn:aws:sqs:us-east-1:123456789012:orders"
+        url: "https://sqs.us-east-1.amazonaws.com/123456789012/orders"
+        name: orders
+        fifo_queue: false
+        visibility_timeout_seconds: 30
+        message_retention_seconds: 345600
+        tags_all: {}
+    - type: aws_sqs_queue
+      name: queue
+      key: 1
+      attrs:
+        id: "https://sqs.us-east-1.amazonaws.com/123456789012/returns"
+        arn: "arn:aws:sqs:us-east-1:123456789012:returns"
+        url: "https://sqs.us-east-1.amazonaws.com/123456789012/returns"
+        name: returns
+        fifo_queue: false
+        visibility_timeout_seconds: 30
+        message_retention_seconds: 345600
+        tags_all: {}
+    - type: aws_sqs_queue
+      name: queue
+      key: 2
+      attrs:
+        id: "https://sqs.us-east-1.amazonaws.com/123456789012/refunds"
+        arn: "arn:aws:sqs:us-east-1:123456789012:refunds"
+        url: "https://sqs.us-east-1.amazonaws.com/123456789012/refunds"
+        name: refunds
+        fifo_queue: false
+        visibility_timeout_seconds: 30
+        message_retention_seconds: 345600
+        tags_all: {}
+    - type: aws_sqs_queue
+      name: queue
+      key: 3
+      attrs:
+        id: "https://sqs.us-east-1.amazonaws.com/123456789012/shipping"
+        arn: "arn:aws:sqs:us-east-1:123456789012:shipping"
+        url: "https://sqs.us-east-1.amazonaws.com/123456789012/shipping"
+        name: shipping
+        fifo_queue: false
+        visibility_timeout_seconds: 30
+        message_retention_seconds: 345600
+        tags_all: {}
+  evidence:
+    - evidence: shift-plan
+      command: plan
+      contains: "must be replaced"
+    - evidence: indexed-state
+      command: state list
+      contains: "aws_sqs_queue.queue[3]"
 
 hypotheses:
   - id: index-shift
@@ -100,10 +135,24 @@ actions:
   - id: for-each-moved
     label: "Change the resource to for_each = toset(var.queue_names) (keyed by name), add moved blocks from each old index to its name (queue[0] to queue[\"orders\"] and so on, with \"returns\" included in the list for this step), then remove \"returns\" in the PR"
     kind: fix
+    done_when:
+      all:
+        - plan_clean: true
+        - reality_lacks: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/returns" }
+        - reality_has: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/orders" }
+        - reality_has: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/refunds" }
+        - reality_has: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/shipping" }
+        - not: { applied: { op: create, address: aws_sqs_queue.queue } }
     feedback: "Each queue is now tracked by its name, so the moves are recognised without touching the queues, and removing \"returns\" destroys only \"returns\"."
   - id: apply-anyway
     label: "Apply the plan; the queues come back with the same names"
     kind: destructive
+    done_when:
+      any:
+        - applied: { op: create, address: aws_sqs_queue.queue }
+        - reality_lacks: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/orders" }
+        - reality_lacks: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/refunds" }
+        - reality_lacks: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/shipping" }
     feedback: "Recreated queues are new queues: every message waiting in \"refunds\" and \"shipping\" is lost."
   - id: keep-placeholder
     label: "Leave \"returns\" in the list forever and just stop using it"
@@ -177,3 +226,6 @@ sources:
   - title: "Terraform: Refactoring (moved blocks, count to for_each)"
     url: "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring"
     retrieved: 2026-10-02
+
+command_notes:
+  "cat queues.tf": "The PR branch's file: the list without \"returns\", and the queues built with count = length(var.queue_names), named by count.index."

@@ -965,3 +965,17 @@ terraform-sg-cycle:
 - [ ] Unverified: `-reconfigure` that removes a backend block clears the record here; real Terraform's handling of the stale record afterwards was not traced.
 - Simplifications: one remote backend type (every `backend "X"` behaves alike, a `local` block with a different path is not modelled as a file move); no `workspace_key_prefix` handling; only the default workspace's state is mirrored in the file (real: other workspaces under `terraform.tfstate.d/`); `init-migrate TYPE` is a history line but not yet an `applied` op in the schema (add it to the enum when an incident needs to credit it); `terraform init -backend=false` and `-backend-config` are ignored.
 
+
+## terraform migrations (TF7b)
+
+Batch status: Task 4 done (terraform-count-index-shift). Tasks 5 to 10 pending.
+
+### terraform-count-index-shift (Task 4)
+
+- Migrated onto the simulator; same id, learning goal, hypotheses, hints, analogy, debrief, concepts and sources (verbatim). The scripted `terraform plan` / `state list | grep` commands and the `queues.tf` file artifact are gone; `queues.tf` is the lab's PR-branch file. Real plan output: two `must be replaced`, one `will be destroyed`, `Plan: 2 to add, 0 to change, 3 to destroy.`
+- Changed text: the old scripted plan showed the replaced resources as diffs of only `name`; the real one lists the computed attributes (`arn`, `id`, `url`, `tags_all`) as `-> (known after apply)`. The destroyed `queue[3]` now carries `(because index [3] is out of range for count)`. Both are the engine's output (unverified against a real aws provider 5.70.0 run).
+- Fix routes credited by world state: (a) `for_each` + `moved` blocks, (b) `for_each` + `terraform state mv`, (c) stay on `count` and shuffle state (returns parked at a free index or rotated to index 3). A `moved` block for `returns` is optional. Deviation from the brief: its fix predicate said `not applied delete queue[1..3]`, but the correct fix itself deletes returns at `[1]` (route a) or at the index it was parked on (route c, any of 1 to 4), so the fix and the trap both use `create`: the fix requires `not applied create aws_sqs_queue.queue`, the trap `apply-anyway` is `applied create aws_sqs_queue.queue` or any of the three live queue URLs missing from reality. A replaced queue keeps its URL, so the replacement is detectable only by the `create` in history.
+- Action label of `for-each-moved` kept verbatim, but its parenthesis ("with returns included in the list for this step") describes the old scripted flow; in the lab `returns` is already out of the list and a moved block for it is optional. Consider rewording.
+- Known limit: evidence `count-list` comes from a scripted `cat queues.tf` (the engine answers a typed scripted line before the shell), so after the player edits the file the exact line `cat queues.tf` still prints the original PR-branch file. Other readers (`grep`, `sed -n`, `less`, `cat ./queues.tf`) show the real file. `state-rm` followed by `import` of the three live queues under for_each keys plans clean but leaves `returns` in the cloud, so it is not credited (the old incident called state surgery error-prone but "can be made to work").
+- Command library: none of the scripted entries were library entries; nothing removed.
+- [ ] Unverified: the exact `QueueNameExists` text for a re-create after `state rm` (modelled in the simulator, TF4).
