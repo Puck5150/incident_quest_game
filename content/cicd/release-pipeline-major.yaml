@@ -39,10 +39,10 @@ terminal:
   prompt: "you@laptop:~/acmectl$"
   commands:
     - match: "gh run list --workflow publish.yml --limit 3"
-      when_actions: [dispatch-and-app-token]
+      when_actions: [dispatch-tag]
       output: |
         STATUS  TITLE                 WORKFLOW     BRANCH  EVENT              ID    ELAPSED  AGE
-        ✓       publish v2.4.0        publish.yml  main    workflow_dispatch  8812  6m12s    3m
+        ✓       publish v2.4.0        publish.yml  v2.4.0  workflow_dispatch  8812  6m12s    3m
         ✓       v2.3.0                publish.yml  v2.3.0  push               8519  2m40s    16d
         ✓       v2.2.1                publish.yml  v2.2.1  push               8204  2m31s    29d
     - match: "gh run list --workflow publish.yml --limit 3"
@@ -84,6 +84,22 @@ files:
                 git commit -am "release v${{ inputs.version }}"
                 git tag "v${{ inputs.version }}"
                 git push origin main "v${{ inputs.version }}"
+  - path: ".github/workflows/publish.yml (excerpt)"
+    evidence: checkout-default
+    language: yaml
+    content: |
+      on:
+        push:
+          tags: ['v*']
+        workflow_dispatch:
+          inputs:
+            tag: { required: true }
+      jobs:
+        build:
+          steps:
+            - uses: actions/checkout@v4     # no ref: builds github.sha
+              # tag push:          github.sha is the tagged commit
+              # workflow_dispatch: github.sha is the head of the branch or tag you dispatch on
   - path: "Annotations on recent runs"
     evidence: node-warnings
     content: |
@@ -104,11 +120,28 @@ hypotheses:
     feedback: "release.yml ran fine 2 hours ago. The publish run is missing, not failed or queued."
 
 actions:
-  - id: dispatch-and-app-token
-    label: "Start publish.yml for v2.4.0 with gh workflow run publish.yml -f tag=v2.4.0, and change release.yml to push tags with a GitHub App installation token"
+  - id: dispatch-main
+    label: "gh workflow run publish.yml -f tag=v2.4.0 (dispatched on main, no --ref)"
+    kind: wrong
+    match_regex: "^gh workflow run publish\\.yml (?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']?$"
+    feedback: "A dispatch runs on main unless you give --ref, and publish.yml's checkout has no ref, so it builds whatever main is now, not the commit that was signed off and tagged. A release must be built from its tag: dispatch with --ref v2.4.0."
+  - id: dispatch-tag
+    label: "Start publish.yml from the tag itself: gh workflow run publish.yml --ref v2.4.0 -f tag=v2.4.0"
     kind: fix
-    match_regex: "^gh workflow run publish\\.yml -f tag=v2\\.4\\.0$"
-    feedback: "workflow_dispatch always creates a run, so v2.4.0 publishes now; with an App token, the next release's tag push will trigger publish.yml on its own."
+    match_regex: "^gh workflow run publish\\.yml (?:(?:-r|--ref)[ =][\"']?v2\\.4\\.0[\"']? (?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']?|(?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']? (?:-r|--ref)[ =][\"']?v2\\.4\\.0[\"']?)$"
+    feedback: "workflow_dispatch always creates a run, and dispatching on the tag ref means the build checks out the tagged commit, the one that was signed off. That publishes v2.4.0; it does not stop v2.5.0 breaking the same way (the durable fix is still to do)."
+  - id: app-token
+    label: "Change release.yml to push the tag with a short-lived GitHub App installation token (contents: write only, minted per run with actions/create-github-app-token), and pass inputs.version through an env var instead of interpolating it into the script"
+    kind: fix
+    feedback: "A tag pushed with an App installation token is not the GITHUB_TOKEN, so it starts publish.yml like a maintainer's push. The token is scoped to this repo with contents: write, expires in an hour, and isn't tied to a person. Passing the input through env: closes the script-injection hole in run: \"${{ inputs.version }}\"."
+  - id: workflow-call
+    label: "Change release.yml to call publish.yml directly (workflow_call, passing the tag), so no tag-push event is needed and no extra credential exists"
+    kind: fix
+    feedback: "The release workflow calls the publish workflow itself, so nothing depends on a tag-push event. No App, key or PAT to manage, and the called workflow runs with permissions you grant it. Check that publish.yml checks out the tag (ref: inputs.tag)."
+  - id: release-pat
+    label: "Store a personal access token (repo scope) as a secret and push the tag with it"
+    kind: wrong
+    feedback: "It triggers publish, but a PAT is long-lived, broader than needed (every repo the person can write to), and tied to one person's account: when they leave or rotate it, releases break again. Use a scoped, short-lived App token or workflow_call."
   - id: retag-laptop
     label: "Delete the tag and push it again from your laptop"
     kind: wrong
@@ -119,14 +152,16 @@ actions:
     feedback: "Permissions change what the token may do, not the rule that its events don't start workflow runs."
 
 solution_paths:
-  - [dispatch-and-app-token]
+  - [dispatch-tag, app-token]
+  - [dispatch-tag, workflow-call]
 
-key_evidence: [no-publish-run, tag-exists, tag-by-token]
+key_evidence: [no-publish-run, tag-exists, tag-by-token, checkout-default]
 
 evidence_labels:
   no-publish-run: "publish.yml has no run for v2.4.0"
   tag-exists: "The v2.4.0 tag is on the remote"
   tag-by-token: "release.yml now pushes the tag with the default GITHUB_TOKEN"
+  checkout-default: "publish.yml checks out github.sha, so a dispatch must run on the tag ref to build the tag"
 
 red_herrings:
   - evidence: node-warnings
@@ -136,7 +171,7 @@ red_herrings:
 hints:
   nudge: "Did publish.yml fail, or never start?"
   direction: "It never started for v2.4.0. Who pushed that tag, and what does GitHub do with events made by the GITHUB_TOKEN?"
-  answer: "Tags pushed with the GITHUB_TOKEN don't trigger workflows. Dispatch publish.yml for v2.4.0 now and push tags with a GitHub App token from now on."
+  answer: "Tags pushed with the GITHUB_TOKEN don't trigger workflows. Dispatch publish.yml on the v2.4.0 ref (--ref v2.4.0) now so it builds the tag, then change release.yml to push with a scoped App token or call publish.yml via workflow_call."
 
 analogy:
   title: "The robot rang its own doorbell"
@@ -159,12 +194,20 @@ debrief:
     - "Look for publish.yml's run for v2.4.0: there isn't one."
     - "Confirm the tag exists on the remote."
     - "See who pushed it: release.yml, with the GITHUB_TOKEN, since this release."
-    - "Dispatch publish.yml for the tag; move release.yml to a GitHub App token."
+    - "Dispatch publish.yml on the tag ref (--ref v2.4.0), so the build is the tagged commit."
+    - "Move release.yml to a scoped, short-lived App token, or call publish.yml with workflow_call; pass inputs through env."
   real_world: |
     workflow_dispatch and repository_dispatch are the exceptions: they
     always create runs. Many release setups call the publish workflow
     directly (workflow_call) from the release workflow instead of relying
-    on a tag-push event.
+    on a tag-push event, which needs no extra credential at all. If you do
+    use an App token, give the App only contents: write on this repo and
+    mint a token per run (actions/create-github-app-token); never a PAT.
+    Dispatch on the tag ref, not main, so a release is always built from
+    the commit that was tagged. And never interpolate ${{ inputs.* }} into
+    a run: script; pass it through env: to avoid script injection. The
+    Node 20 deprecation warnings are not the cause, but plan the action
+    version bumps before the runner default changes.
 
 concepts:
   - term: "GITHUB_TOKEN and triggering workflows"
@@ -203,7 +246,7 @@ stages:
     terminal:
       commands:
         - match: "gh release view v2.4.0 --json assets --jq '.assets[].name'"
-          when_actions: [upload-missing]
+          when_actions: [upload-binaries, upload-sums]
           output: |
             SHA256SUMS
             acmectl-darwin-arm64.tar.gz
@@ -308,7 +351,7 @@ stages:
     terminal:
       commands:
         - match: "curl -s -o /dev/null -w '%{http_code}\\n' -L https://github.com/acme/acmectl/releases/latest/download/acmectl-darwin-arm64.tar.gz"
-          when_actions: [upload-missing]
+          when_actions: [upload-binaries]
           output: |
             200
         - match: "curl -s -o /dev/null -w '%{http_code}\\n' -L https://github.com/acme/acmectl/releases/latest/download/acmectl-darwin-arm64.tar.gz"
@@ -316,7 +359,7 @@ stages:
           output: |
             404
         - match: "gh release download v2.4.0 -p SHA256SUMS -O -"
-          when_actions: [upload-missing]
+          when_actions: [upload-sums]
           output: |
             1b9e...c04a  acmectl-darwin-arm64.tar.gz
             7f3a...9e21  acmectl-linux-amd64.tar.gz
@@ -336,21 +379,36 @@ stages:
         text: "Mark v2.3.0 as Latest until next week."
         feedback: "macOS and Windows users would get the old version on announcement day, and v2.4.0 stays broken."
     actions:
-      - id: upload-missing
-        label: "Build v2.4.0 with the fixed workflow, then gh release upload v2.4.0 acmectl-darwin-arm64.tar.gz acmectl-windows-amd64.zip SHA256SUMS --clobber"
+      - id: clobber-linux
+        label: "gh release upload v2.4.0 ... acmectl-linux-amd64.tar.gz ... --clobber (replace the Linux binary too)"
+        kind: destructive
+        match_regex: "^gh release upload v2\\.4\\.0 (?=.*acmectl-linux-amd64)(?=.*--clobber)"
+        feedback: "Linux users already installed that binary and checked it against the SHA256SUMS you published. A rebuild is not byte-identical, so replacing it breaks their checksums and your provenance. Leave published binaries alone; the new SHA256SUMS must keep the original Linux hash."
+      - id: clobber-binaries
+        label: "gh release upload v2.4.0 <binaries> SHA256SUMS --clobber (one command for everything)"
+        kind: wrong
+        match_regex: "^gh release upload v2\\.4\\.0 (?=.*--clobber)(?=.*acmectl-)"
+        feedback: "--clobber replaces assets of the same name, so a typo or a stray file silently overwrites something users have verified. The binaries are new names: upload them without --clobber. Only SHA256SUMS, which exists and must change, gets --clobber, in its own command."
+      - id: upload-binaries
+        label: "Re-run the fixed publish workflow on the v2.4.0 tag for the three binaries, then attach only the new ones, without --clobber: gh release upload v2.4.0 acmectl-darwin-arm64.tar.gz acmectl-windows-amd64.zip"
         kind: fix
-        match_regex: "^gh release upload v2\\.4\\.0 .*SHA256SUMS.* --clobber$|^gh release upload v2\\.4\\.0 --clobber .*SHA256SUMS.*$"
-        feedback: "The release has all three binaries and a SHA256SUMS that lists them; --clobber replaced only SHA256SUMS. The Linux binary and the tag are untouched."
+        match_regex: "^gh release upload v2\\.4\\.0 (?:(?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz (?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip|(?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip (?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz)$"
+        feedback: "The two missing binaries, built from the tag, are attached as new assets. Without --clobber, the command would refuse to replace anything that already exists, so the Linux binary and the tag are untouched."
+      - id: upload-sums
+        label: "Write a SHA256SUMS that keeps the existing Linux hash and adds the two new binaries, then replace only that file: gh release upload v2.4.0 SHA256SUMS --clobber"
+        kind: fix
+        match_regex: "^gh release upload v2\\.4\\.0 (?:(?:\\./)?(?:dist/)?SHA256SUMS --clobber|--clobber (?:\\./)?(?:dist/)?SHA256SUMS)$"
+        feedback: "SHA256SUMS is the one asset that has to change, and it is replaced alone. It still lists the Linux hash users verified, plus the two new binaries."
       - id: delete-release
         label: "gh release delete v2.4.0 --cleanup-tag, then re-run release.yml"
         kind: destructive
         feedback: "Deletes a tag people have already installed from and verified, and makes a new one. Patch the release instead."
       - id: no-sums
-        label: "Upload just the two missing binaries"
+        label: "Upload just the two missing binaries and stop"
         kind: wrong
         feedback: "The install script verifies against SHA256SUMS, which still lists only Linux: macOS and Windows installs would fail the checksum check."
     solution_paths:
-      - [upload-missing]
+      - [upload-binaries, upload-sums]
     key_evidence: [latest-404, sums-one]
     evidence_labels:
       latest-404: "releases/latest/download for macOS returns 404"
@@ -358,17 +416,18 @@ stages:
     hints:
       nudge: "The workflow is fixed for v2.5.0. What do macOS users get today?"
       direction: "Check what latest/download returns, and what SHA256SUMS lists."
-      answer: "Upload the missing binaries and a full SHA256SUMS to v2.4.0 with gh release upload --clobber; don't move the tag."
+      answer: "Upload only the two missing binaries to v2.4.0 (no --clobber), then replace SHA256SUMS alone with --clobber, keeping the Linux hash; don't move the tag or touch the Linux binary."
     debrief:
       root_cause: |
         v2.4.0 went out as the Latest release with one binary and a
         SHA256SUMS listing one file, so releases/latest/download 404s for
         macOS and Windows. Rebuilding from the same tag and attaching the
-        missing assets (replacing SHA256SUMS with --clobber) completes the
-        release without moving a tag that people have already installed
-        from.
+        missing binaries as new assets, then replacing only SHA256SUMS
+        (the Linux hash kept) with --clobber, completes the release without
+        moving a tag or replacing a binary that people have already
+        installed and verified.
       ideal_path:
         - "Check latest/download for macOS: 404."
         - "Read SHA256SUMS: only Linux."
         - "Build all three from the tag with the fixed workflow."
-        - "gh release upload the missing files and SHA256SUMS --clobber; check again."
+        - "gh release upload the two new binaries (no --clobber), then SHA256SUMS --clobber on its own; never replace the Linux binary; check again."
