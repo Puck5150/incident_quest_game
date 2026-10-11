@@ -75,6 +75,18 @@ actions:
     label: "Make pricing-service's client inject the current trace context (traceparent) into outgoing requests, using OpenTelemetry's HTTP instrumentation or propagator"
     kind: fix
     feedback: "Downstream calls now join the caller's trace, so the next checkout trace shows pricing's children, including discount-service's slow query."
+  - id: fix-scan
+    label: "With the connected trace, find the promotions query's filter and add the missing index to discount-service's schema through its migration pipeline (CREATE INDEX CONCURRENTLY), then check EXPLAIN no longer shows a sequential scan"
+    kind: fix
+    feedback: "This is the actual 2-second regression: a full table scan in discount-service. Propagation only made it visible. Building the index concurrently avoids locking writes while it builds."
+  - id: propagation-test
+    label: "Add a test or CI check that pricing-service's outgoing calls carry traceparent, so a library change cannot silently break traces again"
+    kind: fix
+    feedback: "Tracing broke the moment the shared client was replaced and nothing noticed. A small assertion on the outgoing header, or a trace-completeness check in staging, would have caught it."
+  - id: scale-discount
+    label: "Scale discount-service out so its slow query has more replicas"
+    kind: wrong
+    feedback: "Each replica still scans the whole table; more of them add load on the database without making any call faster."
   - id: more-sampling
     label: "Raise the sampling rate to 100%"
     kind: wrong
@@ -89,7 +101,7 @@ actions:
     feedback: "The collector receives everything it's sent. The context is lost in pricing-service before any span is exported."
 
 solution_paths:
-  - [propagate]
+  - [propagate, fix-scan, propagation-test]
 
 key_evidence: [trace-stops, orphan-trace, no-header, plain-fetch]
 
@@ -102,7 +114,7 @@ evidence_labels:
 hints:
   nudge: "Spans exist downstream. Why aren't they connected to the checkout trace?"
   direction: "Check whether downstream services receive a traceparent header, and how pricing-service makes its calls."
-  answer: "pricing-service's new client doesn't propagate traceparent. Use OpenTelemetry's instrumentation or propagator so outgoing calls carry it."
+  answer: "pricing-service's new client doesn't propagate traceparent: use OpenTelemetry's instrumentation. Then the connected trace shows the real cost, a full table scan in discount-service: add the index, and a test for the header."
 
 analogy:
   title: "The parcel lost its tracking number"
@@ -120,12 +132,15 @@ debrief:
     rewritten client made plain requests without it, so every downstream
     service started a new trace. Checkout traces ended at pricing-service,
     and the slow part, a full table scan in discount-service, sat in separate,
-    unconnected traces.
+    unconnected traces. Restoring the context only makes the slowness
+    visible; the 2-second regression itself is the missing index.
   ideal_path:
     - "Notice the trace ends at pricing-service with no children."
     - "Find the downstream spans as separate root traces."
     - "Confirm downstream requests arrive without traceparent."
     - "Propagate trace context in pricing-service's client; check the next trace is connected."
+    - "Read the connected trace: the 1.9 s is a full table scan in discount-service. Add the index (concurrently, through its migrations) and confirm the plan."
+    - "Add a test that outgoing calls carry traceparent so it cannot silently break again."
   real_world: |
     Use your tracing library's instrumentation for HTTP clients rather than
     hand-rolling calls; a single uninstrumented hop breaks every trace
