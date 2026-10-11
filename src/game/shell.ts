@@ -492,6 +492,7 @@ export class IncidentShell {
       const plan = wantsPlan ? await worldPlan(ctx) : undefined
       return await evalPredicate(pred, { state: lab.state, reality: lab.reality, lock: lab.lock, history: lab.history, plan: () => plan,
         readFile: (p) => this.read(p),
+        ...(lab.savedBackend ? { backend: lab.savedBackend } : {}),
         listFiles: async (dir) => {
           const out: { name: string; text: string }[] = []
           for (const n of await bash.fs.readdir(dir).catch(() => [] as string[])) {

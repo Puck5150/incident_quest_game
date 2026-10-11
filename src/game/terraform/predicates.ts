@@ -1,5 +1,5 @@
 // World predicates: the checks a scenario's done_when is made of, evaluated against a snapshot.
-import { equal } from './eval.ts'
+import { equal, type Value } from './eval.ts'
 import type { PlanResult } from './plan.ts'
 import { hasChanges } from './render.ts'
 import { realityKey, type Reality } from './refresh.ts'
@@ -18,6 +18,8 @@ export interface World {
   plan(): PlanResult | undefined
   readFile(path: string): Promise<string | undefined>
   // The files directly in a directory (name and text); needed by config_matches.
+  // The backend `terraform init` last recorded (its literal attributes), if any; needed by `backend`.
+  backend?: { type: string; attrs: Record<string, Value> }
   listFiles?(dir: string): Promise<{ name: string; text: string }[]>
 }
 
@@ -81,7 +83,13 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   if (has(l, 'sg_only')) return groupOnly(w.reality, l.sg_only)
   if (has(l, 'config_matches')) {
     const re = new RegExp(l.config_matches.matches, 'm')
-    return (await w.listFiles?.(l.config_matches.dir) ?? []).some((f) => f.name.endsWith('.tf') && re.test(stripHclComments(f.text)))
+    return (await w.listFiles?.(l.config_matches.dir) ?? []).some((f) => f.name.endsWith('.tf') && f.text.length <= 200_000 && re.test(stripHclComments(f.text)))
+  }
+  if (has(l, 'backend')) {
+    const b = w.backend
+    if (!b || b.type !== l.backend.type) return false
+    const meets = (req: Record<string, Value | '*'> | undefined) => Object.entries(req ?? {}).every(([k, v]) => (v === '*' ? typeof b.attrs[k] === 'string' && b.attrs[k] !== '' : Object.hasOwn(b.attrs, k) && equal(b.attrs[k], v)))
+    return meets(l.backend.require) && (l.backend.any_of === undefined || l.backend.any_of.some(meets))
   }
   if (has(l, 'reality_lacks')) return !Object.hasOwn(w.reality, realityKey(l.reality_lacks.type, l.reality_lacks.id))
   if (has(l, 'applied')) {

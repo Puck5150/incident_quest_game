@@ -223,17 +223,17 @@ actions:
         - not: { applied: { op: delete, address: aws_cloudwatch_log_group.api } }
         - not: { applied: { op: delete, address: aws_iam_role.task } }
         - not: { applied: { op: delete, address: aws_cloudwatch_log_group.worker } }
-        - config_matches: { dir: /home/you/infra, matches: 'backend\s+"s3"\s*\{(?=[^}]*?^[ \t]*bucket[ \t]*=[ \t]*"[^"]+"[ \t]*$)(?=[^}]*?^[ \t]*key[ \t]*=[ \t]*"[^"]+"[ \t]*$)(?=[^}]*?^[ \t]*encrypt[ \t]*=[ \t]*true[ \t]*$)(?=[^}]*?^[ \t]*(?:use_lockfile[ \t]*=[ \t]*true|dynamodb_table[ \t]*=[ \t]*"[^"]+")[ \t]*$)' }
+        - backend: { type: s3, require: { bucket: '*', key: '*', encrypt: true }, any_of: [{ use_lockfile: true }, { dynamodb_table: '*' }] }
         - not: { file_contains: { path: /home/you/infra/terraform.tfstate, matches: '"resources"' } }
     feedback: "State maps every block to its live object again, the plan is empty, and the state no longer lives on a laptop: it sits in an encrypted S3 backend with locking, and the local file was emptied by the migration. The cause of the incident (state on one machine) is gone, not just its symptom. Remaining hygiene: turn on versioning and restrict access on the state bucket, and delete terraform.tfstate.backup, which still holds the old state in plain text."
   - id: weak-backend
-    label: "Declare an S3 backend that is not encrypted, has no locking, or lacks a bucket or key"
+    label: "Declare an S3 backend that is not encrypted, has no locking, or lacks a bucket or key, and initialise it"
     kind: wrong
     done_when:
       all:
-        - config_matches: { dir: /home/you/infra, matches: 'backend\s+"s3"' }
-        - not: { config_matches: { dir: /home/you/infra, matches: 'backend\s+"s3"\s*\{(?=[^}]*?^[ \t]*bucket[ \t]*=[ \t]*"[^"]+"[ \t]*$)(?=[^}]*?^[ \t]*key[ \t]*=[ \t]*"[^"]+"[ \t]*$)(?=[^}]*?^[ \t]*encrypt[ \t]*=[ \t]*true[ \t]*$)(?=[^}]*?^[ \t]*(?:use_lockfile[ \t]*=[ \t]*true|dynamodb_table[ \t]*=[ \t]*"[^"]+")[ \t]*$)' } }
-    feedback: "A backend block is declared, but it does not meet the bar for state: it needs a bucket and key, encrypt = true (state holds secrets in plain text) and locking (use_lockfile = true, or a dynamodb_table), each on its own uncommented line inside the block. A commented-out setting, or one trailing a comment, does not count."
+        - backend: { type: s3 }
+        - not: { backend: { type: s3, require: { bucket: '*', key: '*', encrypt: true }, any_of: [{ use_lockfile: true }, { dynamodb_table: '*' }] } }
+    feedback: "The backend terraform init recorded does not meet the bar for state: it needs a bucket and key, encrypt = true (state holds secrets in plain text) and locking (use_lockfile = true, or a dynamodb_table), set as plain values in the backend block itself. A setting in a comment, a tag, a nested block or a heredoc does not count, and Terraform allows only one backend block."
   - id: apply-anyway
     label: "Run terraform apply and let it create the missing resources"
     kind: wrong

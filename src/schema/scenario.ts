@@ -196,6 +196,15 @@ export const LeafSchema = z.union([
   }),
   // Some .tf file directly in `dir` matches the regex once its comments are removed (# // and /* */, outside strings).
   z.strictObject({ config_matches: z.strictObject({ dir: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
+  // The backend `terraform init` last recorded is of this type and its literal attributes meet `require`
+  // ('*': a non-empty string) and at least one of `any_of`. Only a successful init records it.
+  z.strictObject({
+    backend: z.strictObject({
+      type: z.string().min(1),
+      require: z.record(z.string(), z.union([z.string().min(1), z.number(), z.boolean()])).optional(),
+      any_of: z.array(z.record(z.string(), z.union([z.string().min(1), z.number(), z.boolean()]))).min(1).optional(),
+    }),
+  }),
   z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])

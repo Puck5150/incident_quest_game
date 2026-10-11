@@ -3,7 +3,9 @@ import type { CliContext } from './cli.ts'
 import { formatDiagnostic } from './diag.ts'
 import type { Lab } from './lab.ts'
 import { parseHcl } from './parse.ts'
+import { evalExpr, UNKNOWN, type Value } from './eval.ts'
 import { emptyState, stateJson } from './state.ts'
+import type { Block } from './types.ts'
 
 export const STATE_FILE = 'terraform.tfstate'
 export const STATE_BACKUP = 'terraform.tfstate.backup'
@@ -12,20 +14,39 @@ export const STATE_BACKUP = 'terraform.tfstate.backup'
 export interface BackendRec {
   type: string
   config: string
+  // The block's own literal attributes (nested blocks and unresolvable expressions left out), for the `backend` predicate.
+  attrs: Record<string, Value>
 }
 type File = { name: string; text: string }
 
-// The `terraform { backend "TYPE" { ... } }` block of the root module's files. A file that does not parse is skipped.
-export function backendOf(files: File[]): BackendRec | undefined {
-  for (const f of files) {
-    for (const b of parseHcl(f.name, f.text).blocks) {
-      if (b.type !== 'terraform') continue
-      const be = b.blocks.find((x) => x.type === 'backend' && x.labels.length === 1)
-      if (be) return { type: be.labels[0], config: JSON.stringify(be.attrs.map((a) => [a.name, a.value]).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) }
+// Every `terraform { backend "TYPE" { ... } }` block of the root module's files, in order. A file that does not parse is skipped.
+function backendBlocks(files: File[]): Block[] {
+  const out: Block[] = []
+  for (const f of files) for (const b of parseHcl(f.name, f.text).blocks) if (b.type === 'terraform') out.push(...b.blocks.filter((x) => x.type === 'backend' && x.labels.length === 1))
+  return out
+}
+const literalAttrs = (be: Block): Record<string, Value> => {
+  const out: Record<string, Value> = {}
+  for (const a of be.attrs) {
+    try {
+      out[a.name] = evalExpr(a.value, { ref: () => UNKNOWN })
+    } catch {
+      // not a literal: left out
     }
   }
-  return undefined
+  return out
 }
+export function backendOf(files: File[]): BackendRec | undefined {
+  const be = backendBlocks(files)[0]
+  if (!be) return undefined
+  return { type: be.labels[0], config: JSON.stringify(be.attrs.map((a) => [a.name, a.value]).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))), attrs: literalAttrs(be) }
+}
+// Where the first backend block is, when a second one makes the configuration invalid.
+export function backendDuplicate(files: File[]): string | undefined {
+  const all = backendBlocks(files)
+  return all.length > 1 ? `${all[0].file}:${all[0].pos.line}` : undefined
+}
+const DUPLICATE = (at: string) => ({ summary: 'Duplicate backend configuration', detail: `A module may have only one backend configuration. The backend was previously configured at ${at}.` })
 const same = (a?: BackendRec, b?: BackendRec) => a?.type === b?.type && a?.config === b?.config
 
 // The default workspace's state: what the local backend keeps in terraform.tfstate (other workspaces live elsewhere).
@@ -45,6 +66,8 @@ export const localState = (lab: Lab) => lab.stateFile && !lab.savedBackend
 // The error a command that opens the backend gives when the configuration names a different backend than init recorded.
 export function backendRequired(lab: Lab, files: File[]): { summary: string; detail: string } | undefined {
   if (!lab.stateFile) return undefined
+  const dup = backendDuplicate(files)
+  if (dup) return DUPLICATE(dup)
   const cur = backendOf(files)
   const saved = lab.savedBackend
   if (same(cur, saved)) return undefined
@@ -95,6 +118,8 @@ function forget(lab: Lab): void {
 // `lines` go under "Initializing the backend..."; `stderr` is the error that stops init there.
 export async function initBackend(args: string[], ctx: CliContext, files: File[]): Promise<{ lines: string[] } | { stderr: string }> {
   const lab = ctx.lab
+  const dup = lab.stateFile ? backendDuplicate(files) : undefined
+  if (dup) return { stderr: box(DUPLICATE(dup).summary, DUPLICATE(dup).detail) }
   const cur = backendOf(files)
   const saved = lab.savedBackend
   if (!lab.stateFile || same(cur, saved)) return { lines: [] }
