@@ -21,6 +21,7 @@ fallback.
 - `terraform` is already a custom command in `src/game/shell.ts` (`TOOLS`), answering from scripted
   commands. Files on disk, hosts, `ssh`, nano/vi and file-edit fixes exist (PLAN_TERMINAL.md T1-T5).
 - `content/commands/terraform.yaml` holds the command breakdowns.
+- 2026-10-11: the scripted incidents were migrated onto the simulator in TF7b (the state-lock incident was retired in favour of `terraform-cancelled-ci-lock`); the text above records the original plan.
 
 ## Decisions (from brainstorming)
 
