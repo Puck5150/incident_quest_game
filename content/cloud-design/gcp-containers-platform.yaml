@@ -135,7 +135,7 @@ reference_designs:
 
 hints:
   nudge: "The app is a container that answers HTTP requests, and the team wants no cluster. Which option isn't Kubernetes at all?"
-  direction: "Cloud Run handles scaling and zones for you. Then check where twenty instances pull the image from at once, and where the password lives."
+  direction: "Cloud Run handles scaling and zones for you. Then check where the image comes from and who can read it, and where the password lives."
   answer: "Cloud Run, a private Artifact Registry repository, and the password in Secret Manager."
 
 analogy:

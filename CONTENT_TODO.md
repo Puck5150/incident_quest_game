@@ -1324,3 +1324,7 @@ the labels and tests use the quoted form.
 - [ ] Teaching-only security lines added (private subnets, encryption, backups/PITR,
       endpoint policies, least-privilege roles) are general practice, not sourced to
       a specific page.
+- [ ] gcp-clickstream-ingestion: BigQuery subscription IAM wording is softened; confirm the exact roles (Data Editor, Metadata Viewer) against the Pub/Sub BigQuery page.
+- [ ] gcp-iam-groups-access: "only security keys" 2SV method restriction is unverified; passkeys wording was dropped.
+- [ ] traffic-spike AWS origin lock: the secret custom header / VPC origin facts are from memory; add sources.
+- [ ] Known limits: acr-identity is credited for az-outage without teaching that the registry itself must be zone-redundant; the origin-locked options bundle the WAF with the lock-down, so the WAF is not tested separately.

@@ -73,7 +73,7 @@ tiers:
         cost: 1
         capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
         as:
-          aws: { label: "Lock the origin to CloudFront and attach AWS WAF", short: "Origin locked + WAF", facts: ["CloudFront has a managed prefix list of its origin-facing addresses that a security group can allow.", "AWS WAF web ACLs can be associated with a CloudFront distribution."] }
+          aws: { label: "Restrict the origin to your CloudFront distribution and attach AWS WAF", short: "Origin locked + WAF", facts: ["CloudFront has a managed prefix list of its origin-facing addresses that a security group can allow, but that list covers every CloudFront distribution, including someone else's.", "Also require a secret custom header that your distribution adds to origin requests (or use a VPC origin), and have the origin reject requests without it.", "AWS WAF web ACLs can be associated with a CloudFront distribution."] }
           azure: { label: "Lock the origin to Front Door and attach a WAF policy", short: "Origin locked + WAF", facts: ["Access restrictions can allow only the AzureFrontDoor.Backend service tag, and the X-Azure-FDID header identifies your Front Door profile.", "A Web Application Firewall policy can be attached to Front Door."] }
           gcp: { label: "Give the VMs no external IPs, allow only the load balancer to reach them, and attach Cloud Armor", short: "Origin locked + Armor", facts: ["Cloud Armor security policies attach to the load balancer's backend services.", "VM firewall rules decide which sources may reach the backends."] }
         differences: "Same goal, different mechanics: each cloud lets you restrict the origin to its edge service and add a WAF at the edge."

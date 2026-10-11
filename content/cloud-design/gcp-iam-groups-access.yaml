@@ -100,11 +100,11 @@ tiers:
         capabilities: { survives: [joiner, mover, blast-radius, query] }
       - id: signin-keys
         short: "Security keys only"
-        label: "Enforce 2-Step Verification for all users, allowing only security keys or passkeys"
+        label: "Enforce 2-Step Verification for all users, allowing only security keys"
         cost: 1
         facts:
           - "In the Admin console you can restrict the allowed 2-Step Verification methods, for example to security keys."
-          - "A security key or passkey signs a challenge tied to the real site's address, so a look-alike phishing page cannot use it."
+          - "A security key signs a challenge tied to the real site's address, so a look-alike phishing page cannot use it."
           - "Keep a recovery path (for example a second registered key) so a lost key does not lock someone out."
         capabilities: { survives: [joiner, mover, blast-radius, phish, query] }
 
@@ -139,17 +139,17 @@ failure_feedback:
   signin-password:
     phish: "With only a password, the attacker signs straight in."
   signin-2sv:
-    phish: "The phishing page asked for the password and then for the code or prompt approval, and relayed both to the real sign-in in real time. Codes, texts and prompts can be phished; a security key or passkey is bound to the real site and cannot."
+    phish: "The phishing page asked for the password and then for the code or prompt approval, and relayed both to the real sign-in in real time. Codes, texts and prompts can be phished; a security key is bound to the real site and cannot."
 
 reference_designs:
   - name: "Recommended"
     picks: { who: grant-dynamic, roles: role-bq, signin: signin-keys }
-    why: "A dynamic group follows the department field the directory already keeps, so joiners and movers need no tickets. BigQuery Data Viewer plus Job User lets analysts run queries and nothing else, and 2-Step Verification limited to security keys or passkeys means neither a phished password nor a phished code is enough."
+    why: "A dynamic group follows the department field the directory already keeps, so joiners and movers need no tickets. BigQuery Data Viewer plus Job User lets analysts run queries and nothing else, and 2-Step Verification limited to security keys means neither a phished password nor a phished code is enough."
 
 hints:
   nudge: "There are three separate questions: who gets access, what they can do, and how they prove it's them."
   direction: "Grant to a group that fills itself from the department field. Choose predefined roles that cover reading data and running queries; basic roles are either too much or not enough."
-  answer: "A dynamic group on the Analytics department, BigQuery Data Viewer on the datasets plus BigQuery Job User on the project, and 2-Step Verification enforced with security keys or passkeys only."
+  answer: "A dynamic group on the Analytics department, BigQuery Data Viewer on the datasets plus BigQuery Job User on the project, and 2-Step Verification enforced with security keys only."
 
 analogy:
   title: "A library card, not the building keys"
@@ -170,7 +170,7 @@ debrief:
     job. Predefined roles are precise: BigQuery Data Viewer to read the
     data, BigQuery Job User to run queries. Enforcing 2-Step Verification
     means a stolen password alone isn't enough, but codes and prompts can
-    still be relayed by a live phishing page; security keys and passkeys
+    still be relayed by a live phishing page; security keys
     are the phishing-resistant method.
   real_world: |
     Grant BigQuery Data Viewer at the dataset level when only some data is

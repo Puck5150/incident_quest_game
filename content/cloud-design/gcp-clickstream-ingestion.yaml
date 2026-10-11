@@ -78,7 +78,7 @@ tiers:
         cost: 1
         facts:
           - "A BigQuery subscription writes messages to an existing BigQuery table as they're received, with no subscriber app to run."
-          - "Pub/Sub writes as its own service agent, so grant that agent only BigQuery Data Editor on the target table; give publishers only the Pub/Sub Publisher role."
+          - "Pub/Sub writes as its own service agent, so grant that agent only the BigQuery roles the Pub/Sub docs list (Data Editor on the target table, plus Metadata Viewer), not project-wide access; give publishers only the Pub/Sub Publisher role."
           - "Seeking the subscription back re-delivers messages whose rows are already in the table, so a replay can insert duplicates."
         capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
       - id: delivery-dataflow
