@@ -269,8 +269,9 @@ actions:
     kind: wrong
     done_when:
       all:
-        - state_has: aws_instance.loadgen
-        - plan_clean: true
+        - applied: { op: create, address: aws_instance.loadgen }
+        - not: { applied: { op: create, address: aws_instance.loadgen, deviant: true } }
+        - plan_has: { no_change: [aws_instance.loadgen] }
         - file_contains:
             path: /home/you/loadtest-infra/compute.tf
             matches: 'resource\s+"aws_instance"\s+"loadgen"\s*\{[^}]*?instance_type\s*=\s*"((i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\.(nano|micro|small|medium|large|xlarge|2xlarge|3xlarge|4xlarge|6xlarge|8xlarge|9xlarge|10xlarge|12xlarge)|(a1|z1d|m5zn)\.metal)"'
@@ -289,19 +290,20 @@ actions:
     match_regex: "^aws service-quotas request-service-quota-increase(?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =](19[3-9]|[2-9][0-9]{2}|[1-9][0-9]{3,})(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(service-code|quota-code|desired-value|region)[ =][^\\s-]\\S*){3,4}$"
     feedback: "The test needs 98 vCPUs; asking for far more is a standing blast radius, since anyone or anything with this account's credentials could launch that much compute (a runaway job or a miner would be billed at that ceiling). Request the capacity the soak needs with a little headroom, and lower it again when the environment is torn down. (AWS review would hold an oversized request PENDING anyway; the quota stays at 64 until a sensible one is approved.)"
   - id: finish-apply
-    label: "With the higher quota approved, run terraform apply again so it creates only loadgen"
+    label: "With the higher quota approved, run a plain terraform apply (no -target, -var, -refresh=false or -lock=false) at the full loadgen size so it creates only loadgen"
     kind: fix
     done_when:
       all:
-        - state_has: aws_instance.loadgen
-        - plan_clean: true
+        - applied: { op: create, address: aws_instance.loadgen }
+        - not: { applied: { op: create, address: aws_instance.loadgen, deviant: true } }
+        - plan_has: { no_change: [aws_instance.loadgen] }
         - file_contains:
             path: /home/you/loadtest-infra/compute.tf
             matches: 'resource\s+"aws_instance"\s+"loadgen"\s*\{[^}]*?instance_type\s*=\s*"(?!(a1|z1d|m5zn)\.metal")(i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\.((16|18|24)xlarge|metal(-(16|24)xl)?)"'
         - not: { applied: { op: delete, address: aws_vpc.loadtest } }
         - not: { applied: { op: delete, address: aws_subnet.loadtest } }
         - not: { applied: { op: delete, address: aws_instance.agent } }
-    feedback: "loadgen launched at full size under the new quota, and the apply only had that one instance to create. The plan is clean."
+    feedback: "loadgen launched at full size under the new quota, and the apply only had that one instance to create. The plan is clean. Targeting loadgen, overriding values with -var, or skipping the refresh or the lock are ways around the safeguards, not the fix."
   - id: destroy-everything
     label: "terraform destroy the half-built environment and apply it again from nothing"
     kind: destructive
@@ -330,7 +332,7 @@ evidence_labels:
 hints:
   nudge: "Read the error box all the way to the end. Who is refusing, and what number does it mention?"
   direction: "The limit is counted in vCPUs for running On-Demand standard instances, per account and Region. Compare it with what loadgen's type needs (aws ec2 describe-instance-types ... VCpuInfo) and the quota itself (aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A)."
-  answer: "The quota is 64 vCPUs; the agent uses 2 and c5.24xlarge wants 96, and the soak test is sized to that load generator. Request what the test needs (at least 98, with modest headroom) with aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 128 and apply again once it's approved; the apply only has loadgen left to create. Do not shrink loadgen to fit (it changes the test), and lower the quota again after teardown."
+  answer: "The quota is 64 vCPUs; the agent uses 2 and c5.24xlarge wants 96, and the soak test is sized to that load generator. Request what the test needs (at least 98, with modest headroom) with aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 128 and run a plain terraform apply (no -target, -var, -refresh=false or -lock=false) once it's approved; the apply only has loadgen left to create. Do not shrink loadgen to fit (it changes the test), and lower the quota again after teardown."
 
 analogy:
   title: "The credit limit"
@@ -358,7 +360,7 @@ debrief:
     - "terraform state list and terraform plan: three objects exist, only loadgen is left (1 to add)."
     - "aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A: 64 (vCPUs). describe-instance-types: c5.24xlarge alone is 96."
     - "Check what the test needs: the soak plan is sized to the 96-vCPU generator, so shrinking loadgen would change what the test proves."
-    - "Request a quota increase to what the test needs (at least 98, with modest headroom), approved before Thursday, then terraform apply: Resources: 1 added. The plan is clean."
+    - "Request a quota increase to what the test needs (at least 98, with modest headroom), approved before Thursday, then a plain terraform apply (no -target, -var, -refresh=false or -lock=false) at the full size: Resources: 1 added. The plan is clean."
     - "After the environment is torn down, lower the quota again."
   real_world: |
     Quota errors come from the cloud, not from Terraform, and they're

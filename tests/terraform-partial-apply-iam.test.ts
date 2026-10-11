@@ -301,4 +301,66 @@ describe('terraform-partial-apply-iam on the simulator', () => {
     expect(ScenarioSchema.safeParse(drift).success).toBe(false)
     expect(ScenarioSchema.safeParse(scenario).success).toBe(true)
   })
+  describe('finish-apply persists once earned (history based)', () => {
+    const fixedRun = async (...after: string[]) => {
+      const { sh } = await play('cd ~/orders-infra')
+      expect((await run(sh, 'terraform apply -auto-approve', GRANTED)).exitCode).toBe(0)
+      for (const l of after) await run(sh, l, GRANTED)
+      return sh
+    }
+
+    it('survives an unrelated state change before the cause is named', async () => {
+      const sh = await fixedRun('terraform apply -auto-approve -replace=aws_db_instance.orders')
+      expect(await sh.doneWhen({ plan_clean: true })).toBe(true)
+      expect((await detectedAll(sh))['finish-apply']).toBe(true)
+    })
+
+    it('survives a comment edit in db.tf after the fix', async () => {
+      const sh = await fixedRun("echo '# note' >> db.tf")
+      expect((await detectedAll(sh))['finish-apply']).toBe(true)
+    })
+
+    it('the destroy-dependencies trap never credits it, nor does a later recreate', async () => {
+      const { sh } = await play('cd ~/orders-infra', 'terraform destroy -auto-approve')
+      await run(sh, 'terraform apply -auto-approve', GRANTED)
+      expect((await detectedAll(sh))['finish-apply']).toBe(false)
+      for (const addr of ['aws_vpc.main', 'aws_subnet.data_a']) {
+        const { sh: s2 } = await play('cd ~/orders-infra')
+        await run(s2, 'terraform apply -auto-approve', GRANTED)
+        await run(s2, `terraform apply -auto-approve -replace=${addr}`, GRANTED)
+        expect((await detectedAll(s2))['finish-apply'], addr).toBe(false)
+      }
+    })
+
+    it('editing state by hand or state rm of the database credits nothing', async () => {
+      const { sh } = await play('cd ~/orders-infra', 'terraform state pull')
+      expect((await detectedAll(sh))['finish-apply']).toBe(false)
+      const sh2 = await fixedRun('terraform state rm aws_db_instance.orders')
+      expect((await detectedAll(sh2))['finish-apply']).toBe(false)
+    })
+
+    it('the wrong policies never lift the denial, so nothing is credited', async () => {
+      for (const taken of [WILD_GRANTED, new Set(['overwrite-deploy-policy'])]) {
+        const { sh } = await play('cd ~/orders-infra')
+        expect((await run(sh, 'terraform apply -auto-approve', taken)).exitCode).toBe(1)
+        expect((await detectedAll(sh))['finish-apply']).toBe(false)
+      }
+    })
+
+    it('stopgap flags on the applying run do not credit it', async () => {
+      for (const flags of ['-target=aws_db_instance.orders', '-lock=false', '-refresh=false', '-var=x=1']) {
+        const { sh } = await play('cd ~/orders-infra')
+        await run(sh, `terraform apply -auto-approve ${flags}`, GRANTED)
+        expect((await detectedAll(sh))['finish-apply'], flags).toBe(false)
+      }
+    })
+
+    it('wording agrees: label, hint and ideal path all say a plain apply', () => {
+      const fa = scenario.actions.find((a) => a.id === 'finish-apply')!
+      expect(fa.label).toMatch(/no -target/)
+      expect(scenario.hints.answer).toMatch(/no -target/)
+      expect(scenario.debrief.ideal_path.join(' ')).toMatch(/no -target/)
+    })
+  })
+
 })
