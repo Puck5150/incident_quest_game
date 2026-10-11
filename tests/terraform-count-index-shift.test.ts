@@ -75,6 +75,13 @@ describe('terraform-count-index-shift on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 
+  it('(b0) the drain check accepts --region', async () => {
+    const q = 'aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/returns'
+    const { out } = await play('cd ~/infra', `${q} --region us-east-1 --attribute-names All`, `${q} --attribute-names ApproximateNumberOfMessages --region=us-east-1`)
+    expect(out[1].output).toContain('"ApproximateNumberOfMessages": "0"')
+    expect(out[2].output).toContain('"ApproximateNumberOfMessages": "0"')
+  })
+
   it('(b) every key evidence tag is obtainable before any fix', async () => {
     const drain = 'aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/returns --attribute-names ApproximateNumberOfMessages'
     const { out } = await play('cd ~/infra', 'terraform plan', 'terraform state list', drain)

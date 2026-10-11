@@ -7,7 +7,7 @@ import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 const scenario = loadIncident('terraform-orphans-after-state-rm')
 const { play, detectedAll } = playbook(scenario)
 
-const NONE = { 'unlock-and-import': false, 'destroy-environment': false, 'bypass-lock': false, 'apply-recreate': false, 'state-rm-rest': false, 'lock-timeout': false }
+const NONE = { 'unlock-and-import': false, 'snapshot-before-destroy': false, 'destroy-environment': false, 'bypass-lock': false, 'apply-recreate': false, 'state-rm-rest': false, 'lock-timeout': false }
 const LOCK_ID = '7e3b9d41-5c2a-8f06-b1d7-a94e2c60f385'
 const CD = 'cd ~/reports-infra'
 const UNLOCK = `terraform force-unlock -force ${LOCK_ID}`
@@ -161,5 +161,16 @@ describe('terraform-orphans-after-state-rm', () => {
       { type: 'SHELL_RAN', commands: ['evidence:lock-holder', 'evidence:orphans-not-in-state'], at: 4 },
     ])
     for (const t of scenario.key_evidence) expect(seen.has(t), t).toBe(true)
+  })
+
+  it('the final snapshot is a typed step that must come before the destroy fix', async () => {
+    const { actionFor } = await import('../src/game/engine.ts')
+    const snap = scenario.actions.find((a) => a.id === 'snapshot-before-destroy')!
+    expect(snap.kind).toBe('fix')
+    expect(scenario.actions.find((a) => a.id === 'destroy-environment')!.after).toEqual(['snapshot-before-destroy'])
+    expect(scenario.solution_paths).toEqual([['unlock-and-import', 'snapshot-before-destroy', 'destroy-environment']])
+    expect(actionFor(scenario, 'aws rds create-db-snapshot --db-instance-identifier reports-db --db-snapshot-identifier reports-db-final')?.id).toBe('snapshot-before-destroy')
+    expect(actionFor(scenario, 'aws rds create-db-snapshot --db-instance-identifier other-db --db-snapshot-identifier x')).toBeUndefined()
+    expect(actionFor(scenario, 'aws rds create-db-snapshot --db-instance-identifier reports-db')).toBeUndefined()
   })
 })

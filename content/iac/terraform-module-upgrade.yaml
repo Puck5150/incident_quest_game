@@ -279,7 +279,7 @@ hypotheses:
 
 actions:
   - id: pin-the-module
-    label: "Pin the module call to the exact release that built the database (2.0.1) and run terraform init so it is installed, then confirm the plan has no changes"
+    label: "Pin the module call to the exact release that built the database (2.0.1) and run terraform init so it is installed, then confirm the plan has no changes (an interim hold: the database is still unencrypted)"
     kind: fix
     done_when:
       all:
@@ -289,7 +289,7 @@ actions:
         - file_contains: { path: /home/you/infra/main.tf, matches: '^\s*version\s*=\s*"\s*=?\s*2\.0\.\d+\s*"\s*(#.*|//.*)?$' }
         # world-based: whatever the constraint says, 2.0.x is what init installed (manifest layout: Key, Source, Version, Dir)
         - file_contains: { path: /home/you/infra/.terraform/modules/modules.json, matches: '"Key":"db","Source":"[^"]*","Version":"2\.0\.\d+","Dir"' }
-    feedback: "The same database, orders-db, is still in place, the installed module is back on a 2.0 release and the plan is empty. The version the stack runs is now decided by an exact pin in the code you review, instead of by whenever someone last ran init. This is a hold, not the end: the pin keeps the module's new, encrypted-by-default behaviour out of production only until you migrate. This database is unencrypted today, and an RDS instance can only be encrypted when it is created, so the follow-up is a planned snapshot-copy migration (snapshot, copy with a KMS key, restore, cut over), rehearsed on a copy, after which you raise the pin to 2.1.0 in a reviewed change."
+    feedback: "The same database, orders-db, is still in place, the installed module is back on a 2.0 release and the plan is empty. The version the stack runs is now decided by an exact pin in the code you review, instead of by whenever someone last ran init. This is an interim hold, not the end: the pin keeps the module's encrypted-by-default behaviour out of production only until you migrate, and this database is unencrypted today. The next job is the snapshot-copy migration."
   - id: override-the-input
     label: "Keep 2.1.0 and set storage_encrypted = false in the module call so the plan goes quiet"
     kind: wrong
@@ -327,7 +327,7 @@ evidence_labels:
 hints:
   nudge: "Nothing in the repository changed, but the plan did. What else feeds a plan besides your own files?"
   direction: "The module call does not name a version, only a range. See which version is installed (.terraform/modules/modules.json) and what its code does differently."
-  answer: "init -upgrade installed 2.1.0 of acme/database/aws, which sets storage_encrypted = true by default; ~> 2.0 allows it. Pin the exact version that built the database (version = \"2.0.1\", not a range), run terraform init so that release is installed, and plan until it says No changes. Do not set storage_encrypted = false to quiet the plan: that writes the unencrypted database into the code and switches off the new default. Encrypting the database is a separate, planned snapshot-copy migration, after which you raise the pin."
+  answer: "init -upgrade installed 2.1.0 of acme/database/aws, which sets storage_encrypted = true by default; ~> 2.0 allows it. Pin the exact version that built the database (version = \"2.0.1\", not a range), run terraform init so that release is installed, and plan until it says No changes. Do not set storage_encrypted = false to quiet the plan: that writes the unencrypted database into the code and switches off the new default. Pinning is only the interim hold: the database is still unencrypted, so the real fix that follows is the snapshot-copy migration, after which you raise the pin."
 
 analogy:
   title: "The supplier changed the recipe"
@@ -358,7 +358,7 @@ debrief:
     - "Look at .terraform/modules/modules.json (installed Version 2.1.0) and the module's code, which now sets storage_encrypted from a variable that defaults to true."
     - "See that the module call only says version = \"~> 2.0\", which allows 2.1.0."
     - "Pin the exact version that built the database (2.0.1), run terraform init so the pinned release replaces 2.1.0, and plan until it says No changes. Do not set storage_encrypted = false to get a quiet plan: that overrides the module's new secure default and records an unencrypted production database in the code."
-    - "Raise a follow-up: the database is unencrypted today, and RDS can only be encrypted at creation, so schedule the snapshot-copy migration (snapshot, copy with a KMS key, restore, cut over), try it on a copy, then move the pin to 2.1.0 in a reviewed change."
+    - "The pin is interim: the database is unencrypted today and RDS can only be encrypted at creation, so do the snapshot-copy migration next (snapshot, copy with a KMS key, restore, cut over), rehearsed on a copy, then move the pin to 2.1.0 in a reviewed change."
   real_world: |
     A module's version is an input, just like a variable. A range like
     ~> 2.0 lets that input change underneath you whenever someone runs
@@ -411,8 +411,110 @@ sources:
     retrieved: 2026-10-09
 
 command_notes:
+  "aws rds describe-db-snapshots --db-snapshot-identifier orders-db-enc-2-1": "Whether the encrypted copy exists yet, is available and reports Encrypted = true."
   "git status": "Nothing is modified: your own code did not change."
   "git log --oneline": "Three commits. None changes the database settings."
   "git log -p -- main.tf": "The module call was added with version = \"~> 2.0\" and has only gained the password since. The range allows any 2.x release."
   "cat .terraform/modules/modules.json": "init's record of what it installed: acme/database/aws at Version 2.1.0."
   "cat .terraform/modules/db/main.tf": "The installed module's code: storage_encrypted comes from a variable that defaults to true."
+
+stages:
+  - id: encrypt-for-real
+    update: |
+      The pin is merged and the afternoon deploy went out. Security's review
+      the next morning: orders-db still reports StorageEncrypted = false, and
+      the platform team's module 2.1.0 (encrypted by default) cannot be
+      adopted until the database itself is encrypted. The change window is
+      Saturday 02:00-04:00. Prepare the migration with the names the runbook
+      uses: snapshot orders-db-pre-2-1, encrypted copy orders-db-enc-2-1
+      (KMS alias alias/orders-db), new instance orders-db-v2.
+    diagram_status: {}
+    files:
+      - path: "Amazon RDS: encrypting an existing instance (excerpt)"
+        evidence: encrypted-copy-route
+        content: |
+          You can't turn encryption on for an existing unencrypted DB instance.
+          To encrypt one: create a snapshot, copy the snapshot with a KMS key
+          (the copy is encrypted), then restore a new DB instance from the
+          encrypted copy. A snapshot restored without that copy produces an
+          unencrypted instance again.
+    terminal:
+      commands:
+        - match_regex: "^aws rds describe-db-snapshots --db-snapshot-identifier orders-db-enc-2-1$"
+          example: "aws rds describe-db-snapshots --db-snapshot-identifier orders-db-enc-2-1"
+          when_actions: [copy-encrypted]
+          output: |
+            {
+                "DBSnapshots": [
+                    {
+                        "DBSnapshotIdentifier": "orders-db-enc-2-1",
+                        "DBInstanceIdentifier": "orders-db",
+                        "Status": "available",
+                        "Encrypted": true,
+                        "KmsKeyId": "arn:aws:kms:us-east-1:123456789012:key/orders-db"
+                    }
+                ]
+            }
+        - match_regex: "^aws rds describe-db-snapshots --db-snapshot-identifier orders-db-enc-2-1$"
+          example: "aws rds describe-db-snapshots --db-snapshot-identifier orders-db-enc-2-1"
+          output: |
+            An error occurred (DBSnapshotNotFound) when calling the DescribeDBSnapshots operation: DBSnapshot not found: orders-db-enc-2-1
+    hypotheses:
+      - id: needs-encrypted-copy
+        text: "An existing RDS instance can't be encrypted in place. The data has to go through a snapshot, an encrypted copy of it, and a restore to a new instance, then a cutover."
+        correct: true
+      - id: toggle-later
+        text: "Encryption can be switched on for orders-db in the console during the window, with a short restart."
+        feedback: "There is no such setting: RDS only encrypts at creation, which is why the Terraform plan wanted to replace the instance."
+      - id: terraform-only
+        text: "Raising the pin to 2.1.0 with prevent_destroy lifted during the window is the migration."
+        feedback: "That replaces the instance with a new, empty, encrypted one: Terraform destroys the old database and creates another from nothing. The data has to be restored from an encrypted snapshot copy."
+    actions:
+      - id: create-snapshot
+        label: "aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-2-1"
+        kind: fix
+        match_regex: "^aws rds create-db-snapshot(?=.*--db-instance-identifier orders-db(\\s|$))(?=.*--db-snapshot-identifier orders-db-pre-2-1(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(db-instance-identifier|db-snapshot-identifier|region)[ =][^\\s-]\\S*){2,3}$"
+        feedback: "A manual snapshot of the unencrypted instance exists. It is also your rollback point: nothing has changed on orders-db."
+      - id: copy-encrypted
+        label: "aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/orders-db"
+        kind: fix
+        after: [create-snapshot]
+        match_regex: "^aws rds copy-db-snapshot(?=.*--source-db-snapshot-identifier orders-db-pre-2-1(\\s|$))(?=.*--target-db-snapshot-identifier orders-db-enc-2-1(\\s|$))(?=.*--kms-key-id[ =][^\\s-][^\\s]*(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(source-db-snapshot-identifier|target-db-snapshot-identifier|kms-key-id|region)[ =][^\\s-]\\S*){3,4}$"
+        feedback: "The copy is encrypted with the KMS key. Check it is available before restoring from it."
+      - id: restore-encrypted
+        label: "aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-enc-2-1"
+        kind: fix
+        after: [copy-encrypted]
+        match_regex: "^aws rds restore-db-instance-from-db-snapshot(?=.*--db-instance-identifier orders-db-v2(\\s|$))(?=.*--db-snapshot-identifier orders-db-enc-2-1(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(db-instance-identifier|db-snapshot-identifier|region)[ =][^\\s-]\\S*){2,3}$"
+        feedback: "orders-db-v2 is being created encrypted, from the data in the snapshot. orders-db keeps serving. Next, in the window: stop writes, take a last snapshot and restore from its encrypted copy (or replay changes), cut the applications over, import orders-db-v2 into Terraform with storage_encrypted = true and prevent_destroy, and retire the old instance only after the checks pass."
+      - id: restore-unencrypted
+        label: "aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-pre-2-1"
+        kind: wrong
+        match_regex: "^aws rds restore-db-instance-from-db-snapshot (?=.*--db-instance-identifier orders-db-v2(\\s|$))(?=.*--db-snapshot-identifier orders-db-pre-2-1(\\s|$))"
+        feedback: "A restore from the unencrypted snapshot gives an unencrypted instance. Copy the snapshot with a KMS key first and restore from the copy."
+      - id: delete-old-first
+        label: "aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot (to clear the way for the encrypted one)"
+        kind: destructive
+        match_regex: "^aws rds delete-db-instance (?=.*--db-instance-identifier[ =]orders-db(\\s|$))"
+        feedback: "That deletes the live production database (with or without a final snapshot) before anything has been restored, verified or cut over. The new instance comes after the checks, and the old one is retired last."
+    solution_paths:
+      - [create-snapshot, copy-encrypted, restore-encrypted]
+    key_evidence: [encrypted-copy-route]
+    evidence_labels:
+      encrypted-copy-route: "An unencrypted instance is encrypted by copying a snapshot with a KMS key and restoring from the copy"
+    hints:
+      nudge: "The Terraform plan could not turn encryption on in place. What does AWS offer instead?"
+      direction: "Read the RDS excerpt: snapshot, copy with a KMS key, restore from the copy. Verify the copy with describe-db-snapshots."
+      answer: "Create the snapshot orders-db-pre-2-1, copy it to orders-db-enc-2-1 with --kms-key-id alias/orders-db, and restore orders-db-v2 from the encrypted copy. Cut over in the window, import the new instance into the module's state, then raise the pin."
+    debrief:
+      root_cause: |
+        The pin in stage 1 only held production steady. An RDS instance can't
+        be encrypted in place, so the real fix is a migration: an encrypted
+        copy of a snapshot restored as a new instance, a planned cutover, the
+        new instance adopted into the module's state with encryption on and
+        prevent_destroy kept, and only then the pin raised to 2.1.0.
+      ideal_path:
+        - "Take a snapshot of orders-db."
+        - "Copy it with a KMS key and check the copy is Encrypted and available."
+        - "Restore a new instance from the encrypted copy."
+        - "In the window: stop writes, catch up, cut over, import the new instance into the module's state (module.db.aws_db_instance.main), keep the old one until the checks pass, retire it, then raise the pin to 2.1.0 in a reviewed change."

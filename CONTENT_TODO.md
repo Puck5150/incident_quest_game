@@ -1015,12 +1015,12 @@ Batch status: Tasks 4 to 6 done (terraform-count-index-shift, terraform-drift-ho
 ### terraform-module-upgrade
 
 - `override-the-input` is now `kind: wrong` (flagged when main.tf sets `storage_encrypted = false`); it is out of `solution_paths`. Only `pin-the-module` is a fix, and it now also requires main.tf to hold an exact `version = "2.0.x"` (optionally `= `), besides the installed 2.0.x in modules.json, a clean plan and no module delete. Ranges that resolve to 2.0.1 (`~> 2.0.1`, `< 2.1`) plan clean but are no longer credited.
-- Design decision for the user: the lab cannot model the snapshot-copy encryption migration, so the follow-up is taught (feedback, ideal_path, debrief) rather than required. The database is unencrypted today; a stage 2 that asks for the migration plan would be the next step.
+- [x] RESOLVED (2026-10-11): the stage 2 migration was built (decision by the coordinator, user standard "no unencrypted prod DB at completion"). `pin-the-module` is the interim stage-1 fix; stage 2 requires the ordered typed `aws rds create-db-snapshot` -> `copy-db-snapshot --kms-key-id` -> `restore-db-instance-from-db-snapshot` (identifiers orders-db-pre-2-1, orders-db-enc-2-1, orders-db-v2). Cutover, importing the new instance into module.db and raising the pin to 2.1.0 are taught only.
 - [ ] Unverified: the snapshot, KMS-encrypted copy, restore, cut-over description for encrypting an existing RDS instance (matches the RDS encryption docs from memory; no new source read).
 
 ### Decision for the user (terraform-module-upgrade)
 
-- The exact pin alone completes the scenario and leaves the database unencrypted. The proper next step is a stage 2 that requires "migrate to an encrypted instance" (snapshot, KMS-encrypted copy, restore, cut over, then raise the pin). Not built; flagged for the user to decide.
+- [x] RESOLVED (2026-10-11): see above, the stage 2 is built; the earlier question is closed.
 - [ ] aws-route53-failover review fix (2026-10-10): accepting any public CIDR / any `pl-` id as the checker rule was a defect, now fixed: only the lab's exact prefix list `pl-0r53hc` or one of the three CIDRs in the scripted `curl .../ip-ranges.json` excerpt (15.177.0.0/18, 54.239.98.0/24, 54.240.217.160/29: invented values, not the real ROUTE53_HEALTHCHECKS list), tcp 443 only, no shell operators, no world-open range; weak actions are evaluated first. A CIDR route needs one command per range and the first credits the action (a prefix list is the cleaner route). Unverified, from memory: that Route 53 HealthCheckStatus metrics live in us-east-1 (CloudWatch metric doc not read), the invented alarm names/`describe-alarms` text, the managed prefix list name. Sources list not extended (health-check/CloudWatch docs not read in full; the ip-addresses page was fetched and confirms prefix lists and ROUTE53_HEALTHCHECKS).
 - [ ] aws-route53-failover second review fix (2026-10-10): the checker-rule regex is now a flag grammar (match_regex is the only matcher the engine offers, so no tokenizer): allow-list `--group-id --protocol --port --cidr --ip-permissions --region us-west-2 --profile --output --no-cli-pager`, each once, space or `=` forms, bare/single/double-quoted exact values; duplicate or unknown flags (`--port 22` after a valid line, a second `--group-id`, `--group-name`, `--description`, `--dry-run`) are not credited, and unquoted shell-active characters cannot appear. `--ip-permissions` must be a quoted document (single quotes, or double quotes without `$ \` ! backtick) or a bare token without brackets/braces; the unquoted `[{...}]` shorthand is no longer credited. Weak forms now flagged wrong/destructive: `modify-security-group-rules` and `authorize-security-group-egress` with a world-open range, and quoted or `=` group ids. Known limit: a quoted ip-permissions document is judged by lookaheads over its text, not parsed as JSON.
 
@@ -1114,3 +1114,106 @@ Batch status: Tasks 4 to 6 done (terraform-count-index-shift, terraform-drift-ho
 - [ ] terraform-destroy-dependency-violation: reading the owner confirmation and CloudTrail evidence is encouraged (methodical bonus, key_evidence) but the typed delete is not gated on it (the engine has no evidence-gate for typed actions).
 - [ ] terraform-vcpu-limit: quota credited 98 to 192 vCPUs (teaching choice); above 192 is `request-excessive-quota` (wrong). `right-size` is now wrong because the ticket says the soak test is sized to the 96-vCPU generator. Lowering the quota after teardown is taught only.
 - [ ] Text-only follow-ups (taught in hints/debrief/feedback, not enforced): terraform-ignore-changes-autoscaling (autoscaling target and policy into code); terraform-destroy-nonempty-bucket (archive check, list-object-versions, flag removal); terraform-import-existing (prevent_destroy is in the label but the choice has no done_when; post-import bucket hardening); terraform-state-in-git (bucket controls, .tfstate.backup purge, managed master password, clone/login audit); terraform-orphans-after-state-rm (snapshot before destroy, force-unlock only with evidence; the default password and skip_final_snapshot remain in the lab config); wrong-workspace-major (the new `workspace-guard` is a click-only required step with no lab state).
+
+## Typed-line guard: actions the validator cannot check yet
+The validator (src/schema/scenario.ts) tries every action's `example`, and the command written in its label when the
+`match_regex` accepts it, against the typed-line guard (shell syntax, repeated flags on a fix). These 84 actions
+with a `match_regex` have neither, so the check is skipped for them; the existing tests cover their canonical lines
+(all of which pass the guard). Add an `example:` (one typed line the regex accepts) to each and tick it off.
+Known: lines that spell unquoted `[`, `{`, `*`, `?` (AWS shorthand like `Rules=[{...}]` or `gs://bucket/**`,
+`--ip-permissions IpProtocol=...,PrefixListIds=[{...}]`) are rejected by the guard even where a regex accepts them;
+the labels and tests use the quoted form.
+- [ ] aws-access-keys-to-role/attach-role
+- [ ] aws-asg-elb-health-check/grace-zero
+- [ ] aws-asg-elb-health-check/grace-too-long
+- [ ] aws-asg-elb-health-check/grace-unset
+- [ ] aws-cross-account-replication-dr/open-key
+- [ ] aws-cross-account-replication-dr/grant-key
+- [ ] aws-cross-account-replication-dr/batch-failed-only
+- [ ] aws-cross-account-replication-dr/batch-none-failed
+- [ ] aws-cross-account-replication-dr/batch-narrow-job
+- [ ] aws-lambda-concurrency-starved/reserve-checkout-small
+- [ ] aws-lambda-concurrency-starved/reserve-checkout-big
+- [ ] aws-lambda-export-two-faults/timeout-too-short
+- [ ] aws-lambda-export-two-faults/timeout-too-long
+- [ ] aws-route53-failover/open-all-ports
+- [ ] aws-route53-failover/open-standby-direct
+- [ ] aws-route53-failover/remove-vpn-rule
+- [ ] aws-route53-failover/allow-health-checkers
+- [ ] aws-single-az-database/multi-az-deferred
+- [ ] aws-single-az-database/reboot-db
+- [ ] aws-single-az-database/delete-primary
+- [ ] aws-sqs-visibility-timeout/timeout-too-low
+- [ ] aws-sqs-visibility-timeout/timeout-too-high
+- [ ] azure-appgw-health-probe/widen-probe
+- [ ] azure-appgw-health-probe/restart-vms
+- [ ] azure-appgw-health-probe/recreate-gateway
+- [ ] azure-cosmos-hot-partition/raise-rus
+- [ ] azure-front-door-host-header/custom-domain
+- [ ] azure-key-vault-wrong-role/secrets-user
+- [ ] azure-orders-backlog-major/cap-concurrency
+- [ ] azure-private-endpoint-dns/link-zone
+- [ ] azure-rbac-wrong-scope/owner-subscription
+- [ ] azure-rbac-wrong-scope/subscription-contributor
+- [ ] azure-rbac-wrong-scope/contributor-rg
+- [ ] azure-vnet-peering-one-way/create-other-side
+- [ ] failing-github-actions/delete-lock
+- [ ] failing-github-actions/force-push
+- [ ] release-pipeline-major/dispatch-main
+- [ ] release-pipeline-major/dispatch-tag
+- [ ] release-pipeline-major/clobber-binaries
+- [ ] release-pipeline-major/upload-binaries
+- [ ] release-pipeline-major/upload-darwin
+- [ ] release-pipeline-major/upload-windows
+- [ ] release-pipeline-major/upload-sums
+- [ ] crashloopbackoff/rollback
+- [ ] crashloopbackoff/delete-pods
+- [ ] crashloopbackoff/delete-deployment
+- [ ] evicted-checkout-major/run-capture
+- [ ] image-pull-backoff/recreate-deployment
+- [ ] postgres-lock-queue/cancel-migration
+- [ ] postgres-lock-queue/analyst-timeout
+- [ ] postgres-lock-queue/analyst-timeout-off
+- [ ] postgres-lock-queue/analyst-timeout-short
+- [ ] gcp-cloud-run-connection-exhaustion/cap-instances
+- [ ] gcp-cloud-run-connection-exhaustion/raise-max
+- [ ] gcp-cloud-run-connection-exhaustion/lower-concurrency
+- [ ] gcp-cloud-run-connection-exhaustion/restart-sql
+- [ ] gcp-lifecycle-deleted-objects/bulk-restore
+- [ ] gcp-lifecycle-deleted-objects/exports-rule
+- [ ] gcp-lifecycle-deleted-objects/reapply-docs
+- [ ] gcp-scan-ingest-major/clear-ingress
+- [ ] gcp-scan-ingest-major/ingress-rule
+- [ ] gcp-scan-ingest-major/redrive
+- [ ] terraform-destroy-dependency-violation/release-eni
+- [ ] terraform-destroy-nonempty-bucket/empty-bucket
+- [ ] terraform-moved-block/state-mv
+- [ ] terraform-orphans-after-state-rm/snapshot-before-destroy
+- [ ] terraform-vcpu-limit/request-quota-increase
+- [ ] terraform-vcpu-limit/request-excessive-quota
+- [ ] wrong-workspace-major/prod-apply
+- [ ] wrong-workspace-major/apply-now
+- [ ] full-disk/truncate-log
+- [ ] full-disk/reboot
+- [ ] media-disk-migration-major/recover-hidden
+- [ ] nginx-permission-denied/chmod-loose
+- [ ] oom-killed-service/kill-python
+- [ ] jwt-clock-skew/fix-ntp
+- [ ] poison-message-loop/lower-delivery-limit
+- [ ] poison-message-loop/scale-workers
+- [ ] dns-resolution-failure/flush-firewall
+- [ ] duplicate-ip-cache-major/isolate-old
+- [ ] duplicate-ip-cache-major/allow-subnet
+- [ ] duplicate-ip-cache-major/copy-carts
+- [ ] expired-tls-certificate/renew
+- [ ] expired-tls-certificate/restart-nginx
+
+### iac fix-quality rework, round 2 (2026-10-11)
+
+- [ ] terraform-module-upgrade stage 2 and terraform-forces-replacement stage 2 share the same typed AWS steps (regex only, ordered with `after:`; no lab state, so a wrong id is simply not credited). Unverified from memory: `copy-db-snapshot --kms-key-id` accepts an alias; DBSnapshotNotFound wording.
+- [ ] terraform-drift-hotfix: new `sg_only` leaf (every rule on the group comes from the listed peers). Routes: /28 or the two NAT /32s; extra sources of any kind (a /25, /23, 10.0.0.0/8, SSH from anywhere) are not credited; extra 8443 sources are the wrong action `codify-wide`, an extra rule on another port just never earns the fix (no feedback).
+- [ ] terraform-state-lost: new `config_matches` leaf (any .tf in the lab dir, comments removed). The backend must have bucket, key, `encrypt = true` and `use_lockfile = true` or a `dynamodb_table`, each on its own line inside the `backend "s3"` block; `weak-backend` (wrong) fires on a declared backend that fails this.
+- [ ] terraform-orphans-after-state-rm: `snapshot-before-destroy` is a typed step and `destroy-environment` has `after: [snapshot-before-destroy]`. Limit: the destroy fix is world-detected, so a player who destroys first can still type the snapshot afterwards (the snapshot of a deleted DB would fail in real life) and get credit.
+- [ ] terraform-destroy-nonempty-bucket: `get-bucket-versioning` and `list-object-versions` now run (scripted, unversioned bucket) with command-library entries. Versioned-bucket cleanup (delete markers) is still taught only.
+- [ ] Regex hygiene: vcpu quota, forces-replacement and module-upgrade snapshot regexes are anchored with a flag-grammar tail (`--flag value`, value not starting with `-`); delete-network-interface accepts `--network-interface-id=`; prod-apply accepts `-var-file prod.tfvars`/`-var-file=…`/`--var-file`, with `-auto-approve` either side; the SQS drain check accepts `--region`. Compound commands, substitutions and repeated flags are now rejected by the engine guard, not by these regexes.
+- [ ] Not changed: the 9-tail `restore-unencrypted` / `delete-old-first` regexes are deliberately unanchored so variants are still caught as wrong/destructive.

@@ -116,7 +116,7 @@ actions:
   - id: prod-apply
     label: "terraform apply -var-file=prod.tfvars (in the prod workspace, after confirming the workspace and reading the plan)"
     kind: fix
-    match_regex: "^terraform apply -var-file=prod\\.tfvars$"
+    match_regex: "^terraform apply( -auto-approve)? --?var-file[ =]prod\\.tfvars( -auto-approve)?$"
     feedback: "Terraform sets orders-prod back to prod's values. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
   - id: workspace-guard
     label: "Open a PR that makes the plan fail when the tfvars environment doesn't match terraform.workspace (a variable validation or precondition on the environment name), and stop applying prod by hand from the shared ops box"

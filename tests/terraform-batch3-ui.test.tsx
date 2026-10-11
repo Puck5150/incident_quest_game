@@ -79,7 +79,7 @@ async function mount(id: string) {
     expect(score(scenario, box.saved!.log).mistakes.destructive).toBe(1)
   }
   const wrongCount = () => score(scenario, box.saved!.log).mistakes.wrongActions
-  return { run, declare, click, taken, settle, remount, closeClean, trapped, wrongCount, box }
+  return { run, declare, click, taken, settle, remount, closeClean, trapped, wrongCount, box, scenario }
 }
 
 
@@ -151,7 +151,24 @@ describe('terraform-module-upgrade through the UI', () => {
     expect(output()).toBe(before)
     await g.run('cat .terraform/modules/modules.json')
     await waitFor(() => expect(output().slice(before.length)).toMatch(/"Version":"2\.0\./))
-    methodical(await g.closeClean('pin-the-module'))
+    // the pin only holds production: closing it reopens the incident with the encryption migration
+    await g.settle()
+    expect(g.taken()).toEqual(['pin-the-module'])
+    fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
+    expect(g.box.resolved).toBeUndefined()
+    await waitFor(() => expect(screen.getAllByText(/The pin is merged and the afternoon deploy went out/).length).toBeGreaterThan(0))
+    g.declare(/An existing RDS instance can't be encrypted in place/)
+    await g.run(
+      'aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-2-1',
+      'aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/orders-db',
+      'aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-enc-2-1',
+    )
+    await g.settle()
+    expect(g.taken()).toEqual(['pin-the-module', 'create-snapshot', 'copy-encrypted', 'restore-encrypted'])
+    fireEvent.click(screen.getByRole('button', { name: 'Close out' }))
+    expect(g.box.resolved).toBeDefined()
+    const { score } = await import('../src/game/scoring.ts')
+    expect(score(g.scenario, g.box.resolved!).mistakes.destructive).toBe(0)
   })
 
   it('trap: remove prevent_destroy from the module and apply: destructive once, pinning afterwards earns nothing', async () => {

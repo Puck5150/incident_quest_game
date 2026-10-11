@@ -436,6 +436,26 @@
     - { command: "S3 console > bucket > Permissions > Object Ownership", note: "The same setting." }
   docs: { title: "AWS CLI: get-bucket-ownership-controls", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-ownership-controls.html" }
 
+- id: aws-s3api-bucket-versioning
+  match: "^aws s3api get-bucket-versioning"
+  summary: "Shows whether versioning is enabled or suspended on a bucket; an empty answer means it was never enabled."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "A versioned bucket keeps old versions and delete markers that aws s3 rm does not remove, and S3 will not delete the bucket until they are gone."
+  alternatives:
+    - { command: "aws s3api list-object-versions --bucket B", note: "Lists the versions and delete markers themselves." }
+  docs: { title: "AWS CLI: get-bucket-versioning", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-versioning.html" }
+
+- id: aws-s3api-list-object-versions
+  match: "^aws s3api list-object-versions"
+  summary: "Lists every version and delete marker in a bucket."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "Shows whether anything is left after aws s3 rm: versions and delete markers also block DeleteBucket."
+  alternatives:
+    - { command: "aws s3 ls s3://B --recursive", note: "Only the current objects, not old versions." }
+  docs: { title: "AWS CLI: list-object-versions", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/list-object-versions.html" }
+
 - id: aws-s3api-list-objects-owner
   match: "^aws s3api list-objects-v2"
   summary: "Lists objects in a bucket, optionally with each object's owner."

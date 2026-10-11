@@ -360,10 +360,16 @@ actions:
         - applied: { op: import, address: aws_instance.worker }
         - applied: { op: import, address: aws_db_instance.reports }
         - not: { lock_bypassed: true }
-    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. The imports were written under a proper lock. force-unlock is only safe because the evidence shows the holder is dead (Marta's capture, her leave, a lock about a day old); with a live holder you would be corrupting state. Before the destroy, take a final snapshot of reports-db even though the owners signed off: dev data sometimes turns out to be the only copy of something."
+    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. The imports were written under a proper lock. force-unlock is only safe because the evidence shows the holder is dead (Marta's capture, her leave, a lock about a day old); with a live holder you would be corrupting state. Before the destroy, the next step is a final snapshot of reports-db."
+  - id: snapshot-before-destroy
+    label: "Take a final snapshot of the dev database before it is destroyed: aws rds create-db-snapshot --db-instance-identifier reports-db --db-snapshot-identifier reports-db-final"
+    kind: fix
+    match_regex: "^aws rds create-db-snapshot(?=.*--db-instance-identifier[ =]reports-db(\\s|$))(?=.*--db-snapshot-identifier[ =][^\\s-][^\\s]*(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(db-instance-identifier|db-snapshot-identifier|region)[ =][^\\s-]\\S*){2,3}$"
+    feedback: "A manual snapshot of reports-db exists. The owners signed off on the teardown, but the sign-off does not prove nobody needs the data, and a snapshot costs almost nothing; you can delete it after the retention period you agree with them."
   - id: destroy-environment
     label: "Run terraform destroy: the worker and database go first, then the group, subnet and VPC"
     kind: fix
+    after: [snapshot-before-destroy]
     done_when:
       all:
         - lock_free: true
@@ -398,7 +404,7 @@ actions:
     feedback: "-lock-timeout retries for a lock a live run is about to release. Marta's process no longer exists, so nothing will ever release this one and the command just fails after the wait."
 
 solution_paths:
-  - [unlock-and-import, destroy-environment]
+  - [unlock-and-import, snapshot-before-destroy, destroy-environment]
 
 key_evidence: [lock-holder, marta-dead, orphans-not-in-state, worker-running, db-running, admin-role]
 

@@ -124,6 +124,14 @@ describe('terraform-destroy-nonempty-bucket', () => {
     expect(out[3].output.trim()).toBe('aws_s3_bucket.logs')
     expect(await detectedAll(sh)).toEqual(NONE)
   })
+
+  it('the versioning checks run and show an unversioned bucket (nothing left after aws s3 rm)', async () => {
+    const { out } = await play('cd ~/reporting-infra', 'aws s3api get-bucket-versioning --bucket acme-reports-logs', 'aws s3api list-object-versions --bucket acme-reports-logs')
+    expect(out[1].output.trim()).toBe('{}')
+    expect(out[2].output).toContain('"VersionId": "null"')
+    expect(out[2].output).not.toContain('DeleteMarkers')
+    expect(scenario.key_evidence).toContain('not-versioned')
+  })
 })
 
 function RM_LS() {

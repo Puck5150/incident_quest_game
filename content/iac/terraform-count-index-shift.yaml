@@ -27,7 +27,7 @@ terminal:
         a91c03e queues: refunds and shipping queues
         6be5f20 queues: orders queue from a list
 
-    - match_regex: "^aws sqs get-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/123456789012/returns --attribute-names (All|ApproximateNumberOfMessages)( ApproximateNumberOfMessagesNotVisible)?( ApproximateNumberOfMessagesDelayed)?$"
+    - match_regex: "^aws sqs get-queue-attributes --queue-url https://sqs\\.us-east-1\\.amazonaws\\.com/123456789012/returns( --region[ =]us-east-1)? --attribute-names (All|ApproximateNumberOfMessages)( ApproximateNumberOfMessagesNotVisible)?( ApproximateNumberOfMessagesDelayed)?( --region[ =]us-east-1)?$"
       example: "aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/returns --attribute-names ApproximateNumberOfMessages"
       evidence: returns-drained
       output: |

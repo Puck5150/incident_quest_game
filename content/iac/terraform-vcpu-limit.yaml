@@ -281,12 +281,12 @@ actions:
   - id: request-quota-increase
     label: "Request a Service Quotas increase for Running On-Demand Standard instances (L-1216C47A) in us-east-1, enough for loadgen plus the agent"
     kind: fix
-    match_regex: "^aws service-quotas request-service-quota-increase (?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =](9[89]|1[0-8][0-9]|19[0-2])(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+    match_regex: "^aws service-quotas request-service-quota-increase(?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =](9[89]|1[0-8][0-9]|19[0-2])(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(service-code|quota-code|desired-value|region)[ =][^\\s-]\\S*){3,4}$"
     feedback: "Requested: Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances, us-east-1, a desired value of at least 98 vCPUs (96 for loadgen plus 2 for the agent) and no more than headroom for the test. Ask for what the soak needs, not an arbitrary huge number: a big quota raises what a compromised credential can launch, and it is yours to lower again once the environment is torn down. In real life this one sits in PENDING until AWS reviews it, sometimes minutes, sometimes days. Here it's approved straight away. Nothing changed in Terraform; the next apply only has loadgen left."
   - id: request-excessive-quota
     label: "Request a very large Service Quotas increase (L-1216C47A, more than 192 vCPUs) so nobody hits the limit again"
     kind: wrong
-    match_regex: "^aws service-quotas request-service-quota-increase (?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =](19[3-9]|[2-9][0-9]{2}|[1-9][0-9]{3,})(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+    match_regex: "^aws service-quotas request-service-quota-increase(?=.*--service-code[ =]ec2(\\s|$))(?=.*--quota-code[ =]L-1216C47A(\\s|$))(?=.*--desired-value[ =](19[3-9]|[2-9][0-9]{2}|[1-9][0-9]{3,})(\\.0+)?(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(service-code|quota-code|desired-value|region)[ =][^\\s-]\\S*){3,4}$"
     feedback: "The test needs 98 vCPUs; asking for far more is a standing blast radius, since anyone or anything with this account's credentials could launch that much compute (a runaway job or a miner would be billed at that ceiling). Request the capacity the soak needs with a little headroom, and lower it again when the environment is torn down. (AWS review would hold an oversized request PENDING anyway; the quota stays at 64 until a sensible one is approved.)"
   - id: finish-apply
     label: "With the higher quota approved, run terraform apply again so it creates only loadgen"

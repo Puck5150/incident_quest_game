@@ -126,6 +126,13 @@ describe('terraform-vcpu-limit on the simulator', () => {
     }
   })
 
+  it('the quota regexes are anchored: trailing junk or a flag-valued flag is not credited', () => {
+    const base = 'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A'
+    for (const cmd of [`${base} --desired-value 128 --dry-run`, `${base} --desired-value --region`, `${base} --desired-value 128 extra`, `${base} --desired-value=-128`])
+      expect(actionFor(scenario, cmd), cmd).toBeUndefined()
+    expect(actionFor(scenario, `${base} --desired-value 128 --region=us-east-1`)?.id).toBe('request-quota-increase')
+  })
+
   it('trap: destroying the partial environment is destructive, and no fix is credited afterwards', async () => {
     const { sh, out } = await play('cd ~/loadtest-infra', 'terraform apply -auto-approve', 'terraform destroy -auto-approve')
     expect(out[2].exitCode).toBe(0)

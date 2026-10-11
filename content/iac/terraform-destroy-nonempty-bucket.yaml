@@ -57,6 +57,28 @@ terminal:
         2026-08-30 02:11:40      48213 reports-logs/2026-08-29-access.log.gz
         2026-08-31 02:11:38      51877 reports-logs/2026-08-30-access.log.gz
         2026-09-01 02:11:41      50342 reports-logs/2026-08-31-access.log.gz
+    - match_regex: "^aws s3api get-bucket-versioning --bucket acme-reports-logs( --region us-east-1)?$"
+      example: "aws s3api get-bucket-versioning --bucket acme-reports-logs"
+      evidence: not-versioned
+      output: |
+        {}
+    - match_regex: "^aws s3api list-object-versions --bucket acme-reports-logs( --region us-east-1)?$"
+      example: "aws s3api list-object-versions --bucket acme-reports-logs"
+      when_actions: [empty-bucket]
+      evidence: not-versioned
+      output: |
+        {}
+    - match_regex: "^aws s3api list-object-versions --bucket acme-reports-logs( --region us-east-1)?$"
+      example: "aws s3api list-object-versions --bucket acme-reports-logs"
+      evidence: not-versioned
+      output: |
+        {
+            "Versions": [
+                { "Key": "logs/2026-08-29-access.log.gz", "VersionId": "null", "IsLatest": true, "Size": 48213 },
+                { "Key": "logs/2026-08-30-access.log.gz", "VersionId": "null", "IsLatest": true, "Size": 51877 },
+                { "Key": "logs/2026-08-31-access.log.gz", "VersionId": "null", "IsLatest": true, "Size": 50342 }
+            ]
+        }
     - match: "aws sts get-caller-identity"
       evidence: admin-role
       output: |
@@ -211,13 +233,14 @@ solution_paths:
   - [force-destroy-route]
   - [empty-bucket, destroy-after-emptying]
 
-key_evidence: [bucket-not-empty, force-destroy-false, bucket-has-objects, admin-role, archive-verified]
+key_evidence: [bucket-not-empty, force-destroy-false, bucket-has-objects, admin-role, archive-verified, not-versioned]
 
 evidence_labels:
   bucket-not-empty: "terraform destroy stops with BucketNotEmpty on the bucket"
   force-destroy-false: "The bucket's state records force_destroy = false"
   bucket-has-objects: "The bucket still holds log objects"
   admin-role: "Your role is an admin role in the account"
+  not-versioned: "The bucket is not versioned: every object has the null version, so there are no old versions or delete markers to clear"
   archive-verified: "The archive bucket holds the same three log files, with the same sizes, so deleting the originals loses nothing"
 
 hints:
@@ -286,3 +309,5 @@ command_notes:
   "aws s3 ls s3://acme-reports-logs --recursive": "Lists every object in the bucket: three log files, which is why S3 refuses to delete it."
   "aws s3 ls s3://acme-reports-logs": "Top level of the bucket: there is a logs/ prefix, so it is not empty."
   "aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive": "The archive account's copy: the same three files with the same sizes as the original bucket."
+  "aws s3api get-bucket-versioning --bucket acme-reports-logs": "An empty answer means versioning was never enabled, so aws s3 rm leaves nothing behind."
+  "aws s3api list-object-versions --bucket acme-reports-logs": "Every object has the null version and there are no delete markers, so emptying with aws s3 rm is enough."

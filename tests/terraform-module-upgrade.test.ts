@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { atStage } from '../src/schema/stages.ts'
-import { runCommand } from '../src/game/engine.ts'
+import { actionFor, runCommand } from '../src/game/engine.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
 const scenario = loadIncident('terraform-module-upgrade')
@@ -242,5 +242,24 @@ describe('terraform-module-upgrade on the simulator', () => {
       ...lines.map((l) => runCommand(atStage(scenario, 0), l, new Set()).evidence),
     ])
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
+  })
+
+  it('the pin is only interim: stage 2 requires the ordered snapshot, encrypted copy and restore (unencrypted restore wrong, deleting the old instance destructive)', () => {
+    expect(scenario.actions.find((a) => a.id === 'pin-the-module')!.label).toMatch(/interim/)
+    expect(scenario.stages).toHaveLength(1)
+    const two = atStage(scenario, 1)
+    expect(two.solution_paths).toEqual([['create-snapshot', 'copy-encrypted', 'restore-encrypted']])
+    const by = (id: string) => two.actions.find((a) => a.id === id)!
+    expect(by('copy-encrypted').after).toEqual(['create-snapshot'])
+    expect(by('restore-encrypted').after).toEqual(['copy-encrypted'])
+    expect(by('restore-unencrypted').kind).toBe('wrong')
+    expect(by('delete-old-first').kind).toBe('destructive')
+    const id = (cmd: string) => actionFor(two, cmd)?.id
+    expect(id('aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-2-1')).toBe('create-snapshot')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/orders-db')).toBe('copy-encrypted')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1')).toBeUndefined()
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-enc-2-1')).toBe('restore-encrypted')
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-pre-2-1')).toBe('restore-unencrypted')
+    expect(id('aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot')).toBe('delete-old-first')
   })
 })

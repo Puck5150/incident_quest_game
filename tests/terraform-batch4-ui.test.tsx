@@ -90,7 +90,7 @@ const D = 'terraform destroy -auto-approve'
 
 describe('terraform-destroy-nonempty-bucket through the UI', () => {
   const ROOT = /still holds objects and its force_destroy setting/
-  const INVESTIGATE = [D, 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws sts get-caller-identity', 'aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive']
+  const INVESTIGATE = [D, 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws sts get-caller-identity', 'aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive', 'aws s3api list-object-versions --bucket acme-reports-logs']
 
   it('ideal path: investigate, empty the bucket (flag before the path), destroy, close; a remount replays the release', async () => {
     const g = await mount('terraform-destroy-nonempty-bucket')
@@ -184,6 +184,7 @@ describe('terraform-deleted-out-of-band through the UI', () => {
 })
 
 describe('terraform-orphans-after-state-rm through the UI', () => {
+  const SNAP = 'aws rds create-db-snapshot --db-instance-identifier reports-db --db-snapshot-identifier reports-db-final'
   const ROOT = /dropped from Terraform's state but still run in AWS/
   const LOCK_ID = '7e3b9d41-5c2a-8f06-b1d7-a94e2c60f385'
   const IMPORTS = ['terraform import aws_instance.worker i-0c7f3a9d1e5b24680', 'terraform import aws_db_instance.reports reports-db']
@@ -201,13 +202,13 @@ describe('terraform-orphans-after-state-rm through the UI', () => {
     fireEvent.keyDown(answer, { key: 'Enter' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(output()).toMatch(/successfully unlocked/))
-    await g.run(...IMPORTS, D)
+    await g.run(...IMPORTS, SNAP, D)
     await waitFor(() => expect(output()).toMatch(/Destroy complete! Resources: 5 destroyed\./))
     await g.settle()
     const before = output()
     await g.remount(/\$ ls/)
     expect(output()).toBe(before)
-    methodical(await g.closeClean('unlock-and-import', 'destroy-environment'))
+    methodical(await g.closeClean('unlock-and-import', 'snapshot-before-destroy', 'destroy-environment'))
   })
 
   it('late naming: unlock, import and destroy before naming the cause, then declare: both fixes are still earned', async () => {
@@ -216,7 +217,9 @@ describe('terraform-orphans-after-state-rm through the UI', () => {
     await waitFor(() => expect(output()).toMatch(/Destroy complete! Resources: 5 destroyed\./))
     await g.settle()
     g.declare(ROOT)
-    methodical(await g.closeClean('unlock-and-import', 'destroy-environment'))
+    // the destroy fix waits for its prerequisite; the snapshot taken after naming releases it
+    await g.run(SNAP)
+    methodical(await g.closeClean('unlock-and-import', 'snapshot-before-destroy', 'destroy-environment'))
   })
 
   it('trap: apply after unlocking duplicates the worker: destructive once, no close-out', async () => {

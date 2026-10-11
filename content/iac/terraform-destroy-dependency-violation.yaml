@@ -247,7 +247,7 @@ actions:
   - id: release-eni
     label: "Delete that one interface with the AWS CLI (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), only after its owner has confirmed in writing that it is abandoned (see #ingest-platform) and you have checked it is unattached"
     kind: fix
-    match_regex: "^aws ec2 delete-network-interface( --region us-east-1)? --network-interface-id eni-0c4a8e2f6b1d97305( --region us-east-1)?( --output json)?$"
+    match_regex: "^aws ec2 delete-network-interface( --region[ =]us-east-1)? --network-interface-id[ =]eni-0c4a8e2f6b1d97305( --region[ =]us-east-1)?( --output json)?$"
     feedback: "The interface is deleted (no output on success). It was available and unattached, detached on 30 Sep by the ingest team's own deploy role, and the ingest team confirmed in writing that this exact interface is theirs and abandoned. Terraform never owned it, so only now can terraform destroy remove the subnet. Deleting it on hearsay (\"they said they moved\") would have been a guess about someone else's resource: check the evidence and get the owner's yes first."
   - id: destroy-after-release
     label: "Run terraform destroy again now that nothing is left in the subnet"

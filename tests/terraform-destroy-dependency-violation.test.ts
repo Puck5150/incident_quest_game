@@ -84,6 +84,12 @@ describe('terraform-destroy-dependency-violation', () => {
     for (const no of ['aws ec2 delete-network-interface --network-interface-id eni-other', 'aws ec2 delete-subnet --subnet-id subnet-0e92c4a7b1d38f560', 'aws ec2 delete-network-interface', `${DEL} --dry-run`]) expect(rx.test(no), no).toBe(false)
   })
 
+  it('the delete regex accepts the --flag=value spelling and still refuses other ids', () => {
+    const rx = new RegExp(scenario.actions.find((a) => a.id === 'release-eni')!.match_regex!)
+    for (const ok of ['aws ec2 delete-network-interface --network-interface-id=eni-0c4a8e2f6b1d97305', 'aws ec2 delete-network-interface --region=us-east-1 --network-interface-id=eni-0c4a8e2f6b1d97305']) expect(rx.test(ok), ok).toBe(true)
+    expect(rx.test('aws ec2 delete-network-interface --network-interface-id=eni-other')).toBe(false)
+  })
+
   it('-target on the vpc is a dead end with the same error, nothing extra destroyed', async () => {
     const { sh, out } = await play('cd ~/app-infra', 'terraform destroy -target=aws_vpc.main -auto-approve', 'terraform state list')
     expect(out[1].exitCode).toBe(1)
