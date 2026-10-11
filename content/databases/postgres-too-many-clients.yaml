@@ -94,11 +94,27 @@ actions:
   - id: pooler
     label: "Put PgBouncer in transaction pooling mode between the API and PostgreSQL, so 200 client connections share a few dozen server connections"
     kind: fix
-    feedback: "The API instances connect to PgBouncer, which hands out a small set of real server connections per transaction. The database stays well under 100."
+    feedback: "The API instances connect to PgBouncer, which hands out a small set of real server connections per transaction. The database stays well under 100. Not done yet: check the app works in transaction mode, lock the pooler down, and cap the total."
+  - id: pooler-compat
+    label: "Check the app against transaction pooling (prepared statements, session SET, advisory locks, LISTEN) and set the driver or max_prepared_statements accordingly"
+    kind: fix
+    feedback: "In transaction mode a client may get a different server connection for each transaction, so anything that lives in a session (named prepared statements, SET, session advisory locks, LISTEN) breaks or leaks. Fix the driver settings, or use a PgBouncer version with max_prepared_statements, before the sale traffic finds out."
+  - id: pooler-auth
+    label: "Harden the pooler: auth_type = scram-sha-256 (never trust), TLS on both legs, and a pg_hba entry that admits only the pooler host"
+    kind: fix
+    feedback: "The pooler is now the front door of the database. It authenticates clients with SCRAM, encrypts both hops, and PostgreSQL accepts connections only from the pooler's address instead of every API pod."
+  - id: pooler-open
+    label: "Run PgBouncer with auth_type = trust so the API needs no password changes"
+    kind: wrong
+    feedback: "Anyone who can reach the pooler's port can connect as any database user. A pooler that skips authentication turns a connection-limit fix into an open door."
   - id: smaller-pool
     label: "Set DB_POOL_SIZE to 4, so 20 instances use at most 80 connections"
     kind: fix
-    feedback: "Total connections now fit under max_connections with room for admins. Size pools from the total, not per instance."
+    feedback: "Total connections now fit under max_connections with room for admins. This is only arithmetic for today's replica count: scale to 30 and you are over again, so it must be paired with a ceiling on replicas."
+  - id: connection-budget
+    label: "Write the connection budget down: cap the autoscaler's maxReplicas so replicas x pool (or the pooler's server pool) plus admin headroom stays under max_connections, and alert at 80% of connections"
+    kind: fix
+    feedback: "The budget now has an owner: the autoscaler cannot scale past what the database can serve, and an alert fires before the limit is hit, not after."
   - id: max-1000
     label: "Raise max_connections to 1000 and restart"
     kind: wrong
@@ -109,8 +125,8 @@ actions:
     feedback: "Requests in flight on those connections fail, and the pools reconnect straight away."
 
 solution_paths:
-  - [pooler]
-  - [smaller-pool]
+  - [pooler, pooler-compat, pooler-auth, connection-budget]
+  - [smaller-pool, connection-budget]
 
 key_evidence: [too-many, max-100, conns-full, pool-10]
 
@@ -123,7 +139,7 @@ evidence_labels:
 hints:
   nudge: "The error is about how many connections there are. How many could the API open now?"
   direction: "Multiply instances by pool size, and compare with max_connections."
-  answer: "20 x 10 = 200 connections against a limit of 100. Use a pooler like PgBouncer, or shrink each instance's pool so the total fits."
+  answer: "20 x 10 = 200 connections against a limit of 100. Put PgBouncer in front (checked for transaction mode, with SCRAM auth and TLS), or shrink each pool; either way cap the autoscaler so replicas x pool stays inside the budget, and alert at 80%."
 
 analogy:
   title: "More waiters, same number of tables"
@@ -146,12 +162,17 @@ debrief:
     - "Check the limit: max_connections 100."
     - "Count who holds them: 96 from the API."
     - "Do the math: 20 instances x pool 10 = 200."
-    - "Pool through PgBouncer, or size the per-instance pool to fit."
+    - "Pool through PgBouncer (check transaction-mode compatibility; scram auth, TLS, narrow pg_hba), or size the per-instance pool to fit."
+    - "Cap the autoscaler to the connection budget and alert at 80%."
   real_world: |
     Connection count is a shared budget; every autoscaling app must divide
     it. A transaction-level pooler lets many app connections share few
     server connections, and is standard in front of PostgreSQL for apps that
-    scale out.
+    scale out. It must be checked against the app (prepared statements,
+    session state and advisory locks misbehave in transaction mode) and
+    locked down like the database it fronts: SCRAM authentication, TLS and
+    a pg_hba entry for the pooler host only. A smaller pool alone only
+    fits today's replica count; budget replicas x pool.
 
 concepts:
   - term: "max_connections"
