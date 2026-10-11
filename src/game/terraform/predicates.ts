@@ -50,6 +50,7 @@ export function stripHclComments(text: string): string {
 
 // The suffix on a history line whose step ran with -lock=false while the lock was held.
 export const LOCK_BYPASSED = ' (lock bypassed)'
+// Other markers: (targeted) (refresh skipped) (cli vars) (lock off) (var-file NAME), set on apply steps.
 
 const has = <T extends object, K extends string>(o: T, k: K): o is Extract<T, Record<K, unknown>> => Object.hasOwn(o, k)
 
@@ -70,7 +71,7 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   if (has(l, 'state_has')) return listAddresses(w.state).some((a) => covers(l.state_has, a))
   if (has(l, 'state_lacks')) return !listAddresses(w.state).some((a) => covers(l.state_lacks, a))
   if (has(l, 'lock_free')) return w.lock === undefined
-  if (has(l, 'lock_bypassed')) return w.history.some((h) => h.endsWith(LOCK_BYPASSED))
+  if (has(l, 'lock_bypassed')) return w.history.some((h) => h.includes(LOCK_BYPASSED))
   if (has(l, 'reality_has')) {
     const { type, id, attr, equals } = l.reality_has
     const key = realityKey(type, id)
@@ -93,11 +94,17 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   }
   if (has(l, 'reality_lacks')) return !Object.hasOwn(w.reality, realityKey(l.reality_lacks.type, l.reality_lacks.id))
   if (has(l, 'applied')) {
-    const { op, address, lock_bypassed } = l.applied
+    const { op, address, lock_bypassed, var_file, deviant } = l.applied
     return w.history.some((h) => {
-      const bypassed = h.endsWith(LOCK_BYPASSED)
-      const rest = bypassed ? h.slice(0, -LOCK_BYPASSED.length) : h
-      return (!lock_bypassed || bypassed) && rest.startsWith(`${op} `) && covers(address, rest.slice(op.length + 1))
+      // "OP ADDRESS" then markers like " (lock bypassed)" or " (var-file prod.tfvars)"
+      const cut = h.indexOf(' (')
+      const marks = cut < 0 ? [] : [...h.slice(cut).matchAll(/\(([^)]*)\)/g)].map((m) => m[1])
+      const rest = cut < 0 ? h : h.slice(0, cut)
+      const files = marks.filter((m) => m.startsWith('var-file '))
+      if (lock_bypassed && !marks.includes('lock bypassed')) return false
+      if (var_file !== undefined && !(files.length === 1 && files[0] === `var-file ${var_file}`)) return false
+      if (deviant && !marks.some((m) => ['targeted', 'refresh skipped', 'cli vars', 'lock off', 'lock bypassed'].includes(m))) return false
+      return rest.startsWith(`${op} `) && covers(address, rest.slice(op.length + 1))
     })
   }
   try {

@@ -99,10 +99,6 @@ terraform:
           region = "us-east-1"
         }
 
-        variable "environment" {
-          type = string
-        }
-
         variable "db_instance_class" {
           type = string
         }
@@ -117,15 +113,14 @@ terraform:
           instance_class      = var.db_instance_class
           multi_az            = true
           skip_final_snapshot = false
+          apply_immediately   = var.db_apply_immediately
         }
     - path: prod.tfvars
       content: |
-        environment = "prod"
         db_instance_class = "db.r6g.xlarge"
         db_apply_immediately = false
     - path: staging.tfvars
       content: |
-        environment = "staging"
         db_instance_class = "db.t4g.medium"
         db_apply_immediately = true
   workspaces:
@@ -140,6 +135,7 @@ terraform:
             engine: postgres
             engine_version: "15.4"
             instance_class: db.t4g.medium
+            apply_immediately: true
             allocated_storage: 20
             storage_encrypted: false
             multi_az: true
@@ -156,6 +152,7 @@ terraform:
             engine: postgres
             engine_version: "15.4"
             instance_class: db.r6g.large
+            apply_immediately: true
             allocated_storage: 20
             storage_encrypted: false
             multi_az: true
@@ -196,18 +193,21 @@ hypotheses:
 
 actions:
   - id: prod-apply
-    label: "Apply prod.tfvars in the prod workspace (terraform apply -var-file=prod.tfvars), after confirming the workspace and reading the plan"
+    label: "Apply prod.tfvars in the prod workspace (terraform apply -var-file=prod.tfvars), with no -target, -var, -refresh=false or -lock=false"
     kind: fix
     done_when:
       all:
         - reality_has: { type: aws_db_instance, id: orders-prod, attr: instance_class, equals: db.r6g.xlarge }
+        - applied: { op: update, address: aws_db_instance.orders, var_file: prod.tfvars }
+        - not: { applied: { op: update, address: aws_db_instance.orders, deviant: true } }
+        - file_contains: { path: /home/you/infra/data/prod.tfvars, matches: '^db_instance_class = "db\.r6g\.xlarge"$' }
         - not: { applied: { op: delete, address: aws_db_instance.orders } }
         - not: { applied: { op: state-rm, address: aws_db_instance.orders } }
-    feedback: "Terraform sets orders-prod back to prod's values, through the same tool and state that changed it. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
+    feedback: "Terraform sets orders-prod back to prod's values, through the same tool and state that changed it, with the whole configuration and prod's own var-file. Targeting one resource, overriding values with -var, skipping the refresh or the lock are ways around the safeguards, not the fix. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
   - id: workspace-guard
-    label: "Open a PR that makes the plan fail when the tfvars environment doesn't match terraform.workspace (a variable validation or precondition on the environment name), and stop applying prod by hand from the shared ops box"
+    label: "Open a PR that makes the plan fail when the tfvars environment doesn't match terraform.workspace (a lifecycle precondition on the database comparing an environment input with terraform.workspace), and stop choosing the workspace and tfvars pair by hand: prod applied from a pipeline or its own directory"
     kind: fix
-    feedback: "With the check in code, applying staging.tfvars in the prod workspace fails before it plans anything. Applying prod from a pipeline with its own credentials (or a directory per environment) removes the chance of choosing the pair by hand at all."
+    feedback: "With the check in code, planning staging.tfvars in the prod workspace fails the plan (a precondition is evaluated while planning, after the variables load). Even better is to remove the choice: derive the instance class from a map keyed by terraform.workspace, or apply prod from a pipeline with its own credentials (or a directory per environment), so nobody picks the pair by hand."
   - id: select-staging
     label: "terraform workspace select staging, then apply staging.tfvars"
     kind: wrong
@@ -252,7 +252,7 @@ command_notes:
 hints:
   nudge: "Terraform changed the database. Which inputs did it use, and for which environment?"
   direction: "Check the workspace on ops-01, the shell history, and what each tfvars file sets."
-  answer: "staging.tfvars was applied in the prod workspace. Apply prod.tfvars in prod, then close the gap that allowed it: a check in code that the tfvars environment matches terraform.workspace, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
+  answer: "staging.tfvars was applied in the prod workspace. Check the plan, then apply prod.tfvars in prod (no -target, -var or -lock=false). Then close the gap that allowed it: a precondition that the environment input matches terraform.workspace, ideally a workspace-keyed map so no pair is chosen by hand, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
 
 analogy:
   title: "The right recipe in the wrong kitchen"
@@ -274,11 +274,14 @@ debrief:
     - "Check orders-prod's class: db.t4g.medium."
     - "See who changed it: Terraform on ops-01 at 16:41."
     - "Find why: prod workspace selected, staging.tfvars applied."
-    - "Apply prod.tfvars in prod."
-    - "Add the workspace/tfvars guard through a PR, and move prod applies off the hand-picked workspace and tfvars pair (pipeline or per-environment directory)."
+    - "Read the plan with prod.tfvars in the prod workspace: the class goes back up (and apply_immediately back to false)."
+    - "Apply prod.tfvars in prod, with no -target, -var, -refresh=false or -lock=false."
+    - "Add the workspace/tfvars guard through a PR (a precondition comparing an environment input with terraform.workspace), and remove the hand-picked pair: a workspace-keyed map for the class, or a pipeline or per-environment directory for prod."
   real_world: |
-    A precondition or validation that compares an environment variable
-    with terraform.workspace stops this before planning. Many teams also
+    A lifecycle precondition that compares an environment input with
+    terraform.workspace makes the plan fail instead of applying the wrong
+    pair. Better still is to derive the class from a map keyed by
+    terraform.workspace so there is no pair to choose. Many teams also
     give each environment its own directory or pipeline, with credentials
     only the pipeline holds for prod, so a person never chooses the pair
     by hand and a prod apply always follows a reviewed plan.

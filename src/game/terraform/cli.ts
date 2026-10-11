@@ -820,7 +820,7 @@ async function cmdPlan(args: string[], ctx: CliContext, cfg: Config, here: boole
     const { lineage, serial } = ctx.lab.state
     const path = resolvePath(cfg.dir, f.out)
     const id = planId(lineage, serial, path)
-    ctx.lab.savedPlans.set(id, { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy: false, targets: f.targets, serial, lineage, workspace: ctx.lab.workspace })
+    ctx.lab.savedPlans.set(id, { tree: cfg.modules.tree, vars: p.vars, replace: f.replace, destroy: false, targets: f.targets, serial, lineage, workspace: ctx.lab.workspace, tokens: runTokens({ ...f, lock: true }, cfg) })
     const slash = path.lastIndexOf('/')
     await ctx.write(path.slice(0, slash) || '/', path.slice(slash + 1), `TFPLAN1\n${id}\n`)
   }
@@ -844,6 +844,24 @@ async function loadSavedPlan(ctx: CliContext, cfg: Config, name: string): Promis
   return saved ?? failLoad('Error: zip: not a valid zip file')
 }
 
+// Markers an apply step carries in the history for how it was run (see `applied` `var_file` and `deviant`).
+function runTokens(f: PlanFlags, cfg: Config, held = false): string[] {
+  const t: string[] = []
+  if (f.targets.length) t.push('(targeted)')
+  if (!f.refresh) t.push('(refresh skipped)')
+  if (!f.lock && !held) t.push('(lock off)') // with a lock held, the (lock bypassed) marker says it
+  for (const s of f.sources) {
+    if (s.kind === 'var') {
+      if (!t.includes('(cli vars)')) t.push('(cli vars)')
+    } else {
+      const abs = resolvePath(cfg.dir, s.path)
+      const m = `(var-file ${abs.startsWith(`${cfg.dir}/`) ? abs.slice(cfg.dir.length + 1) : abs})`
+      if (!t.includes(m)) t.push(m)
+    }
+  }
+  return t
+}
+
 async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'apply' | 'destroy'): Promise<Out> {
   const f = parsePlanFlags(args, mode)
   if (!('sources' in f)) return f
@@ -852,6 +870,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   let input: { tree: ModuleTree; vars: Record<string, Value>; replace: string[]; destroy: boolean; targets: Target[] }
   let head: string
   let warning = ''
+  let tokens = runTokens(f, cfg, !!ctx.lab.lock)
   if (f.planFile !== undefined) {
     if (f.replace.length) return boxFail("Can't set -replace when applying a saved plan", 'The -replace option cannot be used when applying a saved plan file, because a saved plan already records which objects it replaces. Create a new plan with -replace instead.')
     if (f.sources.length) return boxFail("Can't set variables when applying a saved plan", 'The -var and -var-file options cannot be used when applying a saved plan file, because a saved plan includes the variable values that were set when it was created.')
@@ -864,6 +883,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
     if (saved.serial !== ctx.lab.state.serial || saved.lineage !== ctx.lab.state.lineage || saved.workspace !== ctx.lab.workspace)
       return boxFail('Saved plan is stale', 'The given plan file can no longer be applied because the state was changed by another operation after the plan was created.')
     input = { tree: saved.tree, vars: saved.vars, replace: saved.replace, destroy: saved.destroy, targets: saved.targets ?? [] }
+    tokens = [...(saved.tokens ?? []), ...(f.lock || ctx.lab.lock ? [] : ['(lock off)'])]
     head = '' // a saved plan was already reviewed: no plan text, no question
   } else {
     const p = await makePlan(f, ctx, cfg, destroy)
@@ -891,7 +911,7 @@ async function cmdApply(args: string[], ctx: CliContext, cfg: Config, mode: 'app
   ctx.lab.hasState = true
   // A step applied with -lock=false while someone else held the lock is marked, for done_when.
   const bypassed = !f.lock && ctx.lab.lock ? LOCK_BYPASSED : ''
-  for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}${bypassed}`)
+  for (const st of r.steps) if (st.ok) ctx.lab.history.push(`${st.op} ${st.address}${bypassed}${tokens.map((x) => ` ${x}`).join('')}`)
   const progress = renderProgress(r)
   // The apply's own warning comes just before the summary (backend/local/backend_apply.go).
   const stdout = [head, progress, input.targets.length ? `\n${TARGETED_APPLY_WARNING}` : '', renderApplyEnd(r, mode)].filter(Boolean).join('\n')

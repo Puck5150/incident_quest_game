@@ -107,9 +107,48 @@ describe('wrong-workspace-major on the simulator', () => {
     expect(await detectedAll(sh)).toEqual({ ...NONE, 'destroy-prod': true })
   })
 
-  it('(j) -target does not change the outcome: the fix still needs the prod value in prod', async () => {
-    const { sh } = await play('cd ~/infra/data', 'terraform apply -auto-approve -target=aws_db_instance.orders -var-file=staging.tfvars')
-    expect(await detectedAll(sh)).toEqual(NONE)
+  it('(j) stopgaps never credit prod-apply: -target, -lock=false, -refresh=false, -var, edited tfvars', async () => {
+    const P = 'terraform apply -auto-approve'
+    const cases: [string, string[]][] = [
+      ['-target with prod.tfvars', [`${P} -target=aws_db_instance.orders -var-file=prod.tfvars`]],
+      ['-lock=false', [`${P} -lock=false -var-file=prod.tfvars`]],
+      ['-refresh=false', [`${P} -refresh=false -var-file=prod.tfvars`]],
+      ['-var override of prod.tfvars', [`${P} -var-file=prod.tfvars -var db_instance_class=db.r6g.xlarge`]],
+      ['-var only, no tfvars', [`${P} -var db_instance_class=db.r6g.xlarge -var db_apply_immediately=false`]],
+      ['staging.tfvars with -var class', [`${P} -var-file=staging.tfvars -var db_instance_class=db.r6g.xlarge`]],
+      ['staging.tfvars edited to prod values', ["sed -i 's/db.t4g.medium/db.r6g.xlarge/' staging.tfvars", `${P} -var-file=staging.tfvars`]],
+      ['prod.tfvars edited to another class', ["sed -i 's/db.r6g.xlarge/db.r6g.2xlarge/' prod.tfvars", `${P} -var-file=prod.tfvars`]],
+      ['two var-files', [`${P} -var-file=staging.tfvars -var-file=prod.tfvars`]],
+      ['a copy of the prod values', ['cp -f prod.tfvars other.tfvars', `${P} -var-file=other.tfvars`]],
+      ['saved plan made with -target', ['terraform plan -target=aws_db_instance.orders -var-file=prod.tfvars -out=p', 'terraform apply p']],
+    ]
+    for (const [name, cmds] of cases) {
+      const { sh } = await play('cd ~/infra/data', ...cmds)
+      expect((await detectedAll(sh))['prod-apply'], name).toBe(false)
+    }
+  })
+
+  it('(j2) a stopgap apply is sticky: the clean apply afterwards has nothing left to change, so no credit', async () => {
+    const { sh } = await play('cd ~/infra/data', `${PROD} -lock=false`.replace('-auto-approve -var-file=prod.tfvars', '-auto-approve -var-file=prod.tfvars'), PROD)
+    expect((await detectedAll(sh))['prod-apply']).toBe(false)
+  })
+
+  it('(j3) clean spellings still credit: plan -out then apply, ./prod.tfvars, absolute path, -var-file prod.tfvars', async () => {
+    for (const cmds of [
+      ['terraform plan -var-file=prod.tfvars -out=p', 'terraform apply p'],
+      ['terraform apply -auto-approve -var-file=./prod.tfvars'],
+      ['terraform apply -auto-approve -var-file=/home/you/infra/data/prod.tfvars'],
+      ['terraform workspace select prod', 'terraform apply -auto-approve -var-file prod.tfvars'],
+    ]) {
+      const { sh } = await play('cd ~/infra/data', ...cmds)
+      expect((await detectedAll(sh))['prod-apply'], cmds.join(';')).toBe(true)
+    }
+  })
+
+  it('(j4) the config passes apply_immediately, and the prod plan shows it going back to false', async () => {
+    const { out } = await play('cd ~/infra/data', 'cat main.tf', 'terraform plan -var-file=prod.tfvars')
+    expect(out[1].output).toContain('apply_immediately   = var.db_apply_immediately')
+    expect(out[2].output).toMatch(/~ apply_immediately\s+= true -> false/)
   })
 
   it('(k) the guard in main.tf is advice only: editing it in credits nothing (the lab does not simulate preconditions)', async () => {

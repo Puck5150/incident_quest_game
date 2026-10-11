@@ -130,6 +130,8 @@ describe('wrong-workspace-major through the UI', () => {
     expect(g.taken()).toEqual(['prod-apply'])
     g.click(/Open a PR that makes the plan fail/)
     expect(g.taken()).toEqual(['prod-apply', 'workspace-guard'])
+    g.click(/Close out/)
+    await waitFor(() => expect(screen.getByText('Stage 2 of 3')).toBeTruthy())
   })
 
   it('trap: state rm in prod is destructive once, and the prod apply afterwards earns nothing', async () => {

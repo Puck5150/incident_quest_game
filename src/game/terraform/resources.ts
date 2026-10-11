@@ -107,6 +107,7 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
     password: { sensitive: true },
     multi_az: { computed: true },
     skip_final_snapshot: { default: false },
+    apply_immediately: { default: false }, // stored in state; the lab applies a class change at once whatever its value
     endpoint: RO,
   }),
   aws_s3_bucket: aws({ bucket: NEWC, force_destroy: { default: false }, tags: {}, tags_all: TAGS_ALL, bucket_domain_name: RO }),
