@@ -90,7 +90,7 @@ const D = 'terraform destroy -auto-approve'
 
 describe('terraform-destroy-nonempty-bucket through the UI', () => {
   const ROOT = /still holds objects and its force_destroy setting/
-  const INVESTIGATE = [D, 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws sts get-caller-identity']
+  const INVESTIGATE = [D, 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws sts get-caller-identity', 'aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive']
 
   it('ideal path: investigate, empty the bucket (flag before the path), destroy, close; a remount replays the release', async () => {
     const g = await mount('terraform-destroy-nonempty-bucket')

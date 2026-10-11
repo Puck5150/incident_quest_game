@@ -39,14 +39,17 @@ describe('terraform-destroy-nonempty-bucket', () => {
   })
 
   it('evidence is obtainable before any change', async () => {
-    const { out } = await play('cd ~/reporting-infra', 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws s3 ls s3://acme-reports-logs/', 'aws sts get-caller-identity')
+    const { out } = await play('cd ~/reporting-infra', 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws s3 ls s3://acme-reports-logs/', 'aws sts get-caller-identity', 'aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive')
     expect(out[1].output).toMatch(/force_destroy\s*=\s*false/)
+    expect(out[5].output.trim().split('\n')).toHaveLength(3)
+    expect(out[5].output).toContain('reports-logs/2026-08-31-access.log.gz')
     expect(out[1].hits).toContain('evidence:force-destroy-false')
     expect(out[2].output.trim().split('\n')).toHaveLength(3)
     expect(out[3].output).toContain('PRE logs/')
     expect(out[4].output).toContain('PlatformAdmin')
     const tags = new Set(scenario.terminal!.commands.filter((c) => out.some((r) => r.hits.includes(c.match ?? c.example ?? ''))).map((c) => c.evidence))
-    expect(tags.has('bucket-has-objects') && tags.has('admin-role')).toBe(true)
+    expect(tags.has('bucket-has-objects') && tags.has('admin-role') && tags.has('archive-verified')).toBe(true)
+    expect(scenario.key_evidence).toContain('archive-verified')
   })
 
   it('route A: editing alone does not help, apply then destroy does', async () => {
