@@ -197,3 +197,34 @@ describe('terraform-moved-block through the UI', () => {
     await g.trapped('merge-with-snapshot')
   })
 })
+
+describe('terraform-state-in-git through the UI', () => {
+  const ROOT = /Terraform state records every resource's attributes/
+  const BACKEND = `printf 'terraform {\\n  backend "s3" {\\n    bucket       = "acme-tfstate"\\n    key          = "analytics-infra/terraform.tfstate"\\n    region       = "us-east-1"\\n    encrypt      = true\\n    use_lockfile = true\\n  }\\n}\\n' > backend.tf`
+  const IGNORE = `printf '*.tfstate\\n*.tfstate.*\\n' >> .gitignore`
+
+  it('ideal path: evidence, migrate, purge the leftover copy, ignore, rotate; both fixes close out', async () => {
+    const g = await mount('terraform-state-in-git')
+    await g.run('git ls-files | grep tfstate', 'terraform state pull', 'cat main.tf')
+    await waitFor(() => expect(output()).toMatch(/"result"/))
+    g.declare(ROOT)
+    await g.run(BACKEND, 'echo yes | terraform init', IGNORE, 'rm -f terraform.tfstate.backup')
+    await waitFor(() => expect(output()).toMatch(/Successfully configured the backend "s3"/))
+    await g.run('terraform apply -auto-approve -replace=random_password.db')
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 1 added, 1 changed, 1 destroyed\./))
+    await g.settle()
+    expect(g.taken()).toEqual(['remote-backend', 'rotate'])
+    await g.closeClean('remote-backend', 'rotate')
+  })
+
+  it('gitignore alone is a wrong action: no credit, no Close out', async () => {
+    const g = await mount('terraform-state-in-git')
+    g.declare(ROOT)
+    await g.run(IGNORE, 'terraform plan')
+    await g.settle()
+    g.click(/Add terraform\.tfstate to \.gitignore/)
+    expect(g.taken()).toEqual(['gitignore-only'])
+    expect(g.wrongCount()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
+  })
+})
