@@ -121,7 +121,7 @@ evidence_labels:
 hints:
   nudge: "It's size, not the page. What happens to a packet that's too big for the tunnel?"
   direction: "Test packet sizes with ping -M do, then check what the new firewall rules do to ICMP."
-  answer: "Path MTU discovery depends on ICMP \"fragmentation needed\", which the new baseline blocks. Allow ICMP type 3 code 4 in the firewall baseline, keeping the rest of the ICMP block. A TCP MSS clamp on the VPN gateway is a useful addition but doesn't fix the black hole alone."
+  answer: "Path MTU discovery depends on ICMP \"fragmentation needed\", which the new baseline blocks. Allow ICMP type 3 code 4 (and ICMPv6 packet-too-big, type 2, for IPv6) in the firewall baseline, keeping the rest of the ICMP block. A TCP MSS clamp on the VPN gateway is a useful addition but doesn't fix the black hole alone."
 
 analogy:
   title: "The low bridge with no warning sign"

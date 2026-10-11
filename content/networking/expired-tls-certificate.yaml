@@ -228,9 +228,9 @@ actions:
     match_regex: "^(sudo )?(systemctl restart nginx|service nginx restart)$"
     feedback: "nginx reloads the same expired files from /etc/letsencrypt/live. Nothing on disk changed, so nothing gets better."
   - id: dns-switch
-    label: "Change the renewal to a DNS-01 challenge"
+    label: "As the outage fix, switch renewal to a DNS-01 challenge instead of reopening port 80"
     kind: wrong
-    feedback: "DNS-01 is a good long-term design for a hardened edge, since it needs no inbound port 80 at all, but it needs a DNS plugin and a scoped API credential that don't exist here, so it can't restore service during this outage. Reopen port 80 now and plan DNS-01 as a follow-up change."
+    feedback: "Wrong as the outage fix, right as a follow-up. DNS-01 is a good long-term design for a hardened edge, since it needs no inbound port 80 at all, but it needs a DNS plugin and a scoped API credential that don't exist here, so it can't restore service during this outage. Reopen port 80 now and plan DNS-01 as a follow-up change."
   - id: skip-verify
     label: "Ask partners to add curl -k (skip certificate checks) until it's fixed"
     kind: destructive

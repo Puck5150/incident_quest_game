@@ -446,6 +446,6 @@ stages:
       ideal_path:
         - "Notice weekend images broke exactly when the disk was mounted, and the root disk didn't shrink."
         - "Bind-mount / elsewhere and look under srv/media: 12 GB, 09-27 to 10-02."
-        - "rsync -a them onto the new disk, verify with diff -r, then delete the originals under /mnt/rootfs/srv/media (the root filesystem's copy, not /srv/media) and umount /mnt/rootfs."
+        - "rsync -a them onto the new disk, verify the copy (for example diff -r or a dry-run rsync; the lab does not simulate it), then delete the originals under /mnt/rootfs/srv/media (the root filesystem's copy, not /srv/media) and umount /mnt/rootfs."
         - "Check an image from the weekend and df: root back to about 60%."
         - "Prevent a repeat: findmnt --verify after fstab edits, and RequiresMountsFor=/srv/media on media-api and nginx so they won't start (and write onto /) without the disk."

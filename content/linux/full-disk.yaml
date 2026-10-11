@@ -198,7 +198,7 @@ debrief:
     - "Find the culprit with du and ls: one 29G app.log."
     - "Free space by truncating the file in place. Deleting a file the app holds open frees nothing."
     - "Fix the root cause: the logrotate path typo."
-    - "Verify: df -h shows free space, logrotate -d lists app.log, and the nginx access log shows 200s again."
+    - "Verify: df -h shows free space, logrotate -d (a dry run, not simulated here) should list app.log, and the nginx access log shows 200s again."
     - "Follow up: add a disk-usage alert (80% warn, 90% page) so the next runaway log is caught early."
   real_world: |
     Full disks are one of the most common production incidents, and logs are
