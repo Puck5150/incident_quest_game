@@ -48,6 +48,18 @@ describe('terraform-destroy-dependency-violation', () => {
     expect(out[5].output).toContain('PlatformAdmin')
   })
 
+  it('the owner evidence is there to be read before the delete: confirmation log and CloudTrail', async () => {
+    const { out } = await play('cd ~/app-infra', 'aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=eni-0c4a8e2f6b1d97305')
+    expect(out[1].output).toContain('DetachNetworkInterface')
+    expect(out[1].hits).toContain('aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=eni-0c4a8e2f6b1d97305')
+    const log = scenario.logs!.find((l) => l.evidence === 'owner-confirmed')!
+    expect(log.lines).toContain('eni-0c4a8e2f6b1d97305 (that id only)')
+    expect(scenario.key_evidence).toEqual(expect.arrayContaining(['owner-confirmed', 'eni-idle']))
+    expect(scenario.hints.answer).not.toMatch(/they confirmed they moved off/)
+    expect(scenario.hints.answer).toMatch(/confirmed in #ingest-platform/)
+    expect(scenario.actions.find((a) => a.id === 'release-eni')!.label).toMatch(/owner has confirmed in writing/)
+  })
+
   it('ideal route: release the interface, destroy once, second destroy is a no-op', async () => {
     const { sh, out } = await withTaken([D, DESC, { take: 'release-eni' }, DESC, D, D, 'terraform state list'])
     expect(out[0].exitCode).toBe(1)

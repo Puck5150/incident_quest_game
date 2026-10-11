@@ -122,8 +122,11 @@ describe('terraform-destroy-dependency-violation through the UI', () => {
 
   it('ideal path: read the error, find whose interface it is, delete it, destroy, close', async () => {
     const g = await mount('terraform-destroy-dependency-violation')
-    await g.run(D, 'terraform state list', DESC, 'aws sts get-caller-identity')
+    await g.run(D, 'terraform state list', DESC, 'aws sts get-caller-identity', 'aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=eni-0c4a8e2f6b1d97305')
     await waitFor(() => expect(output()).toMatch(/DependencyViolation[\s\S]*Interface for the shared ingest endpoint/))
+    fireEvent.click(screen.getByRole('tab', { name: 'Logs' }))
+    fireEvent.click(screen.getByRole('button', { name: '#ingest-platform (this week)' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Terminal' }))
     g.declare(ROOT)
     await g.run(DEL, DESC, D)
     await waitFor(() => expect(output()).toMatch(/Destroy complete! Resources: 2 destroyed\./))
@@ -132,6 +135,15 @@ describe('terraform-destroy-dependency-violation through the UI', () => {
     await g.remount(/\$ ls/)
     expect(output()).toBe(before)
     methodical(await g.closeClean('release-eni', 'destroy-after-release'))
+  })
+
+  it('deleting without reading the owner evidence still works but is not methodical', async () => {
+    const g = await mount('terraform-destroy-dependency-violation')
+    g.declare(ROOT)
+    await g.run(DESC, DEL, D)
+    await waitFor(() => expect(output()).toMatch(/Destroy complete! Resources: 4 destroyed\./))
+    const s = await g.closeClean('release-eni', 'destroy-after-release')
+    expect(s.lines.map((l) => l.label).join('\n')).not.toMatch(/Methodical/)
   })
 
   it('trap: state rm of the subnet and VPC, then destroy: destructive once', async () => {

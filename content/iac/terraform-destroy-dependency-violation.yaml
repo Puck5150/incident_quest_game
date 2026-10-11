@@ -71,6 +71,24 @@ terminal:
                 }
             ]
         }
+    - match_regex: "^aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=eni-0c4a8e2f6b1d97305( --region us-east-1)?( --output json)?$"
+      example: "aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=eni-0c4a8e2f6b1d97305"
+      evidence: eni-idle
+      output: |
+        {
+            "Events": [
+                {
+                    "EventName": "DetachNetworkInterface",
+                    "EventTime": "2026-09-30T09:14:22+00:00",
+                    "Username": "ingest-platform-deploy"
+                },
+                {
+                    "EventName": "CreateNetworkInterface",
+                    "EventTime": "2025-11-04T13:02:51+00:00",
+                    "Username": "ingest-platform-deploy"
+                }
+            ]
+        }
     - match: "aws sts get-caller-identity"
       evidence: admin-role
       output: |
@@ -203,6 +221,14 @@ terraform:
       command: state list
       contains: "aws_vpc.main"
 
+logs:
+  - name: "#ingest-platform (this week)"
+    evidence: owner-confirmed
+    lines: |
+      Mon 10:12 you: platform is tearing down the old app VPC (10.70.0.0/16). eni-0c4a8e2f6b1d97305 in subnet-0e92c4a7b1d38f560 is tagged Team=ingest-platform and is not attached to anything. Is it yours, and is it safe to delete?
+      Mon 10:41 priya (ingest-platform): yes, that one is ours, left over from the old endpoint that we moved into the new VPC on 30 Sep. Nothing uses it and it is not in our Terraform. Safe to delete eni-0c4a8e2f6b1d97305 (that id only); we have its settings in our runbook.
+      Mon 10:44 you: thanks, deleting that one only and recording it in the change ticket.
+
 hypotheses:
   - id: foreign-interface
     text: "Something Terraform never created still lives in the subnet (a network interface), and AWS will not delete a subnet that is in use."
@@ -219,10 +245,10 @@ hypotheses:
 
 actions:
   - id: release-eni
-    label: "Delete the orphaned interface with the AWS CLI (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), after checking whose it is"
+    label: "Delete that one interface with the AWS CLI (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), only after its owner has confirmed in writing that it is abandoned (see #ingest-platform) and you have checked it is unattached"
     kind: fix
     match_regex: "^aws ec2 delete-network-interface( --region us-east-1)? --network-interface-id eni-0c4a8e2f6b1d97305( --region us-east-1)?( --output json)?$"
-    feedback: "The interface is deleted (no output on success). It was available, unattached, and the ingest team had already moved off this VPC. Terraform never owned it, so only now can terraform destroy remove the subnet."
+    feedback: "The interface is deleted (no output on success). It was available and unattached, detached on 30 Sep by the ingest team's own deploy role, and the ingest team confirmed in writing that this exact interface is theirs and abandoned. Terraform never owned it, so only now can terraform destroy remove the subnet. Deleting it on hearsay (\"they said they moved\") would have been a guess about someone else's resource: check the evidence and get the owner's yes first."
   - id: destroy-after-release
     label: "Run terraform destroy again now that nothing is left in the subnet"
     kind: fix
@@ -257,18 +283,20 @@ actions:
 solution_paths:
   - [release-eni, destroy-after-release]
 
-key_evidence: [subnet-dependency-violation, eni-owner, eni-not-in-state, admin-role]
+key_evidence: [subnet-dependency-violation, eni-owner, eni-not-in-state, admin-role, owner-confirmed, eni-idle]
 
 evidence_labels:
   subnet-dependency-violation: "terraform destroy stops on the subnet with DependencyViolation after the instance and group are gone"
   eni-owner: "A network interface from the ingest team sits in the subnet, unattached"
   eni-not-in-state: "Terraform's state lists only the VPC and the subnet: the interface is not one of its resources"
   admin-role: "Your role is an admin role in the account"
+  owner-confirmed: "The ingest team confirmed in writing that this exact interface is theirs and safe to delete"
+  eni-idle: "CloudTrail shows the interface was detached on 30 Sep by the ingest team's deploy role, nothing since"
 
 hints:
   nudge: "The instance and the group are gone, yet the subnet is still 'in use'. In use by what? Terraform's state does not say."
-  direction: "Ask EC2 what lives in the subnet: aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560. Read the description, status and tags to see whose interface it is. depends_on, -target and state rm will not help."
-  answer: "The interface eni-0c4a8e2f6b1d97305 belongs to the ingest team and is unattached; they confirmed they moved off. Delete it (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), then run terraform destroy again."
+  direction: "Ask EC2 what lives in the subnet: aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560. Read the description, status and tags to see whose interface it is, then read what its owner said in #ingest-platform and when it was last attached (CloudTrail). depends_on, -target and state rm will not help."
+  answer: "The interface eni-0c4a8e2f6b1d97305 belongs to the ingest team and is unattached, and they confirmed in #ingest-platform that it is abandoned. Once you have read that confirmation, delete only that interface (aws ec2 delete-network-interface --network-interface-id eni-0c4a8e2f6b1d97305), then run terraform destroy again."
 
 analogy:
   title: "The tenant's boxes in the unit"
@@ -292,10 +320,13 @@ debrief:
     - "Read the error: DependencyViolation on the subnet, not UnauthorizedOperation."
     - "Rule out ordering (the instance went first) and stale state (a refresh shows nothing)."
     - "Ask EC2 what is in the subnet and read whose interface it is."
-    - "Delete it only once the evidence shows it is unattached and abandoned, then terraform destroy again."
+    - "Check its last attachment (CloudTrail) and ask the owning team in writing; do not act on a second-hand 'they said they moved'."
+    - "Delete only that interface once the owner has confirmed it is abandoned, then terraform destroy again."
   real_world: |
-    In real life you ask the owner before deleting someone else's interface, and
-    you may be unable to: interfaces created by AWS services (VPC endpoints,
+    In real life you ask the owner before deleting someone else's interface
+    and keep the confirmation with the change ticket, record its settings so
+    it can be recreated, and delete exactly that id, never a filter or a
+    wildcard. You may also be unable to: interfaces created by AWS services (VPC endpoints,
     Lambda in a VPC, load balancers, NAT gateways) are managed by the service,
     cannot be deleted directly, and go away only when the owning service
     resource is deleted. The simulator lets you delete this one because it is
@@ -328,3 +359,4 @@ sources:
 command_notes:
   "aws sts get-caller-identity": "An admin role in the stack's account: a permission problem would be UnauthorizedOperation, not DependencyViolation."
   "aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=subnet-0e92c4a7b1d38f560": "Lists what is in the subnet: one unattached interface with the ingest team's description and tags, which Terraform does not manage."
+  "aws cloudtrail lookup-events --lookup-attributes AttributeKey=ResourceName,AttributeValue=eni-0c4a8e2f6b1d97305": "Who created and last detached the interface: the ingest team's deploy role, on 30 Sep, and nothing since."
