@@ -120,7 +120,7 @@ terminal:
       when_actions: [add-dlx]
       output: |
         vhost  name          pattern              apply-to       definition                                                    priority
-        /      order-emails  ^qq\.order-emails$   quorum_queues  {"dead-letter-exchange":"order-emails.dlx"}                   10
+        /      order-emails  ^qq\.order-emails$   quorum_queues  {"dead-letter-exchange":"order-emails.dlx","dead-letter-strategy":"at-least-once","overflow":"reject-publish"}  10
     - match_regex: "^(sudo )?rabbitmqctl list_policies$"
       evidence: no-dlx
       output: |
@@ -162,13 +162,21 @@ hypotheses:
 
 actions:
   - id: add-dlx
-    label: "Declare exchange order-emails.dlx bound to a new quorum queue qq.order-emails.dead, and apply a policy setting dead-letter-exchange on qq.order-emails"
+    label: "Declare exchange order-emails.dlx bound to a new quorum queue qq.order-emails.dead, and apply a policy on qq.order-emails with dead-letter-exchange, dead-letter-strategy at-least-once and overflow reject-publish; keep the policy and topology in the broker definitions/IaC, not only a one-off rabbitmqctl command"
     kind: fix
-    feedback: "Now a message rejected without requeue is republished to the dead-letter exchange and kept in qq.order-emails.dead instead of being discarded. Set this up before changing the worker."
+    feedback: "Now a message rejected without requeue is republished to the dead-letter exchange and kept in qq.order-emails.dead instead of being discarded. Quorum queues dead-letter at-most-once by default, which can still lose messages; at-least-once (which needs overflow reject-publish) is the setting for a no-loss safety net. Set this up before changing the worker."
   - id: reject-permanent
     label: "Change email-worker to basic.reject(requeue=false) on errors that will never succeed (like a schema-v1 message), keep retries for temporary errors, and deploy"
     kind: fix
     feedback: "The 420 replayed v1 messages go to the dead-letter queue on their first failure, the backlog drains at normal speed, and the dead-lettered ones can be fixed up and republished later. basic.reject also counts toward the delivery limit, so the broker's safety net works again."
+  - id: repair-replay
+    label: "Repair the 420 dead-lettered v1 messages (upcast to schema v2 with an explicit currency from the archive's USD assumption), republish them, and make replay-orders validate each event against the current schema before publishing"
+    kind: fix
+    feedback: "The customers still get their confirmations, and the tool that caused the incident can no longer publish what consumers cannot process. Fix at the source, not only the consumer."
+  - id: queue-alerts
+    label: "Alert on ack rate against deliver rate (redelivery ratio), ready-message growth, and any messages in qq.order-emails.dead"
+    kind: fix
+    feedback: "Every dashboard was green while 24,000 emails piled up. Alerting on redelivery rate and a non-empty dead-letter queue finds a poison loop in minutes."
   - id: lower-delivery-limit
     label: "Set a policy with delivery-limit: 5 on qq.order-emails"
     kind: wrong
@@ -190,7 +198,7 @@ actions:
     feedback: "Purging removes all messages in the queue: the 420 bad ones and over 24,000 real order confirmations from this morning. Those customers will never get their email, and you'll have to reconstruct them from the orders database."
 
 solution_paths:
-  - [add-dlx, reject-permanent]
+  - [add-dlx, reject-permanent, repair-replay, queue-alerts]
 
 key_evidence: [redeliver-loop, same-messages-failing, nack-requeue, replay]
 evidence_labels:
@@ -239,6 +247,7 @@ debrief:
     - "Add a dead-letter exchange and queue first, so nothing rejected is lost."
     - "Change the worker to reject unprocessable messages without requeue; keep delayed retries for temporary errors."
     - "Verify: the poison messages land in the dead-letter queue, acks recover, the backlog drains, then repair and republish the 420."
+    - "Make replay-orders validate against the current schema, and alert on redelivery rate and the dead-letter queue."
   real_world: |
     "Requeue on any error" feels safe and is one of the most common ways a
     message pipeline stalls. Separate errors that might succeed later
