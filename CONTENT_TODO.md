@@ -71,9 +71,7 @@ from your own experience and tick them off.
 - [ ] `gh run list` column layout: representative.
 
 ## iac/terraform-moved-block
-- [ ] Plan output: "will be destroyed", "(because ... is not in configuration)",
-      "has moved to", and the "Plan: X to add" summary are Terraform's wording from
-      experience; the refactoring docs describe the behavior but don't print a plan.
+- [x] Plan rows ("will be destroyed", "(because ... is not in configuration)", "has moved to", the "Plan: X to add" summary) now come from the simulator (TF7b task 8); the CI log is checked against a real simulated plan. Still hand-written: the CI log's "(8 more attributes known after apply)" abbreviation.
 - [ ] Forced-replacement wording ("must be replaced", "# forces replacement")
       used in hypothesis feedback: from experience.
 
@@ -1187,7 +1185,7 @@ the labels and tests use the quoted form.
 - [ ] gcp-scan-ingest-major/redrive
 - [ ] terraform-destroy-dependency-violation/release-eni
 - [ ] terraform-destroy-nonempty-bucket/empty-bucket
-- [ ] terraform-moved-block/state-mv
+- [ ] terraform-moved-block/state-mv (now a `wrong` action detected from state history, `state mv`/`state rm` of the old address; the original unreviewed alternative text no longer applies)
 - [ ] terraform-orphans-after-state-rm/snapshot-before-destroy
 - [ ] terraform-vcpu-limit/request-quota-increase
 - [ ] terraform-vcpu-limit/request-excessive-quota
@@ -1229,3 +1227,14 @@ the labels and tests use the quoted form.
 - [ ] `aws_s3_object` is cloud-only (not a modelled resource type), so the data being kept is guarded by the `applied delete` check, not a `reality_has` on an object.
 - [ ] (fix round 1) The fix now requires `lifecycle { prevent_destroy = true }` (per-line `config_matches`, comments stripped) and no `force_destroy = true` in the config. Deliberate limit: post-import hardening (public access block, default encryption, versioning, TLS-only policy) stays taught only, not enforced.
 - [ ] `plan -generate-config-out` (real in Terraform 1.9) now answers `Not available in this lab yet` ("not simulated yet in this lab"), tested.
+
+### terraform-moved-block migration (TF7b task 8)
+
+- [x] Scoring ruling (user has not approved changing live scoring; fix-quality standard): the declarative `moved` block is the ONLY credited fix. `terraform state mv` (and `state rm` plus `import`) is imperative one-off state surgery that does not travel to other workspaces or environments, so it is NOT a second fix route as the task brief proposed: `state-mv` stays kind `wrong` (not destructive) with teaching feedback, detected from the world (module address in state, old address gone, no `moved` block in main.tf, no delete applied). If the player also adds the `moved` block, the fix is credited and `state-mv` is not flagged. `solution_paths` stays `[[moved-block]]`. The fix predicate anchors the `from`/`to` addresses so a wrong `to` (e.g. `...orders_v2`) is not credited.
+- [ ] Reviewer decision: the brief's plan to make `state-mv` a credited fix was overridden; revisit only with user approval of scoring changes.
+- [ ] Unverified from memory: the claim that a `state mv` does not carry to other workspaces/environments (true by construction of state, but not quoted from a docs page); the "each moving its own state the first time it applies" wording for moved blocks across environments; moved blocks "Terraform v1.1 and later" (unchanged from before).
+- [ ] The pipeline `terraform plan` log now mirrors the simulator's real plan rows and summary (attribute list is the simulator's, tested); "(8 more attributes known after apply)" is a hand-written abbreviation. The real RDS attribute count is not modelled.
+- [ ] `prevent_destroy` is flagged `wrong` when it appears in `modules/database/main.tf` regardless of the rest, as teaching feedback; it does not block the moved-block fix when combined with it. The simulator's apply of the untouched PR with `prevent_destroy` on the module resource destroys the old address (the old address has no config), as the real tool would.
+
+- [x] (fix round 1) moved-block now needs: a comment-stripped `moved` block (any root .tf file, `from`/`to` in either order, addresses anchored) AND a plan with no destroy and no update on either address AND the database still in the cloud under id db-ORDERSPROD7Q2X AND no applied delete of either address AND no `state rm` of either address in the history. So destroying the database, orphaning it with `state rm`, a commented-out block and a wrong `to` are never credited. `state-mv` (wrong) fires from the history on `state mv` or `state rm` of the old address, and stays flagged even if the player then adds the moved block (the surgery happened); removing the moved block after a clean apply flags nothing. `merge-with-snapshot` also fires on a delete of the module address (destroy after the move). Engine: `applied.op` gained `state-mv` and `state-rm` (history lines the CLI already wrote), schemas and AUTHORING updated. Deliberate limits: sticky once taken; an environment with its own state file is not simulated.
+- [ ] Unverified from memory: `state mv` is the right tool across state files/backends and for emergency repair (used in the state-mv feedback and hints; the `state mv` docs show moving between state files with -state-out).

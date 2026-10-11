@@ -1928,7 +1928,9 @@
                                   "update",
                                   "delete",
                                   "import",
-                                  "forget"
+                                  "forget",
+                                  "state-mv",
+                                  "state-rm"
                                 ]
                               },
                               "address": {
@@ -2353,7 +2355,9 @@
                                       "update",
                                       "delete",
                                       "import",
-                                      "forget"
+                                      "forget",
+                                      "state-mv",
+                                      "state-rm"
                                     ]
                                   },
                                   "address": {
@@ -2791,7 +2795,9 @@
                                         "update",
                                         "delete",
                                         "import",
-                                        "forget"
+                                        "forget",
+                                        "state-mv",
+                                        "state-rm"
                                       ]
                                     },
                                     "address": {
@@ -3216,7 +3222,9 @@
                                             "update",
                                             "delete",
                                             "import",
-                                            "forget"
+                                            "forget",
+                                            "state-mv",
+                                            "state-rm"
                                           ]
                                         },
                                         "address": {
@@ -3661,7 +3669,9 @@
                                         "update",
                                         "delete",
                                         "import",
-                                        "forget"
+                                        "forget",
+                                        "state-mv",
+                                        "state-rm"
                                       ]
                                     },
                                     "address": {
@@ -4086,7 +4096,9 @@
                                             "update",
                                             "delete",
                                             "import",
-                                            "forget"
+                                            "forget",
+                                            "state-mv",
+                                            "state-rm"
                                           ]
                                         },
                                         "address": {
@@ -5350,7 +5362,9 @@
                                         "update",
                                         "delete",
                                         "import",
-                                        "forget"
+                                        "forget",
+                                        "state-mv",
+                                        "state-rm"
                                       ]
                                     },
                                     "address": {
@@ -5775,7 +5789,9 @@
                                             "update",
                                             "delete",
                                             "import",
-                                            "forget"
+                                            "forget",
+                                            "state-mv",
+                                            "state-rm"
                                           ]
                                         },
                                         "address": {
@@ -6213,7 +6229,9 @@
                                               "update",
                                               "delete",
                                               "import",
-                                              "forget"
+                                              "forget",
+                                              "state-mv",
+                                              "state-rm"
                                             ]
                                           },
                                           "address": {
@@ -6638,7 +6656,9 @@
                                                   "update",
                                                   "delete",
                                                   "import",
-                                                  "forget"
+                                                  "forget",
+                                                  "state-mv",
+                                                  "state-rm"
                                                 ]
                                               },
                                               "address": {
@@ -7083,7 +7103,9 @@
                                               "update",
                                               "delete",
                                               "import",
-                                              "forget"
+                                              "forget",
+                                              "state-mv",
+                                              "state-rm"
                                             ]
                                           },
                                           "address": {
@@ -7508,7 +7530,9 @@
                                                   "update",
                                                   "delete",
                                                   "import",
-                                                  "forget"
+                                                  "forget",
+                                                  "state-mv",
+                                                  "state-rm"
                                                 ]
                                               },
                                               "address": {
