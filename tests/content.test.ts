@@ -100,7 +100,7 @@ describe('validator rejects', () => {
   })
 
   it('solution path pointing at an unknown action', () => {
-    expect(loadMutated((y) => y.replace('[truncate-log, fix-logrotate, disk-alert]', '[truncate-log, typo]'))).toThrow(
+    expect(loadMutated((y) => y.replace('[truncate-log, fix-logrotate]', '[truncate-log, typo]'))).toThrow(
       /"typo" is not an action with kind: fix/,
     )
   })

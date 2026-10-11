@@ -150,10 +150,6 @@ actions:
             compress
             missingok
         }
-  - id: disk-alert
-    label: "Add a disk-usage alert on / (warn at 80%, page at 90%, plus a growth-rate alert)"
-    kind: fix
-    feedback: "The disk filled over days and the first sign was customers failing at 100%. An alert at 80% turns the next runaway log into a ticket during working hours instead of an outage at 02:14."
   - id: rm-log
     label: "rm /var/log/app/app.log"
     kind: wrong
@@ -170,7 +166,7 @@ actions:
     feedback: "The disk is still full after the reboot. You caused extra downtime and fixed nothing."
 
 solution_paths:
-  - [truncate-log, fix-logrotate, disk-alert]
+  - [truncate-log, fix-logrotate]
 
 key_evidence: [write-failure, disk-full]
 evidence_labels:
@@ -203,7 +199,7 @@ debrief:
     - "Free space by truncating the file in place. Deleting a file the app holds open frees nothing."
     - "Fix the root cause: the logrotate path typo."
     - "Verify: df -h shows free space, logrotate -d lists app.log, and the nginx access log shows 200s again."
-    - "Add a disk-usage alert (80% warn, 90% page) so the next runaway log is caught early."
+    - "Follow up: add a disk-usage alert (80% warn, 90% page) so the next runaway log is caught early."
   real_world: |
     Full disks are one of the most common production incidents, and logs are
     the usual culprit. Alert on disk usage trends (not just 100%), and treat

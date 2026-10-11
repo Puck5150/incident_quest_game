@@ -5,7 +5,7 @@ import { loadIncident } from './helpers/terraform-incident.ts'
 const sc = loadIncident('full-disk')
 
 describe('full-disk', () => {
-  it('requires truncation, the logrotate fix and a disk alert', () => expect(sc.solution_paths).toEqual([['truncate-log', 'fix-logrotate', 'disk-alert']]))
+  it('requires truncation and the logrotate fix; the alert is a debrief follow-up', () => expect(sc.solution_paths).toEqual([['truncate-log', 'fix-logrotate']]))
   it('credits truncation in place, not rm of the held-open file', () => {
     expect(actionFor(sc, ': > /var/log/app/app.log')?.id).toBe('truncate-log')
     expect(actionFor(sc, 'sudo truncate -s 0 /var/log/app/app.log')?.id).toBe('truncate-log')
