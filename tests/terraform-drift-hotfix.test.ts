@@ -4,9 +4,10 @@ import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 const scenario = loadIncident('terraform-drift-hotfix')
 const { play, detectedAll } = playbook(scenario)
 
-const NONE = { codify: false, 'codify-wide': false, 'apply-anyway': false, 'target-instance': false, 'refresh-apply': false }
+const NONE = { codify: false, 'codify-nat': false, 'codify-wide': false, 'apply-anyway': false, 'target-instance': false, 'refresh-apply': false }
 const FIXED = { ...NONE, codify: true }
 const WIDE = { ...NONE, 'codify-wide': true }
+const NAT = { ...NONE, 'codify-nat': true }
 const TRAPPED = { ...NONE, 'apply-anyway': true }
 
 const HOTFIX = `  ingress {
@@ -76,12 +77,13 @@ describe('terraform-drift-hotfix on the simulator', () => {
   it('keeps the old action ids, kinds, solution path and evidence tags', () => {
     expect(scenario.actions.map((a) => [a.id, a.kind])).toEqual([
       ['codify', 'fix'],
+      ['codify-nat', 'fix'],
       ['codify-wide', 'wrong'],
       ['apply-anyway', 'destructive'],
       ['target-instance', 'wrong'],
       ['refresh-apply', 'wrong'],
     ])
-    expect(scenario.solution_paths).toEqual([['codify']])
+    expect(scenario.solution_paths).toEqual([['codify'], ['codify-nat']])
     expect(scenario.key_evidence).toEqual(['plan-removes-rule', 'drift', 'hotfix-note', 'partner-range'])
     expect(scenario.logs!.map((l) => l.evidence)).toEqual(['hotfix-note'])
   })
@@ -143,13 +145,47 @@ describe('terraform-drift-hotfix on the simulator', () => {
     await sh.run(APPLY, scenario as never, new Set())
     expect(await detectedAll(sh)).toEqual(WIDE)
     expect(scenario.actions.find((a) => a.id === 'codify-wide')!.kind).toBe('wrong')
-    expect(scenario.solution_paths).toEqual([['codify']])
+    expect(scenario.solution_paths).toEqual([['codify'], ['codify-nat']])
   })
 
   it('(d2) the narrowing that is not the verified range does not count: another /28, the whole /16 or 0.0.0.0/0', async () => {
     for (const cidr of ['198.51.100.32/28', '198.51.0.0/16', '0.0.0.0/0']) {
       const { sh } = await play('cd ~/infra', MAIN(INTERNAL + NARROW.replace('198.51.100.16/28', cidr)), APPLY)
       expect((await detectedAll(sh)).codify, cidr).toBe(false)
+    }
+  })
+
+  it('(d3) second route: only the two NAT gateways as /32s is also the fix; one of them alone, or mixed with the /28, is not', async () => {
+    const nat = (cidr: string, d: string) => NARROW.replace('198.51.100.16/28', cidr).replace('partner callbacks SEC-4417', d)
+    const both = nat('198.51.100.17/32', 'nat a') + nat('198.51.100.18/32', 'nat b')
+    const { sh, out } = await play('cd ~/infra', MAIN(INTERNAL + both), APPLY)
+    expect(out[2].output).toContain('Apply complete!')
+    expect(await detectedAll(sh)).toEqual(NAT)
+    expect((await sh.run('terraform plan', scenario as never, new Set())).output).toContain('No changes.')
+    const one = await play('cd ~/infra', MAIN(INTERNAL + nat('198.51.100.17/32', 'nat a')), APPLY)
+    expect(await detectedAll(one.sh)).toEqual(NONE)
+    const mixed = await play('cd ~/infra', MAIN(INTERNAL + NARROW + nat('198.51.100.17/32', 'nat a')), APPLY)
+    expect((await detectedAll(mixed.sh)).codify).toBe(false)
+    expect((await detectedAll(mixed.sh))['codify-nat']).toBe(false)
+  })
+
+  it('(d4) extra or wider sources next to the verified range are not the fix: a /25, a /23, 10.0.0.0/8, SSH from anywhere', async () => {
+    const SSH = `  ingress {
+    description = "ssh"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+`
+    const extra = (cidr: string) => NARROW.replace('198.51.100.16/28', cidr).replace('partner callbacks SEC-4417', 'extra')
+    for (const [name, rules] of [['/25', NARROW + extra('198.51.100.0/25')], ['/23', NARROW + extra('198.51.100.0/23')], ['10/8', NARROW + extra('10.0.0.0/8')], ['ssh', NARROW + SSH]] as const) {
+      const { sh } = await play('cd ~/infra', MAIN(INTERNAL + rules), APPLY)
+      const got = await detectedAll(sh)
+      expect(got.codify, name).toBe(false)
+      expect(got['codify-nat'], name).toBe(false)
+      // the extra 8443 sources are the wrong action; SSH from anywhere simply never earns the fix
+      expect(got['codify-wide'], name).toBe(name !== 'ssh')
     }
   })
 

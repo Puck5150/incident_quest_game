@@ -126,5 +126,11 @@ describe('terraform-drift-hotfix through the UI', () => {
     await g.run('terraform apply -auto-approve')
     await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 2 changed, 0 destroyed\./))
     await g.trapped('apply-anyway')
+    // recovery: the verified narrow rule, applied, is still the fix; the destructive mark stays
+    await g.run(SED, 'terraform apply -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 1 changed, 0 destroyed\./))
+    await g.settle()
+    expect(g.taken()).toEqual(['apply-anyway', 'codify'])
+    expect(g.wrongCount()).toBe(0)
   })
 })

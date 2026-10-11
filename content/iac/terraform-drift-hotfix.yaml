@@ -137,28 +137,41 @@ hypotheses:
 
 actions:
   - id: codify
-    label: "Put the rule in code through a reviewed PR, narrowed to the partner's verified callback range 198.51.100.16/28 on 8443, and apply, so the group matches the code and the plan stops removing it"
+    label: "Put the rule in code through a reviewed PR, narrowed to the partner's verified callback range 198.51.100.16/28 on 8443 and nothing else added, and apply, so the group matches the code and the plan stops removing it"
     kind: fix
     done_when:
       all:
         - state_has: aws_security_group.payments
         - sg_rule: { group_id: sg-0payments, direction: ingress, port: 443, exact: true, cidr: 10.20.0.0/16 }
         - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.16/28 }
-        - not: { sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, cidr: 198.51.100.0/24 } }
-        - not: { sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, cidr: 0.0.0.0/0 } }
-        - not: { file_contains: { path: /home/you/infra/main.tf, matches: 'ignore_changes' } }
+        - sg_only: { group_id: sg-0payments, direction: ingress, cidrs: [10.20.0.0/16, 198.51.100.16/28] }
+        - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
         - plan_has: { no_change: [aws_security_group.payments] }
-    feedback: "The code, the state and the group now agree on the narrowest rule the partner's own ticket supports: TCP 8443 from their two NAT gateways only, not the whole /24 the console fix opened. Callbacks keep working, the plan shows only the tag, and the change went through review instead of staying a console one-off."
+    feedback: "The code, the state and the group now agree on the narrowest range the partner's own ticket supports for the callbacks: TCP 8443 from 198.51.100.16/28, not the whole /24 the console fix opened, and the group has no other source on any port. Callbacks keep working, the plan shows only the tag, and the change went through review instead of staying a console one-off."
+  - id: codify-nat
+    label: "Put the rule in code through a reviewed PR, narrowed to the partner's two NAT gateways 198.51.100.17/32 and 198.51.100.18/32 on 8443 and nothing else added, and apply"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_security_group.payments
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 443, exact: true, cidr: 10.20.0.0/16 }
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.17/32 }
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.18/32 }
+        - sg_only: { group_id: sg-0payments, direction: ingress, cidrs: [10.20.0.0/16, 198.51.100.17/32, 198.51.100.18/32] }
+        - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
+        - plan_has: { no_change: [aws_security_group.payments] }
+    feedback: "Even tighter: only the two gateway addresses the partner's ticket names can reach 8443, and nothing else was added to the group. The cost is that a change on their side (a third gateway) needs another reviewed change, which is the point of least privilege."
   - id: codify-wide
-    label: "Copy the console rule into the code as it is (198.51.100.0/24 on 8443) so the plan stops removing it"
+    label: "Codify the console rule as it is (198.51.100.0/24 on 8443), or with the /28 plus a wider or extra source, so the plan stops removing it"
     kind: wrong
     done_when:
       all:
         - state_has: aws_security_group.payments
-        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.0/24 }
-        - not: { file_contains: { path: /home/you/infra/main.tf, matches: 'ignore_changes' } }
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443 }
+        - not: { sg_only: { group_id: sg-0payments, direction: ingress, port: 8443, cidrs: [198.51.100.16/28, 198.51.100.17/32, 198.51.100.18/32] } }
+        - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
         - plan_has: { no_change: [aws_security_group.payments] }
-    feedback: "The plan goes quiet, but you have made an emergency guess permanent. On-call used the whole /24 because they did not have the exact addresses; the partner's ticket (SEC-4417) says callbacks come only from 198.51.100.16/28, and the rest of the /24 belongs to other customers of their provider. Codifying drift means verifying it first: confirm the source with the partner, narrow it, and put it through review."
+    feedback: "The plan goes quiet, but 8443 is now open to more than the partner needs. On-call used the whole /24 as a guess because they did not have the exact addresses; the partner's ticket (SEC-4417) says callbacks come only from 198.51.100.16/28 (the NAT gateways .17 and .18), and the rest of the /24 belongs to other customers of their provider. Codifying drift means verifying it first: confirm the source with the partner, narrow it, add nothing else, and put it through review."
   - id: apply-anyway
     label: "Apply the plan as it is"
     kind: destructive
@@ -178,6 +191,7 @@ actions:
 
 solution_paths:
   - [codify]
+  - [codify-nat]
 
 key_evidence: [plan-removes-rule, drift, hotfix-note, partner-range]
 
@@ -190,7 +204,7 @@ evidence_labels:
 hints:
   nudge: "Nobody removed that rule in code. Was it ever in code?"
   direction: "Run a refresh-only plan to see what changed outside Terraform, then check last night's incident notes and the partner's ticket. Is the range on the rule the range the partner actually needs?"
-  answer: "The rule was a console hotfix, so it's drift, and the /24 was a guess. Read the partner ticket, put the rule in code narrowed to 198.51.100.16/28 on 8443 through a reviewed PR, and apply. Copying the /24 as it is would make the guess permanent."
+  answer: "The rule was a console hotfix, so it's drift, and the /24 was a guess. Read the partner ticket, put the rule in code narrowed to 198.51.100.16/28 (or just the two NAT gateways, .17/32 and .18/32) on 8443 through a reviewed PR, add no other source, and apply. Copying the /24 as it is would make the guess permanent."
 
 analogy:
   title: "The plan of the house vs the house"
