@@ -68,6 +68,23 @@ terminal:
         {
             "VpcEndpoints": []
         }
+    - match: "aws ec2 describe-vpc-endpoints --vpc-endpoint-ids vpce-0s3gw --query VpcEndpoints[0].PolicyDocument"
+      when_actions: [s3-endpoint, endpoint-policy]
+      output: |
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                { "Effect": "Allow", "Principal": "*", "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+                  "Resource": ["arn:aws:s3:::acme-media-*", "arn:aws:s3:::acme-media-*/*"] }
+            ]
+        }
+    - match: "aws ec2 describe-vpc-endpoints --vpc-endpoint-ids vpce-0s3gw --query VpcEndpoints[0].PolicyDocument"
+      when_actions: [s3-endpoint]
+      output: |
+        {
+            "Version": "2008-10-17",
+            "Statement": [ { "Effect": "Allow", "Principal": "*", "Action": "*", "Resource": "*" } ]
+        }
     - match: "aws ec2 describe-route-tables --route-table-ids rtb-0private --query RouteTables[0].Routes"
       when_actions: [s3-endpoint]
       output: |
@@ -82,6 +99,10 @@ terminal:
             { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local" },
             { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c" }
         ]
+    - match_regex: "^aws ec2 modify-vpc-endpoint .*--policy-document file://\\S+"
+      example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document file://endpoint-policy.json"
+      output: |
+        (lab) Policy files are not readable here, so this command is not judged. Type the policy inline in single quotes, or use the action button once you are sure the file allows only the media buckets.
     - match: "aws s3api get-bucket-location --bucket acme-media-originals"
       output: |
         {
@@ -106,8 +127,30 @@ actions:
   - id: s3-endpoint
     label: "aws ec2 create-vpc-endpoint --vpc-id vpc-0shop --service-name com.amazonaws.us-east-1.s3 --route-table-ids rtb-0private"
     kind: fix
-    match_regex: "^aws ec2 create-vpc-endpoint --vpc-id vpc-0shop (--vpc-endpoint-type Gateway )?--service-name com\\.amazonaws\\.us-east-1\\.s3 --route-table-ids rtb-0private$"
+    match_regex: "^aws (--region [a-z]{2}(-[a-z]+)+-[0-9] )?ec2 create-vpc-endpoint --vpc-id vpc-0shop (--vpc-endpoint-type Gateway )?--service-name com\\.amazonaws\\.us-east-1\\.s3 --route-table-ids rtb-0private( --region [a-z]{2}(-[a-z]+)+-[0-9])?$"
     feedback: "A gateway endpoint adds a route for S3's addresses to the private route table. It's more specific than 0.0.0.0/0, so S3 traffic now goes straight to S3, and gateway endpoints have no additional charge. Nothing changes in image-resizer."
+  - id: endpoint-policy-wide
+    label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '<a policy that allows everything, a Deny, other buckets or wildcard actions>'"
+    kind: wrong
+    endpoint_policy:
+      verdict: broad
+      endpoint_id: vpce-0s3gw
+      allowed_actions: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+      required_actions: [s3:GetObject, s3:PutObject]
+      bucket_prefix: "acme-media-"
+      example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}'"
+    feedback: "That is not the policy wanted here. It may be wider than the media workload needs (a wildcard action or resource, another bucket), or it may omit an action image-resizer needs (GetObject and PutObject), or use a shape that is not a plain Allow (a Deny, even a harmless extra one, is simply not this fix). Wider ones would let anything in the subnets reach more than acme-media-* through this endpoint. Allow just the actions image-resizer uses, on acme-media-* buckets and objects only."
+  - id: endpoint-policy
+    label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{...Allow s3:GetObject/PutObject/ListBucket, Principal \"*\", on arn:aws:s3:::acme-media-* and arn:aws:s3:::acme-media-*/*...}'"
+    kind: fix
+    endpoint_policy:
+      verdict: ok
+      endpoint_id: vpce-0s3gw
+      allowed_actions: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+      required_actions: [s3:GetObject, s3:PutObject]
+      bucket_prefix: "acme-media-"
+      example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::acme-media-*\",\"arn:aws:s3:::acme-media-*/*\"]}]}'"
+    feedback: "A gateway endpoint is created with a policy that allows everything. Replacing it with one limited to the media buckets means this endpoint can no longer be used to reach other buckets, such as one in someone else's account. (acme-media-* is a prefix, so any bucket that matches it is allowed; listing the exact bucket ARNs is stricter.) If other workloads in these subnets need S3 (package repositories, other buckets), add exactly those buckets first. Also consider an aws:SourceVpce condition on the media buckets' own policies."
   - id: budget-alert
     label: "Set up an AWS Budgets alert (or cost anomaly alert) on the account, sent to engineering as well as finance"
     kind: fix
@@ -126,7 +169,7 @@ actions:
     feedback: "Every service in the private subnets loses internet access: payment calls, package updates, third-party APIs. The bill goes down because the shop stops working."
 
 solution_paths:
-  - [s3-endpoint, budget-alert]
+  - [s3-endpoint, endpoint-policy, budget-alert]
 
 key_evidence: [usage-type, nat-bytes, resizer-launch, no-endpoint]
 
@@ -139,7 +182,7 @@ evidence_labels:
 hints:
   nudge: "Which usage type grew, and what started the same day?"
   direction: "A NAT gateway is billed per gigabyte. Where is image-resizer's traffic going, and does it have to pass through the NAT gateway to get there?"
-  answer: "NatGateway-Bytes grew from 09-17, when image-resizer started moving 1.3 TB a day to S3 through the NAT gateway. Add an S3 gateway endpoint to the private route table (no additional charge), and set up a spend alert."
+  answer: "NatGateway-Bytes grew from 09-17, when image-resizer started moving 1.3 TB a day to S3 through the NAT gateway. Add an S3 gateway endpoint to the private route table (no additional charge), scope its endpoint policy to the acme-media-* buckets instead of leaving the default allow-everything policy, and set up a spend alert."
 
 analogy:
   title: "Paying the courier to cross the street"
@@ -163,7 +206,8 @@ debrief:
     - "Break \"EC2-Other\" down by usage type: NatGateway-Bytes is the increase."
     - "Match the timing: NAT gateway bytes jumped on 09-17, the day image-resizer launched."
     - "Check how private subnets reach S3: no gateway endpoint, so through the NAT gateway."
-    - "Add an S3 gateway endpoint to the private route tables; S3 traffic stops using the NAT gateway."
+    - "Add an S3 gateway endpoint to the private route tables (every private route table, not just one); S3 traffic stops using the NAT gateway."
+    - "Replace the endpoint's default allow-all policy with one limited to the media buckets, and consider aws:SourceVpce conditions in the bucket policies."
     - "Watch NAT gateway bytes drop back, and set up a spend alert so the next one is caught in days."
   real_world: |
     NAT gateway data processing for traffic to AWS's own services is one of

@@ -17,8 +17,8 @@ environment: |
   The web app runs on Azure App Service: web-staging in resource group
   rg-web-staging, and web-prod in rg-web-prod, both in the subscription
   sub-shop. The pipeline signs in as the service principal sp-deploy-web
-  (app ID 3f9c...). Its access was set up last week, while building the
-  staging environment.
+  (app ID 3f9c...) using a client secret kept as a pipeline variable. Its
+  access was set up last week, while building the staging environment.
 
 diagram:
   nodes:
@@ -56,7 +56,7 @@ terminal:
         Principal                             Role         Scope
         ------------------------------------  -----------  --------------------------------------------------
         3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b  Contributor  /subscriptions/2222.../resourceGroups/rg-web-staging
-        3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b  Contributor  /subscriptions/2222.../resourceGroups/rg-web-prod
+        3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b  Website Contributor  /subscriptions/2222.../resourceGroups/rg-web-prod/providers/Microsoft.Web/sites/web-prod
     - match: "az role assignment list --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --all --out table"
       evidence: staging-only
       output: |
@@ -82,15 +82,21 @@ hypotheses:
     feedback: "The action is an ordinary deploy action the pipeline performs on staging every day. What differs is the scope: rg-web-prod."
 
 actions:
-  - id: assign-prod
-    label: "az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --role Contributor --scope /subscriptions/2222.../resourceGroups/rg-web-prod"
-    kind: fix
-    match_regex: "^az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --role \"?Contributor\"? --scope /subscriptions/\\S+/resourceGroups/rg-web-prod$"
-    feedback: "The pipeline now has the same role on production as on staging, scoped to that one resource group. Re-run the deploy (new assignments can take a few minutes to apply)."
+  - id: owner-subscription
+    label: "Make the service principal Owner of the subscription so this never happens again"
+    kind: destructive
+    match_regex: "^az role assignment create(?=.* --role[ =][\"\\']?(Owner|8e3af657-a8ff-443c-a75c-2fe8c4bcb635)[\"\\']?( |$)).*$"
+    feedback: "Owner can also grant roles to anyone, so a pipeline credential can now hand out access to anyone, at whatever scope Owner was granted (the whole subscription if that is the scope). One leaked secret and the attacker controls who else gets in."
   - id: subscription-contributor
     label: "Assign Contributor to the service principal on the whole subscription"
     kind: wrong
-    feedback: "Lower levels inherit from higher ones, so this grants Contributor on every resource group in sub-shop, including other teams' databases. The pipeline only needs rg-web-prod."
+    match_regex: "^az role assignment create(?=.* --role[ =][\"\\']?(Contributor|b24988ac-6180-42a0-ab88-20f7382dd24c)[\"\\']?( |$))(?=.* --scope[ =][\"\\']?/subscriptions/[^/ \"\\']+[\"\\']?( |$)).*$"
+    feedback: "Lower levels inherit from higher ones, so this grants Contributor on every resource group in sub-shop, including other teams' databases. The pipeline only needs to deploy one web app."
+  - id: contributor-rg
+    label: "Copy the staging grant: Contributor on the whole rg-web-prod resource group"
+    kind: wrong
+    match_regex: "^az role assignment create(?=.* --role[ =][\"\\']?(Contributor|b24988ac-6180-42a0-ab88-20f7382dd24c)[\"\\']?( |$)).*$"
+    feedback: "It unblocks the deploy, but Contributor can create, change and delete every resource in rg-web-prod, not just publish to one web app. A deploy pipeline needs the narrowest role that works at the narrowest scope: Website Contributor on web-prod. Copying staging's grant is the path of least resistance, not the right answer."
   - id: rerun
     label: "Re-run the pipeline"
     kind: wrong
@@ -99,13 +105,19 @@ actions:
     label: "Deploy production from your own account, which has access"
     kind: wrong
     feedback: "It ships today's release, and leaves the pipeline broken and production deployed by hand. The next release hits the same wall."
-  - id: owner-subscription
-    label: "Make the service principal Owner of the subscription so this never happens again"
-    kind: destructive
-    feedback: "Owner can also grant roles to anyone, so a pipeline credential now controls the whole subscription, including who else gets in. One leaked secret and it's all gone."
+  - id: assign-prod
+    label: "az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b --role \"Website Contributor\" --scope /subscriptions/2222.../resourceGroups/rg-web-prod/providers/Microsoft.Web/sites/web-prod"
+    kind: fix
+    # Flag grammar, each once, any order: --assignee <the sp>, --role "Website Contributor", --scope <subscription>/resourceGroups/rg-web-prod/providers/Microsoft.Web/sites/web-prod, optional --assignee-principal-type ServicePrincipal. Nothing else, no shell operators.
+    match_regex: "^az role assignment create(?!.*--assignee[ =].*--assignee[ =])(?!.*--role[ =].*--role[ =])(?!.*--scope[ =].*--scope[ =])(?!.*--assignee-principal-type[ =].*--assignee-principal-type[ =])(?=.* --assignee[ =](3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b|\"3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b\"|'3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b')( |$))(?=.* --role[ =](\"Website Contributor\"|\\'Website Contributor\\'|\"?de139f84-1756-47ae-9be6-808fbbe81aa3\"?)( |$))(?=.* --scope[ =](/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod|\"/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod\"|'/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod')( |$))( --assignee[ =](3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b|\"3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b\"|'3f9c0e21-6b7a-4d8e-9f10-2c3d4e5f6a7b')| --role[ =](\"Website Contributor\"|\\'Website Contributor\\'|\"?de139f84-1756-47ae-9be6-808fbbe81aa3\"?)| --scope[ =](/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod|\"/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod\"|'/subscriptions/[0-9A-Za-z.-]+/resourceGroups/rg-web-prod/providers/Microsoft\\.Web/sites/web-prod')| --assignee-principal-type[ =]ServicePrincipal)+$"
+    feedback: "The pipeline can now deploy to web-prod and do nothing else in production: Website Contributor on the one site, not Contributor on the group. Re-run the deploy (new assignments can take a few minutes to apply). Next, deal with the credential itself."
+  - id: use-federated-credential
+    label: "Replace sp-deploy-web's client secret with a federated identity credential (OIDC) for the production pipeline, then delete the secret"
+    kind: fix
+    feedback: "A client secret is a long-lived password sitting in a pipeline variable: it expires, gets copied, and leaks. With workload identity federation the pipeline presents a short-lived token from its own identity provider and there is no secret to steal or rotate. Define the role assignment and the federated credential in IaC too."
 
 solution_paths:
-  - [assign-prod]
+  - [assign-prod, use-federated-credential]
 
 key_evidence: [authz-failed, staging-only]
 
@@ -116,7 +128,7 @@ evidence_labels:
 hints:
   nudge: "Sign-in worked, then a specific action at a specific scope was refused. Which scope?"
   direction: "List the service principal's role assignments and compare their scopes with the one in the error."
-  answer: "sp-deploy-web has Contributor on rg-web-staging only. Assign the same role at the rg-web-prod scope."
+  answer: "sp-deploy-web has Contributor on rg-web-staging only. Assign a least-privilege role (Website Contributor) on the web-prod site only, not Contributor on the group, and move the pipeline off its long-lived client secret to a federated (OIDC) credential."
 
 analogy:
   title: "The badge for the wrong building"
@@ -124,8 +136,8 @@ analogy:
     The new contractor's badge was set up while they worked in the test
     lab, and opens every door there. Today they went to the main building
     and the first door stayed shut. Their badge works, it's just not valid
-    here. Add the main building to the badge, not a master key for the
-    whole campus.
+    here. Add the one door they need to the badge, not the whole building
+    and certainly not a master key for the campus.
 
 debrief:
   root_cause: |
@@ -139,13 +151,16 @@ debrief:
     - "Read the error: who (the pipeline's principal), what (a deploy action) and where (rg-web-prod)."
     - "Note that sign-in succeeded, so it's authorization, not authentication."
     - "List the principal's role assignments: Contributor on rg-web-staging only."
-    - "Assign the same role, scoped to rg-web-prod."
+    - "Assign the narrowest role that can deploy (Website Contributor) scoped to web-prod, rather than copying staging's Contributor on the group."
     - "Re-run the deploy."
+    - "Replace the long-lived client secret with a federated credential (OIDC) and put the assignments in IaC."
   real_world: |
     Pipelines usually get access per environment, and the production grant
-    is the one most often forgotten. Grant at the narrowest scope that
-    works, keep the assignments in infrastructure code next to the
-    environments, and never fix a scope error by going broader than needed.
+    is the one most often forgotten. Grant the narrowest role at the
+    narrowest scope that works (a deploy role on one site, not Contributor on
+    a group), keep the assignments in infrastructure code next to the
+    environments, prefer workload identity federation over a client secret,
+    and never fix a scope error by going broader than needed.
 
 concepts:
   - term: "Scope"

@@ -55,10 +55,18 @@ terminal:
       output: |
         true
     - match: "az webapp config appsettings list -g rg-shop -n app-checkout --query \"[?starts_with(name, 'ServiceBus')]\""
-      when_actions: [grant-identity]
+      when_actions: [grant-identity, remove-sas]
       output: |
         [
           { "name": "ServiceBus__fullyQualifiedNamespace", "slotSetting": false, "value": "sb-fulfil-prod.servicebus.windows.net" }
+        ]
+    - match: "az webapp config appsettings list -g rg-shop -n app-checkout --query \"[?starts_with(name, 'ServiceBus')]\""
+      when_actions: [grant-identity]
+      output: |
+        [
+          { "name": "ServiceBus__fullyQualifiedNamespace", "slotSetting": false, "value": "sb-fulfil-prod.servicebus.windows.net" },
+          { "name": "ServiceBus__ConnectionString", "slotSetting": false,
+            "value": "Endpoint=sb://sb-fulfil-prod.servicebus.windows.net/;SharedAccessKeyName=checkout-send;SharedAccessKey=*** (dead: local auth is off, but still stored)" }
         ]
     - match: "az webapp config appsettings list -g rg-shop -n app-checkout --query \"[?starts_with(name, 'ServiceBus')]\""
       evidence: sas-setting
@@ -142,6 +150,10 @@ actions:
     label: "Assign app-checkout's managed identity Azure Service Bus Data Sender on the fulfilment queue, and switch its setting from ServiceBus__ConnectionString to ServiceBus__fullyQualifiedNamespace"
     kind: fix
     feedback: "app-checkout now authenticates with Microsoft Entra ID, which is what the namespace accepts. The outbox starts sending its backlog."
+  - id: remove-sas
+    label: "Delete the checkout-send SAS policy on the namespace and remove the old ServiceBus__ConnectionString app setting"
+    kind: fix
+    feedback: "The dead key is gone from both ends. While local auth is off it can't be used, but a stale shared key in app settings is a long-lived credential that comes back to life the day someone re-enables local auth. Nothing should still hold it."
   - id: reenable-local-auth
     label: "az servicebus namespace update -g rg-fulfil -n sb-fulfil-prod --disable-local-auth false"
     kind: wrong
@@ -157,7 +169,7 @@ actions:
     feedback: "It would work (once the app stops using SAS), but Owner can also receive and manage every entity. The app only sends to one queue: Data Sender on that queue."
 
 solution_paths:
-  - [grant-identity]
+  - [grant-identity, remove-sas]
 
 key_evidence: [send-401, local-auth-off, sas-setting, no-sb-role]
 
@@ -175,7 +187,7 @@ red_herrings:
 hints:
   nudge: "The app is running and the queue is empty. What does the app say when it sends?"
   direction: "The app's log shows 401 using a SAS key. What changed on the namespace around 22:00, and how does the app authenticate?"
-  answer: "Policy remediation disabled local auth at 22:03. Give app-checkout's managed identity Azure Service Bus Data Sender on the queue and switch it to an identity-based connection."
+  answer: "Policy remediation disabled local auth at 22:03. Give app-checkout's managed identity Azure Service Bus Data Sender on the queue and switch it to an identity-based connection, then delete the checkout-send SAS policy and the old connection-string setting."
 
 analogy:
   title: "The building switched to badges overnight"
@@ -200,7 +212,9 @@ debrief:
     - "Check the namespace: disableLocalAuth is true (the activity log says since 22:03)."
     - "Check the app's settings and its identity's roles: SAS connection string, no Service Bus role."
     - "Assign Data Sender on the queue and switch to the identity-based setting; watch the outbox drain."
+    - "Clean up: delete the checkout-send SAS policy and remove the stale connection-string setting."
   real_world: |
+    Keep roles and settings in IaC so the baseline and the apps agree.
     Microsoft's migration order is: give every app an Entra ID role and
     switch its code, test with both methods enabled, and only then disable
     local auth. A policy with a remediation task skips straight to the last
@@ -299,10 +313,19 @@ stages:
         feedback: "Raising it only postpones the dead-lettering. Every retry still lands on a warehouse that's over its limit."
     actions:
       - id: cap-concurrency
-        label: "Cap func-fulfil at 2 instances (az functionapp scale config set ... --maximum-instance-count 2) and set maxConcurrentCalls to 4 in host.json: at most 8 calls at once, about 16 a second at 0.5 s each"
+        label: "Cap func-fulfil at 2 instances (az functionapp scale config set ... --maximum-instance-count 2)"
         kind: fix
-        match_regex: "^az functionapp scale config set -g rg-fulfil -n func-fulfil --maximum-instance-count [1-2]$"
-        feedback: "At most 8 concurrent calls, under the warehouse's 20 a second. The backlog drains in about 10 minutes instead of being rejected."
+        # Flag grammar, each once, any order: -g|--resource-group rg-fulfil, -n|--name func-fulfil, --maximum-instance-count 1 or 2. Nothing else, no shell operators.
+        match_regex: "^az functionapp scale config set(?!.*( -g |--resource-group[ =]).*( -g |--resource-group[ =]))(?!.*( -n |--name[ =]).*( -n |--name[ =]))(?!.*--maximum-instance-count.*--maximum-instance-count)(?=.*( -g |--resource-group[ =])rg-fulfil( |$))(?=.*( -n |--name[ =])func-fulfil( |$))(?=.* --maximum-instance-count[ =][12]( |$))( -g rg-fulfil| --resource-group[ =]rg-fulfil| -n func-fulfil| --name[ =]func-fulfil| --maximum-instance-count[ =][12])+$"
+        feedback: "Two instances stop the 14-way fan-out, but at the default 16 calls each that is still 32 at once, about 64 a second against a limit of 20. This is half the fix: you also have to cap the calls per instance."
+      - id: cap-calls
+        label: "Set maxConcurrentCalls to 4 in func-fulfil's host.json and deploy it (2 instances x 4 = 8 calls at once, about 16 a second at 0.5 s each)"
+        kind: fix
+        feedback: "Now total concurrency is 8, under the warehouse's 20 a second, and the backlog drains in about 10 minutes instead of being rejected. Set it in the repo so the next deploy keeps it."
+      - id: backoff-429
+        label: "Make the function honour the warehouse's Retry-After on 429 (back off, or rate-limit before the call) instead of failing the invocation, so throttling does not burn a message's delivery count"
+        kind: fix
+        feedback: "Caps are a static guess at the warehouse's limit. Honouring 429 and Retry-After makes the consumer stay under whatever limit the warehouse has today, and a throttled message waits instead of marching toward the dead-letter queue."
       - id: raise-delivery
         label: "Raise the queue's max delivery count to 100"
         kind: wrong
@@ -316,7 +339,7 @@ stages:
         kind: destructive
         feedback: "That deletes 9,874 paid orders that haven't reached the warehouse yet."
     solution_paths:
-      - [cap-concurrency]
+      - [cap-concurrency, cap-calls, backoff-429]
     key_evidence: [wh-429, fanout, max-100, host-default]
     evidence_labels:
       wh-429: "Warehouse calls get 429 and messages hit the delivery limit"
@@ -326,7 +349,7 @@ stages:
     hints:
       nudge: "The warehouse is up but saying 429. How many calls are we making, and how many may we?"
       direction: "Compare instances × concurrent calls per instance with the warehouse's 20 a second."
-      answer: "14 instances × 16 calls is far over 20/s. Cap the instances and maxConcurrentCalls so total concurrency fits the warehouse's limit."
+      answer: "14 instances × 16 calls is far over 20/s. Cap the instances (2) and maxConcurrentCalls (4) so total concurrency fits the warehouse's limit, and make the consumer back off on 429 with Retry-After."
     debrief:
       root_cause: |
         Releasing 14,203 orders at once let func-fulfil do what it's built
@@ -340,7 +363,8 @@ stages:
         - "Read func-fulfil's traces: 429 from the warehouse, delivery counts climbing."
         - "See the fan-out: 14 instances, ~425 calls a second."
         - "Find the defaults behind it: up to 100 instances, 16 calls each."
-        - "Cap instances and concurrency to fit 20/s, then watch the queue drain."
+        - "Cap instances and concurrency to fit 20/s (instances alone are not enough: 2 x 16 is still 32 at once), then watch the queue drain."
+        - "Honour Retry-After on 429 so throttling never consumes the delivery count."
 
   - id: dead-letters
     update: |

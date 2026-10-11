@@ -75,14 +75,23 @@ terminal:
       output: |
         {}
     - match: "aws lambda get-function-concurrency --function-name thumbnail-backfill"
+      output: |
+        {}
+    - match: "aws lambda list-event-source-mappings --function-name thumbnail-backfill"
       when_actions: [cap-backfill]
       output: |
         {
-            "ReservedConcurrentExecutions": 100
+            "EventSourceMappings": [
+                { "UUID": "6b1f2c9e-3a44-4d0e-9a1b-5c7d8e9f0a12", "EventSourceArn": "arn:aws:sqs:us-east-1:111122223333:thumbnail-jobs", "State": "Enabled", "BatchSize": 10, "ScalingConfig": { "MaximumConcurrency": 50 } }
+            ]
         }
-    - match: "aws lambda get-function-concurrency --function-name thumbnail-backfill"
+    - match: "aws lambda list-event-source-mappings --function-name thumbnail-backfill"
       output: |
-        {}
+        {
+            "EventSourceMappings": [
+                { "UUID": "6b1f2c9e-3a44-4d0e-9a1b-5c7d8e9f0a12", "EventSourceArn": "arn:aws:sqs:us-east-1:111122223333:thumbnail-jobs", "State": "Enabled", "BatchSize": 10 }
+            ]
+        }
 
 logs:
   - name: "API Gateway execution log: checkout (14:06)"
@@ -110,20 +119,39 @@ hypotheses:
     feedback: "Separate functions, same pool: functions without reserved concurrency all share the account's unreserved concurrency in a region. The backfill took 900 of the 1,000."
 
 actions:
-  - id: cap-backfill
+  - id: cap-backfill-reserved
     label: "aws lambda put-function-concurrency --function-name thumbnail-backfill --reserved-concurrent-executions 100"
+    kind: wrong
+    match_regex: "^aws lambda put-function-concurrency --function-name thumbnail-backfill --reserved-concurrent-executions \\d+$"
+    feedback: "It does cap the backfill, but it is the wrong control for a queue consumer. The SQS poller keeps pulling messages and invoking into the cap; throttled invocations go back to the queue with their receive count raised, and once a message passes the redrive policy's maxReceiveCount it lands in the dead-letter queue, so work is lost. Put the cap on the event source mapping instead, where the poller simply stops pulling."
+  - id: cap-backfill
+    label: "aws lambda update-event-source-mapping --uuid 6b1f2c9e-3a44-4d0e-9a1b-5c7d8e9f0a12 --scaling-config MaximumConcurrency=50"
     kind: fix
-    match_regex: "^aws lambda put-function-concurrency --function-name thumbnail-backfill --reserved-concurrent-executions [1-9]\\d{0,2}$"
-    feedback: "Reserved concurrency also caps a function: the backfill can never use more than 100 again. The rest of the pool is free, checkout's throttles stop, and the backfill just takes longer while its queue holds the work."
+    match_regex: "^aws lambda update-event-source-mapping --uuid 6b1f2c9e-3a44-4d0e-9a1b-5c7d8e9f0a12 --scaling-config (MaximumConcurrency=(2\\d|[3-9]\\d|[12]\\d{2}|300)|\\x27MaximumConcurrency=(2\\d|[3-9]\\d|[12]\\d{2}|300)\\x27|\\x27\\{\"MaximumConcurrency\":\\s?(2\\d|[3-9]\\d|[12]\\d{2}|300)\\}\\x27)$"
+    feedback: "The queue poller now never runs more than 50 backfill invocations at once, and the rest of the messages simply wait on the queue: nothing is throttled, retried or sent to a dead-letter queue. The pool has room again and checkout's throttles stop."
+  - id: reserve-checkout-small
+    label: "Reserve fewer than 200 executions for checkout-api (for example 100)"
+    kind: wrong
+    match_regex: "^aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions (\\d{1,2}|1\\d{2})$"
+    feedback: "Reserved concurrency is also the function's maximum. Checkout peaks near 150, so a reservation under 200 caps it at or below its own peak with no room for growth: it would throttle itself on a busy day."
+  - id: reserve-checkout-big
+    label: "Reserve more than 500 executions for checkout-api (for example 900)"
+    kind: wrong
+    match_regex: "^aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions (50[1-9]|5[1-9]\\d|[6-9]\\d{2}|\\d{4,})$"
+    feedback: "Lambda must keep at least 100 executions unreserved, and a huge reservation starves every other function in the account (values near 1,000 are rejected). Size it above the real peak with headroom, around 300."
   - id: reserve-checkout
     label: "aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions 300"
     kind: fix
-    match_regex: "^aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions [2-9]\\d{2}$"
-    feedback: "300 executions are now set aside for checkout, and no other function can use them. Size it above checkout's real peak (about 150), because reserved concurrency is also its maximum."
+    match_regex: "^aws lambda put-function-concurrency --function-name checkout-api --reserved-concurrent-executions ([2-4]\\d{2}|500)$"
+    feedback: "300 executions are now set aside for checkout, and no other function can use them. That is double its real peak (about 150), because reserved concurrency is also its maximum, and it still leaves 700 for everything else."
+  - id: alarm-concurrency
+    label: "Create CloudWatch alarms on account ConcurrentExecutions (say 80 percent of the limit) and on checkout-api Throttles, paging the on-call"
+    kind: fix
+    feedback: "The pool sat at 1,000 for minutes before a customer-facing 5xx rate paged anyone. Alarms on the shared pool and on checkout's Throttles warn before the next noisy neighbour, and tell you when the reservations need resizing."
   - id: limit-increase
-    label: "Request a higher account concurrency limit"
+    label: "Request a higher account concurrency limit, and nothing else"
     kind: wrong
-    feedback: "It isn't instant, and a backfill with 2.1 million jobs would scale into the new headroom too. The fix is isolation: cap the batch job, guarantee the critical one."
+    feedback: "Worth doing later as extra headroom, but on its own it is not a fix: it isn't instant, and a backfill with 2.1 million jobs would scale into the new headroom too. The fix is isolation: cap the batch job's poller, guarantee the critical function."
   - id: more-memory
     label: "Give checkout-api more memory so it runs faster"
     kind: wrong
@@ -134,7 +162,7 @@ actions:
     feedback: "That deletes 2.1 million jobs the data team needs, and doesn't stop the next batch job from doing the same thing. Capping its concurrency stops the harm and keeps the work."
 
 solution_paths:
-  - [cap-backfill, reserve-checkout]
+  - [cap-backfill, reserve-checkout, alarm-concurrency]
 
 key_evidence: [rate-exceeded, pool-exhausted, checkout-throttled, no-reservations]
 
@@ -147,7 +175,7 @@ evidence_labels:
 hints:
   nudge: "Lambda says ConcurrentInvocationLimitExceeded. Whose limit is that?"
   direction: "Look at account-level concurrency and which function is using it, then at whether any function has reserved concurrency."
-  answer: "The backfill scaled to ~900 of the account's 1,000 shared executions, starving checkout-api. Cap thumbnail-backfill with reserved concurrency (say 100) and reserve ~300 for checkout-api."
+  answer: "The backfill scaled to ~900 of the account's 1,000 shared executions, starving checkout-api. Cap the backfill on its SQS event source mapping (MaximumConcurrency, say 50), not with function reserved concurrency, which makes the poller hit throttles. Reserve ~300 for checkout-api (above its ~150 peak, leaving the pool plenty) and alarm on account concurrency and Throttles."
 
 analogy:
   title: "One car park for everyone"
@@ -155,7 +183,9 @@ analogy:
     The office and the warehouse share one 1,000-space car park. Today the
     warehouse called in 900 temporary drivers, and now customers coming to
     the shop can't find a space and drive away. Give the warehouse its own
-    roped-off section of 100, and keep 300 spaces signed "customers only".
+    roped-off section of 50 by telling the gate to let only 50 of them in at
+    a time (rather than letting them circle the lot), and keep 300 spaces
+    signed "customers only".
 
 debrief:
   root_cause: |
@@ -171,14 +201,17 @@ debrief:
     - "Read the failure: Lambda answers 429, ConcurrentInvocationLimitExceeded (an account-level limit)."
     - "Look at account concurrency: pinned at 1,000 since 14:06, mostly thumbnail-backfill."
     - "Check reservations: none, so every function competes for the same pool."
-    - "Cap the backfill with reserved concurrency; checkout recovers immediately."
-    - "Reserve concurrency for checkout-api, sized above its peak, so it's guaranteed next time."
+    - "List the backfill's SQS event source mapping and cap it with MaximumConcurrency; checkout recovers immediately. A reserved-concurrency cap on a queue consumer would throttle the poller and push messages toward the dead-letter queue."
+    - "Reserve concurrency for checkout-api, sized above its peak (about 300), so it's guaranteed next time and the rest of the pool stays large."
+    - "Alarm on account ConcurrentExecutions and checkout Throttles, and consider a quota increase or a separate account for batch work."
   real_world: |
     Queue-driven batch functions are the classic noisy neighbour in a shared
-    Lambda account. Give every queue consumer a reserved-concurrency cap,
-    reserve capacity for customer-facing functions, and alert on account
-    concurrency and Throttles. Many teams also put batch work in a separate
-    account.
+    Lambda account. Give every queue consumer a maximum concurrency on its
+    event source mapping (not a function reserved-concurrency cap, which
+    makes the poller invoke into throttles and burns message retries toward
+    the dead-letter queue), reserve capacity for customer-facing functions,
+    and alert on account concurrency and Throttles. Many teams also put
+    batch work in a separate account and request a quota increase.
 
 concepts:
   - term: "Lambda concurrency"
@@ -204,6 +237,9 @@ sources:
   - title: "AWS Lambda API: Invoke (TooManyRequestsException, ConcurrentInvocationLimitExceeded)"
     url: "https://docs.aws.amazon.com/lambda/latest/api/API_Invoke.html"
     retrieved: 2026-10-01
+  - title: "AWS Lambda: Using Lambda with Amazon SQS (scaling, maximum concurrency on the event source mapping)"
+    url: "https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html"
+    retrieved: 2026-10-10
   - title: "AWS Lambda: Monitoring concurrency"
     url: "https://docs.aws.amazon.com/lambda/latest/dg/monitoring-concurrency.html"
     retrieved: 2026-10-01

@@ -39,14 +39,17 @@ describe('terraform-destroy-nonempty-bucket', () => {
   })
 
   it('evidence is obtainable before any change', async () => {
-    const { out } = await play('cd ~/reporting-infra', 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws s3 ls s3://acme-reports-logs/', 'aws sts get-caller-identity')
+    const { out } = await play('cd ~/reporting-infra', 'terraform state show aws_s3_bucket.logs', 'aws s3 ls s3://acme-reports-logs --recursive', 'aws s3 ls s3://acme-reports-logs/', 'aws sts get-caller-identity', 'aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive')
     expect(out[1].output).toMatch(/force_destroy\s*=\s*false/)
+    expect(out[5].output.trim().split('\n')).toHaveLength(3)
+    expect(out[5].output).toContain('reports-logs/2026-08-31-access.log.gz')
     expect(out[1].hits).toContain('evidence:force-destroy-false')
     expect(out[2].output.trim().split('\n')).toHaveLength(3)
     expect(out[3].output).toContain('PRE logs/')
     expect(out[4].output).toContain('PlatformAdmin')
     const tags = new Set(scenario.terminal!.commands.filter((c) => out.some((r) => r.hits.includes(c.match ?? c.example ?? ''))).map((c) => c.evidence))
-    expect(tags.has('bucket-has-objects') && tags.has('admin-role')).toBe(true)
+    expect(tags.has('bucket-has-objects') && tags.has('admin-role') && tags.has('archive-verified')).toBe(true)
+    expect(scenario.key_evidence).toContain('archive-verified')
   })
 
   it('route A: editing alone does not help, apply then destroy does', async () => {
@@ -120,6 +123,24 @@ describe('terraform-destroy-nonempty-bucket', () => {
     expect(out[1].output).not.toContain('state lock')
     expect(out[3].output.trim()).toBe('aws_s3_bucket.logs')
     expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('the versioning checks run and show an unversioned bucket (nothing left after aws s3 rm)', async () => {
+    const { out } = await play('cd ~/reporting-infra', 'aws s3api get-bucket-versioning --bucket acme-reports-logs', 'aws s3api list-object-versions --bucket acme-reports-logs')
+    expect(out[1].output.trim()).toBe('{}')
+    expect(out[2].output).toContain('"VersionId": "null"')
+    expect(out[2].output).not.toContain('DeleteMarkers')
+    expect(scenario.key_evidence).toContain('not-versioned')
+    expect(out[2].output).toContain('"ETag"')
+    const forms = await play('cd ~/reporting-infra', 'aws s3api list-object-versions --bucket=acme-reports-logs', 'aws s3api get-bucket-versioning --region=us-east-1 --bucket acme-reports-logs --no-cli-pager', 'aws s3api list-object-versions --region us-east-1')
+    expect(forms.out[1].output).toContain('VersionId')
+    expect(forms.out[2].output.trim()).toBe('{}')
+    expect(forms.out[3].output).not.toContain('VersionId')
+    // once emptied, the real CLI prints nothing for an unversioned bucket
+    const emptied = await play('cd ~/reporting-infra')
+    const gone = await emptied.sh.run('aws s3api list-object-versions --bucket acme-reports-logs', atStage(scenario, 0), new Set(['empty-bucket']))
+    expect(gone.output.trim()).toBe('')
+    expect(gone.hits).toContain('aws s3api list-object-versions --bucket acme-reports-logs')
   })
 })
 

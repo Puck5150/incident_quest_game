@@ -88,6 +88,13 @@ terminal:
         node-b     1130m        29%    7104Mi          49%
         node-c     1240m        32%    7950Mi          55%
 
+files:
+  - path: "label-printer CPU usage, last 14 days (metrics excerpt)"
+    content: |
+      pod            p50    p95    max     max at
+      label-printer  190m   225m   240m    2026-09-12 11:20 (previous sale hour)
+      VPA recommendation (target): 270m
+
 hypotheses:
   - id: requests
     text: "The scheduler places pods by their CPU requests, not actual usage. Each new pod requests 2 CPUs, and no node has 2 unrequested CPUs left."
@@ -104,9 +111,9 @@ hypotheses:
 
 actions:
   - id: right-size
-    label: "Set label-printer's CPU request to 250m (its real use is about 0.2 CPU) and roll out"
+    label: "In the manifest in Git, set label-printer's CPU request to about 300m (the 14-day peak in the metrics history is 240m; add about 25% headroom, and compare with the VPA recommendation) and roll out"
     kind: fix
-    feedback: "Six pods now request 1.5 CPUs in total, which fit on the existing nodes with room to spare."
+    feedback: "Six pods now request 1.8 CPUs in total, which fit on the existing nodes with room to spare, and the request still covers a busy sale hour: it is sized from the pods' peak with headroom, not from this quiet moment. Too low a request is its own fault (throttling, noisy-neighbour eviction), so check the sizing against history, and make the change in Git so the next apply doesn't revert it."
   - id: add-nodes
     label: "Add six more nodes to the cluster"
     kind: wrong
@@ -134,7 +141,7 @@ evidence_labels:
 hints:
   nudge: "The nodes are 30% busy, but are they 30% booked?"
   direction: "Read why the scheduler can't place the pod, then compare what each pod requests with what it uses."
-  answer: "Each pod requests 2 CPUs but uses 0.2; the nodes' CPU is mostly requested already. Lower the request to about 250m."
+  answer: "Each pod requests 2 CPUs but uses 0.2; the nodes' CPU is mostly requested already. Lower the request to about 300m, sized from peak usage plus headroom (not from idle usage), in the manifest."
 
 analogy:
   title: "Booking the whole table for one coffee"
@@ -155,7 +162,7 @@ debrief:
     - "List the pods: four Pending."
     - "Describe one: FailedScheduling, 3 Insufficient cpu."
     - "Compare requests with reality: nodes 80%+ requested, 30% used; the pods use 0.2 of the 2 CPUs they request."
-    - "Right-size the request, roll out, and confirm all six run."
+    - "Right-size the request from measured peak plus headroom (check history or a VPA recommendation, not just kubectl top at a quiet moment), change it in Git, roll out, and confirm all six run."
   real_world: |
     Requests are reservations. Set them from measured usage (kubectl top,
     or a vertical autoscaler's recommendations), review them when templates

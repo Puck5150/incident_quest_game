@@ -35,6 +35,10 @@ terminal:
       output: |
         10:51:12 up 41 days,  3:02,  1 user,  load average: 0.92, 9.84, 31.07
     - match: "uptime"
+      when_actions: [start-now]
+      output: |
+        10:51:12 up 41 days,  3:02,  1 user,  load average: 0.92, 9.84, 31.07
+    - match: "uptime"
       evidence: load-48
       output: |
         10:31:12 up 41 days,  2:42,  1 user,  load average: 48.21, 47.90, 41.33
@@ -60,10 +64,18 @@ terminal:
       output: |
         enabled
     - match: "ssh files-01 systemctl is-enabled nfs-server"
+      when_actions: [enable-boot]
+      output: |
+        enabled
+    - match: "ssh files-01 systemctl is-enabled nfs-server"
       output: |
         disabled
     - match: "ssh files-01 systemctl is-active nfs-server"
       when_actions: [start-nfs]
+      output: |
+        active
+    - match: "ssh files-01 systemctl is-active nfs-server"
+      when_actions: [start-now]
       output: |
         active
     - match: "ssh files-01 systemctl is-active nfs-server"
@@ -96,8 +108,22 @@ actions:
   - id: start-nfs
     label: "ssh files-01 sudo systemctl enable --now nfs-server"
     kind: fix
-    match_regex: "^ssh files-01 (sudo )?systemctl enable --now nfs-server(\\.service)?$"
+    match_regex: "^ssh files-01 (sudo systemctl (enable --now nfs-server|enable nfs-server --now)(\\.service)?|'sudo systemctl (enable --now nfs-server|enable nfs-server --now)(\\.service)?'|\"sudo systemctl (enable --now nfs-server|enable nfs-server --now)(\\.service)?\")$"
     feedback: "The NFS server starts (and will start on the next boot). The hard mount's retries succeed, the waiting processes finish, and the load average falls."
+  - id: start-now
+    label: "ssh files-01 sudo systemctl start nfs-server"
+    kind: fix
+    match_regex: "^ssh files-01 (sudo systemctl start nfs-server(\\.service)?|'sudo systemctl start nfs-server(\\.service)?'|\"sudo systemctl start nfs-server(\\.service)?\")$"
+    feedback: "The server answers again and the load drains, but it is still disabled: the next reboot leaves files-01 without NFS again unless you also enable it."
+  - id: enable-boot
+    label: "ssh files-01 sudo systemctl enable nfs-server"
+    kind: fix
+    match_regex: "^ssh files-01 (sudo systemctl enable nfs-server(\\.service)?|'sudo systemctl enable nfs-server(\\.service)?'|\"sudo systemctl enable nfs-server(\\.service)?\")$"
+    feedback: "nfs-server now starts at boot, so a patch reboot no longer takes the share with it."
+  - id: nfs-alert
+    label: "Find out why nfs-server was disabled (config drift, a hand change, a package script) and fix that in config management; alert when nfs-server is inactive and add a post-patch service check"
+    kind: fix
+    feedback: "Someone or something disabled the service, and nothing noticed it was down for the share's clients until the load average alarmed. Fixing the source of the drift and alerting on the service means the next patch window finds out in seconds, not from customers."
   - id: add-cpus
     label: "Resize web-04 to 16 CPUs"
     kind: wrong
@@ -112,7 +138,8 @@ actions:
     feedback: "Every customer loses their session, and as soon as web-04 is back, the first upload hangs on the same missing NFS server."
 
 solution_paths:
-  - [start-nfs]
+  - [start-nfs, nfs-alert]
+  - [start-now, enable-boot, nfs-alert]
 
 key_evidence: [load-48, cpu-idle, d-state, not-responding, nfs-inactive]
 
@@ -126,7 +153,7 @@ evidence_labels:
 hints:
   nudge: "Load average isn't the same thing as CPU usage. What else does it count?"
   direction: "Look for processes in state D and what they're waiting on, then check the server they're waiting for."
-  answer: "nfs-server on files-01 is disabled and didn't start after the reboot. Start and enable it."
+  answer: "nfs-server on files-01 is disabled and didn't start after the reboot. Start and enable it (systemctl enable --now, or enable and start), then find out why it was disabled and alert on the service."
 
 analogy:
   title: "A long queue at a closed counter"
@@ -149,6 +176,7 @@ debrief:
     - "Find what's waiting: dozens of processes in state D on NFS calls."
     - "Read the kernel log: files-01 not responding."
     - "Check files-01: nfs-server inactive since the reboot; start and enable it."
+    - "Find why it was disabled, fix that in config management, and alert on nfs-server being inactive (post-patch service check)."
   real_world: |
     High load with idle CPUs means waiting, usually on storage or network
     filesystems. Check for state D processes and their wchan before buying

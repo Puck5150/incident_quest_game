@@ -81,13 +81,36 @@ actions:
   - id: terminate-idle
     label: "SELECT pg_terminate_backend(58210);"
     kind: fix
-    match_regex: "^SELECT pg_terminate_backend\\(58210\\);?$"
+    match_regex: "^[Ss][Ee][Ll][Ee][Cc][Tt] pg_terminate_backend ?\\( ?58210 ?\\) ?;?$"
     feedback: "The idle transaction ends and releases its lock, the ALTER TABLE finishes in milliseconds, and the queued queries run. Tell analyst2 their session was closed."
   - id: cancel-migration
     label: "SELECT pg_cancel_backend(60977); (cancel the migration; rerun it later with a lock_timeout)"
     kind: fix
-    match_regex: "^SELECT pg_cancel_backend\\(60977\\);?$"
-    feedback: "With the ALTER gone from the queue, the waiting queries go ahead, since they don't conflict with the analyst's read lock. Rerun the migration with SET lock_timeout so it gives up quickly instead of queuing everyone."
+    match_regex: "^[Ss][Ee][Ll][Ee][Cc][Tt] pg_cancel_backend ?\\( ?60977 ?\\) ?;?$"
+    feedback: "With the ALTER gone from the queue, the waiting queries go ahead, since they don't conflict with the analyst's read lock. But the idle session is still there, holding its lock, and the column is not added: code from the deploy may expect gift_message. Terminate the idle session too, then rerun the migration with lock_timeout."
+  - id: migration-lock-timeout
+    label: "Run the migration (rerun it if you cancelled it) with SET lock_timeout = '2s' and a retry with backoff, and make the migration tooling do that for every schema change"
+    kind: fix
+    feedback: "The ALTER needs its lock for milliseconds, so a 2 s lock_timeout lets it fail fast instead of making every query queue behind it; the retry loop picks a quiet moment. Do this for every migration, not just this one."
+  - id: analyst-timeout
+    label: "ALTER ROLE analyst2 SET idle_in_transaction_session_timeout = '5min'; (then repeat for each other analyst or BI role listed by \\du)"
+    kind: fix
+    match_regex: "^[Aa][Ll][Tt][Ee][Rr] (?:[Rr][Oo][Ll][Ee]|[Uu][Ss][Ee][Rr]) (?:analyst2|\"analyst2\") (?:[Ii][Nn] [Dd][Aa][Tt][Aa][Bb][Aa][Ss][Ee] (?:shop|\"shop\") )?[Ss][Ee][Tt] idle_in_transaction_session_timeout (?:=|[Tt][Oo]) (?:'(?:(?:[1-9]|10) ?min|(?:6[0-9]|[7-9][0-9]|[1-5][0-9]{2}|600) ?s|(?:[6-9][0-9]{4}|[1-5][0-9]{5}|600000)(?: ?ms)?)'|(?:[6-9][0-9]{4}|[1-5][0-9]{5}|600000)) ?;?$"
+    feedback: "PostgreSQL now ends any analyst2 session that sits idle in a transaction for more than 5 minutes, so a forgotten console can never hold a lock for an hour again. The setting applies to new sessions."
+  - id: analyst-timeout-off
+    label: "ALTER ROLE analyst2 SET idle_in_transaction_session_timeout = 0 (or DEFAULT)"
+    kind: wrong
+    match_regex: "^[Aa][Ll][Tt][Ee][Rr] (?:[Rr][Oo][Ll][Ee]|[Uu][Ss][Ee][Rr]) (?:analyst2|\"analyst2\") (?:[Ii][Nn] [Dd][Aa][Tt][Aa][Bb][Aa][Ss][Ee] (?:shop|\"shop\") )?[Ss][Ee][Tt] idle_in_transaction_session_timeout (?:=|[Tt][Oo]) (?:'?0(?:ms|s|min)?'?|[Dd][Ee][Ff][Aa][Uu][Ll][Tt]) ?;?$"
+    feedback: "0 disables the timeout (and DEFAULT removes the override), which is the setting that let this happen. Pick a bound, such as 5 minutes."
+  - id: analyst-timeout-short
+    label: "ALTER ROLE analyst2 SET idle_in_transaction_session_timeout = '1s' (under a minute)"
+    kind: wrong
+    match_regex: "^[Aa][Ll][Tt][Ee][Rr] (?:[Rr][Oo][Ll][Ee]|[Uu][Ss][Ee][Rr]) (?:analyst2|\"analyst2\") (?:[Ii][Nn] [Dd][Aa][Tt][Aa][Bb][Aa][Ss][Ee] (?:shop|\"shop\") )?[Ss][Ee][Tt] idle_in_transaction_session_timeout (?:=|[Tt][Oo]) (?:'(?:(?:[1-9]|[1-5][0-9]) ?s|(?:[1-9][0-9]{0,3}|[1-5][0-9]{4})(?: ?ms)?)'|(?:[1-9][0-9]{0,3}|[1-5][0-9]{4})) ?;?$"
+    feedback: "An interactive analyst pauses between statements for longer than that, so their sessions would be killed mid-work and they would soon get the setting reverted. Choose a bound people can live with, 1 to 10 minutes."
+  - id: analyst-replica
+    label: "Give analysts a read-only role on a replica (or the warehouse) and revoke their access to the primary"
+    kind: fix
+    feedback: "Ad-hoc reporting no longer shares locks, connections or CPU with checkout, and a read-only role on a replica can't take locks that block writes. Set the same idle and statement timeouts on that role."
   - id: restart
     label: "Restart PostgreSQL"
     kind: destructive
@@ -98,8 +121,8 @@ actions:
     feedback: "New requests queue up behind the ALTER straight away. The queue is caused by the blocker at its head."
 
 solution_paths:
-  - [terminate-idle]
-  - [cancel-migration]
+  - [terminate-idle, migration-lock-timeout, analyst-timeout, analyst-replica]
+  - [cancel-migration, terminate-idle, migration-lock-timeout, analyst-timeout, analyst-replica]
 
 key_evidence: [activity, blockers]
 
@@ -110,7 +133,7 @@ evidence_labels:
 hints:
   nudge: "Nothing is busy; everything is waiting. Waiting for what, and behind whom?"
   direction: "Look at pg_stat_activity's states and wait events, then use pg_blocking_pids to find the head of the queue."
-  answer: "An idle-in-transaction session blocks the ALTER, and everything queues behind the ALTER. Terminate the idle session (or cancel the migration), then add lock_timeout to migrations."
+  answer: "An idle-in-transaction session blocks the ALTER, and everything queues behind the ALTER. Terminate the idle session (cancelling the migration first is fine, but the idle session must still go), then prevent a repeat: lock_timeout with retry on migrations, idle_in_transaction_session_timeout on analyst roles, and analysts on a read-only replica instead of the primary."
 
 analogy:
   title: "A van waiting for one parked car"
@@ -132,12 +155,17 @@ debrief:
   ideal_path:
     - "Check pg_stat_activity: everything waits on Lock; one session is idle in transaction."
     - "Find the head of the queue with pg_blocking_pids: the idle session blocks the ALTER."
-    - "Terminate the idle session (or cancel the migration)."
-    - "Prevent it: lock_timeout on migrations, idle_in_transaction_session_timeout for ad-hoc users."
+    - "Terminate the idle session (if you cancelled the migration instead, terminate it too and rerun the migration)."
+    - "Prevent it: lock_timeout plus retry on migrations."
+    - "Set idle_in_transaction_session_timeout on analyst roles, and move their ad-hoc access to a read-only replica."
   real_world: |
     Schema changes should always set a short lock_timeout and retry, so a
     blocked migration gives up instead of queuing the whole app. Long open
-    transactions from consoles and BI tools are a classic blocker.
+    transactions from consoles and BI tools are a classic blocker. The
+    least-privilege fix for them is structural: a read-only role on a
+    replica or warehouse, with idle_in_transaction_session_timeout and
+    statement_timeout set on that role, so ad-hoc queries can't take locks
+    on the primary at all.
 
 concepts:
   - term: "ACCESS EXCLUSIVE lock"

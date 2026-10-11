@@ -2,7 +2,7 @@
 // attributes the provider computes, which are secret, and which force the
 // resource to be destroyed and re-created when they change ("forces
 // replacement" in a plan). Types not listed here are not modeled.
-import { equal, hasUnknown, UNKNOWN, type Value } from './eval.ts'
+import { equal, equalSet, hasUnknown, UNKNOWN, type Value } from './eval.ts'
 
 export interface AttrSpec {
   forceNew?: boolean // changing it replaces the resource
@@ -19,10 +19,25 @@ export interface ResourceSchema {
 }
 
 const AWS = 'registry.terraform.io/hashicorp/aws'
+const RANDOM = 'registry.terraform.io/hashicorp/random'
 const RO: AttrSpec = { readOnly: true }
 const TAGS_ALL: AttrSpec = { computed: true, copyOf: 'tags' }
 const NEW: AttrSpec = { forceNew: true }
 const NEWC: AttrSpec = { forceNew: true, computed: true }
+const SG_RULE: Record<string, AttrSpec> = {
+  security_group_id: NEW,
+  ip_protocol: {},
+  from_port: {},
+  to_port: {},
+  cidr_ipv4: {},
+  cidr_ipv6: {},
+  prefix_list_id: {},
+  referenced_security_group_id: {},
+  description: {},
+  security_group_rule_id: RO,
+  tags: {},
+  tags_all: TAGS_ALL,
+}
 const aws = (attrs: Record<string, AttrSpec>): ResourceSchema => ({ provider: AWS, attrs: { id: RO, arn: RO, ...attrs } })
 
 export const SCHEMAS: Record<string, ResourceSchema> = {
@@ -45,6 +60,28 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
     tags: {},
     tags_all: TAGS_ALL,
   }),
+  // Separate rule resources. security_group_id pins the rule to its group; the peer and the ports change in place.
+  // ponytail: attribute names from memory of the provider docs and which attributes force replacement are unverified (CONTENT_TODO).
+  aws_vpc_security_group_ingress_rule: aws(SG_RULE),
+  aws_vpc_security_group_egress_rule: aws(SG_RULE),
+  // The older resource: everything except the description forces a new rule, and it has no arn.
+  aws_security_group_rule: {
+    provider: AWS,
+    attrs: {
+      id: RO,
+      type: NEW,
+      security_group_id: NEW,
+      from_port: NEW,
+      to_port: NEW,
+      protocol: NEW,
+      cidr_blocks: { forceNew: true, set: true },
+      ipv6_cidr_blocks: { forceNew: true, set: true },
+      prefix_list_ids: { forceNew: true, set: true },
+      source_security_group_id: NEWC,
+      self: { forceNew: true, default: false },
+      description: {},
+    },
+  },
   aws_instance: aws({
     ami: NEW,
     instance_type: {},
@@ -85,6 +122,21 @@ export const SCHEMAS: Record<string, ResourceSchema> = {
   aws_iam_role: aws({ name: NEWC, path: { forceNew: true, default: '/' }, assume_role_policy: {}, tags: {}, tags_all: TAGS_ALL }),
   aws_ecs_service: aws({ name: NEW, cluster: NEWC, task_definition: {}, desired_count: { default: 0 }, tags: {}, tags_all: TAGS_ALL }),
   aws_cloudwatch_log_group: aws({ name: NEWC, retention_in_days: { default: 0 }, tags: {}, tags_all: TAGS_ALL }),
+  // Every configurable argument of the random provider's resources forces replacement. min_* and bcrypt_hash are not modelled.
+  random_password: {
+    provider: RANDOM,
+    attrs: {
+      id: RO,
+      result: { readOnly: true, sensitive: true },
+      length: NEW,
+      special: { forceNew: true, default: true },
+      upper: { forceNew: true, default: true },
+      lower: { forceNew: true, default: true },
+      numeric: { forceNew: true, default: true },
+      override_special: NEW,
+      keepers: NEW,
+    },
+  },
 }
 
 export function schemaFor(type: string): ResourceSchema | undefined {
@@ -183,7 +235,7 @@ export function diffInstance(
       if (before === undefined || before === null) continue
       d = null // removed from the configuration
     }
-    if (!hasUnknown(d) && equal(before ?? null, d)) continue
+    if (!hasUnknown(d) && (spec.set ? equalSet : equal)(before ?? null, d)) continue
     changes.push(change(n, before, d, !!spec.forceNew))
     next.set(n, d)
   }

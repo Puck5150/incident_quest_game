@@ -33,7 +33,17 @@ import {
   id = "/acme/worker"
 }
 EOF`
-const NONE = { 'import-resources': false, 'apply-anyway': false, 'delete-and-recreate': false }
+const BACKEND = (extra = '  use_lockfile = true\n  encrypt      = true\n') => `cat > backend.tf <<'EOF'
+terraform {
+  backend "s3" {
+    bucket = "acme-tf-state"
+    key    = "api/terraform.tfstate"
+    region = "us-east-1"
+${extra.replace(/^/gm, '  ')}  }
+}
+EOF`
+const MIGRATE = 'terraform init -migrate-state -force-copy'
+const NONE = { 'import-resources': false, 'weak-backend': false, 'apply-anyway': false, 'delete-and-recreate': false }
 const FIXED = { ...NONE, 'import-resources': true }
 
 describe('terraform-state-lost on the simulator', () => {
@@ -67,11 +77,16 @@ describe('terraform-state-lost on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(NONE)
     // the fix is still reachable afterwards
     for (const l of IMPORTS) expect((await sh.run(l, atStage(scenario, 0), new Set())).exitCode).toBe(0)
+    expect(await detectedAll(sh)).toEqual(NONE)
+    for (const l of [BACKEND(), MIGRATE]) await sh.run(l, atStage(scenario, 0), new Set())
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
-  it('(c) route A: four terraform import commands, then a clean plan', async () => {
+  it('(c) route A: four terraform import commands, the backend, then a clean plan', async () => {
     const { sh, out } = await play('cd ~/infra', ...IMPORTS, 'terraform state list', 'terraform plan')
+    expect(await detectedAll(sh)).toEqual(NONE) // imports alone leave the state on the laptop: not the fix
+    await sh.run(BACKEND(), atStage(scenario, 0), new Set())
+    await sh.run(MIGRATE, atStage(scenario, 0), new Set())
     for (const r of out.slice(1, 5)) {
       expect(r.exitCode).toBe(0)
       expect(r.output).toContain('Import successful!')
@@ -81,8 +96,11 @@ describe('terraform-state-lost on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
-  it('(d) route B: import blocks, apply with yes, then a clean plan', async () => {
+  it('(d) route B: import blocks, apply with yes, the backend, then a clean plan', async () => {
     const { sh, out } = await play('cd ~/infra', IMPORT_BLOCKS, 'terraform plan', 'echo yes | terraform apply', 'terraform state list', 'terraform plan')
+    expect(await detectedAll(sh)).toEqual(NONE)
+    await sh.run(BACKEND(), atStage(scenario, 0), new Set())
+    await sh.run(MIGRATE, atStage(scenario, 0), new Set())
     expect(out[2].output).toContain('Plan: 4 to import, 0 to add, 0 to change, 0 to destroy.')
     expect(out[3].exitCode).toBe(0)
     expect(out[3].output).toContain('Apply complete! Resources: 4 imported, 0 added, 0 changed, 0 destroyed.')
@@ -105,10 +123,76 @@ describe('terraform-state-lost on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 
+  const RAW = (block: string, name = 'backend.tf') => `cat > ${name} <<'EOF'\nterraform {\n${block}}\nEOF`
+  const BE = (inner: string) => `  backend "s3" {\n    bucket = "acme-tf-state"\n    key    = "api/terraform.tfstate"\n${inner}  }\n`
+
+  it('(c1) weak backends are not the fix and get their own wrong action once initialised: unencrypted, no locking, comment, tag or heredoc spoofs', async () => {
+    const WEAK = { ...NONE, 'weak-backend': true }
+    const weak = [
+      BACKEND('  use_lockfile = true\n'),
+      BACKEND('  encrypt = true\n'),
+      BACKEND('  use_lockfile = true\n  encrypt = false # encrypt = true\n'),
+      BACKEND('  # use_lockfile = true\n  encrypt = true\n'),
+      BACKEND('  encrypt = true\n  /* use_lockfile = true */\n'),
+      RAW(BE('    encrypt = false\n    tags = {\n      encrypt = true\n      use_lockfile = true\n    }\n')),
+      RAW(BE('    encrypt = false\n    note = <<-EOT\n    encrypt = true\n    use_lockfile = true\n    EOT\n')),
+      RAW(BE('    encrypt = false\n    assume_role {\n      encrypt = true\n      use_lockfile = true\n    }\n')),
+    ]
+    for (const [i, w] of weak.entries()) {
+      const { sh } = await play('cd ~/infra', ...IMPORTS, w, MIGRATE)
+      expect(await detectedAll(sh), String(i)).toEqual(WEAK)
+    }
+    const declined = await play('cd ~/infra', ...IMPORTS, BACKEND(), 'echo no | terraform init -migrate-state')
+    expect((await declined.sh.run('terraform plan', atStage(scenario, 0), new Set())).output).toContain('to add')
+    expect(await detectedAll(declined.sh)).toEqual(NONE)
+    // a backend declared but never initialised: the state is still the local file
+    const noInit = await play('cd ~/infra', ...IMPORTS, BACKEND())
+    expect(await detectedAll(noInit.sh)).toEqual(NONE)
+  })
+
+  it('(c2) the backend may live in any .tf file, with a nested block first or all on one line; a good one in a comment does not count', async () => {
+    const BLOCK = 'terraform {\n  backend "s3" {\n    bucket = "acme-tf-state"\n    key = "api/terraform.tfstate"\n    encrypt = true\n    use_lockfile = true\n  }\n}\n'
+    for (const [name, how] of [['versions.tf', '>'], ['main.tf', '>>'], ['backend.tf', '>']] as const) {
+      const { sh } = await play('cd ~/infra', ...IMPORTS, `printf '${BLOCK.replace(/\n/g, '\\n')}' ${how} ${name}`, MIGRATE)
+      expect(await detectedAll(sh), name).toEqual(FIXED)
+    }
+    const nested = await play('cd ~/infra', ...IMPORTS, RAW(BE('    assume_role {\n      role_arn = "arn:aws:iam::123456789012:role/state"\n    }\n    encrypt = true\n    use_lockfile = true\n')), MIGRATE)
+    expect(await detectedAll(nested.sh)).toEqual(FIXED)
+    const dynamo = await play('cd ~/infra', ...IMPORTS, RAW(BE('    encrypt = true\n    dynamodb_table = "terraform-locks"\n')), MIGRATE)
+    expect(await detectedAll(dynamo.sh)).toEqual(FIXED)
+    const commented = await play('cd ~/infra', ...IMPORTS, `printf '${BLOCK.replace(/^/gm, '# ').replace(/\n/g, '\\n')}' > backend.tf`, MIGRATE)
+    expect(await detectedAll(commented.sh)).toEqual(NONE)
+  })
+
+  it('(c3) two backend blocks are an error at init and on every command, like Terraform; a weak and a good pair credits nothing', async () => {
+    const good = RAW(BE('    encrypt = true\n    use_lockfile = true\n'))
+    const weakOne = RAW(BE('    encrypt = false\n'), 'extra.tf')
+    const { sh, out } = await play('cd ~/infra', ...IMPORTS, good, weakOne, MIGRATE, 'terraform plan')
+    expect(out[7].exitCode).toBe(1)
+    expect(out[7].output).toContain('Duplicate backend configuration')
+    expect(out[8].output).toContain('Duplicate backend configuration')
+    expect(await detectedAll(sh)).toEqual(NONE)
+    // removing the extra block lets init go ahead
+    await sh.run("rm -f extra.tf", atStage(scenario, 0), new Set())
+    await sh.run(MIGRATE, atStage(scenario, 0), new Set())
+    expect(await detectedAll(sh)).toEqual(FIXED)
+  })
+
+  it('(c4) a hostile file with fifty thousand backend openers is judged in well under a second', async () => {
+    const { backendOf } = await import('../src/game/terraform/statefile.ts')
+    const { evalPredicate } = await import('../src/game/terraform/predicates.ts')
+    const big = 'terraform {\n' + 'backend "s3" {\n'.repeat(50000)
+    const t = Date.now()
+    expect(backendOf([{ name: 'big.tf', text: big }])).toBeUndefined()
+    const w = { state: { version: 4 } as never, reality: {}, history: [], plan: () => undefined, readFile: async () => undefined, listFiles: async () => [{ name: 'big.tf', text: big }] }
+    expect(await evalPredicate({ config_matches: { dir: '/x', matches: 'backend\\s+"s3"\\s*\\{(?=[^}]*?^encrypt)' } } as never, w as never)).toBe(false)
+    expect(Date.now() - t).toBeLessThan(500)
+  })
+
   it('(g) after the fix, a further apply is a no-op', async () => {
-    const { sh, out } = await play('cd ~/infra', ...IMPORTS, 'terraform apply -auto-approve')
-    expect(out[5].exitCode).toBe(0)
-    expect(out[5].output).toContain('No changes.')
+    const { sh, out } = await play('cd ~/infra', ...IMPORTS, BACKEND(), MIGRATE, 'terraform apply -auto-approve')
+    expect(out[7].exitCode).toBe(0)
+    expect(out[7].output).toContain('No changes.')
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 

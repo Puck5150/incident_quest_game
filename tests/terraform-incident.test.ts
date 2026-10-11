@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { actionFor } from '../src/game/engine.ts'
 import { atStage } from '../src/schema/stages.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
@@ -106,5 +107,43 @@ describe('terraform-forces-replacement on the simulator', () => {
   it('the other evidence is findable: the provider docs file, the scripted git diff and AWS command', () => {
     const tags = new Set([...(scenario.files ?? []).map((f) => f.evidence), ...scenario.terminal!.commands.map((c) => c.evidence), ...(scenario.terraform!.evidence ?? []).map((e) => e.evidence)])
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
+  })
+
+  it('reverting is only an interim step: stage 1 is credited by the revert, and stage 2 requires the real migration', () => {
+    expect(fix.label).toMatch(/interim/)
+    expect(scenario.stages).toHaveLength(1)
+    const two = atStage(scenario, 1)
+    expect(two.solution_paths).toEqual([['create-snapshot', 'copy-encrypted', 'restore-encrypted']])
+    expect(two.actions.find((a) => a.id === 'delete-old-first')!.kind).toBe('destructive')
+    expect(two.actions.find((a) => a.id === 'restore-unencrypted')!.kind).toBe('wrong')
+  })
+
+  it('stage 2 typed commands: the encrypted copy needs a KMS key, the restore must come from the encrypted copy', () => {
+    const two = atStage(scenario, 1)
+    const id = (cmd: string) => actionFor(two, cmd)?.id
+    expect(id('aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-encrypt')).toBe('create-snapshot')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id alias/orders-db')).toBe('copy-encrypted')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted')).toBeUndefined()
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-encrypted')).toBe('restore-encrypted')
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-pre-encrypt')).toBe('restore-unencrypted')
+    expect(id('aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot')).toBe('delete-old-first')
+  })
+
+  it('stage 2 typed commands accept = forms, quotes, harmless flags and global flags before the service; the AWS-managed default key and extra flags are not credited', () => {
+    const two = atStage(scenario, 1)
+    const id = (cmd: string) => actionFor(two, cmd)?.id
+    expect(id('aws rds create-db-snapshot --db-instance-identifier=orders-db --db-snapshot-identifier=orders-db-pre-encrypt --no-cli-pager')).toBe('create-snapshot')
+    expect(id('aws --region us-east-1 rds create-db-snapshot --db-instance-identifier "orders-db" --db-snapshot-identifier orders-db-pre-encrypt --output json')).toBe('create-snapshot')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier=orders-db-pre-encrypt --target-db-snapshot-identifier=orders-db-encrypted --kms-key-id=alias/orders-db --region=us-east-1')).toBe('copy-encrypted')
+    expect(id("aws rds copy-db-snapshot --source-db-snapshot-identifier 'orders-db-pre-encrypt' --target-db-snapshot-identifier orders-db-encrypted --kms-key-id 'alias/orders-db'")).toBe('copy-encrypted')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id alias/aws/rds')).toBe('copy-default-key')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id=alias/aws/rds')).toBe('copy-default-key')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id alias/orders-db --copy-tags')).toBeUndefined()
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier=orders-db-v2 --db-snapshot-identifier=orders-db-encrypted --no-cli-pager')).toBe('restore-encrypted')
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier=orders-db-v2 --db-snapshot-identifier=orders-db-pre-encrypt')).toBe('restore-unencrypted')
+    expect(id('aws --region us-east-1 rds delete-db-instance --db-instance-identifier "orders-db" --skip-final-snapshot')).toBe('delete-old-first')
+    expect(id("aws rds delete-db-instance --db-instance-identifier='orders-db'")).toBe('delete-old-first')
+    expect(id('aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-encrypt --region us-west-2')).toBeUndefined()
+    expect(two.actions.find((a) => a.id === 'copy-default-key')!.kind).toBe('wrong')
   })
 })

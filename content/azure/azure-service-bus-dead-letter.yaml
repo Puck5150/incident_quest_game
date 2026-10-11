@@ -109,11 +109,11 @@ hypotheses:
 
 actions:
   - id: fix-consumer
-    label: "Change warehouse-sync to accept giftWrap (add it to WarehouseOrder, or ignore unknown fields) and deploy"
+    label: "Change warehouse-sync to accept giftWrap (add it to WarehouseOrder as a tolerant reader that ignores other unknown fields), add a contract test against order-svc's schema, and deploy"
     kind: fix
     feedback: "New gift-wrap orders now go straight through. Do this before resubmitting, or the dead-lettered orders will just fail ten more times and land back in the DLQ."
   - id: resubmit
-    label: "Resubmit the 312 dead-lettered messages from orders-to-warehouse/$deadletterqueue to the queue (Service Bus Explorer: re-send, then complete from the DLQ)"
+    label: "Resubmit the 312 dead-lettered messages from orders-to-warehouse/$deadletterqueue to the queue (Service Bus Explorer: re-send, then complete from the DLQ), after confirming warehouse-sync is idempotent on the order ID so a retry cannot ship an order twice"
     kind: fix
     feedback: "Messages stay in the dead-letter queue until someone takes them out; nothing retries them on its own. Once the fixed consumer is live, they flow through to the warehouse."
   - id: dlq-alert
@@ -176,7 +176,9 @@ debrief:
     - "Resubmit the dead-lettered messages, then check they reach the warehouse."
     - "Alert on dead-lettered messages so the DLQ is never silent again."
   real_world: |
-    A dead-letter queue keeps messages safe, but only if someone watches it.
+    Consumers should be tolerant readers backed by a contract test, should
+    dead-letter genuine poison messages explicitly with a reason and alert on
+    it, and must be idempotent so resubmitting cannot double-ship. A dead-letter queue keeps messages safe, but only if someone watches it.
     Alert on dead-lettered message counts for every important queue, make
     consumers tolerant of new optional fields, and have a tested way to
     resubmit messages after a fix.

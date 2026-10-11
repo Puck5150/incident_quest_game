@@ -177,6 +177,9 @@
         "initialized": {
           "type": "boolean"
         },
+        "state_file": {
+          "type": "boolean"
+        },
         "files": {
           "minItems": 1,
           "type": "array",
@@ -1235,6 +1238,130 @@
             "type": "string",
             "minLength": 1
           },
+          "allow_shell": {
+            "type": "boolean"
+          },
+          "example": {
+            "type": "string",
+            "minLength": 1
+          },
+          "after": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+            }
+          },
+          "iam_policy": {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "wildcard",
+                  "overwrite"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reserved_policy": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "resource": {
+                "type": "string",
+                "minLength": 1
+              },
+              "example": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "verdict",
+              "role",
+              "profile",
+              "reserved_policy",
+              "allowed_actions",
+              "required_actions",
+              "resource",
+              "example"
+            ],
+            "additionalProperties": false
+          },
+          "endpoint_policy": {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "broad"
+                ]
+              },
+              "endpoint_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "bucket_prefix": {
+                "type": "string",
+                "minLength": 1
+              },
+              "example": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "verdict",
+              "endpoint_id",
+              "allowed_actions",
+              "required_actions",
+              "bucket_prefix",
+              "example"
+            ],
+            "additionalProperties": false
+          },
           "file": {
             "type": "object",
             "properties": {
@@ -1248,12 +1375,182 @@
               },
               "after": {
                 "type": "string"
+              },
+              "ingress_policy": {
+                "type": "object",
+                "properties": {
+                  "narrow": {
+                    "type": "object",
+                    "properties": {
+                      "identity": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "service": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "method": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "identity",
+                      "source",
+                      "service",
+                      "method",
+                      "target"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "keep": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "identity": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "source": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "service": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "method": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "target": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "identity",
+                        "source",
+                        "service",
+                        "method",
+                        "target"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "narrow"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
               "path",
               "matches",
               "after"
+            ],
+            "additionalProperties": false
+          },
+          "requires_file": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^\\/"
+              },
+              "ingress_policy": {
+                "type": "object",
+                "properties": {
+                  "narrow": {
+                    "type": "object",
+                    "properties": {
+                      "identity": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "service": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "method": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "identity",
+                      "source",
+                      "service",
+                      "method",
+                      "target"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "keep": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "identity": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "source": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "service": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "method": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "target": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "identity",
+                        "source",
+                        "service",
+                        "method",
+                        "target"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "narrow"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "path",
+              "ingress_policy"
             ],
             "additionalProperties": false
           },
@@ -1288,11 +1585,15 @@
                                 "items": {
                                   "type": "string"
                                 }
+                              },
+                              "no_change": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
                               }
                             },
-                            "required": [
-                              "no_destroy"
-                            ],
                             "additionalProperties": false
                           }
                         },
@@ -1419,6 +1720,204 @@
                       {
                         "type": "object",
                         "properties": {
+                          "sg_rule": {
+                            "type": "object",
+                            "properties": {
+                              "group_id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "direction": {
+                                "type": "string",
+                                "enum": [
+                                  "ingress",
+                                  "egress"
+                                ]
+                              },
+                              "port": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 65535
+                              },
+                              "protocol": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "exact": {
+                                "type": "boolean",
+                                "const": true
+                              },
+                              "source_group_id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "cidr": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "group_id",
+                              "direction",
+                              "port"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "sg_rule"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "sg_only": {
+                            "type": "object",
+                            "properties": {
+                              "group_id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "direction": {
+                                "type": "string",
+                                "enum": [
+                                  "ingress",
+                                  "egress"
+                                ]
+                              },
+                              "port": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 65535
+                              },
+                              "protocol": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "cidrs": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "source_group_ids": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            },
+                            "required": [
+                              "group_id",
+                              "direction"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "sg_only"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "config_matches": {
+                            "type": "object",
+                            "properties": {
+                              "dir": {
+                                "type": "string",
+                                "pattern": "^\\/"
+                              },
+                              "matches": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "dir",
+                              "matches"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "config_matches"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "backend": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "require": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    }
+                                  ]
+                                }
+                              },
+                              "any_of": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "backend"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
                           "applied": {
                             "type": "object",
                             "properties": {
@@ -1511,11 +2010,15 @@
                                     "items": {
                                       "type": "string"
                                     }
+                                  },
+                                  "no_change": {
+                                    "minItems": 1,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
                                   }
                                 },
-                                "required": [
-                                  "no_destroy"
-                                ],
                                 "additionalProperties": false
                               }
                             },
@@ -1642,6 +2145,204 @@
                           {
                             "type": "object",
                             "properties": {
+                              "sg_rule": {
+                                "type": "object",
+                                "properties": {
+                                  "group_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "direction": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ingress",
+                                      "egress"
+                                    ]
+                                  },
+                                  "port": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535
+                                  },
+                                  "protocol": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "exact": {
+                                    "type": "boolean",
+                                    "const": true
+                                  },
+                                  "source_group_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "cidr": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "group_id",
+                                  "direction",
+                                  "port"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "sg_rule"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "sg_only": {
+                                "type": "object",
+                                "properties": {
+                                  "group_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "direction": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ingress",
+                                      "egress"
+                                    ]
+                                  },
+                                  "port": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535
+                                  },
+                                  "protocol": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "cidrs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "source_group_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "group_id",
+                                  "direction"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "sg_only"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "config_matches": {
+                                "type": "object",
+                                "properties": {
+                                  "dir": {
+                                    "type": "string",
+                                    "pattern": "^\\/"
+                                  },
+                                  "matches": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "dir",
+                                  "matches"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "config_matches"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "backend": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "require": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "any_of": {
+                                    "minItems": 1,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "type"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "backend"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
                               "applied": {
                                 "type": "object",
                                 "properties": {
@@ -1747,11 +2448,15 @@
                                       "items": {
                                         "type": "string"
                                       }
+                                    },
+                                    "no_change": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
                                     }
                                   },
-                                  "required": [
-                                    "no_destroy"
-                                  ],
                                   "additionalProperties": false
                                 }
                               },
@@ -1878,6 +2583,204 @@
                             {
                               "type": "object",
                               "properties": {
+                                "sg_rule": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "exact": {
+                                      "type": "boolean",
+                                      "const": true
+                                    },
+                                    "source_group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidr": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction",
+                                    "port"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_rule"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "sg_only": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidrs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "source_group_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_only"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "config_matches": {
+                                  "type": "object",
+                                  "properties": {
+                                    "dir": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "dir",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "config_matches"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "backend": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "require": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "any_of": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "type"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "backend"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "applied": {
                                   "type": "object",
                                   "properties": {
@@ -1970,11 +2873,15 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "no_change": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
-                                      "required": [
-                                        "no_destroy"
-                                      ],
                                       "additionalProperties": false
                                     }
                                   },
@@ -2095,6 +3002,204 @@
                                   },
                                   "required": [
                                     "reality_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_rule": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "exact": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "source_group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidr": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction",
+                                        "port"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_rule"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_only": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidrs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "source_group_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_only"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "config_matches": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dir": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "dir",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "config_matches"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "backend": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "require": {
+                                          "type": "object",
+                                          "propertyNames": {
+                                            "type": "string"
+                                          },
+                                          "additionalProperties": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "boolean"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "any_of": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "boolean"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "backend"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -2213,11 +3318,15 @@
                                       "items": {
                                         "type": "string"
                                       }
+                                    },
+                                    "no_change": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
                                     }
                                   },
-                                  "required": [
-                                    "no_destroy"
-                                  ],
                                   "additionalProperties": false
                                 }
                               },
@@ -2344,6 +3453,204 @@
                             {
                               "type": "object",
                               "properties": {
+                                "sg_rule": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "exact": {
+                                      "type": "boolean",
+                                      "const": true
+                                    },
+                                    "source_group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidr": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction",
+                                    "port"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_rule"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "sg_only": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidrs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "source_group_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_only"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "config_matches": {
+                                  "type": "object",
+                                  "properties": {
+                                    "dir": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "dir",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "config_matches"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "backend": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "require": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "any_of": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "type"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "backend"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "applied": {
                                   "type": "object",
                                   "properties": {
@@ -2436,11 +3743,15 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "no_change": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
-                                      "required": [
-                                        "no_destroy"
-                                      ],
                                       "additionalProperties": false
                                     }
                                   },
@@ -2561,6 +3872,204 @@
                                   },
                                   "required": [
                                     "reality_lacks"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_rule": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "exact": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "source_group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidr": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction",
+                                        "port"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_rule"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_only": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidrs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "source_group_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_only"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "config_matches": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dir": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "dir",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "config_matches"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "backend": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "require": {
+                                          "type": "object",
+                                          "propertyNames": {
+                                            "type": "string"
+                                          },
+                                          "additionalProperties": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "boolean"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "any_of": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "boolean"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "backend"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -3151,6 +4660,130 @@
                   "type": "string",
                   "minLength": 1
                 },
+                "allow_shell": {
+                  "type": "boolean"
+                },
+                "example": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "after": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                  }
+                },
+                "iam_policy": {
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "wildcard",
+                        "overwrite"
+                      ]
+                    },
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "profile": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reserved_policy": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "allowed_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "resource": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "example": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "role",
+                    "profile",
+                    "reserved_policy",
+                    "allowed_actions",
+                    "required_actions",
+                    "resource",
+                    "example"
+                  ],
+                  "additionalProperties": false
+                },
+                "endpoint_policy": {
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "broad"
+                      ]
+                    },
+                    "endpoint_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "allowed_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "bucket_prefix": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "example": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "endpoint_id",
+                    "allowed_actions",
+                    "required_actions",
+                    "bucket_prefix",
+                    "example"
+                  ],
+                  "additionalProperties": false
+                },
                 "file": {
                   "type": "object",
                   "properties": {
@@ -3164,12 +4797,182 @@
                     },
                     "after": {
                       "type": "string"
+                    },
+                    "ingress_policy": {
+                      "type": "object",
+                      "properties": {
+                        "narrow": {
+                          "type": "object",
+                          "properties": {
+                            "identity": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "service": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "method": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "identity",
+                            "source",
+                            "service",
+                            "method",
+                            "target"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "keep": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "identity": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "service": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "method": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "identity",
+                              "source",
+                              "service",
+                              "method",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "narrow"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
                     "path",
                     "matches",
                     "after"
+                  ],
+                  "additionalProperties": false
+                },
+                "requires_file": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "pattern": "^\\/"
+                    },
+                    "ingress_policy": {
+                      "type": "object",
+                      "properties": {
+                        "narrow": {
+                          "type": "object",
+                          "properties": {
+                            "identity": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "service": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "method": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "identity",
+                            "source",
+                            "service",
+                            "method",
+                            "target"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "keep": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "identity": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "service": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "method": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "identity",
+                              "source",
+                              "service",
+                              "method",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "narrow"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "ingress_policy"
                   ],
                   "additionalProperties": false
                 },
@@ -3204,11 +5007,15 @@
                                       "items": {
                                         "type": "string"
                                       }
+                                    },
+                                    "no_change": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
                                     }
                                   },
-                                  "required": [
-                                    "no_destroy"
-                                  ],
                                   "additionalProperties": false
                                 }
                               },
@@ -3335,6 +5142,204 @@
                             {
                               "type": "object",
                               "properties": {
+                                "sg_rule": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "exact": {
+                                      "type": "boolean",
+                                      "const": true
+                                    },
+                                    "source_group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidr": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction",
+                                    "port"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_rule"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "sg_only": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidrs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "source_group_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_only"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "config_matches": {
+                                  "type": "object",
+                                  "properties": {
+                                    "dir": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "dir",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "config_matches"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "backend": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "require": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "any_of": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "boolean"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "type"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "backend"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "applied": {
                                   "type": "object",
                                   "properties": {
@@ -3427,11 +5432,15 @@
                                           "items": {
                                             "type": "string"
                                           }
+                                        },
+                                        "no_change": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
-                                      "required": [
-                                        "no_destroy"
-                                      ],
                                       "additionalProperties": false
                                     }
                                   },
@@ -3558,6 +5567,204 @@
                                 {
                                   "type": "object",
                                   "properties": {
+                                    "sg_rule": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "exact": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "source_group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidr": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction",
+                                        "port"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_rule"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_only": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidrs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "source_group_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_only"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "config_matches": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dir": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "dir",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "config_matches"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "backend": {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "require": {
+                                          "type": "object",
+                                          "propertyNames": {
+                                            "type": "string"
+                                          },
+                                          "additionalProperties": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "boolean"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "any_of": {
+                                          "minItems": 1,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "boolean"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "backend"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
                                     "applied": {
                                       "type": "object",
                                       "properties": {
@@ -3663,11 +5870,15 @@
                                             "items": {
                                               "type": "string"
                                             }
+                                          },
+                                          "no_change": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
                                           }
                                         },
-                                        "required": [
-                                          "no_destroy"
-                                        ],
                                         "additionalProperties": false
                                       }
                                     },
@@ -3794,6 +6005,204 @@
                                   {
                                     "type": "object",
                                     "properties": {
+                                      "sg_rule": {
+                                        "type": "object",
+                                        "properties": {
+                                          "group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "direction": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ingress",
+                                              "egress"
+                                            ]
+                                          },
+                                          "port": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 65535
+                                          },
+                                          "protocol": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "exact": {
+                                            "type": "boolean",
+                                            "const": true
+                                          },
+                                          "source_group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "cidr": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "group_id",
+                                          "direction",
+                                          "port"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "sg_rule"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "sg_only": {
+                                        "type": "object",
+                                        "properties": {
+                                          "group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "direction": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ingress",
+                                              "egress"
+                                            ]
+                                          },
+                                          "port": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 65535
+                                          },
+                                          "protocol": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "cidrs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "source_group_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "group_id",
+                                          "direction"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "sg_only"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "config_matches": {
+                                        "type": "object",
+                                        "properties": {
+                                          "dir": {
+                                            "type": "string",
+                                            "pattern": "^\\/"
+                                          },
+                                          "matches": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "dir",
+                                          "matches"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "config_matches"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "backend": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "require": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "boolean"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "any_of": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "propertyNames": {
+                                                "type": "string"
+                                              },
+                                              "additionalProperties": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string",
+                                                    "minLength": 1
+                                                  },
+                                                  {
+                                                    "type": "number"
+                                                  },
+                                                  {
+                                                    "type": "boolean"
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "type"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "backend"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
                                       "applied": {
                                         "type": "object",
                                         "properties": {
@@ -3886,11 +6295,15 @@
                                                 "items": {
                                                   "type": "string"
                                                 }
+                                              },
+                                              "no_change": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
                                               }
                                             },
-                                            "required": [
-                                              "no_destroy"
-                                            ],
                                             "additionalProperties": false
                                           }
                                         },
@@ -4011,6 +6424,204 @@
                                         },
                                         "required": [
                                           "reality_lacks"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "sg_rule": {
+                                            "type": "object",
+                                            "properties": {
+                                              "group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "direction": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "ingress",
+                                                  "egress"
+                                                ]
+                                              },
+                                              "port": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 65535
+                                              },
+                                              "protocol": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "exact": {
+                                                "type": "boolean",
+                                                "const": true
+                                              },
+                                              "source_group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "cidr": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "group_id",
+                                              "direction",
+                                              "port"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "sg_rule"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "sg_only": {
+                                            "type": "object",
+                                            "properties": {
+                                              "group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "direction": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "ingress",
+                                                  "egress"
+                                                ]
+                                              },
+                                              "port": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 65535
+                                              },
+                                              "protocol": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "cidrs": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "source_group_ids": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "group_id",
+                                              "direction"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "sg_only"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "config_matches": {
+                                            "type": "object",
+                                            "properties": {
+                                              "dir": {
+                                                "type": "string",
+                                                "pattern": "^\\/"
+                                              },
+                                              "matches": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "dir",
+                                              "matches"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "config_matches"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "backend": {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "require": {
+                                                "type": "object",
+                                                "propertyNames": {
+                                                  "type": "string"
+                                                },
+                                                "additionalProperties": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "boolean"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "any_of": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "propertyNames": {
+                                                    "type": "string"
+                                                  },
+                                                  "additionalProperties": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                      },
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "boolean"
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "backend"
                                         ],
                                         "additionalProperties": false
                                       },
@@ -4129,11 +6740,15 @@
                                             "items": {
                                               "type": "string"
                                             }
+                                          },
+                                          "no_change": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
                                           }
                                         },
-                                        "required": [
-                                          "no_destroy"
-                                        ],
                                         "additionalProperties": false
                                       }
                                     },
@@ -4260,6 +6875,204 @@
                                   {
                                     "type": "object",
                                     "properties": {
+                                      "sg_rule": {
+                                        "type": "object",
+                                        "properties": {
+                                          "group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "direction": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ingress",
+                                              "egress"
+                                            ]
+                                          },
+                                          "port": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 65535
+                                          },
+                                          "protocol": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "exact": {
+                                            "type": "boolean",
+                                            "const": true
+                                          },
+                                          "source_group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "cidr": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "group_id",
+                                          "direction",
+                                          "port"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "sg_rule"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "sg_only": {
+                                        "type": "object",
+                                        "properties": {
+                                          "group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "direction": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ingress",
+                                              "egress"
+                                            ]
+                                          },
+                                          "port": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 65535
+                                          },
+                                          "protocol": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "cidrs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "source_group_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "group_id",
+                                          "direction"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "sg_only"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "config_matches": {
+                                        "type": "object",
+                                        "properties": {
+                                          "dir": {
+                                            "type": "string",
+                                            "pattern": "^\\/"
+                                          },
+                                          "matches": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "dir",
+                                          "matches"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "config_matches"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "backend": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "require": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "boolean"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "any_of": {
+                                            "minItems": 1,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "propertyNames": {
+                                                "type": "string"
+                                              },
+                                              "additionalProperties": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string",
+                                                    "minLength": 1
+                                                  },
+                                                  {
+                                                    "type": "number"
+                                                  },
+                                                  {
+                                                    "type": "boolean"
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "type"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "backend"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
                                       "applied": {
                                         "type": "object",
                                         "properties": {
@@ -4352,11 +7165,15 @@
                                                 "items": {
                                                   "type": "string"
                                                 }
+                                              },
+                                              "no_change": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
                                               }
                                             },
-                                            "required": [
-                                              "no_destroy"
-                                            ],
                                             "additionalProperties": false
                                           }
                                         },
@@ -4477,6 +7294,204 @@
                                         },
                                         "required": [
                                           "reality_lacks"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "sg_rule": {
+                                            "type": "object",
+                                            "properties": {
+                                              "group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "direction": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "ingress",
+                                                  "egress"
+                                                ]
+                                              },
+                                              "port": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 65535
+                                              },
+                                              "protocol": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "exact": {
+                                                "type": "boolean",
+                                                "const": true
+                                              },
+                                              "source_group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "cidr": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "group_id",
+                                              "direction",
+                                              "port"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "sg_rule"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "sg_only": {
+                                            "type": "object",
+                                            "properties": {
+                                              "group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "direction": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "ingress",
+                                                  "egress"
+                                                ]
+                                              },
+                                              "port": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 65535
+                                              },
+                                              "protocol": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "cidrs": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "source_group_ids": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "group_id",
+                                              "direction"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "sg_only"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "config_matches": {
+                                            "type": "object",
+                                            "properties": {
+                                              "dir": {
+                                                "type": "string",
+                                                "pattern": "^\\/"
+                                              },
+                                              "matches": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "dir",
+                                              "matches"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "config_matches"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "backend": {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "require": {
+                                                "type": "object",
+                                                "propertyNames": {
+                                                  "type": "string"
+                                                },
+                                                "additionalProperties": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    {
+                                                      "type": "number"
+                                                    },
+                                                    {
+                                                      "type": "boolean"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "any_of": {
+                                                "minItems": 1,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "propertyNames": {
+                                                    "type": "string"
+                                                  },
+                                                  "additionalProperties": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string",
+                                                        "minLength": 1
+                                                      },
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "boolean"
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "type"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "backend"
                                         ],
                                         "additionalProperties": false
                                       },

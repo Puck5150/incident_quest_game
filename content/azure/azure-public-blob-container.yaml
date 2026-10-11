@@ -56,6 +56,10 @@ terminal:
           "publicAccess": "blob"
         }
     - match: "az storage account show -n shopdocsprod -g rg-shop-prod --query allowBlobPublicAccess"
+      when_actions: [disallow-account-anon]
+      output: |
+        false
+    - match: "az storage account show -n shopdocsprod -g rg-shop-prod --query allowBlobPublicAccess"
       evidence: account-allows
       output: |
         true
@@ -138,12 +142,21 @@ actions:
   - id: private-container
     label: "az storage container set-permission --name invoices --account-name shopdocsprod --public-access off"
     kind: fix
-    match_regex: "^az storage container set-permission --name invoices --account-name shopdocsprod --public-access off( .*)?$"
-    feedback: "Anonymous requests to invoices are refused from now on, and the product images the website needs keep working. That stops the leak in seconds."
+    # Flag grammar: --name invoices, --account-name shopdocsprod, --public-access off (each once, any order), optional --auth-mode login. Nothing else, no shell operators.
+    match_regex: "^az storage container set-permission(?!.*( -n |--name[ =]).*( -n |--name[ =]))(?!.*--account-name[ =].*--account-name[ =])(?!.*--public-access[ =].*--public-access[ =])(?!.*--auth-mode[ =].*--auth-mode[ =])(?=.*( -n |--name[ =])invoices( |$))(?=.* --account-name[ =]shopdocsprod( |$))(?=.* --public-access[ =]off( |$))( -n invoices| --name[ =]invoices| --account-name[ =]shopdocsprod| --public-access[ =]off| --auth-mode[ =]login)+$"
+    feedback: "Anonymous requests to invoices are refused from now on, and the product images the website needs keep working. That stops the leak in seconds, but it is containment, not the end of the incident: you still have to find out what was already taken and close the account-level door."
   - id: fix-module
     label: "Change the Bicep module's default to publicAccess 'None', so containers are private unless a caller asks otherwise, and redeploy"
     kind: fix
     feedback: "Without this, the next infrastructure deploy sets invoices back to 'Container' and reopens the leak. Private by default means only product-images, which asks for 'Blob' explicitly, is public."
+  - id: assess-exposure
+    label: "Query StorageBlobLogs for AuthenticationType Anonymous to scope exactly which invoices were listed and downloaded, by whom and since when, and hand the result to security and privacy for breach-notification assessment"
+    kind: fix
+    feedback: "Closing the container does not un-leak what was already downloaded. The log shows two outside addresses and specific invoices; that scope drives whether customers and regulators must be told, and whether anything linked to the URLs needs further action. Keep the logs, do not delete them."
+  - id: disallow-account-anon
+    label: "Raise a change: move the public product images to their own dedicated storage account, then set allowBlobPublicAccess to false on shopdocsprod and add an Azure Policy (deny) plus an alert for anonymous access on accounts that hold private data"
+    kind: fix
+    feedback: "This is the guardrail. With anonymous access disallowed on the account, no container setting or module default can ever expose invoices again; Policy stops the next account from being created permissive, and the alert catches regressions. Do it after the images move, so the website keeps working."
   - id: rotate-keys
     label: "Rotate both storage account keys"
     kind: wrong
@@ -151,7 +164,7 @@ actions:
   - id: account-off-now
     label: "az storage account update -n shopdocsprod -g rg-shop-prod --allow-blob-public-access false"
     kind: wrong
-    match_regex: "^az storage account update -n shopdocsprod -g rg-shop-prod --allow-blob-public-access false$"
+    match_regex: "^az storage account update(?=.*( -n |--name[ =])shopdocsprod( |$))(?=.* --allow-blob-public-access[ =]false( |$)).*$"
     feedback: "It stops the leak, and also every anonymous request to the account: every product image on the website breaks. The container-level change is just as fast and breaks nothing. Making the account private is the right end state, after the images move to their own account."
   - id: delete-container
     label: "Delete the invoices container to remove the exposure"
@@ -159,7 +172,7 @@ actions:
     feedback: "That deletes every customer invoice the account area serves, and the evidence you need to work out exactly what was exposed and to whom. Close the door; don't burn the files."
 
 solution_paths:
-  - [private-container, fix-module]
+  - [private-container, fix-module, assess-exposure, disallow-account-anon]
 
 key_evidence: [container-public, anonymous-reads, module-default]
 
@@ -171,7 +184,7 @@ evidence_labels:
 hints:
   nudge: "The researcher didn't log in. What does Azure need before it serves a blob to someone who sends no credentials?"
   direction: "Check the container's anonymous access level and the account setting, then the logs for anonymous requests, then how the container was created."
-  answer: "invoices has publicAccess 'container', from the Bicep module's default when it was moved in #412. Set it to off now, change the module default to 'None', and use the logs to see what was downloaded."
+  answer: "invoices has publicAccess 'container', from the Bicep module's default when it was moved in #412. Set it to off now, change the module default to 'None', query the anonymous logs to scope the exposure and hand it to security/privacy, and move public images to their own account so anonymous access can be disallowed on shopdocsprod (with a Policy to keep it that way)."
 
 analogy:
   title: "The filing cabinet in the shop window"
@@ -198,7 +211,7 @@ debrief:
     - "Close it surgically: set invoices to private. Product images keep working."
     - "Find why: the module's default, used by the move in #412. Make private the default and redeploy."
     - "Query StorageBlobLogs for AuthenticationType Anonymous to see what was listed and downloaded, and hand that to whoever handles data-breach notification."
-    - "Plan the end state: public images in their own account, and anonymous access disallowed on the account that holds private data."
+    - "Finish the end state: public images in their own account, anonymous access disallowed on the account that holds private data, an Azure Policy and an alert so it cannot recur."
   real_world: |
     Publicly readable storage is one of the most common causes of data leaks
     on every cloud. Microsoft recommends disallowing anonymous access on every

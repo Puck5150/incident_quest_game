@@ -1,6 +1,7 @@
 // Simulated cloud provider: deterministic ids, arns, durations and error texts.
 import { UNKNOWN, type Value } from './eval.ts'
 import { realityKey, type Reality } from './refresh.ts'
+import { isRuleType, ruleDuplicate } from './sgrules.ts'
 
 const ACCOUNT = '123456789012'
 const REGION = 'us-east-1'
@@ -41,7 +42,29 @@ export function formatDuration(s: number): string {
 const str = (v: Value | undefined): string | undefined => (typeof v === 'string' ? v : undefined)
 const ec2 = (kind: string) => (id: string) => `arn:aws:ec2:${REGION}:${ACCOUNT}:${kind}/${id}`
 
+// The provider's default alphabet: letters, digits and special characters, each class on unless its flag is false.
+function password(c: Ctx): string {
+  const on = (k: string) => c.p[k] !== false
+  const chars = (on('lower') ? 'abcdefghijklmnopqrstuvwxyz' : '') + (on('upper') ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' : '') + (on('numeric') ? '0123456789' : '') + (on('special') ? (str(c.p.override_special) ?? '!@#$%&*()-_=+[]{}<>:?') : '')
+  const n = typeof c.p.length === 'number' ? c.p.length : 0
+  const bytes = c.h('pw', 2 * n)
+  return chars ? Array.from({ length: n }, (_, i) => chars[parseInt(bytes.slice(2 * i, 2 * i + 2), 16) % chars.length]).join('') : ''
+}
+
+const SG_RULE_TYPE: TypeInfo = {
+  id: (c) => `sgr-0${c.h('sgr', 16)}`,
+  arn: ec2('security-group-rule'),
+  defaults: (id) => ({ security_group_rule_id: id }),
+  seconds: [1, 1, 1],
+}
+
 const TYPES: Record<string, TypeInfo> = {
+  random_password: {
+    id: () => 'none',
+    // Deterministic per apply (the seed carries the state serial), so a replay repeats it and a replacement differs.
+    defaults: (_i, c) => ({ result: password(c) }),
+    seconds: [0, 0, 0],
+  },
   aws_vpc: {
     id: (c) => `vpc-0${c.h('vpc', 8)}`,
     arn: ec2('vpc'),
@@ -59,6 +82,13 @@ const TYPES: Record<string, TypeInfo> = {
     arn: ec2('security-group'),
     defaults: (_i, c) => ({ name: `terraform-${c.h('name', 20)}`, vpc_id: `vpc-0${c.h('dvpc', 8)}`, ingress: [], egress: [] }),
     seconds: [2, 2, 1],
+  },
+  aws_vpc_security_group_ingress_rule: SG_RULE_TYPE,
+  aws_vpc_security_group_egress_rule: SG_RULE_TYPE,
+  aws_security_group_rule: {
+    // ponytail: the real id is a hash of the rule's fields (sgrule-<digits>); unique digits per rule are enough here.
+    id: (c) => `sgrule-${c.h('sgrule', 10).replace(/[a-f]/g, (x) => String(x.charCodeAt(0) % 10))}`,
+    seconds: [1, 1, 1],
   },
   aws_instance: {
     id: (c) => `i-0${c.h('i', 16)}`,
@@ -151,6 +181,7 @@ export function fillOnUpdate(prior: Attrs, next: Attrs): Attrs {
 }
 
 export function alreadyExists(type: string, attrs: Attrs, reality: Reality, seed: string): string | undefined {
+  if (isRuleType(type)) return ruleDuplicate(type, attrs, reality, requestId(seed))
   const nat = info(type)?.natural
   if (!nat) return undefined
   const name = str(attrs[nat.key])
@@ -169,6 +200,8 @@ export function referencedBy(reality: Reality, type: string, id: string): { type
   for (const k of Object.keys(reality).sort()) {
     if (k === self || !mentions(reality[k], id)) continue
     const i = k.indexOf(':')
+    // A group's own rules go with it; only another group's rule that names it holds it.
+    if (isRuleType(k.slice(0, i)) && reality[k].security_group_id === id) continue
     return { type: k.slice(0, i), id: k.slice(i + 1) }
   }
   return undefined

@@ -65,7 +65,7 @@ async function mount(id: string) {
     expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
     expect(score(scenario, box.saved!.log).mistakes.destructive).toBe(1)
   }
-  return { run, declare, closeClean, trapped, settle }
+  return { run, declare, closeClean, trapped, settle, taken }
 }
 
 describe('terraform-state-lost through the UI', () => {
@@ -77,12 +77,16 @@ describe('terraform-state-lost through the UI', () => {
     'terraform import aws_cloudwatch_log_group.worker /acme/worker',
   ]
 
-  it('ideal path: investigate, name the lost state, import all four, close', async () => {
+  const BACKEND = `printf 'terraform {\\n  backend "s3" {\\n    bucket = "acme-tf-state"\\n    key = "api/terraform.tfstate"\\n    encrypt = true\\n    use_lockfile = true\\n  }\\n}\\n' > backend.tf`
+  it('ideal path: investigate, name the lost state, import all four, move the state to the S3 backend, close', async () => {
     const g = await mount('terraform-state-lost')
     await g.run('terraform init', 'terraform state list', 'terraform plan', 'aws s3api head-bucket --bucket acme-app-logs', 'aws sts get-caller-identity')
     await waitFor(() => expect(output()).toMatch(/Plan: 4 to add[\s\S]*"Account": "123456789012"/))
     g.declare(ROOT)
-    await g.run(...IMPORTS, 'terraform plan')
+    await g.run(...IMPORTS)
+    await g.settle()
+    expect(g.taken()).toEqual([]) // imports alone leave the state on the laptop: not the fix yet
+    await g.run(BACKEND, 'terraform init -migrate-state -force-copy', 'terraform plan')
     await waitFor(() => expect(output()).toMatch(/No changes\./))
     await g.closeClean('import-resources')
   })

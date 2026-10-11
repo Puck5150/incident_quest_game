@@ -54,7 +54,7 @@ terminal:
         local   all             all                                     peer
         host    all             all             127.0.0.1/32            scram-sha-256
         host    all             all             ::1/128                 scram-sha-256
-        host    shop            shop            10.0.2.30/32            scram-sha-256
+        hostssl shop            shop            10.0.2.30/32            scram-sha-256
     - match: "sudo grep -v '^#' /etc/postgresql/16/main/pg_hba.conf | grep -v '^$'"
       evidence: hba-local-only
       output: |
@@ -93,9 +93,13 @@ actions:
     kind: fix
     feedback: "PostgreSQL now also listens on db-01's network address. listen_addresses can only change at server start, so the restart is needed."
   - id: hba
-    label: "Add 'host shop shop 10.0.2.30/32 scram-sha-256' to pg_hba.conf and reload"
+    label: "Add 'hostssl shop shop 10.0.2.30/32 scram-sha-256' to pg_hba.conf and reload (hostssl: TLS connections only)"
     kind: fix
-    feedback: "PostgreSQL now accepts the shop user, from app-01 only, with a password. Without it, the connection would get through and be rejected with \"no pg_hba.conf entry\"."
+    feedback: "PostgreSQL now accepts the shop user, from app-01 only, over TLS, with a SCRAM password check. A plain 'host' line would also accept unencrypted connections. Without it, the connection would get through and be rejected with \"no pg_hba.conf entry\"."
+  - id: tls
+    label: "Turn TLS on: ssl = on with a server certificate and key (ssl_cert_file, ssl_key_file), and have the app connect with sslmode=verify-full"
+    kind: fix
+    feedback: "Passwords and order data no longer cross the network in clear text, and verify-full means app-01 checks it is really talking to db-01."
   - id: open-firewall
     label: "sudo ufw allow 5432/tcp"
     kind: wrong
@@ -106,7 +110,7 @@ actions:
     feedback: "That lets anyone who can reach db-01 sign in as any user, including postgres, with no password."
 
 solution_paths:
-  - [listen, hba]
+  - [listen, hba, tls]
 
 key_evidence: [refused, listen-loopback, listen-default, hba-local-only]
 
@@ -119,14 +123,15 @@ evidence_labels:
 hints:
   nudge: "\"Refused\" means the connection reached db-01 and nothing was listening. Which addresses is PostgreSQL listening on?"
   direction: "Check listen_addresses, then check whether pg_hba.conf would let app-01 in once it can connect."
-  answer: "listen_addresses is the default, localhost. Add db-01's address, restart, and add a pg_hba.conf line for the shop user from app-01."
+  answer: "listen_addresses is the default, localhost. Add db-01's address, restart, add a hostssl pg_hba.conf line (scram-sha-256) for the shop user from app-01 only, and turn TLS on (ssl = on, certificate and key, sslmode=verify-full in the app)."
 
 analogy:
   title: "A shop that only serves through the back door"
   text: |
     The shop is open, but by default it only serves staff at the back
     door, so customers at the front door find it shut. Open the front door,
-    and give the doorman a list saying which customers may come in.
+    and give the doorman a list saying which customers may come in, through
+    a private entrance where nobody can overhear what they say.
 
 debrief:
   root_cause: |
@@ -140,11 +145,14 @@ debrief:
     - "Read the error: connection refused, so nothing is listening there."
     - "Check what PostgreSQL listens on: only 127.0.0.1."
     - "Set listen_addresses to include 10.0.2.15 and restart."
-    - "Allow the shop user from app-01 in pg_hba.conf, reload, and connect from the app."
+    - "Allow the shop user from app-01 with a hostssl, scram-sha-256 pg_hba.conf line, and reload."
+    - "Turn on TLS (ssl = on with certificate and key) and connect from the app with sslmode=verify-full."
   real_world: |
     "Refused" (nothing listening) and "timed out" (something dropping
     packets) point at different layers. Only listen on the addresses you
-    need, and keep pg_hba.conf entries as narrow as the app needs.
+    need, and keep pg_hba.conf entries as narrow as the app needs: hostssl
+    with scram-sha-256 and ssl = on (certificate, key, sslmode=verify-full
+    in the client), so credentials and data are never sent in clear text.
 
 concepts:
   - term: "listen_addresses"

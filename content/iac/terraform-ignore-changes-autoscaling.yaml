@@ -22,22 +22,6 @@ environment: |
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "terraform plan"
-      when_actions: [ignore-desired]
-      output: |
-        aws_ecs_service.checkout: Refreshing state... [id=arn:aws:ecs:us-east-1:111122223333:service/prod/checkout]
-
-        No changes. Your infrastructure matches the configuration.
-    - match: "terraform plan"
-      evidence: plan-reset
-      output: |2
-          # aws_ecs_service.checkout will be updated in-place
-          ~ resource "aws_ecs_service" "checkout" {
-              ~ desired_count = 12 -> 2
-                name          = "checkout"
-            }
-
-        Plan: 0 to add, 1 to change, 0 to destroy.
     - match: "aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids service/prod/checkout --query ScalableTargets[0].[MinCapacity,MaxCapacity]"
       evidence: autoscaling
       output: |
@@ -49,16 +33,55 @@ terminal:
       output: |
         12
 
-files:
-  - path: "ecs.tf (excerpt)"
-    evidence: desired-fixed
-    content: |
-      resource "aws_ecs_service" "checkout" {
-        name          = "checkout"
-        cluster       = aws_ecs_cluster.prod.id
-        desired_count = 2
-        # ...
-      }
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: ecs.tf
+      content: |
+        resource "aws_ecs_service" "checkout" {
+          name            = "checkout"
+          cluster         = "prod"
+          task_definition = "checkout:42"
+          desired_count   = 2
+        }
+  state:
+    - type: aws_ecs_service
+      name: checkout
+      attrs:
+        id: "arn:aws:ecs:us-east-1:123456789012:service/prod/checkout"
+        arn: "arn:aws:ecs:us-east-1:123456789012:service/prod/checkout"
+        name: checkout
+        cluster: prod
+        task_definition: "checkout:42"
+        desired_count: 2
+        tags_all: {}
+  cloud:
+    patch:
+      - type: aws_ecs_service
+        id: "arn:aws:ecs:us-east-1:123456789012:service/prod/checkout"
+        set:
+          desired_count: 12
+  evidence:
+    - evidence: plan-reset
+      command: plan
+      contains: "desired_count"
+    - evidence: desired-fixed
+      command: plan
+      contains: "12 -> 2"
 
 hypotheses:
   - id: two-owners
@@ -76,8 +99,19 @@ hypotheses:
 
 actions:
   - id: ignore-desired
-    label: "Add lifecycle { ignore_changes = [desired_count] } to aws_ecs_service.checkout"
+    label: "Add lifecycle { ignore_changes = [desired_count] } (that attribute only) to aws_ecs_service.checkout"
     kind: fix
+    done_when:
+      all:
+        - state_has: aws_ecs_service.checkout
+        - reality_has:
+            type: aws_ecs_service
+            id: "arn:aws:ecs:us-east-1:123456789012:service/prod/checkout"
+            attr: desired_count
+            equals: 12
+        - config_matches: { dir: /home/you/infra, matches: '^[ \t]*ignore_changes[ \t]*=[ \t]*\[\s*"?desired_count"?\s*,?\s*\][ \t]*$' }
+        - plan_clean: true
+        - not: { applied: { op: update, address: aws_ecs_service.checkout } }
     feedback: "Terraform still sets the initial count when it creates the service, then leaves it to the autoscaler. Plans stop showing the reset."
   - id: set-12
     label: "Change desired_count to 12 in code"
@@ -90,6 +124,7 @@ actions:
   - id: apply-at-night
     label: "Only apply infra changes at night"
     kind: wrong
+    done_when: { applied: { op: update, address: aws_ecs_service.checkout } }
     feedback: "It hides the problem in quiet hours; any daytime apply, including an urgent fix, still resets it."
 
 solution_paths:
@@ -105,7 +140,7 @@ evidence_labels:
 hints:
   nudge: "Read the plan for a change nobody asked for."
   direction: "Two things set the service's desired count. Which one wins at each apply?"
-  answer: "Terraform keeps resetting the autoscaler's value. Add lifecycle { ignore_changes = [desired_count] }."
+  answer: "Terraform keeps resetting the autoscaler's value. Add lifecycle { ignore_changes = [desired_count] } and nothing else in that list: ignoring task_definition or the whole resource would hide real drift and stop deploys from showing in plans. Then bring the autoscaling target and policy into Terraform too, so the scaling owner is in code."
 
 analogy:
   title: "Two people setting the thermostat"
@@ -126,13 +161,18 @@ debrief:
   ideal_path:
     - "Read the plan: desired_count 12 -> 2."
     - "Find the other owner: an autoscaling target on the same service."
-    - "Add ignore_changes for desired_count."
+    - "Add ignore_changes for desired_count only (not task_definition or all)."
     - "Plan again: no changes."
   real_world: |
     Whenever another system owns an attribute (autoscalers, deployment
     tools, sidecar injectors), ignore it in Terraform so the two don't fight.
-    Use ignore_changes narrowly, for specific attributes, not the whole
-    resource.
+    Use ignore_changes narrowly, for the one attribute the other system
+    owns, not the whole resource and not attributes Terraform should keep
+    controlling (ignoring task_definition would stop Terraform deploying new
+    revisions and hide drift). Better still, manage the Application Auto
+    Scaling target and policy (aws_appautoscaling_target and
+    aws_appautoscaling_policy) in the same code, so the min, max and scaling
+    rules are reviewed and the ignore has a visible owner.
 
 concepts:
   - term: "ignore_changes"
@@ -149,3 +189,7 @@ sources:
   - title: "Amazon ECS: Automatically scale your service"
     url: "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html"
     retrieved: 2026-10-02
+
+command_notes:
+  "aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids service/prod/checkout --query ScalableTargets[0].[MinCapacity,MaxCapacity]": "The autoscaler owns this service's count and moves it between 2 and 20."
+  "aws ecs describe-services --cluster prod --services checkout --query services[0].desiredCount": "The service is running 12 tasks right now, scaled up by the autoscaler."

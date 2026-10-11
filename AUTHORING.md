@@ -97,10 +97,101 @@ stage reopens the incident into the next one (see below).
   collapsed. Remember to escape backslashes in YAML strings (`\\*`).
 - **Typed fixes:** give an action a `match_regex` and typing a matching command in
   the terminal takes that action, the same as clicking it (only after the right
-  hypothesis; before that it's refused). Use it for actions that really are one
+  hypothesis; before that it's refused). A typed fix entered during investigation is not retroactive: it is refused
+  and not replayed when the cause is named, so the player must declare a root cause first and then
+  retype it (say so in the stage's hint if a lab relies on it). Use it for actions that really are one
   command (`kubectl rollout undo …`, `sudo reboot`); leave multi-step fixes as
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.
+- **What a typed line may contain (engine guard, all action kinds).** A typed line
+  earns an action only if it is ONE plain command, read the way bash reads it (one
+  scanner in `src/game/typedLine.ts`; `tests/typed-line-scanner.test.ts` checks it
+  against real bash). Never credited, not even as a `wrong`/`destructive` match (the
+  line falls through to the scripted/real-shell answer like any unscripted command):
+  - an unquoted `; & | < >`, `(` or `)`, a backtick, `$` anywhere unquoted, `$'...'`;
+  - inside double quotes: a backtick, and `$` followed by a letter, digit, `_`, `(`,
+    `{` or one of `? * @ # ! $ -` (the shell expands these there);
+  - a newline, any whitespace other than a plain space or tab (NBSP and other
+    Unicode spaces split words in the engine's regex view but not in bash), an
+    unterminated quote, a trailing backslash;
+  - unquoted `* ? [`, `{`/`}` attached to a word (`{a,b}`; a standalone `{ 6379 }`
+    as in nft is fine), a leading `~` or `#`, and `~` in an assignment word
+    (`NAME=~`, `NAME=a:~`).
+  One closing `;` is fine. Operators inside matching quotes are data (a JSON policy
+  document, `psql -c "..."`). So type AWS shorthand like `Rules=[{...}]` or
+  `gs://b/**` quoted, and write the quoted form in the label and the regex. When a
+  line is rejected ONLY for an unquoted glob/brace/`~`/`#` and would earn an action
+  if quoted, the terminal adds a hint ("Quote that argument, e.g. 'gs://bucket/**'").
+  **SQL prompts are explicit.** `typedMode(scenario)` (`src/game/paths.ts`) reads
+  the terminal prompt: `name=#`, `name=>`, `name->`, `name-#` (psql, e.g. `postgres=#`,
+  `shop=>`) and `sqlite>` are SQL; `mysql>` is MySQL; EVERYTHING else is a shell
+  (`user@host:~$`, `[admin@docs-01 ~]$`, `azureuser@vm (vnet):~$`, `PS C:\>`). In SQL
+  modes there is no shell, so the line is read with SQL rules: `'..'` strings and
+  `".."` identifiers with a doubled quote as the escape (no backslash escapes;
+  MySQL allows them inside strings and has `#` comments and backtick identifiers),
+  `--` and `/* */` comments (an apostrophe in a comment is fine), `<>`, `||`, `&`
+  are ordinary SQL, and `;` may only be the last significant token. A second
+  statement however disguised, a stray `$` (dollar quoting), a backslash outside
+  quotes (psql meta-commands such as `\!`), a newline or an unterminated quote or
+  comment is rejected. A new SQL prompt style needs a line in `typedMode`.
+  A line that repeats a `--long-flag` or `-x` (same scanner, so a flag inside a
+  quoted value is not a flag; nothing after a bare `--` is a flag) is not credited
+  as a `fix` (the real CLI takes the last value, a regex sees the first);
+  `wrong`/`destructive` still land. `allow_shell` does NOT disable this repeat check.
+  Regexes should still be anchored and should not let a flag's value start with `-`
+  (`[^\\s-]`), since `--kms-key-id --region x` gives the key the next flag; anchor a
+  flag on its left too (`(?:^|\\s)--kms-key-id`).
+  Opt-out, only when the command IS the syntax (`: > /var/log/app/app.log`,
+  `rm -rf /srv/media/*`, `az vm stop --ids $(az vm list ...)`, unquoted AWS
+  shorthand): `allow_shell: true` on the action. The validator then requires
+  (`looseAllowShellRegex`): every top-level `|` branch starts with `^` and ends with
+  an unescaped `$`; no unescaped `.`; no `\S \W \D \P \p` (alone or in a class); no
+  negated class `[^...]`; no class holding `; & | < > $` or a backtick, nor a range
+  spanning one (`[ -~]`); no lookahead/lookbehind. Spell the text out.
+  **`example:`** is an optional field on an action: one typed line its `match_regex`
+  must accept (the validator fails if it does not). The validator fails if the
+  `example`, or, when there is no `example`, the command written in the label (its
+  trailing "(prose)" removed) when the regex accepts it, is rejected by the guard
+  (in the prompt's mode) or repeats a flag on a fix, and the action lacks
+  `allow_shell`. Add an `example` whenever the label is not the typed command (bare
+  SQL at a shell prompt: `psql -d db -c "..."`). Actions with neither are listed in
+  CONTENT_TODO.md. Tests: `tests/typed-command-guard.test.ts`.
+- **Ordering fixes (`after:`).** `after: [action-id, …]` on a fix (this is the
+  action's `after`, unrelated to a `file` action's `file.after`, the text the button
+  writes): it is credited only once those fixes are taken, whether typed, clicked or
+  detected from a file or `done_when`. Earlier, it is refused with "Not yet: do this
+  first: <label>" and nothing is recorded. Prerequisites must be fix actions of the
+  same stage, form no cycle, and be on every `solution_paths` path that has the
+  action. `solution_paths` still means "all of any one path"; only the order is
+  enforced, and only through the engine's log: `fixComplete` itself is unordered, so
+  a hand-built log in a test can bypass it. Use it where order is the lesson
+  (snapshot, then copy, then restore).
+- **Judging a policy document:** a regex cannot tell a least-privilege IAM policy
+  from a lookalike. For an `aws iam put-role-policy` fix give the action
+  `iam_policy: { verdict: ok|wildcard|overwrite, role, profile, reserved_policy,
+  allowed_actions, required_actions, resource, example }` instead of `match_regex`.
+  The field is hard-wired to `aws iam put-role-policy` and to service-prefixed
+  action names (`rds:CreateDBInstance`); another command needs a new helper. The
+  engine parses the line and `--policy-document` (`src/game/awsPolicyCheck.ts`):
+  `ok` needs every statement to be an Allow on exactly `resource`, actions inside
+  `allowed_actions` (ASCII case-insensitive) including `required_actions`, one aws
+  command, no shell operators, and no other top-level or statement keys (NotAction,
+  NotResource and Principal are rejected). Evasion rules: every token outside the
+  document must be plain (no `$ \ { } * ? ~ ! #`, no `$'…'`, no expansion in double
+  quotes), the document may not repeat a key, and `wildcard` (any `*`) and
+  `overwrite` (reusing `reserved_policy`) are judged first. Use three actions (a fix
+  and two wrong ones) with an IDENTICAL spec apart from `verdict` and `example`. The
+  validator checks that `required_actions` are inside `allowed_actions`, that each
+  `example` earns its verdict, that the specs match, and that no scripted terminal
+  command is also matched. The document must be inline (`file://` is not readable).
+- **Judging a VPC endpoint policy:** `endpoint_policy: { verdict: ok|broad, endpoint_id,
+  allowed_actions, required_actions, bucket_prefix, example }` judges `aws ec2
+  modify-vpc-endpoint --vpc-endpoint-id ID --policy-document '<json>'` with the same
+  tokenizer and evasion rules as `iam_policy`: every statement Effect Allow, Principal
+  exactly `"*"`, Action inside `allowed_actions`, every Resource an S3 ARN of a bucket
+  named `<bucket_prefix>…` (objects as `/*`). A parseable document that is anything else
+  earns `broad`; `file://`, malformed or shell-tricked lines earn nothing. Same spec rules
+  as `iam_policy` (identical across the actions that share it).
 - **Every investigation command is discoverable.** A `match_regex` command needs an
   `example`: one concrete command its pattern accepts (the validator checks it
   matches). `help` lists `match` commands as written and pattern commands by their
@@ -290,6 +381,21 @@ simulated Linux host. What that means for an incident:
       after: |                            # what the button writes
         /var/log/app/*.log { ... }
   ```
+- **Judging an ingress-policy file.** A regex cannot tell a narrow VPC Service Controls
+  ingress rule from a lookalike. Give the `file` an `ingress_policy: { keep: [rule...],
+  narrow: rule }` (a rule is `{ identity, source, service, method, target }`) and the file
+  counts as fixed only if it ALSO passes `src/game/vpcscIngress.ts`: one YAML document
+  (no aliases, no duplicate keys, at most 8000 characters) holding exactly the `keep`
+  policies plus the `narrow` rule, each with one identity, source, operation, method and
+  target and no other key anywhere (so `permission:`, `access_level`, extra identities,
+  wildcards and a second document all fail; flow style, quotes and comments are fine).
+  `matches` stays required as a cheap prefilter (use `ingressFrom`).
+- **A typed fix that depends on a file.** `requires_file: { path, ingress_policy }` on an
+  action with a `match_regex` makes the typed command count only if that file passes the
+  check at the moment the command runs (the terminal reads the file through the shell).
+  The engine never credits such an action by itself, and the button is unchanged. Script the
+  command's output with a `match_regex` terminal command so it prints the same either way.
+  The typed line must also name that file (a word or `--flag=value` that resolves to `path` from the shell's current directory). The validator checks the gate is solvable (a `file` action's `after` in the same stage passes it) and that a scripted `match_regex` terminal command, with an `example`, also matches the action's typed line.
 - **Hosts.** The prompt's host is where the player starts. Hosts in scripted
   `ssh HOST ...` lines exist: `ssh HOST cmd` runs there, `ssh HOST` logs in
   until `exit`. Local scripts (`./order-sync`) exist and answer from their
@@ -463,7 +569,7 @@ terraform:
 ```
 
 Fields:
-- `dir`: the lab directory (default the shell's starting directory; `~/` and absolute paths work). `version`: Terraform version like `1.9.8`. `initialized`: false makes the player run `terraform init` first.
+- `dir`: the lab directory (default the shell's starting directory; `~/` and absolute paths work). `version`: Terraform version like `1.9.8`. `initialized`: false makes the player run `terraform init` first. `state_file`: true puts `terraform.tfstate` on the disk (see State file on disk and backend changes).
 - `files`: the starting `.tf` files (at least one; module directories such as `modules/net/main.tf` work; local `./` sources and registry modules from `modules.registry`). `vars`: values for `variable` blocks.
 - `modules.installed`: `[{ key, source, dir }]`, the modules `terraform init` already installed (becomes `.terraform/modules/modules.json`). `key` is the call name, dotted for nested calls (`net`, `net.inner`). A local module gives `dir`, which must hold `.tf` files in `files`; a registry module gives `version` instead of `dir` (see Registry modules). A lab with module calls that omits an entry must be run through `terraform init` first (`Module not installed`). A registry module that itself calls a local submodule cannot be pre-installed this way (the schema requires local dirs to be in `terraform.files`): leave it out and make the player run `terraform init`.
 - `state`: managed (or `mode: data`) objects. Every `attrs` needs a string `id`. `key` makes a `count` or `for_each` instance; `status: tainted` marks one tainted. `outputs`: output values (`sensitive: true` hides them).
@@ -474,9 +580,11 @@ Fields:
 
 Commands that work: `init`, `validate`, `plan`, `apply`, `destroy`, `show`, `state list|show|pull|mv|rm`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `get`, `output`, `workspace show|list|new|select|delete`, `version`. The rest (`console`, `state push`, `state replace-provider`, …) answer "not simulated yet".
 
+`plan -refresh-only` and `apply -refresh-only` work: the plan lists every difference found outside Terraform (not only what the plan refers to) and plans no actions; the apply asks, then records the refreshed values in state without touching any object (not with `-target`, `-replace`, `-refresh=false`, or a plan file). A `set` attribute (a security group's `ingress`) compares without order, so the same rules in another order are no change. A refresh-only run matches `command: plan` / `apply` evidence like any other.
+
 `evidence[].command` is one of: `plan`, `validate`, `init`, `show`, `output`, `version`, `state list`, `state show`, `state pull`, `state mv`, `state rm`, `apply`, `destroy`, `import`, `taint`, `untaint`, `refresh`, `force-unlock`, `get`, `providers`, `workspace show`, `workspace list`, `workspace new`, `workspace select`, `workspace delete`.
 
-Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported.
+Making a fix detectable: use a `file:` action on the `.tf` file (`path` absolute under `dir`, `matches` a regex that the fixed file satisfies, `after` the full fixed content for the button). Verification is the player running `terraform plan` again, so the usual rule that a terminal command needs `when_actions` is skipped for these incidents. Only resource types listed in `src/game/terraform/resources.ts` are supported (the AWS ones plus `random_password` from `hashicorp/random`: `length` required, `special`/`upper`/`lower`/`numeric` default true, every argument forces replacement; `result` is sensitive and derived from the lab seed, so a replay repeats it and a replacement changes it; `min_*` and `bcrypt_hash` are not modelled). The registry offers random 3.6.3 by default (override with `terraform.providers.random.available`). The lock file mounted for an initialised lab is AWS-only, so a scenario using `random_password` gets `Inconsistent dependency lock file` on `plan` until `init` runs: either start it un-initialised on purpose (`initialized: false`) or ship a `.terraform.lock.hcl` in `files` that includes the random block (a shipped lock is used as is).
 
 Destroy-time errors come from the cloud as it is: a subnet, security group or VPC is refused (`DependencyViolation`, SG text with the SDK v2 `DeleteSecurityGroup` wrapper) while any other object in the cloud mentions its id, so a blocker is just a `cloud.add` object (for example an `aws_network_interface` with `subnet_id` or `groups` holding the id, or a subnet created out of band for a VPC). A bucket is refused with `BucketNotEmpty` while objects exist and `force_destroy` is not `true` IN STATE: author objects as `cloud.add: [{ type: aws_s3_object, attrs: { id: "BUCKET/path/key", bucket: BUCKET, key: path/key } }]`. Setting `force_destroy = true` in the configuration is not enough; an `apply` must write it, then `destroy` removes the objects and the bucket. Scripted `faults` still win over these. Bucket versions are not modelled.
 
@@ -748,6 +856,18 @@ These change the current workspace's state only, never the cloud:
 
 `state mv`, `state rm`, `taint` and `untaint` need a state file; `import` and `refresh` do not. Each successful change bumps the state serial.
 
+### State file on disk and backend changes
+
+`state_file: true` puts `terraform.tfstate` in the lab directory, so `cat`, `grep` and `ls` show state the way a real local backend leaves it (a sensitive attribute such as a database `password` is in plain text). Default false: a lab without it has no such file and ignores `backend` blocks entirely (`terraform-orphans-after-state-rm` keeps its block as text).
+
+- The file is a view of the default workspace's state, byte for byte what `terraform state pull` prints. It is written at mount and after every `terraform` command run in the lab directory. After a command that changed the state, `terraform.tfstate.backup` holds the state as it was before that command (the file real Terraform keeps). Editing the file changes nothing: it is overwritten at the next terraform command and never read back. Other workspaces are not on disk. The file is not part of the incident's committed files, so `git checkout terraform.tfstate` does not restore it.
+- A lab that starts with a `backend "TYPE" { ... }` block and `initialized` true starts with that backend already recorded: the state is remote and there is no `terraform.tfstate`. A lab that starts without one holds its state in the file. `initialized: false` records nothing.
+- `terraform init` compares the root module's `terraform { backend ... }` block (type and arguments) with the one it last recorded. Until `init` runs again, `plan`, `apply`, `destroy`, `refresh`, `import`, `state`, `output`, `show`, `taint`, `untaint`, `force-unlock`, `providers` and `workspace` (except `show`) fail with `Backend initialization required, please run "terraform init"` and the reason (`Initial configuration of the requested backend "s3"`, `Unsetting the previously set backend "s3"`, or, for a changed block, `Backend configuration block has changed` / `Backend type changed from "X" to "Y"`). `validate` and `fmt` do not need it.
+- A first backend block (the state is in the file): `init` asks `Do you want to copy existing state to the new backend?` (dialog, or `echo yes | terraform init`, or `-force-copy` to skip it). `yes` copies the state with its serial and lineage and records `init-migrate TYPE` in the history; `terraform.tfstate` is then emptied (a zero-byte file) and `terraform.tfstate.backup` keeps the old state, which still holds every secret. Any other answer starts with an empty state, but the local file is cleared the same way. This is real Terraform's behaviour for a first configuration, whichever of `-migrate-state` or `-reconfigure` is given.
+- A backend already recorded and then changed or removed: plain `init` fails with `Error: Backend configuration changed` and names `-migrate-state` and `-reconfigure`. `-migrate-state` (or `-force-copy`) prints the change, asks the same copy question and copies the state; removing the block copies it back into `terraform.tfstate` (`Successfully unset the backend`). `-reconfigure` records the new backend without copying: the state is empty, so `plan` wants to create everything, and the local files are untouched. Both flags together are an `Invalid init options` error.
+- `init -migrate-state` with no change in the backend prints nothing extra, as in real Terraform. A `lock:` on the lab is untouched by all of this.
+- Limits: every backend type is treated like a remote one (a `local` block with another path is detected as a change, but its file is not moved); the remote state is not on disk anywhere; `.terraform/terraform.tfstate` (the record of the backend) is kept by the lab, not as a file.
+
 ### State locks
 
 `lock` makes the state look locked by someone else, the way a cancelled CI run leaves it. Locks are authored only: a failed or cancelled apply in the game never leaves one behind.
@@ -849,19 +969,26 @@ Leaves (one key each):
 |---|---|
 | `plan_clean: true` | A real refresh and plan, run now on the files on disk with variables resolved as `terraform plan` does (including exported `TF_VAR_*` from the saved shell environment), shows no changes and no diagnostics. It ignores locks. False when the configuration cannot be planned (syntax error, missing variable, no config). |
 | `plan_has: { no_destroy: [ADDR, …] }` | That same plan would not destroy or replace any listed address. Same plan caveats as `plan_clean`; false if it cannot be planned. |
+| `plan_has: { no_change: [ADDR, …] }` | That same plan would not update, replace or destroy any listed address (a create is not a change). Key-less and module addresses cover instances and module children. False if it cannot be planned or has diagnostics. Both keys may be given; `plan_has` needs at least one. |
 | `state_has: ADDR` / `state_lacks: ADDR` | The address is (or is not) in state. |
 | `lock_free: true` | No state lock is held. |
 | `lock_bypassed: true` | Some command ran with `-lock=false` while someone else's lock was held and left the marker: an apply or destroy step, `state mv`, `state rm`, `taint`, `untaint`, `import` or `workspace new`/`delete`. It stays true after a later `force-unlock`. Reads (`plan`, `show`, `state list`) and commands that failed record nothing. Use it when a trap should not have to list addresses. |
 | `reality_has: { type, id, attr?, equals? }` | The cloud holds that object. With `attr` it must have the attribute, and with `equals` the value must match. `type` must be a supported resource type. |
 | `reality_lacks: { type, id }` | The cloud no longer holds it. |
+| `sg_rule: { group_id, direction, port, protocol?, exact?, source_group_id?, cidr? }` | Some rule on the security group `group_id` (an id in `state` or `cloud.add`), `direction` `ingress` or `egress`, covers `port`. It reads the group's inline rules and the separate rule resources (`aws_vpc_security_group_{ingress,egress}_rule`, `aws_security_group_rule`) together. `port` counts when it falls inside the rule's range (and an all-protocols rule covers every port) unless `exact: true`, which wants a rule for exactly that one port and protocol. `protocol` defaults to `tcp`; `6`, `17`, `1`, `58` and `all`/`-1` are normalised. `source_group_id` (another group's id) or `cidr` narrows the peer; `cidr: "*"` means any CIDR (IPv4 or IPv6), any other value must match exactly; give one, not both. With neither, any peer counts. Wrap in `not` to require that no such rule exists. |
+| `sg_only: { group_id, direction, port?, protocol?, cidrs?, source_group_ids? }` | EVERY rule on the group in that direction (only the rules covering `port` when it is given, else all of them) comes from one of the listed CIDRs or source groups: no wider range, no extra source, no world-open rule. Prefix-list peers never pass. True for a known group with no rules (pair it with `sg_rule` to require the one you want); false for an unknown group. At least one of `cidrs` / `source_group_ids` is required, and the groups must exist in `state` or `cloud.add`. |
+| `backend: { type, require?, any_of? }` | The backend `terraform init` last recorded (needs `state_file: true`; an init that failed or a declared-but-never-initialised block records nothing) has this `type`, and its own literal attributes (nested blocks and non-literal expressions are ignored, so a setting in a comment, a tag or a heredoc never counts) satisfy every entry of `require` (a value, or `'*'` for a non-empty string) and at least one map in `any_of`. Two `backend` blocks anywhere in the root module are `Duplicate backend configuration` at `init` and every backend command, as in Terraform. |
 | `applied: { op, address, lock_bypassed? }` | An apply did `op` (`create`, `update`, `delete`, `import`, `forget`) to the address at some point in this lab. It survives a recreate, so it catches "destroyed at some point". Only apply steps count (including `import` and `removed` blocks); the CLI's `terraform import` and `terraform state rm` leave their own history lines (`import ADDR`, `state-rm ADDR`), so `state-rm` never matches `applied`, but an `applied: { op: import }` leaf also matches a CLI `terraform import` of that address. The history is not per workspace: an apply in any workspace counts. With `lock_bypassed: true` only a step applied with `-lock=false` while someone else's lock was held counts; without it, bypassed steps count like any other. |
 | `file_contains: { path, matches }` | The file at the absolute `path` matches the regex (multiline). |
+| `config_matches: { dir, matches }` | Some `.tf` file directly in the absolute `dir` matches the regex (multiline) AFTER its comments (`#`, `//`, `/* */`, outside double-quoted strings) are removed, so a commented-out setting or a trailing `# encrypt = true` is not seen. Use it instead of `file_contains` when the setting may live in any file (a `backend` block in `versions.tf`, `main.tf` or `backend.tf`). Anchor settings per line (`^[ \t]*encrypt[ \t]*=[ \t]*true[ \t]*$`) and keep a block's checks in one regex with lookaheads such as `backend\s+"s3"\s*\{(?=[^}]*?^[ \t]*encrypt...)` so they cannot be satisfied by different blocks. Keep regexes linear (no nested quantifiers). |
 
 ```yaml
 done_when: { state_lacks: aws_instance.web }
 done_when: { reality_has: { type: aws_s3_bucket, id: logs, attr: versioning, equals: true } }
 done_when: { plan_has: { no_destroy: [aws_db_instance.orders] } }
+done_when: { plan_has: { no_change: [aws_security_group.payments] } }
 done_when: { lock_free: true }
+done_when: { all: [{ sg_rule: { group_id: sg-0app, direction: ingress, port: 8080, exact: true, source_group_id: sg-0web } }, { not: { sg_rule: { group_id: sg-0app, direction: ingress, port: 8080, cidr: "*" } } }] }
 done_when: { applied: { op: create, address: aws_instance.reconciler, lock_bypassed: true } }
 done_when: { file_contains: { path: /home/you/infra/db.tf, matches: 'ignore_changes\s*=\s*\[[^\]]*storage_encrypted' } }
 ```

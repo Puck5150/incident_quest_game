@@ -215,8 +215,22 @@ stages:
       - id: raise-timeout
         label: "aws lambda update-function-configuration --function-name order-export --timeout 30"
         kind: fix
-        match_regex: "^aws lambda update-function-configuration --function-name order-export --timeout ([1-9][0-9]|[1-8][0-9]{2}|900)$"
-        feedback: "The function now has time to run the query and write the file. The query takes about 8 seconds; a timeout with headroom, well under the 900-second maximum, keeps a slow night from failing."
+        match_regex: "^aws lambda update-function-configuration --function-name order-export --timeout (3[0-9]|[4-9][0-9]|[12][0-9]{2}|300)$"
+        feedback: "The function now has time to run the query and write the file. The query takes about 8 seconds; a timeout of 30 to 300 seconds gives a slow night room to finish while a hung connection is still cut off in minutes, not at the 900-second maximum."
+      - id: timeout-too-short
+        label: "Raise the timeout only a little (under 30 seconds, for example 10)"
+        kind: wrong
+        match_regex: "^aws lambda update-function-configuration --function-name order-export --timeout ([0-9]|[12][0-9])$"
+        feedback: "The query takes about 8 seconds and the connection time comes on top. A 10-second timeout passes tonight and fails the first slow night, silently, as before. Leave real headroom: at least 30 seconds."
+      - id: timeout-too-long
+        label: "Set the timeout to the 900-second maximum (or anything over 300)"
+        kind: wrong
+        match_regex: "^aws lambda update-function-configuration --function-name order-export --timeout (30[1-9]|3[1-9][0-9]|[4-8][0-9]{2}|900)$"
+        feedback: "Nothing in this job should take minutes. A huge timeout lets a hung connection or runaway query bill for a quarter of an hour every night before anyone notices. Size it from the measured query time with headroom."
+      - id: alarm-export-failure
+        label: "Alarm on the function's Errors (and Duration near the timeout), and add a check that fails if no CSV appears in the bucket by 03:00"
+        kind: fix
+        feedback: "This job failed silently for four nights because nothing looked at it. An Errors alarm catches a crash, a Duration alarm warns before the timeout bites, and a missing-file check catches every other way the export can quietly not happen."
       - id: more-memory
         label: "Raise the function's memory to 1024 MB"
         kind: wrong
@@ -230,7 +244,7 @@ stages:
         kind: destructive
         feedback: "The orders API loses its database during the reboot, and the query is just as slow afterwards: it reads a full day of orders."
     solution_paths:
-      - [raise-timeout]
+      - [raise-timeout, alarm-export-failure]
     key_evidence: [task-timeout, query-8s, fn-config]
     evidence_labels:
       task-timeout: "The function connects, then Lambda stops it: \"Task timed out after 3.00 seconds\""
@@ -239,7 +253,7 @@ stages:
     hints:
       nudge: "It connects now. How long does the work take, and how long is the function allowed to run?"
       direction: "Compare the query's duration in the database log with the function's timeout setting."
-      answer: "The query takes about 8 seconds and the function's timeout is the default 3. Raise the timeout (for example to 30 seconds)."
+      answer: "The query takes about 8 seconds and the function's timeout is the default 3. Raise the timeout to 30 to 300 seconds (not 10, not 900), and alarm on Errors and on a missing CSV, because this failed silently for four nights."
     debrief:
       root_cause: |
         With the database reachable, the function connected and ran the
@@ -252,4 +266,5 @@ stages:
         - "Read the logs again: it connects now, then times out at 3.00 seconds."
         - "Find how long the work takes: the database logged the query at about 7.8 seconds."
         - "Check the function's timeout: 3 seconds, the default."
-        - "Raise the timeout with headroom, then confirm the CSV arrives."
+        - "Raise the timeout with headroom (30 to 300 seconds), then confirm the CSV arrives."
+        - "Alarm on the function's Errors and Duration, and on the CSV not appearing, so a silent failure is caught the first night."

@@ -102,7 +102,7 @@ hypotheses:
 
 actions:
   - id: max-prepared
-    label: "Set max_prepared_statements = 200 in pgbouncer.ini and restart PgBouncer, so it tracks protocol-level prepared statements across server connections"
+    label: "Set max_prepared_statements = 200 in pgbouncer.ini and apply it with RELOAD (a full restart drops every client connection; if a restart turns out to be needed, roll it instance by instance), so it tracks protocol-level prepared statements across server connections"
     kind: fix
     feedback: "PgBouncer now prepares each statement on whichever server connection runs it. The driver's prepared statements work in transaction mode."
   - id: driver-no-prepare
@@ -136,7 +136,7 @@ red_herrings:
 hints:
   nudge: "Same page, sometimes fine, sometimes \"prepared statement does not exist\". What changed between the app and the database?"
   direction: "In transaction pooling, consecutive transactions can run on different server connections. How does PgBouncer handle prepared statements?"
-  answer: "max_prepared_statements is 0. Set it (e.g. 200) and restart PgBouncer, or turn off server-side prepares in the driver."
+  answer: "max_prepared_statements is 0. Set it (e.g. 200) and apply it without dropping clients if you can, or turn off server-side prepares in the driver."
 
 analogy:
   title: "A new switchboard between you and the clerks"
@@ -291,7 +291,7 @@ stages:
     terminal:
       commands:
         - match: "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\""
-          when_actions: [void-and-index]
+          when_actions: [void-and-refund, unique-index]
           output: |
             0
         - match: "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\""
@@ -313,20 +313,28 @@ stages:
         text: "Add the unique index first and it will reject the duplicates."
         feedback: "Creating a unique index fails while duplicate keys exist (\"could not create unique index\"). Void the duplicates first, and make the index partial so voided rows don't count."
     actions:
-      - id: void-and-index
-        label: "Mark the later invoice in each duplicate pair void, refund the 9 paid ones, then CREATE UNIQUE INDEX ... ON invoices (customer_id, period) WHERE status <> 'void'"
+      - id: void-and-refund
+        label: "Mark the later invoice in each duplicate pair void (keep the rows), refund the 9 paid ones through the payment processor with an audit record, and tell the affected customers"
         kind: fix
-        feedback: "One live invoice per customer per period, the payments put right, and the database now refuses a second one, whatever the job does."
+        feedback: "One live invoice per customer per period, the 9 payments reversed through the processor (not by editing rows) so books and bank agree, and customers hear it from you first."
+      - id: unique-now
+        label: "CREATE UNIQUE INDEX ... ON invoices (customer_id, period) (plain, or without the WHERE clause)"
+        kind: wrong
+        example: "psql -d billing -c \"CREATE UNIQUE INDEX ON invoices (customer_id, period)\""  # the label is bare SQL; at this shell prompt the player types it through psql
+        match_regex: "^(?:psql -d billing (?:-c|-Atc) \"[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee]))|[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee])))"
+        feedback: "A plain CREATE UNIQUE INDEX blocks writes to invoices for the whole build, on the busiest invoicing day. Without WHERE status <> 'void' it would also forbid keeping voided duplicates as records, and it fails while duplicates exist. Use CONCURRENTLY, partial."
+      - id: unique-index
+        label: "CREATE UNIQUE INDEX CONCURRENTLY ON invoices (customer_id, period) WHERE status <> 'void'"
+        kind: fix
+        example: "psql -d billing -c \"CREATE UNIQUE INDEX CONCURRENTLY ON invoices (customer_id, period) WHERE status <> 'void'\""  # the label is the bare SQL; at this shell prompt the player types it through psql
+        match_regex: "^(?:psql -d billing (?:-c|-Atc) \"[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee] )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] (?:\\(status (?:<>|!=) 'void'\\)|status (?:<>|!=) 'void') ?;?\"|[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee] )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] (?:\\(status (?:<>|!=) 'void'\\)|status (?:<>|!=) 'void') ?;?)$"
+        feedback: "The database now refuses a second live invoice for a customer and period, whatever the job does, and CONCURRENTLY let invoicing keep running during the build. If a concurrent build ever fails it leaves an INVALID index: drop it and retry."
       - id: delete-dups
         label: "DELETE the later invoice of each pair"
         kind: destructive
         feedback: "Destroys invoices customers have received, and 9 of them are attached to payments. Void and refund instead."
-      - id: unique-now
-        label: "CREATE UNIQUE INDEX ON invoices (customer_id, period)"
-        kind: wrong
-        feedback: "It fails while 214 duplicates exist, and without WHERE status <> 'void' it would also forbid keeping voided duplicates as records."
     solution_paths:
-      - [void-and-index]
+      - [void-and-refund, unique-index]
     key_evidence: [dup-214, charged-9]
     evidence_labels:
       dup-214: "214 customers have two live September invoices"
@@ -334,7 +342,7 @@ stages:
     hints:
       nudge: "Which customers got two invoices, and has money moved on any of them?"
       direction: "Group September's non-void invoices by customer, and join the duplicates to payments."
-      answer: "Void the later of each pair, refund the 9 paid ones, then add a partial unique index on (customer_id, period) WHERE status <> 'void'."
+      answer: "Void the later of each pair, refund the 9 paid ones through the processor, then CREATE UNIQUE INDEX CONCURRENTLY a partial unique index on (customer_id, period) WHERE status <> 'void'."
     debrief:
       root_cause: |
         Two workers ran the batch together several times since last night,
@@ -347,4 +355,5 @@ stages:
         - "Count customers with two live September invoices: 214."
         - "Find which duplicates were paid: 9."
         - "Void the later of each pair and refund the paid ones."
-        - "Add a partial unique index, then re-count: 0."
+        - "Add the partial unique index with CREATE UNIQUE INDEX CONCURRENTLY (check it is not INVALID), then re-count: 0."
+        - "Alert on duplicate live invoices so the next one is caught in minutes."

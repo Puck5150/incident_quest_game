@@ -97,8 +97,12 @@ actions:
   - id: link-zone
     label: "az network private-dns link vnet create -g rg-net -z privatelink.blob.core.windows.net -n link-app -v <vnet-app's resource ID> -e false"
     kind: fix
-    match_regex: "^az network private-dns link vnet create (-g|--resource-group) rg-net (-z|--zone-name) privatelink\\.blob\\.core\\.windows\\.net (-n|--name) link-app (-v|--virtual-network) \\S+ (-e|--registration-enabled) false$"
+    match_regex: "^az network private-dns link vnet create (-g|--resource-group) rg-net (-z|--zone-name) privatelink\\.blob\\.core\\.windows\\.net (-n|--name) link-app (-v|--virtual-network) ([A-Za-z0-9._/-]+/virtualNetworks/)?vnet-app (-e|--registration-enabled) false$"
     feedback: "With the zone linked to vnet-app, the name resolves to 10.0.5.4 there too, so the app reaches the storage account privately over the peering. Public access can stay disabled."
+  - id: zone-in-iac
+    label: "Put the zone's virtual network links in IaC (or the central DNS design) so every network that needs private resolution is linked by code"
+    kind: fix
+    feedback: "The hand-made link fixes today; the next network added to the design repeats the outage unless the zone and its links are declared with the private endpoint."
   - id: reenable-public
     label: "Turn public network access back on for stshopdocs"
     kind: wrong
@@ -113,7 +117,7 @@ actions:
     feedback: "Now vnet-hub resolves the public endpoint too, which is disabled, so the batch jobs fail as well. Everything that used the private endpoint loses storage."
 
 solution_paths:
-  - [link-zone]
+  - [link-zone, zone-in-iac]
 
 key_evidence: [resolves-public, hub-only-link, public-disabled]
 

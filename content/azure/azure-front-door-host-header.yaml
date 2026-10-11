@@ -105,10 +105,18 @@ hypotheses:
 
 actions:
   - id: custom-domain
-    label: "Add www.acme.example as a custom domain on shop-web (verify it with the asuid TXT record; DNS for www keeps pointing at Front Door), and bind a certificate imported from Key Vault"
+    label: "Add www.acme.example as a custom domain on shop-web (verify it with the asuid TXT record; DNS for www keeps pointing at Front Door)"
     kind: fix
     match_regex: "^az webapp config hostname add --webapp-name shop-web (-g|--resource-group) rg-web --hostname www\\.acme\\.example$"
-    feedback: "App Service now accepts requests for www.acme.example, so the host name is preserved end to end, which Microsoft recommends behind a reverse proxy: sign-in redirects and cookies keep using the real domain. The free App Service managed certificate can't be used here, because DNS points at Front Door, not App Service."
+    feedback: "App Service now accepts requests for www.acme.example, so the host name is preserved end to end, which Microsoft recommends behind a reverse proxy: sign-in redirects and cookies keep using the real domain. The host name is in, but Front Door's HTTPS connection to the origin still needs a certificate for it."
+  - id: bind-certificate
+    label: "Import the www.acme.example certificate from Key Vault into shop-web and bind it to the custom domain (SNI SSL)"
+    kind: fix
+    feedback: "Front Door connects to the origin over HTTPS and validates the certificate against the host name it sends, so the binding is required. The free App Service managed certificate can't be used here, because DNS points at Front Door, not App Service."
+  - id: lock-origin
+    label: "Restrict shop-web so only this Front Door can reach it: access restriction on the AzureFrontDoor.Backend service tag plus an X-Azure-FDID header check for the fd-shop profile"
+    kind: fix
+    feedback: "Until the origin is locked down, anyone who knows shop-web.azurewebsites.net can go straight to the app and bypass the WAF you just added. Allowing only Front Door's service tag with your profile's ID closes that path."
   - id: fix-bicep
     label: "Put the custom domain binding and certificate for shop-web in Bicep, next to the Front Door origin"
     kind: fix
@@ -128,7 +136,7 @@ actions:
     feedback: "The shop is now on the internet without the protection you just added, and nothing changes: the 404 comes from App Service. A WAF block would be a 403."
 
 solution_paths:
-  - [custom-domain, fix-bicep]
+  - [custom-domain, bind-certificate, lock-origin, fix-bicep]
 
 key_evidence: [users-404, host-404, header-unset, no-custom-domain]
 
@@ -141,7 +149,7 @@ evidence_labels:
 hints:
   nudge: "The app works on one host name and 404s on another. What does App Service do with a host name it doesn't know?"
   direction: "Check which host header Front Door sends to the origin, and which host names shop-web is configured for."
-  answer: "originHostHeader isn't set, so Front Door forwards Host: www.acme.example, and shop-web has no such custom domain, so it returns 404. Add www.acme.example as a custom domain on shop-web (TXT verification, imported certificate) rather than overriding the header, which would break sign-in."
+  answer: "originHostHeader isn't set, so Front Door forwards Host: www.acme.example, and shop-web has no such custom domain, so it returns 404. Add www.acme.example as a custom domain on shop-web (TXT verification) with its certificate bound, rather than overriding the header, which would break sign-in, then lock the origin to Front Door so the WAF cannot be bypassed."
 
 analogy:
   title: "The receptionist who only knows the old company name"
@@ -167,7 +175,8 @@ debrief:
     - "Reproduce outside Front Door: the app answers its default name and 404s for Host: www.acme.example."
     - "Check the origin's host header: not set, so the visitor's host name is forwarded."
     - "Check the app's host names: only azurewebsites.net."
-    - "Add www.acme.example as a custom domain on the app (TXT verification), with an imported certificate."
+    - "Add www.acme.example as a custom domain on the app (TXT verification), and bind an imported certificate."
+    - "Restrict the origin to Front Door (service tag access restriction plus the X-Azure-FDID check) so the WAF cannot be bypassed."
     - "Capture both sides in Bicep."
   real_world: |
     Host-name mismatches behind reverse proxies (Front Door, Application

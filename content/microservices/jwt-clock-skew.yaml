@@ -57,6 +57,7 @@ logs:
   - name: "maintenance log (last week)"
     lines: |
       wishlist-01: kernel update, reboot. chrony disabled during the update to avoid a time jump; re-enable after.
+      (same procedure used on cart-02, search-01 and notify-01 in the same maintenance window)
 
 hypotheses:
   - id: clock-behind
@@ -76,8 +77,16 @@ actions:
   - id: fix-ntp
     label: "Re-enable and start chrony on wishlist-01 (systemctl enable --now chrony), and confirm the clock is synchronised"
     kind: fix
-    match_regex: "^ssh wishlist-01 (sudo )?systemctl enable --now chrony(\\.service)?$"
+    match_regex: "^ssh wishlist-01 (sudo )?systemctl (?:enable --now|--now enable) chronyd?(?:\\.service)?$"
     feedback: "chrony brings wishlist-01's clock back in line, so new tokens are valid there as soon as they're issued, like everywhere else."
+  - id: check-fleet
+    label: "Check every other host from that maintenance window (cart-02, search-01, notify-01) for chrony and a synchronised clock, and re-enable it where it is off"
+    kind: fix
+    feedback: "The same procedure ran on four hosts and the re-enable step was easy to forget on any of them. Fixing one that happened to fail first leaves the others to break the same way."
+  - id: clock-alert
+    label: "Alert on unsynchronised clocks (for example node_timex_sync_status = 0, or clock offset above a second) and add the re-enable step to the maintenance checklist"
+    kind: fix
+    feedback: "The clock drifted for days with nothing watching it. An alert finds it in minutes, and the checklist stops the cause."
   - id: big-leeway
     label: "Raise wishlist-service's leeway to 10 minutes"
     kind: wrong
@@ -92,7 +101,7 @@ actions:
     feedback: "Right for now, drifting again tomorrow: without time synchronisation the clock wanders. Turn chrony back on."
 
 solution_paths:
-  - [fix-ntp]
+  - [fix-ntp, check-fleet, clock-alert]
 
 key_evidence: [nbf-reject, not-synced, chrony-off]
 
@@ -104,7 +113,7 @@ evidence_labels:
 hints:
   nudge: "\"Not yet valid\" compares the token's time with whose clock?"
   direction: "Compare wishlist-01's time with the real time, and check whether it's keeping time automatically."
-  answer: "chrony was left off after maintenance and wishlist-01's clock is over 3 minutes slow. Re-enable chrony."
+  answer: "chrony was left off after maintenance and wishlist-01's clock is over 3 minutes slow. Re-enable chrony, check the other hosts patched in the same window, and alert on unsynchronised clocks."
 
 analogy:
   title: "The guard with the slow watch"
@@ -127,6 +136,7 @@ debrief:
     - "Compare wishlist-01's clock with real time: 3m17s behind, not synchronised."
     - "Find why: chrony was disabled for maintenance and left off."
     - "Re-enable chrony and confirm the clock is synchronised."
+    - "Check cart-02, search-01 and notify-01 from the same window, then add a clock-sync alert and a re-enable step to the maintenance checklist."
   real_world: |
     Time is a dependency: tokens, certificates, logs and distributed locks
     all assume synchronised clocks. Alert on unsynchronised clocks, and keep

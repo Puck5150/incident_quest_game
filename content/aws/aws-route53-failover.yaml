@@ -100,19 +100,61 @@ terminal:
       output: |
         200
     - match: "aws ec2 describe-security-groups --group-ids sg-0usw2alb --query SecurityGroups[0].IpPermissions"
+      when_actions: [allow-health-checkers, restore-standby-ingress]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+              "IpRanges": [ { "CidrIp": "0.0.0.0/0", "Description": "public API, same as the primary (CHG-2371, WAF attached)" } ],
+              "PrefixListIds": [ { "PrefixListId": "pl-0r53hc", "Description": "Route 53 health checkers" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0usw2alb --query SecurityGroups[0].IpPermissions"
       when_actions: [allow-health-checkers]
+      evidence: sg-office-only
       output: |
         [
             { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
               "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ],
               "PrefixListIds": [ { "PrefixListId": "pl-0r53hc", "Description": "Route 53 health checkers" } ] }
         ]
+    - match: "curl -m 5 https://api.shop.example.com/healthz"
+      when_actions: [allow-health-checkers, restore-standby-ingress]
+      output: |
+        200
+    - match: "curl -m 5 https://api.shop.example.com/healthz"
+      when_actions: [allow-health-checkers]
+      output: |
+        curl: (28) Connection timed out after 5001 milliseconds
+        (run from a customer network, not the office VPN: the name now resolves to us-west-2, whose security group still drops you)
+    - match: "curl -m 5 https://api.shop.example.com/healthz"
+      output: |
+        503
     - match: "aws ec2 describe-security-groups --group-ids sg-0usw2alb --query SecurityGroups[0].IpPermissions"
       evidence: sg-office-only
       output: |
         [
             { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
               "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] }
+        ]
+    - match: "curl https://ip-ranges.amazonaws.com/ip-ranges.json"
+      output: |
+        (excerpt: the ROUTE53_HEALTHCHECKS entries of the full file)
+        { "ip_prefix": "15.177.0.0/18", "region": "GLOBAL", "service": "ROUTE53_HEALTHCHECKS" }
+        { "ip_prefix": "54.239.98.0/24", "region": "GLOBAL", "service": "ROUTE53_HEALTHCHECKS" }
+        { "ip_prefix": "54.240.217.160/29", "region": "GLOBAL", "service": "ROUTE53_HEALTHCHECKS" }
+    - match: "aws cloudwatch describe-alarms"
+      when_actions: [alarm-standby-hc]
+      output: |
+        api-primary-unhealthy  HealthCheckStatus hc-use1  < 1  -> pager
+        api-standby-unhealthy  HealthCheckStatus hc-usw2  < 1  -> pager
+    - match: "aws cloudwatch describe-alarms"
+      output: |
+        api-primary-unhealthy  HealthCheckStatus hc-use1  < 1  -> pager
+    - match: "aws ec2 describe-security-groups --group-ids sg-0use1alb --query SecurityGroups[0].IpPermissions"
+      evidence: primary-sg
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+              "IpRanges": [ { "CidrIp": "0.0.0.0/0", "Description": "public API (AWS WAF web ACL attached)" } ] }
         ]
     - match: "aws route53 list-resource-record-sets --hosted-zone-id Z04SHOPEXAMPLE"
       when_actions: [lower-ttl]
@@ -140,6 +182,11 @@ logs:
     lines: |
       hc-use1: alarm "api-primary-unhealthy" -> pager (fired 13:06)
       hc-usw2: (no alarm)
+  - name: "change process: standby network changes"
+    lines: |
+      CHG-2310 (Dana) is an approved change. Widening or reverting a security-group restriction needs a new change with the
+      owner's approval, applied through the IaC pipeline. An emergency CLI edit is allowed only if narrow (no wider than
+      the need) and must be backfilled into the IaC the same day; otherwise the next apply overwrites it.
 
 hypotheses:
   - id: standby-unhealthy-last-resort
@@ -159,10 +206,36 @@ hypotheses:
     feedback: "Route 53 only marks an endpoint unhealthy when 18% or fewer of its checkers report it healthy, which protects against partial isolation. Here every checker region times out, and has since 09-17."
 
 actions:
+  - id: open-all-ports
+    label: "Open the standby ALB's security group to 0.0.0.0/0 on every port"
+    kind: destructive
+    match_regex: "^(sudo )?aws ec2 (authorize-security-group-(ingress|egress)|modify-security-group-rules)(?=.*--group-id[ =][\"']?sg-0usw2alb[\"']?( |$))(?=.*(0\\.0\\.0\\.0/0|::/0))(?=.*( --protocol[ =][\"']?(-1|all)|  ?--port[ =][\"']?(?!443[\"']?( |$))|(From|To)Port[\\\"']?[=:] ?(?!443(?![0-9]))|IpProtocol[\\\"']?[=:] ?[\\\"']?(-1|all))).*$"
+    feedback: "Everything works and everything is exposed: SSH-style management ports, debug ports, anything that ever listens. A load balancer should accept 443 and nothing else. Failover needed two narrow rules, not an open door."
+  - id: open-standby-direct
+    label: "Add 0.0.0.0/0 on 443 to the standby security group straight from the CLI"
+    kind: wrong
+    match_regex: "^(sudo )?aws ec2 (authorize-security-group-(ingress|egress)|modify-security-group-rules)(?=.*--group-id[ =][\"']?sg-0usw2alb[\"']?( |$))(?=.*(0\\.0\\.0\\.0/0|::/0)).*$"
+    feedback: "It unblocks checkers and customers in one stroke, but it silently reverts Dana's approved change, adds drift the next IaC apply will undo (and fail over to a dead standby again), and skips the owner's review. Do the health-checker rule narrowly, and put real-user access through a change."
+  - id: remove-vpn-rule
+    label: "Delete the office-VPN-only rule from the standby security group"
+    kind: wrong
+    match_regex: "^(sudo )?aws ec2 revoke-security-group-ingress(?=.*--group-id[ =][\"']?sg-0usw2alb[\"']?( |$)).*$"
+    feedback: "Removing a security control nobody approved the removal of isn't a fix, and it would leave the group with no way for checkers or customers in. Add what is missing through a change, don't tear down what is there."
   - id: allow-health-checkers
-    label: "Allow inbound 443 from the Route 53 health checker IP ranges (ROUTE53_HEALTHCHECKS) in the us-west-2 load balancer's security group"
+    label: "Allow inbound 443 only, from the Route 53 health checker ranges (the AWS-managed prefix list, or the ROUTE53_HEALTHCHECKS CIDRs from ip-ranges.json), in the us-west-2 load balancer's security group"
     kind: fix
-    feedback: "The checkers reach /healthz, the standby turns healthy after its failure threshold, and with only the primary unhealthy Route 53 starts answering with us-west-2. Resolvers that already cached the old answer keep it until their TTL runs out."
+    # Typed, one command per line, parsed as a flag grammar (allow-list: --group-id --protocol --port --cidr --ip-permissions --region us-west-2 --profile --output --no-cli-pager; each once; space or = forms; bare or quoted exact values): the lab's exact prefix list (pl-0r53hc) or one CIDR listed in ip-ranges.json (ROUTE53_HEALTHCHECKS), tcp, 443 only.
+    # World-open ranges, a second range, shell operators or extra ports are rejected; wrong/destructive actions are listed (and matched) first.
+    match_regex: "^(sudo )?aws ec2 authorize-security-group-ingress(?!.*--group-id[ =].*--group-id[ =])(?!.*--region[ =].*--region[ =])(?!.*--profile[ =].*--profile[ =])(?!.*--output[ =].*--output[ =])(?!.*--no-cli-pager.*--no-cli-pager)(?:(?=.* --group-id[ =])(?=.* --protocol[ =])(?=.* --port[ =])(?=.* --cidr[ =])(?!.*--protocol[ =].*--protocol[ =])(?!.*--port[ =].*--port[ =])(?!.*--cidr[ =].*--cidr[ =])(( --group-id[ =](sg-0usw2alb|\"(sg-0usw2alb)\"|'(sg-0usw2alb)')| --region[ =](us-west-2|\"(us-west-2)\"|'(us-west-2)')| --profile[ =]([A-Za-z0-9_-]+|\"([A-Za-z0-9_-]+)\"|'([A-Za-z0-9_-]+)')| --output[ =](json|text|table|\"(json|text|table)\"|'(json|text|table)')| --no-cli-pager)| --protocol[ =](tcp|6|\"(tcp|6)\"|'(tcp|6)')| --port[ =](443|\"(443)\"|'(443)')| --cidr[ =](15\\.177\\.0\\.0/18|54\\.239\\.98\\.0/24|54\\.240\\.217\\.160/29|\"(15\\.177\\.0\\.0/18|54\\.239\\.98\\.0/24|54\\.240\\.217\\.160/29)\"|'(15\\.177\\.0\\.0/18|54\\.239\\.98\\.0/24|54\\.240\\.217\\.160/29)'))+$|(?=.* --group-id[ =])(?=.* --ip-permissions[ =])(?!.*--ip-permissions[ =].*--ip-permissions[ =])(?=.*FromPort[\\\"']?[=:] ?443(?![0-9]))(?=.*ToPort[\\\"']?[=:] ?443(?![0-9]))(?!.*(From|To)Port[\\\"']?[=:] ?(?!443(?![0-9])))(?=.*IpProtocol[\\\"']?[=:] ?[\\\"']?(tcp|6)[\\\"',} ])(?!.*IpProtocol[\\\"']?[=:] ?(?![\\\"']?(tcp|6)[\\\"',} ]))(?=.*PrefixListId[\\\"']?[=:] ?[\\\"']?pl-0r53hc[^0-9a-z])(?!.*pl-(?!0r53hc))(?!.*(0\\.0\\.0\\.0/0|::/0|IpRanges|Ipv6Ranges|UserIdGroupPairs))(( --group-id[ =](sg-0usw2alb|\"(sg-0usw2alb)\"|'(sg-0usw2alb)')| --region[ =](us-west-2|\"(us-west-2)\"|'(us-west-2)')| --profile[ =]([A-Za-z0-9_-]+|\"([A-Za-z0-9_-]+)\"|'([A-Za-z0-9_-]+)')| --output[ =](json|text|table|\"(json|text|table)\"|'(json|text|table)')| --no-cli-pager)| --ip-permissions[ =]('[^']*'|\"[^\"$`\\\\!]*\"|[A-Za-z0-9=,.:-]+))+$)"
+    feedback: "The checkers reach /healthz on 443 and nothing else, the standby turns healthy after its failure threshold, and with only the primary unhealthy Route 53 starts answering with us-west-2. Narrow is right: a prefix list or the published ranges, one port. A narrow emergency edit like this must be backfilled into the IaC the same day. But look at who else arrives at us-west-2 now: real customers, and the security group still drops them."
+  - id: restore-standby-ingress
+    label: "Raise a change to undo CHG-2310 for real users: give the standby ALB the primary's inbound rules and WAF web ACL, approved by its owner and applied through IaC"
+    kind: fix
+    feedback: "CHG-2310 assumed the standby serves no users, which is false the moment failover happens. Undoing a security restriction is a change for its owner to approve, not a quiet console edit, and it belongs in the IaC so the next apply doesn't revert it. The standby now matches the primary's exposure (public 443 behind the WAF), no wider, and customers get through."
+  - id: alarm-standby-hc
+    label: "Create a CloudWatch alarm on HealthCheckStatus for hc-usw2 (Route 53 metrics are in us-east-1) that pages like the primary's"
+    kind: fix
+    feedback: "The standby sat unhealthy for three weeks because nothing watched it. An alarm that pages on the standby's health check is the detection that was missing, so the next silent rot is caught the day it happens."
   - id: lower-ttl
     label: "Set the TTL on both failover records to 60 seconds"
     kind: fix
@@ -181,20 +254,21 @@ actions:
     feedback: "A record with no health check is always treated as healthy, so Route 53 sends everyone to the PRIMARY: us-east-1, which is down. You've turned a slow failover into no failover, now and next time."
 
 solution_paths:
-  - [allow-health-checkers, lower-ttl]
+  - [allow-health-checkers, restore-standby-ingress, alarm-standby-hc, lower-ttl]
 
-key_evidence: [still-primary, both-unhealthy, checker-timeouts, sg-office-only]
+key_evidence: [still-primary, both-unhealthy, checker-timeouts, sg-office-only, primary-sg]
 
 evidence_labels:
   still-primary: "A fresh lookup still returns the us-east-1 load balancer"
   both-unhealthy: "Both health checks are unhealthy; the standby's has been since before the outage"
   checker-timeouts: "Every health checker region times out connecting to the standby"
-  sg-office-only: "The standby's security group only allows the office VPN, not Route 53's health checkers"
+  sg-office-only: "The standby's security group only allows the office VPN, not Route 53's health checkers or real customers"
+  primary-sg: "The primary load balancer is public on 443 behind a WAF; the standby must match it for real users"
 
 hints:
   nudge: "Failover only works if Route 53 thinks the secondary is healthy. Does it?"
   direction: "Check both health checks' status, then why the standby's checks fail even though the app answers from the office. What does Route 53 do when every record is unhealthy?"
-  answer: "CHG-2310 restricted the standby's security group to the office VPN, so Route 53's checkers time out and hc-usw2 has been unhealthy since 09-17. With both records unhealthy, Route 53 treats all of them as healthy and returns the primary. Allow the health checker ranges, then cut the TTL to 60."
+  answer: "CHG-2310 restricted the standby's security group to the office VPN, so Route 53's checkers time out and hc-usw2 has been unhealthy since 09-17. With both records unhealthy, Route 53 treats all of them as healthy and returns the primary. Fix both halves. (1) Allow only the Route 53 health checker ranges (managed prefix list or published CIDRs) on 443. (2) Raise a change, approved by the owner and applied through IaC, giving the standby the primary's public 443 and WAF, because customers will land there and are still blocked. Then alarm on hc-usw2 and cut the TTL to 60. Never open it to 0.0.0.0/0 on all ports."
 
 analogy:
   title: "The spare key nobody could reach"
@@ -203,8 +277,11 @@ analogy:
     caretaker checks every day that it opens. Someone fenced it off "because
     nobody uses it", so the caretaker's checks kept failing and he stopped
     trusting either door. When the main door jammed, his rule for "both doors
-    look broken" was to keep sending everyone to the main one. Unfence the
-    backup, then make the signs update faster next time.
+    look broken" was to keep sending everyone to the main one. Opening
+    the gate to the caretaker alone lets Route 53 send the crowd there, but
+    the crowd still can't get in. Let the caretaker through, have the owner
+    approve reopening the entrance to the public as the main door is, wire
+    the backup door to the alarm, then make the signs update faster.
 
 debrief:
   root_cause: |
@@ -215,7 +292,9 @@ debrief:
     us-east-1 started failing at 13:05, both records were unhealthy. To avoid
     making failures worse, Route 53 then treats every record as healthy (its
     mode of last resort), so it kept answering with the primary. On top of
-    that, CHG-1980 had raised the records' TTL to 3600 seconds, so even once
+    that, even after the checkers are let in, customers would still be sent to
+    a standby that drops them, since CHG-2310 also blocks real users; and no
+    alarm watches hc-usw2. CHG-1980 had raised the records' TTL to 3600 seconds, so even once
     failover works, resolvers that already have the old answer can keep it
     for up to an hour.
   ideal_path:
@@ -224,14 +303,19 @@ debrief:
     - "Ask why the standby fails when its app answers: every checker region times out, so it's network, not app."
     - "Find the block: the security group allows only the office VPN (CHG-2310)."
     - "Remember Route 53's last-resort rule: all unhealthy means all treated as healthy, so the primary wins."
-    - "Allow the health checker ranges, watch the standby turn healthy and dig switch to us-west-2."
-    - "Set the TTL to 60 seconds, and add an alarm on the standby's health check."
+    - "Allow only the Route 53 health checker ranges (AWS-managed prefix list or published ROUTE53_HEALTHCHECKS CIDRs) on 443 in the standby's security group; watch the standby turn healthy and dig switch to us-west-2."
+    - "Test from outside the office: real users time out against the standby, because CHG-2310 also blocks them. Compare with the primary's security group (public 443, WAF)."
+    - "Raise a change, approved by CHG-2310's owner and applied through IaC, giving the standby the primary's inbound rules and WAF. Don't hand-edit the group or open it to 0.0.0.0/0 on all ports; that is drift and exposure."
+    - "Add a CloudWatch alarm on hc-usw2's HealthCheckStatus (us-east-1 metrics) that pages like the primary's."
+    - "Set the TTL to 60 seconds, and schedule a failover drill."
   real_world: |
     A standby that's never exercised quietly stops working: a firewall rule,
     an expired certificate or a stale config, and nobody notices because it
     "serves no users". Alarm on the standby's health check as loudly as the
     primary's, keep TTLs on failover records short, and run failover drills
-    so the first real failover isn't the test.
+    so the first real failover isn't the test. And when a restriction like
+    "the standby serves no users" is made, it is wrong at the exact moment
+    failover happens: undo it through the change process, not a console edit.
 
 sources:
   - title: "Route 53: Values specific for failover records (TTL of 60 seconds or less with health checks)"

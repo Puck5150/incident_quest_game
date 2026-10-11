@@ -298,12 +298,14 @@ describe('terraform apply', () => {
     expect(bad.exitCode).toBe(1)
   })
 
-  it('keeps -refresh-only unavailable and rejects flags apply does not take', async () => {
-    for (const flag of ['-refresh-only']) {
-      const r = await world().run('apply', flag)
-      expect(r.stderr, flag).toContain('Error: Not available in this lab yet')
-      expect(r.exitCode).toBe(1)
-    }
+  it('runs -refresh-only (nothing to record here), refuses -destroy and rejects flags apply does not take', async () => {
+    const refresh = await world().run('apply', '-refresh-only')
+    expect(refresh.exitCode).toBe(0)
+    expect(refresh.stdout).toContain('No changes. Your infrastructure still matches the configuration.')
+    expect(refresh.stdout).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
+    const r = await world().run('apply', '-destroy')
+    expect(r.stderr).toContain('Error: Not available in this lab yet')
+    expect(r.exitCode).toBe(1)
     expect((await world().run('apply', '-out=x')).stderr).toContain('flag provided but not defined: -out')
     expect((await world().run('apply', '-input=false', '-no-color', '-lock=false', '-lock-timeout=5s', '-parallelism=2', '-compact-warnings', '-auto-approve')).exitCode).toBe(0)
   })

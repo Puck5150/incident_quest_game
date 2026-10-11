@@ -9,7 +9,10 @@
 import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
-import { filesOnDisk } from '../game/paths.ts'
+import { asciiLower, endpointPolicyVerdict, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
+import { filesOnDisk, typedMode } from '../game/paths.ts'
+import { hasUnsafeSyntax, looseAllowShellRegex, repeatsFlag } from '../game/typedLine.ts'
+import { fileFixed, gateOk } from '../game/fileFix.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
 import { isRegistrySource, normalizeRegistry, REGISTRY_SOURCE, registryDir } from '../game/terraform/layout.ts'
@@ -153,15 +156,55 @@ const regex = z
       ctx.addIssue({ code: 'custom', message: `invalid regex: ${(e as Error).message}`, input: r })
     }
   })
-const LeafSchema = z.union([
+export const LeafSchema = z.union([
   z.strictObject({ plan_clean: z.literal(true) }),
-  z.strictObject({ plan_has: z.strictObject({ no_destroy: z.array(tfAddrOrModule).min(1) }) }),
+  z.strictObject({
+    plan_has: z
+      .strictObject({ no_destroy: z.array(tfAddrOrModule).min(1).optional(), no_change: z.array(tfAddrOrModule).min(1).optional() })
+      .refine((p) => p.no_destroy !== undefined || p.no_change !== undefined, 'plan_has needs no_destroy or no_change'),
+  }),
   z.strictObject({ state_has: tfAddrOrModule }),
   z.strictObject({ state_lacks: tfAddrOrModule }),
   z.strictObject({ lock_free: z.literal(true) }),
   z.strictObject({ lock_bypassed: z.literal(true) }),
   z.strictObject({ reality_has: z.strictObject({ type: tfType, id: z.string().min(1), attr: z.string().min(1).optional(), equals: json.optional() }) }),
   z.strictObject({ reality_lacks: z.strictObject({ type: tfType, id: z.string().min(1) }) }),
+  // Some rule on the security group (inline or a separate rule resource) covers the port, from this peer group or CIDR ('*': any CIDR).
+  z.strictObject({
+    sg_rule: z.strictObject({
+      group_id: z.string().min(1),
+      direction: z.enum(['ingress', 'egress']),
+      port: z.number().int().min(0).max(65535),
+      protocol: z.string().min(1).optional(),
+      exact: z.literal(true).optional(),
+      source_group_id: z.string().min(1).optional(),
+      cidr: z.string().min(1).optional(),
+    }).refine((r) => r.cidr === undefined || r.source_group_id === undefined, 'give cidr or source_group_id, not both'),
+  }),
+  // Every rule on the group (in this direction, and covering `port` when given) comes from one of the listed peers: no wider or extra source.
+  z.strictObject({
+    sg_only: z
+      .strictObject({
+        group_id: z.string().min(1),
+        direction: z.enum(['ingress', 'egress']),
+        port: z.number().int().min(0).max(65535).optional(),
+        protocol: z.string().min(1).optional(),
+        cidrs: z.array(z.string().min(1)).optional(),
+        source_group_ids: z.array(z.string().min(1)).optional(),
+      })
+      .refine((r) => (r.cidrs?.length ?? 0) + (r.source_group_ids?.length ?? 0) > 0, 'list at least one cidr or source group'),
+  }),
+  // Some .tf file directly in `dir` matches the regex once its comments are removed (# // and /* */, outside strings).
+  z.strictObject({ config_matches: z.strictObject({ dir: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
+  // The backend `terraform init` last recorded is of this type and its literal attributes meet `require`
+  // ('*': a non-empty string) and at least one of `any_of`. Only a successful init records it.
+  z.strictObject({
+    backend: z.strictObject({
+      type: z.string().min(1),
+      require: z.record(z.string(), z.union([z.string().min(1), z.number(), z.boolean()])).optional(),
+      any_of: z.array(z.record(z.string(), z.union([z.string().min(1), z.number(), z.boolean()]))).min(1).optional(),
+    }),
+  }),
   z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
@@ -169,6 +212,16 @@ const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])
 const PredicateSchema = z.union([LeafOrNot, z.strictObject({ all: z.array(LeafOrNot).min(1) }), z.strictObject({ any: z.array(LeafOrNot).min(1) })])
 export type Leaf = z.infer<typeof LeafSchema>
 export type Predicate = z.infer<typeof PredicateSchema>
+// A VPC Service Controls ingress file judged by parsing it (src/game/vpcscIngress.ts): exactly the `keep`
+// policies plus the one `narrow` rule, nothing else.
+const IngressRuleSchema = z.strictObject({
+  identity: z.string().min(1),
+  source: z.string().min(1),
+  service: z.string().min(1),
+  method: z.string().min(1),
+  target: z.string().min(1),
+})
+const IngressSpecSchema = z.strictObject({ narrow: IngressRuleSchema, keep: z.array(IngressRuleSchema).optional() })
 const ActionsSchema = z
   .array(
     z.strictObject({
@@ -178,11 +231,49 @@ const ActionsSchema = z
       feedback: z.string().min(1),
       // Typing a matching command in the terminal takes this action too.
       match_regex: z.string().min(1).optional(),
+      // Typed lines with shell operators, substitutions or a repeated flag are not credited (AUTHORING.md);
+      // allow_shell opts this action out of the operator check (needs a fully anchored regex).
+      allow_shell: z.boolean().optional(),
+      // One concrete typed line this action's match_regex must accept (and the typed-line guard must credit).
+      // The validator checks it; without one it also checks the command written in the label, if the regex matches it.
+      example: z.string().min(1).optional(),
+      // Prerequisites (same stage, kind: fix): the action is credited only once these are taken.
+      after: z.array(id).min(1).optional(),
+      // Typing an `aws iam put-role-policy` whose parsed --policy-document earns this verdict takes the action
+      // (src/game/awsPolicyCheck.ts). Instead of a regex, which cannot judge a JSON document.
+      iam_policy: z
+        .strictObject({
+          verdict: z.enum(['ok', 'wildcard', 'overwrite']),
+          role: z.string().min(1),
+          profile: z.string().min(1),
+          reserved_policy: z.string().min(1),
+          allowed_actions: z.array(z.string().min(1)).min(1),
+          required_actions: z.array(z.string().min(1)).min(1),
+          resource: z.string().min(1),
+          // One concrete command that earns `verdict` (the validator checks it does).
+          example: z.string().min(1),
+        })
+        .optional(),
+      // Typing an `aws ec2 modify-vpc-endpoint --policy-document '<json>'` whose parsed document earns this verdict
+      // takes the action (src/game/awsPolicyCheck.ts). A file:// document is never judged.
+      endpoint_policy: z
+        .strictObject({
+          verdict: z.enum(['ok', 'broad']),
+          endpoint_id: z.string().min(1),
+          allowed_actions: z.array(z.string().min(1)).min(1),
+          required_actions: z.array(z.string().min(1)).min(1),
+          bucket_prefix: z.string().min(1),
+          example: z.string().min(1),
+        })
+        .optional(),
       // A fix made by editing a file (PLAN_TERMINAL.md T4): the action is taken
       // once the file on disk matches `matches`; the button writes `after`.
       file: z
-        .strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: z.string().min(1), after: z.string() })
+        .strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: z.string().min(1), after: z.string(), ingress_policy: IngressSpecSchema.optional() })
         .optional(),
+      // A typed command (match_regex) that takes this action only while the file on disk passes the ingress check at
+      // the moment it is run; otherwise it runs but does not count. Needs a match_regex.
+      requires_file: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), ingress_policy: IngressSpecSchema }).optional(),
       // A Terraform fix (TF3d): taken once this holds of the lab's world. Needs a terraform block.
       done_when: PredicateSchema.optional(),
     }),
@@ -235,6 +326,8 @@ export const TerraformSchema = z.strictObject({
   dir: z.string().min(1).optional(),
   version: z.string().regex(/^\d+\.\d+\.\d+$/, 'must look like 1.9.8').optional(),
   initialized: z.boolean().optional(),
+  // true: `terraform.tfstate` (and after the first change `.backup`) is on the disk, a view of the default workspace's state; see AUTHORING.md.
+  state_file: z.boolean().optional(),
   files: z
     .array(
       z.strictObject({
@@ -553,6 +646,70 @@ export const ScenarioSchema = z
       if (!s.terraform && !(v.terminal?.commands ?? []).some((c) => c.when_actions?.some((a) => fixIds.has(a))))
         issue("no terminal command changes after this stage's fixes: add one with when_actions so players can verify the fix", at('solution_paths'))
 
+      const iamSpecs = v.actions.filter((a) => a.iam_policy)
+      v.actions.forEach((a, i) => {
+        const p = a.iam_policy
+        if (!p) return
+        if (!v.terminal) issue('iam_policy needs a terminal to type into', at('actions', i, 'iam_policy'))
+        const allowed = new Set(p.allowed_actions.map(asciiLower))
+        if (!p.required_actions.every((r) => allowed.has(asciiLower(r)))) issue('required_actions must be inside allowed_actions', at('actions', i, 'iam_policy', 'required_actions'))
+        if (iamPolicyVerdict(p.example, p) !== p.verdict) issue(`example doesn't earn the "${p.verdict}" verdict`, at('actions', i, 'iam_policy', 'example'))
+        if (hasUnsafeSyntax(p.example) || (a.kind === 'fix' && repeatsFlag(p.example))) issue('example is rejected by the typed-line guard (shell syntax or a repeated flag)', at('actions', i, 'iam_policy', 'example'))
+        const { verdict: _v, example: _e, ...core } = p
+        iamSpecs.forEach((o) => {
+          const { verdict: _w, example: _x, ...oc } = o.iam_policy!
+          if (JSON.stringify(oc) !== JSON.stringify(core)) issue(`iam_policy of "${o.id}" differs from "${a.id}": actions that share the check must share an identical spec`, at('actions', i, 'iam_policy'))
+        })
+        v.terminal?.commands.forEach((c) => {
+          const text = c.match ?? c.example
+          if (text !== undefined && iamPolicyVerdict(text, p) !== null) issue(`also matches the scripted command "${text}"`, at('actions', i, 'iam_policy'))
+        })
+      })
+      const epSpecs = v.actions.filter((a) => a.endpoint_policy)
+      v.actions.forEach((a, i) => {
+        const p = a.endpoint_policy
+        if (!p) return
+        if (!v.terminal) issue('endpoint_policy needs a terminal to type into', at('actions', i, 'endpoint_policy'))
+        const allowed = new Set(p.allowed_actions.map(asciiLower))
+        if (!p.required_actions.every((r) => allowed.has(asciiLower(r)))) issue('required_actions must be inside allowed_actions', at('actions', i, 'endpoint_policy', 'required_actions'))
+        if (endpointPolicyVerdict(p.example, p) !== p.verdict) issue(`example doesn't earn the "${p.verdict}" verdict`, at('actions', i, 'endpoint_policy', 'example'))
+        if (hasUnsafeSyntax(p.example) || (a.kind === 'fix' && repeatsFlag(p.example))) issue('example is rejected by the typed-line guard (shell syntax or a repeated flag)', at('actions', i, 'endpoint_policy', 'example'))
+        const { verdict: _v, example: _e, ...core } = p
+        epSpecs.forEach((o) => {
+          const { verdict: _w, example: _x, ...oc } = o.endpoint_policy!
+          if (JSON.stringify(oc) !== JSON.stringify(core)) issue(`endpoint_policy of "${o.id}" differs from "${a.id}": actions that share the check must share an identical spec`, at('actions', i, 'endpoint_policy'))
+        })
+        v.terminal?.commands.forEach((c) => {
+          const text = c.match ?? c.example
+          if (text !== undefined && endpointPolicyVerdict(text, p) !== null) issue(`also matches the scripted command "${text}"`, at('actions', i, 'endpoint_policy'))
+        })
+      })
+      // `after`: prerequisites exist in this stage, are fixes, are on every solution path that uses the action, and never loop.
+      const byId = new Map(v.actions.map((a) => [a.id, a]))
+      v.actions.forEach((a, i) => {
+        a.after?.forEach((p, j) => {
+          const where = at('actions', i, 'after', j)
+          const pre = byId.get(p)
+          if (!pre) return issue(`unknown action "${p}" (after: must name an action of this stage)`, where)
+          if (p === a.id) return issue('an action cannot come after itself', where)
+          if (a.kind !== 'fix' || pre.kind !== 'fix') issue('after: is for ordering fix actions', where)
+        })
+        const seen = new Set<string>()
+        for (let todo = [...(a.after ?? [])]; todo.length; ) {
+          const n = todo.pop()!
+          if (n === a.id) {
+            issue(`after: forms a cycle through "${a.id}"`, at('actions', i, 'after'))
+            break
+          }
+          if (seen.has(n)) continue
+          seen.add(n)
+          todo.push(...(byId.get(n)?.after ?? []))
+        }
+        v.solution_paths.forEach((path, k) => {
+          if (path.includes(a.id) && seen.size && ![...seen].every((p) => path.includes(p)))
+            issue(`solution path includes "${a.id}" without its after: prerequisites`, at('solution_paths', k))
+        })
+      })
       v.actions.forEach((a, i) => {
         if (a.match_regex === undefined) return
         if (!v.terminal) issue('match_regex needs a terminal to type into', at('actions', i, 'match_regex'))
@@ -561,6 +718,25 @@ export const ScenarioSchema = z
           rx = new RegExp(a.match_regex)
         } catch (e) {
           return issue(`invalid regex: ${(e as Error).message}`, at('actions', i, 'match_regex'))
+        }
+        // Opting out of the shell-operator check is only safe when nothing can ride along: every branch pinned at both ends.
+        if (a.allow_shell) {
+          const loose = looseAllowShellRegex(a.match_regex)
+          if (loose) issue(`allow_shell needs a regex that pins the whole line: ${loose}`, at('actions', i, 'allow_shell'))
+        }
+        // The action's own example, or the command its label shows, must earn credit as typed: a command the guard
+        // rejects (substitution, operator, repeated flag on a fix) needs allow_shell or a different command.
+        const mode = typedMode(v)
+        for (const [src, text] of [['example', a.example], ['label', a.label]] as const) {
+          if (text === undefined || (src === 'label' && a.example !== undefined)) continue
+          const typed = (src === 'label' ? text.replace(/ \([^()]*\)\s*$/, '') : text).trim().replace(/\s+/g, ' ') // a label's trailing "(prose)" is not part of the command
+          if (!rx.test(typed)) {
+            if (src === 'example') issue(`example "${text}" does not match the match_regex`, at('actions', i, 'example'))
+            continue
+          }
+          if (!a.allow_shell && hasUnsafeSyntax(typed, mode))
+            issue(`the ${src} command "${typed}" has shell syntax the typed-line guard rejects, so it would earn nothing: add allow_shell (anchored regex) or use a plain command`, at('actions', i, src))
+          if (a.kind === 'fix' && repeatsFlag(typed)) issue(`the ${src} command "${text}" repeats a flag, which is never credited as a fix`, at('actions', i, src))
         }
         // A typed command either shows scripted output or takes an action, never both.
         v.terminal?.commands.forEach((c) => {
@@ -628,18 +804,39 @@ export const ScenarioSchema = z
       part.actions.forEach((act, i) => {
         if (!act.file) return
         const at = (...p: (string | number)[]) => (k === 0 ? ['actions', i, 'file', ...p] : ['stages', k - 1, 'actions', i, 'file', ...p])
-        let rx: RegExp
         try {
-          rx = new RegExp(act.file.matches, 'm')
+          new RegExp(act.file.matches, 'm')
         } catch (e) {
           return issue(`invalid regex: ${(e as Error).message}`, at('matches'))
         }
         const initial = filesOnDisk(atStage(s, k)).get(act.file.path)
         if (initial === undefined) issue(`${act.file.path} isn't on disk at this stage (add it as a file, a log with that name, or a scripted cat)`, at('path'))
-        else if (rx.test(initial)) issue('the file already matches before any fix', at('matches'))
-        if (!rx.test(act.file.after)) issue("`after` doesn't match `matches`", at('after'))
+        else if (initial !== undefined && fileFixed(act.file, initial)) issue('the file already matches before any fix', at('matches'))
+        if (!fileFixed(act.file, act.file.after)) issue("`after` doesn't match `matches`", at('after'))
       })
     })
+    ;[s, ...stages].forEach((part, k) =>
+      part.actions.forEach((act, i) => {
+        if (!act.requires_file) return
+        const at = (...p: (string | number)[]) => (k === 0 ? ['actions', i, 'requires_file', ...p] : ['stages', k - 1, 'actions', i, 'requires_file', ...p])
+        if (act.match_regex === undefined) issue('requires_file needs a match_regex', at())
+        const initial = filesOnDisk(atStage(s, k)).get(act.requires_file.path)
+        if (initial === undefined) issue(`${act.requires_file.path} isn't on disk at this stage`, at('path'))
+        else if (gateOk(act.requires_file, initial)) issue('the file already passes before any fix', at('path'))
+        const rf = act.requires_file
+        // Solvable: some file action writes a version of that file that passes the gate.
+        if (!part.actions.some((o) => o.file?.path === rf.path && gateOk(rf, o.file.after))) issue('no file action in this stage has an `after` that passes the requires_file check', at())
+        // Consistent: a scripted terminal command prints for the same typed line, so it behaves the same whether or not it counts.
+        let rx: RegExp | undefined
+        try {
+          rx = act.match_regex === undefined ? undefined : new RegExp(act.match_regex)
+        } catch {
+          rx = undefined
+        }
+        if (rx && !(part.terminal?.commands ?? []).some((c) => c.match_regex !== undefined && c.example !== undefined && rx.test(c.example.trim().replace(/\s+/g, ' ')) && new RegExp(c.match_regex).test(c.example.trim().replace(/\s+/g, ' '))))
+          issue('requires_file needs a scripted terminal command (match_regex with an example) that also matches the action\'s typed line', at())
+      }),
+    )
 
     // Difficulty 5 is a major incident (PLAN_DIFFICULTY_5.md section 2).
     if (s.ticket.severity === 'SEV1' && s.difficulty !== 5) issue('SEV1 is reserved for major incidents (difficulty 5)', ['ticket', 'severity'])
@@ -716,6 +913,22 @@ export const ScenarioSchema = z
         if (typeof a.attrs.id !== 'string') issue('needs a string id attribute', ['terraform', 'cloud', 'add', i, 'attrs'])
         else known.add(`${a.type}:${a.attrs.id}`)
       })
+      // sg_rule names a security group of the lab, and peer groups must exist too.
+      ;[s, ...stages].forEach((part, k) =>
+        part.actions.forEach((act, i) => {
+          if (!act.done_when) return
+          const p = act.done_when
+          const leaves = 'all' in p ? p.all : 'any' in p ? p.any : [p]
+          for (const l of leaves) {
+            const x = 'not' in l ? l.not : l
+            const r = 'sg_rule' in x ? x.sg_rule : 'sg_only' in x ? x.sg_only : undefined
+            if (!r) continue
+            const peers: [string, string | undefined][] = [['group_id', r.group_id], ['source_group_id', 'source_group_id' in r ? r.source_group_id : undefined], ...(('source_group_ids' in r ? r.source_group_ids : undefined) ?? []).map((v) => ['source_group_ids', v] as [string, string])]
+            for (const [field, id] of peers)
+              if (id !== undefined && !known.has(`aws_security_group:${id}`)) issue(`${'sg_rule' in x ? 'sg_rule' : 'sg_only'} ${field} "${id}" is not a security group in state or cloud.add`, k === 0 ? ['actions', i, 'done_when'] : ['stages', k - 1, 'actions', i, 'done_when'])
+          }
+        }),
+      )
       ;(['patch', 'delete', 'release'] as const).forEach((w) =>
         tf.cloud?.[w]?.forEach((c, i) => {
           if (!known.has(`${c.type}:${c.id}`)) issue(`no object with id "${c.id}" in state or cloud.add`, ['terraform', 'cloud', w, i, 'id'])

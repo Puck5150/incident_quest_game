@@ -125,13 +125,17 @@ hypotheses:
 
 actions:
   - id: repoint
-    label: "Update checkout-cpu-high to watch AutoScalingGroupName=checkout-asg instead of the old instance ID"
+    label: "Update checkout-cpu-high to watch AutoScalingGroupName=checkout-asg instead of the old instance ID, in the infrastructure code next to checkout-asg so a re-apply cannot put the old dimension back"
     kind: fix
     feedback: "The alarm now evaluates the average CPU of whatever instances are in the group, so it survives instances being replaced. It goes back to OK, and would have gone into ALARM yesterday."
   - id: notify-insufficient
     label: "Also send the alarm's INSUFFICIENT_DATA state to the on-call topic (--insufficient-data-actions)"
     kind: fix
     feedback: "If this alarm ever loses its data again, someone hears about it the same day instead of finding out during an outage."
+  - id: scale-out-policy
+    label: "Add a target-tracking scaling policy to checkout-asg (for example average CPU 60) so the group scales out before the alarm ever fires"
+    kind: fix
+    feedback: "The group sat at 99% CPU for 40 minutes at 2-6 instances without adding any: nothing told it to. An alarm only tells a human; a scaling policy would have absorbed the load. Keep the alarm as the backstop for when scaling is not enough."
   - id: lower-threshold
     label: "Lower the threshold to 50%"
     kind: wrong
@@ -146,7 +150,7 @@ actions:
     feedback: "Now checkout has no CPU alarm at all, which is quieter but no safer. The alarm needed one setting changed."
 
 solution_paths:
-  - [repoint, notify-insufficient]
+  - [repoint, notify-insufficient, scale-out-policy]
 
 key_evidence: [alarm-stale, instance-gone, cpu-was-high, migration]
 
@@ -159,7 +163,7 @@ evidence_labels:
 hints:
   nudge: "An alarm can be in three states. Which one is it in, and since when?"
   direction: "Look at the alarm's dimensions and state, and compare them with the move to the Auto Scaling group."
-  answer: "The alarm's dimension is InstanceId=i-0checkoutold, terminated on 09-24. With no data and TreatMissingData=missing it has sat in INSUFFICIENT_DATA ever since. Point it at AutoScalingGroupName=checkout-asg, and page on INSUFFICIENT_DATA too."
+  answer: "The alarm's dimension is InstanceId=i-0checkoutold, terminated on 09-24. With no data and TreatMissingData=missing it has sat in INSUFFICIENT_DATA ever since. Point it at AutoScalingGroupName=checkout-asg (in the IaC next to the group), page on INSUFFICIENT_DATA too, and ask why the group never scaled out at 99% CPU: it needs a scaling policy."
 
 analogy:
   title: "The smoke detector in the old flat"
@@ -186,11 +190,13 @@ debrief:
     - "Connect it to the move: that instance was terminated the same morning."
     - "Point the alarm at AutoScalingGroupName=checkout-asg."
     - "Notify on INSUFFICIENT_DATA too, so a blind alarm is noticed the day it goes blind."
+    - "Ask the next question: the group sat at 99% CPU for 40 minutes without scaling out. Add a target-tracking scaling policy."
   real_world: |
     Alarms that quietly stop watching anything are a classic gap after
     migrations: instance IDs, load balancer names and queue names change,
     and the alarms don't. Alarm on group-level dimensions, make "migrate the
-    alarms" part of every change checklist, and treat INSUFFICIENT_DATA on
+    alarms" part of every change checklist, define each alarm in the IaC
+    beside the thing it watches, and treat INSUFFICIENT_DATA on
     an important alarm as something to look at.
 
 concepts:

@@ -360,10 +360,16 @@ actions:
         - applied: { op: import, address: aws_instance.worker }
         - applied: { op: import, address: aws_db_instance.reports }
         - not: { lock_bypassed: true }
-    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. The imports were written under a proper lock."
+    feedback: "The stale lock is gone (taken by a process that no longer exists) and Terraform manages the worker and the database again, so a destroy can now see them. The imports were written under a proper lock. force-unlock is only safe because the evidence shows the holder is dead (Marta's capture, her leave, a lock about a day old); with a live holder you would be corrupting state. Before the destroy, the next step is a final snapshot of reports-db."
+  - id: snapshot-before-destroy
+    label: "Take a final snapshot of the dev database before it is destroyed: aws rds create-db-snapshot --db-instance-identifier reports-db --db-snapshot-identifier reports-db-final"
+    kind: fix
+    match_regex: "^aws rds create-db-snapshot(?=.*--db-instance-identifier[ =]reports-db(\\s|$))(?=.*--db-snapshot-identifier[ =][^\\s-][^\\s]*(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(db-instance-identifier|db-snapshot-identifier|region)[ =][^\\s-]\\S*){2,3}$"
+    feedback: "A manual snapshot of reports-db exists. The owners signed off on the teardown, but the sign-off does not prove nobody needs the data, and a snapshot costs almost nothing; you can delete it after the retention period you agree with them."
   - id: destroy-environment
     label: "Run terraform destroy: the worker and database go first, then the group, subnet and VPC"
     kind: fix
+    after: [snapshot-before-destroy]
     done_when:
       all:
         - lock_free: true
@@ -398,7 +404,7 @@ actions:
     feedback: "-lock-timeout retries for a lock a live run is about to release. Marta's process no longer exists, so nothing will ever release this one and the command just fails after the wait."
 
 solution_paths:
-  - [unlock-and-import, destroy-environment]
+  - [unlock-and-import, snapshot-before-destroy, destroy-environment]
 
 key_evidence: [lock-holder, marta-dead, orphans-not-in-state, worker-running, db-running, admin-role]
 
@@ -413,7 +419,7 @@ evidence_labels:
 hints:
   nudge: "Two things are wrong at once: a lock nobody holds, and a bill that did not drop. What does state list contain, and what does AWS say is running?"
   direction: "Read marta-destroy.txt to decide whether the lock holder is alive, then compare terraform state list with aws ec2 describe-instances and aws rds describe-db-instances. Reading with terraform plan -lock=false is safe; writing with it is not. Do not run apply to 'recreate' what is already running."
-  answer: "Marta's destroy is dead: terraform force-unlock 7e3b9d41-5c2a-8f06-b1d7-a94e2c60f385. The worker and database run in AWS but are missing from state: terraform import aws_instance.worker i-0c7f3a9d1e5b24680, terraform import aws_db_instance.reports reports-db. Then terraform destroy."
+  answer: "Check the holder is really dead first (marta-destroy.txt), then: terraform force-unlock 7e3b9d41-5c2a-8f06-b1d7-a94e2c60f385. The worker and database run in AWS but are missing from state: terraform import aws_instance.worker i-0c7f3a9d1e5b24680, terraform import aws_db_instance.reports reports-db. Snapshot reports-db (aws rds create-db-snapshot), then terraform destroy."
 
 analogy:
   title: "The inventory sheet and the storage unit"
@@ -443,6 +449,7 @@ debrief:
     - "terraform force-unlock the lock, then terraform plan: two creates for things that already exist."
     - "terraform import aws_instance.worker i-0c7f3a9d1e5b24680 and terraform import aws_db_instance.reports reports-db."
     - "Real Terraform 1.9.8 needs one more step here: the imported database must get skip_final_snapshot = true applied to its state (terraform apply) before the destroy, or the delete fails; the lab does not enforce this."
+    - "Take a final snapshot of reports-db (aws rds create-db-snapshot) before destroying, even with the owners' sign-off: it costs almost nothing and the sign-off does not prove the data is disposable."
     - "terraform destroy: the worker and database go first, then the group, subnet and VPC."
   real_world: |
     The import IDs are the instance id for aws_instance and the identifier for
@@ -452,7 +459,11 @@ debrief:
     final_snapshot_identifier) before destroying, or the delete fails; this lab
     does not model that. Never use -lock=false to get past someone else's lock
     without proving the holder is dead, and never use state rm to get a hung
-    apply moving: it leaves billed, unmanaged infrastructure behind. Newer
+    apply moving: it leaves billed, unmanaged infrastructure behind. Keep a
+    final snapshot of any database you tear down (skip_final_snapshot = true
+    and a default password written in the configuration are fine for a
+    throwaway lab and wrong anywhere else: prefer a managed master password
+    and encrypted storage). Newer
     Terraform (1.10 and later) can lock with a file in the S3 bucket
     (use_lockfile); force-unlock works the same way.
 

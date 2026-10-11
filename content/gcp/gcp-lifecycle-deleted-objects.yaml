@@ -108,10 +108,24 @@ actions:
     match_regex: "^gcloud storage buckets update gs://acme-user-docs --clear-lifecycle$"
     feedback: "The rule is removed from the documents bucket. Lifecycle changes can take up to 24 hours to go into effect, though, so the old rule may still delete some objects until then. They'll be soft-deleted too, so check again and restore any stragglers tomorrow."
   - id: bulk-restore
-    label: "Bulk-restore everything soft-deleted since the change: gcloud storage restore \"gs://acme-user-docs/**\" --async --deleted-after-time=2026-09-30T16:40:00Z"
+    label: "Bulk-restore everything soft-deleted since the change: gcloud storage restore \"gs://acme-user-docs/**\" --async --deleted-after-time=2026-09-30T16:40:00Z (run it after the rule is cleared, and keep the window to the incident: an earlier start would resurrect documents customers deleted on purpose)"
     kind: fix
-    match_regex: "^gcloud storage restore \"?gs://acme-user-docs/\\*\\*\"? --async --deleted-after-time=\\S+( --deleted-before-time=\\S+)?$"
-    feedback: "That starts a bulk restore as a long-running operation. It runs asynchronously and can take an hour or more to begin, so tell support when to expect documents back, and track the operation until it finishes."
+    match_regex: "^gcloud storage restore (?:\"gs://acme-user-docs/\\*\\*\"|'gs://acme-user-docs/\\*\\*')(?!.*--async.*--async)(?!.*--deleted-after-time.*--deleted-after-time)(?!.*--deleted-before-time.*--deleted-before-time)(?=.* --deleted-after-time[= ]2026-09-30T16:(?:3[0-9]|4[01]):[0-5][0-9](?:\\.[0-9]+)?Z(?: |$))(?: (?:--async|--deleted-after-time[= ]2026-09-30T16:(?:3[0-9]|4[01]):[0-5][0-9](?:\\.[0-9]+)?Z|--deleted-before-time[= ]2026-10-0[1-3]T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?Z))+$"
+    feedback: "That starts a bulk restore as a long-running operation. It runs asynchronously and can take an hour or more to begin, so tell support when to expect documents back, and track the operation until it finishes. A restore from the start of the window also brings back anything a customer or the app deleted on purpose since 16:40, so check the window's deletions against the audit log or support requests first."
+  - id: exports-rule
+    label: "Apply the intended cleanup to the right bucket: gcloud storage buckets update gs://acme-exports --lifecycle-file=exports-cleanup.json (after reviewing the file and testing it on a prefix)"
+    kind: fix
+    match_regex: "^gcloud storage buckets update gs://acme-exports (?:--lifecycle-file[= ]exports-cleanup\\.json)$"
+    feedback: "The exports bucket gets the daily cleanup it was meant to have, so nobody is tempted to re-apply the file in a hurry."
+  - id: protect-docs
+    label: "Guard acme-user-docs: limit storage.buckets.update to a small admin group, route lifecycle files through code review, and evaluate a retention policy or object holds for ID scans and contracts"
+    kind: fix
+    feedback: "A shared, hand-run gcloud command with no review changed a bucket of customer documents. Restricting who can change bucket configuration and requiring review closes that; a retention policy (agreed with legal) makes deletion impossible before the period ends."
+  - id: reapply-docs
+    label: "Re-apply exports-cleanup.json to acme-user-docs to see whether it was the cause"
+    kind: destructive
+    match_regex: "^gcloud storage buckets update gs://acme-user-docs .*--lifecycle-file[= ]\"?(?:\\./)?exports-cleanup\\.json"
+    feedback: "That is the rule that deleted the documents. Reproducing the fault on production data while a restore is pending deletes more."
   - id: age-30
     label: "Change the rule's age condition from 1 day to 30 days"
     kind: wrong
@@ -126,7 +140,7 @@ actions:
     feedback: "Objects already soft-deleted are kept. But for up to 24 hours the old lifecycle rule may still delete more documents, and with soft delete off those deletions are permanent. Google's docs warn about exactly this: with soft delete disabled, deleted objects can't be restored."
 
 solution_paths:
-  - [stop-rule, bulk-restore]
+  - [stop-rule, bulk-restore, exports-rule, protect-docs]
 
 key_evidence: [wrong-bucket-rule, soft-deleted, audit-change, meant-exports]
 

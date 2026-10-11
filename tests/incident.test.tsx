@@ -459,3 +459,24 @@ it('root cause first, then the revert: revert-and-migrate is taken once', async 
   await settle()
   expect(taken()).toEqual(['revert-and-migrate'])
 })
+
+it('stage 2 of terraform-forces-replacement: a restore typed before the copy is refused in the terminal and not credited', async () => {
+  const { taken, settle } = await tfFirst()
+  await type("sed -i 's/storage_encrypted *= true/storage_encrypted = false/' db.tf")
+  await type('terraform plan')
+  await waitFor(() => expect(taken()).toEqual(['revert-and-migrate']))
+  fireEvent.click(await screen.findByRole('button', { name: 'Close out' }))
+  fireEvent.click(await screen.findByLabelText(/can't be encrypted in place/))
+  fireEvent.click(screen.getByRole('button', { name: 'Declare hypothesis' }))
+  const SNAP = 'aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-encrypt'
+  const COPY = 'aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id alias/orders-db'
+  const RESTORE = 'aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-encrypted'
+  await type(RESTORE)
+  await waitFor(() => expect(output()).toMatch(/Not yet: do this first: aws rds copy-db-snapshot/))
+  await type(`${SNAP} && ${COPY}`) // a compound line is not two fixes
+  await settle()
+  expect(taken()).toEqual(['revert-and-migrate'])
+  for (const c of [SNAP, COPY, RESTORE]) await type(c)
+  await settle()
+  expect(taken()).toEqual(['revert-and-migrate', 'create-snapshot', 'copy-encrypted', 'restore-encrypted'])
+})

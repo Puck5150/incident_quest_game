@@ -103,8 +103,12 @@ actions:
   - id: create-other-side
     label: "Ask the data team to run: az network vnet peering create -g rg-data --vnet-name vnet-data -n data-to-app --remote-vnet <vnet-app's resource ID> --allow-vnet-access"
     kind: fix
-    match_regex: "^az network vnet peering create (-g|--resource-group) rg-data --vnet-name vnet-data (-n|--name) data-to-app --remote-vnet \\S+ --allow-vnet-access$"
+    match_regex: "^az network vnet peering create (-g|--resource-group) rg-data --vnet-name vnet-data (-n|--name) data-to-app --remote-vnet ([A-Za-z0-9._/-]+/virtualNetworks/)?vnet-app --allow-vnet-access$"
     feedback: "With a peering in each virtual network, both show Connected, a route for the other network appears on each side, and the app reaches 10.20.1.5:5432."
+  - id: scope-nsg
+    label: "Scope the database's NSG: allow 5432 only from the app subnet (or an application security group), not the whole peered range"
+    kind: fix
+    feedback: "A connected peering lets all of 10.10.0.0/16 reach all of 10.20.0.0/16 through the default AllowVnetInBound rule. A rule allowing only the app subnet on 5432, with the rest denied, keeps the peering from becoming a flat network."
   - id: recreate-app-side
     label: "Delete app-to-data and create it again"
     kind: wrong
@@ -112,7 +116,7 @@ actions:
   - id: open-nsg
     label: "Add an NSG rule on the database allowing 5432 from 10.10.0.0/16"
     kind: wrong
-    feedback: "There's no route between the networks yet, so traffic never reaches the NSG. Once the peering is connected, the default AllowVnetInBound rule already covers it."
+    feedback: "There's no route between the networks yet, so traffic never reaches the NSG. Once the peering is connected, the default AllowVnetInBound rule is broad enough to cover it, which is exactly why you should scope it to the app subnet and port 5432 rather than add or lean on a wide rule."
   - id: vpn-gateway
     label: "Connect the two networks with VPN gateways instead"
     kind: wrong
@@ -123,7 +127,7 @@ actions:
     feedback: "That puts the company database on the internet to work around a missing peering. The data team's half of the peering is one command."
 
 solution_paths:
-  - [create-other-side]
+  - [create-other-side, scope-nsg]
 
 key_evidence: [initiated, no-return-peering, no-peering-route]
 
@@ -159,6 +163,7 @@ debrief:
     - "Confirm the effect: the app VM's effective routes have nothing for 10.20.0.0/16."
     - "Get the data team to create data-to-app in vnet-data."
     - "Verify: both peerings Connected, the route appears, and port 5432 answers."
+    - "Scope the database NSG to the app subnet on 5432 instead of relying on AllowVnetInBound; put both peering halves in IaC."
   real_world: |
     One-sided peerings are a classic when two teams own the two networks. Put
     both sides of a peering in the same change (or the same infrastructure

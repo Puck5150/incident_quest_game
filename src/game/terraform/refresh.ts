@@ -1,7 +1,8 @@
 // Refresh: compare what state says with what is actually in the simulated
 // cloud ("reality"), the first step of a plan. Differences are drift: someone
 // changed or deleted something outside Terraform.
-import { equal, type Value } from './eval.ts'
+import { equal, equalSet, type Value } from './eval.ts'
+import { schemaFor } from './resources.ts'
 import { instanceAddress, type State, type StateInstance, type StateResource } from './state.ts'
 
 // What exists in the cloud, keyed by realityKey(type, id).
@@ -42,7 +43,7 @@ export function refresh(state: State, reality: Reality): { state: State; drift: 
       const attributes = new Map(Object.entries(structuredClone(inst.attributes)))
       for (const [name, after] of Object.entries(now)) {
         const before = Object.hasOwn(inst.attributes, name) ? inst.attributes[name] : null
-        if (!equal(before, after)) changes.push({ name, before, after })
+        if (!(schemaFor(r.type)?.attrs[name]?.set ? equalSet : equal)(before, after)) changes.push({ name, before, after })
         attributes.set(name, structuredClone(after))
       }
       if (changes.length) drift.push({ address, kind: 'changed', changes })

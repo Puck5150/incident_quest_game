@@ -1,0 +1,335 @@
+import { describe, expect, it } from 'vitest'
+import { loadIncident, playbook } from './helpers/terraform-incident.ts'
+
+const scenario = loadIncident('terraform-drift-hotfix')
+const { play, detectedAll } = playbook(scenario)
+
+const NONE = { codify: false, 'codify-nat': false, 'codify-wide': false, 'apply-anyway': false, 'target-instance': false, 'refresh-apply': false }
+const FIXED = { ...NONE, codify: true }
+const WIDE = { ...NONE, 'codify-wide': true }
+const NAT = { ...NONE, 'codify-nat': true }
+const TRAPPED = { ...NONE, 'apply-anyway': true }
+
+const HOTFIX = `  ingress {
+    description = "partner hotfix"
+    from_port   = 8443
+    to_port     = 8443
+    protocol    = "tcp"
+    cidr_blocks = ["198.51.100.0/24"]
+  }
+`
+const NARROW = HOTFIX.replace('partner hotfix', 'partner callbacks SEC-4417').replace('198.51.100.0/24', '198.51.100.16/28')
+const INTERNAL = `  ingress {
+    description = "internal clients"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["10.20.0.0/16"]
+  }
+`
+// The whole lab main.tf with the security group's ingress blocks given.
+const MAIN = (ingress: string, sgExtra = '') => `cat > main.tf <<'EOF'
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+resource "aws_security_group" "payments" {
+  name        = "payments"
+  description = "Payments service"
+  vpc_id      = "vpc-0payments"
+${sgExtra}
+${ingress}}
+
+resource "aws_instance" "payments_worker" {
+  ami           = "ami-0abc1234def567890"
+  instance_type = "t3.small"
+
+  tags = {
+    cost-center = "payments"
+  }
+}
+EOF`
+const WIDE_CODE = MAIN(INTERNAL + HOTFIX)
+const CODIFIED = MAIN(INTERNAL + NARROW)
+const APPLY = 'terraform apply -auto-approve'
+const RULE443 = { cidr_blocks: ['10.20.0.0/16'], description: 'internal clients', from_port: 443, protocol: 'tcp', to_port: 443 }
+const RULE8443 = { cidr_blocks: ['198.51.100.0/24'], description: 'partner hotfix', from_port: 8443, protocol: 'tcp', to_port: 8443 }
+const RULE_NARROW = { cidr_blocks: ['198.51.100.16/28'], description: 'partner callbacks SEC-4417', from_port: 8443, protocol: 'tcp', to_port: 8443 }
+const SG = (sh: { doneWhen: (d: never) => Promise<boolean> }, equals: unknown[]) =>
+  sh.doneWhen({ reality_has: { type: 'aws_security_group', id: 'sg-0payments', attr: 'ingress', equals } } as never)
+
+describe('terraform-drift-hotfix on the simulator', () => {
+  it('is backed by the simulator, with only a benign git command scripted', () => {
+    expect(scenario.terraform).toBeDefined()
+    expect(scenario.terminal!.commands.map((c) => c.match ?? c.example)).toEqual(['git log --oneline -3'])
+    for (const c of scenario.terminal!.commands) expect(scenario.command_notes?.[c.match ?? c.example!]).toBeDefined()
+  })
+
+  it('keeps the old action ids, kinds, solution path and evidence tags', () => {
+    expect(scenario.actions.map((a) => [a.id, a.kind])).toEqual([
+      ['codify', 'fix'],
+      ['codify-nat', 'fix'],
+      ['codify-wide', 'wrong'],
+      ['apply-anyway', 'destructive'],
+      ['target-instance', 'wrong'],
+      ['refresh-apply', 'wrong'],
+    ])
+    expect(scenario.solution_paths).toEqual([['codify'], ['codify-nat']])
+    expect(scenario.key_evidence).toEqual(['plan-removes-rule', 'drift', 'hotfix-note', 'partner-range'])
+    expect(scenario.logs!.map((l) => l.evidence)).toEqual(['hotfix-note'])
+  })
+
+  it('(a) the real plan: instance tags and the security group losing the hotfix rule; evidence plan-removes-rule', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform plan')
+    const plan = out[1].output
+    expect(plan).toContain('# aws_instance.payments_worker will be updated in-place')
+    expect(plan).toContain('+ "cost-center" = "payments"')
+    expect(plan).toContain('# aws_security_group.payments will be updated in-place')
+    expect(plan).toContain('- "198.51.100.0/24",')
+    expect(plan).toContain('- description = "partner hotfix"')
+    expect(plan).toContain('(1 unchanged element hidden)')
+    expect(plan).toContain('Plan: 0 to add, 2 to change, 0 to destroy.')
+    expect(out[1].hits).toContain('evidence:plan-removes-rule')
+    expect(out[1].hits).not.toContain('evidence:drift')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(b) plan -refresh-only shows the security group changed outside Terraform; evidence drift; state is not touched', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform plan -refresh-only', 'terraform state show aws_security_group.payments')
+    expect(out[1].exitCode).toBe(0)
+    expect(out[1].output).toContain('Note: Objects have changed outside of Terraform')
+    expect(out[1].output).toContain('# aws_security_group.payments has changed')
+    expect(out[1].output).toContain('+ description = "partner hotfix"')
+    expect(out[1].output).toContain('This is a refresh-only plan, so Terraform will not take any actions to undo')
+    expect(out[1].output).not.toContain('Plan:')
+    expect(out[1].hits).toContain('evidence:drift')
+    expect(out[2].output).not.toContain('8443')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(c) every key evidence tag is obtainable before any fix (the note and the partner ticket are scripted)', async () => {
+    const { out } = await play('cd ~/infra', 'terraform plan', 'terraform plan -refresh-only')
+    const tags = new Set(out.flatMap((r) => r.hits).filter((h) => h.startsWith('evidence:')).map((h) => h.slice(9)))
+    expect(tags.has('plan-removes-rule') && tags.has('drift')).toBe(true)
+    const scripted = new Set([...(scenario.logs ?? []).map((l) => l.evidence), ...(scenario.files ?? []).map((f) => f.evidence)])
+    expect(scripted.has('hotfix-note') && scripted.has('partner-range')).toBe(true)
+    expect(scenario.files!.find((f) => f.evidence === 'partner-range')!.content).toContain('198.51.100.16/28')
+  })
+
+  it('(d) ideal: codify the rule narrowed to the verified /28, then apply: the group is narrowed in reality and the plan is clean', async () => {
+    const { sh, out } = await play('cd ~/infra', CODIFIED, 'terraform plan')
+    expect(out[2].output).toContain('Plan: 0 to add, 2 to change, 0 to destroy.')
+    expect(out[2].output).toContain('# aws_security_group.payments will be updated in-place')
+    expect(await detectedAll(sh)).toEqual(NONE) // code alone is not the fix: reality still has the /24
+    const apply = await sh.run(APPLY, scenario as never, new Set())
+    expect(apply.output).toContain('Apply complete! Resources: 0 added, 2 changed, 0 destroyed.')
+    expect(await detectedAll(sh)).toEqual(FIXED)
+    expect(await SG(sh, [RULE443, RULE_NARROW])).toBe(true)
+    expect((await sh.run('terraform plan', scenario as never, new Set())).output).toContain('No changes.')
+    expect(await detectedAll(sh)).toEqual(FIXED)
+  })
+
+  it('(d1) weak route: codifying the console /24 as it is plans only the tag, and is the wrong action, never the fix', async () => {
+    const { sh, out } = await play('cd ~/infra', WIDE_CODE, 'terraform plan')
+    expect(out[2].output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
+    expect(await detectedAll(sh)).toEqual(WIDE)
+    await sh.run(APPLY, scenario as never, new Set())
+    expect(await detectedAll(sh)).toEqual(WIDE)
+    expect(scenario.actions.find((a) => a.id === 'codify-wide')!.kind).toBe('wrong')
+    expect(scenario.solution_paths).toEqual([['codify'], ['codify-nat']])
+  })
+
+  it('(d2) the narrowing that is not the verified range does not count: another /28, the whole /16 or 0.0.0.0/0', async () => {
+    for (const cidr of ['198.51.100.32/28', '198.51.0.0/16', '0.0.0.0/0']) {
+      const { sh } = await play('cd ~/infra', MAIN(INTERNAL + NARROW.replace('198.51.100.16/28', cidr)), APPLY)
+      expect((await detectedAll(sh)).codify, cidr).toBe(false)
+    }
+  })
+
+  it('(d3) second route: only the two NAT gateways as /32s is also the fix; one of them alone, or mixed with the /28, is not', async () => {
+    const nat = (cidr: string, d: string) => NARROW.replace('198.51.100.16/28', cidr).replace('partner callbacks SEC-4417', d)
+    const both = nat('198.51.100.17/32', 'nat a') + nat('198.51.100.18/32', 'nat b')
+    const { sh, out } = await play('cd ~/infra', MAIN(INTERNAL + both), APPLY)
+    expect(out[2].output).toContain('Apply complete!')
+    expect(await detectedAll(sh)).toEqual(NAT)
+    expect((await sh.run('terraform plan', scenario as never, new Set())).output).toContain('No changes.')
+    const one = await play('cd ~/infra', MAIN(INTERNAL + nat('198.51.100.17/32', 'nat a')), APPLY)
+    expect(await detectedAll(one.sh)).toEqual(NONE)
+    const mixed = await play('cd ~/infra', MAIN(INTERNAL + NARROW + nat('198.51.100.17/32', 'nat a')), APPLY)
+    expect((await detectedAll(mixed.sh)).codify).toBe(false)
+    expect((await detectedAll(mixed.sh))['codify-nat']).toBe(false)
+  })
+
+  it('(d4) extra or wider sources next to the verified range are not the fix: a /25, a /23, 10.0.0.0/8, SSH from anywhere', async () => {
+    const SSH = `  ingress {
+    description = "ssh"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+`
+    const extra = (cidr: string) => NARROW.replace('198.51.100.16/28', cidr).replace('partner callbacks SEC-4417', 'extra')
+    for (const [name, rules] of [['/25', NARROW + extra('198.51.100.0/25')], ['/23', NARROW + extra('198.51.100.0/23')], ['10/8', NARROW + extra('10.0.0.0/8')], ['ssh', NARROW + SSH]] as const) {
+      const { sh } = await play('cd ~/infra', MAIN(INTERNAL + rules), APPLY)
+      const got = await detectedAll(sh)
+      expect(got.codify, name).toBe(false)
+      expect(got['codify-nat'], name).toBe(false)
+      // the extra 8443 sources are the wrong action; SSH from anywhere simply never earns the fix
+      expect(got['codify-wide'], name).toBe(name !== 'ssh')
+    }
+  })
+
+  it('(e) spelling variants of the narrowed rule are accepted once applied', async () => {
+    const reordered = `  ingress {
+    cidr_blocks = ["198.51.100.16/28"]
+    protocol    = "tcp"
+    to_port     = 8443
+    from_port   = 8443
+    description = "partner callbacks"
+  }
+`
+    const cases = [MAIN(NARROW + INTERNAL), MAIN(INTERNAL + reordered), MAIN(INTERNAL + NARROW.replace('["198.51.100.16/28"]', '[ "198.51.100.16/28" ]'))]
+    for (const c of cases) {
+      const { sh, out } = await play('cd ~/infra', c, APPLY)
+      expect(out[2].output).toContain('Apply complete!')
+      expect(await detectedAll(sh)).toEqual(FIXED)
+    }
+    // the same edit made with sed on the checked-out file
+    const sed = `sed -i 's|^  vpc_id      = "vpc-0payments"|&\\n  ingress {\\n    description = "partner callbacks"\\n    from_port = 8443\\n    to_port = 8443\\n    protocol = "tcp"\\n    cidr_blocks = ["198.51.100.16/28"]\\n  }|' main.tf`
+    const { sh } = await play('cd ~/infra', sed, APPLY)
+    expect(await detectedAll(sh)).toEqual(FIXED)
+  })
+
+  it('(f) a rule that does not match reality (other description or port) leaves the group changing: not the wide route either', async () => {
+    for (const bad of [HOTFIX.replace('partner hotfix', 'partner'), HOTFIX.replace(/8443/g, '9443')]) {
+      const { sh, out } = await play('cd ~/infra', MAIN(INTERNAL + bad), 'terraform plan')
+      expect(out[2].output).toContain('# aws_security_group.payments will be updated in-place')
+      expect(await detectedAll(sh)).toEqual(NONE)
+    }
+  })
+
+  it('(g) the CIDR only in a comment, or ignore_changes on ingress, is a clean plan but not the codified fix', async () => {
+    const comment = await play('cd ~/infra', MAIN(INTERNAL, '  # TODO 198.51.100.0/24 on 8443\n'), 'terraform plan')
+    expect(comment.out[2].output).toContain('aws_security_group.payments will be updated')
+    expect(await detectedAll(comment.sh)).toEqual(NONE)
+    const ignore = await play('cd ~/infra', MAIN(INTERNAL + '\n  lifecycle {\n    ignore_changes = [ingress]\n  }\n'), 'terraform plan')
+    expect(ignore.out[2].output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
+    expect(await detectedAll(ignore.sh)).toEqual(NONE)
+  })
+
+  it('(h) trap: apply as-is removes the rule from reality; the engine latches the destructive action, and recovery needs the verified range', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform apply -auto-approve')
+    expect(out[1].output).toContain('Apply complete! Resources: 0 added, 2 changed, 0 destroyed.')
+    expect(await SG(sh, [RULE443])).toBe(true)
+    expect(await detectedAll(sh)).toEqual(TRAPPED)
+    await sh.run(WIDE_CODE, scenario as never, new Set())
+    const plan = await sh.run('terraform plan', scenario as never, new Set())
+    expect(plan.output).toContain('aws_security_group.payments will be updated in-place')
+    await sh.run(APPLY, scenario as never, new Set())
+    expect(await SG(sh, [RULE443, RULE8443])).toBe(true)
+    expect((await sh.run('terraform plan', scenario as never, new Set())).output).toContain('No changes.')
+    expect(await detectedAll(sh)).toEqual(WIDE) // the trap predicate no longer holds, the wide rule is back and also wrong
+    // recovery with the verified range is still the fix
+    await sh.run(CODIFIED, scenario as never, new Set())
+    await sh.run(APPLY, scenario as never, new Set())
+    expect((await detectedAll(sh)).codify).toBe(true)
+  })
+
+  it('(i) trap spelling: answering yes to a plain apply is the same damage', async () => {
+    const { sh } = await play('cd ~/infra', 'echo yes | terraform apply')
+    expect(await detectedAll(sh)).toEqual(TRAPPED)
+  })
+
+  it('(j) wrong: -target on the instance leaves the group alone, the rule stays in reality and the next plan still removes it', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform apply -target=aws_instance.payments_worker -auto-approve', 'terraform plan')
+    expect(out[1].output).toContain('Apply complete! Resources: 0 added, 1 changed, 0 destroyed.')
+    expect(out[1].output).not.toContain('aws_security_group.payments: Modifying')
+    expect(await SG(sh, [RULE443, RULE8443])).toBe(true)
+    expect(out[2].output).toContain('Plan: 0 to add, 1 to change, 0 to destroy.')
+    expect(out[2].output).toContain('# aws_security_group.payments will be updated in-place')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(k) wrong: apply -refresh-only records the rule in state but the plan still removes it', async () => {
+    const { sh, out } = await play('cd ~/infra', 'terraform apply -refresh-only -auto-approve', 'terraform state show aws_security_group.payments', 'terraform plan')
+    expect(out[1].exitCode).toBe(0)
+    expect(out[1].output).toContain('# aws_security_group.payments has changed')
+    expect(out[1].output).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
+    expect(out[2].output).toContain('8443')
+    expect(out[3].output).toContain('# aws_security_group.payments will be updated in-place')
+    expect(out[3].output).toContain('- description = "partner hotfix"')
+    expect(await SG(sh, [RULE443, RULE8443])).toBe(true)
+    expect(await detectedAll(sh)).toEqual(NONE)
+    // refreshed first, then codified wide: the wrong action; narrowed and applied: the fix
+    await sh.run(WIDE_CODE, scenario as never, new Set())
+    expect(await detectedAll(sh)).toEqual(WIDE)
+    expect((await sh.run('terraform plan -refresh-only', scenario as never, new Set())).output).toContain('No changes. Your infrastructure still matches the configuration.')
+    await sh.run(CODIFIED, scenario as never, new Set())
+    await sh.run(APPLY, scenario as never, new Set())
+    expect((await detectedAll(sh)).codify).toBe(true)
+  })
+
+  it('(l) refresh-only apply asks first and an unanswered prompt changes nothing', async () => {
+    const { sh, out } = await play('cd ~/infra', 'echo no | terraform apply -refresh-only', 'echo yes | terraform apply -refresh-only', 'terraform state show aws_security_group.payments')
+    expect(out[1].exitCode).toBe(1)
+    expect(out[1].output).toContain('Would you like to update the Terraform state to reflect these detected changes?')
+    expect(out[1].output).toContain('Apply cancelled.')
+    expect(out[2].exitCode).toBe(0)
+    expect(out[3].output).toContain('8443')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(m) refresh-only flag conflicts are errors', async () => {
+    const { out } = await play('cd ~/infra', 'terraform plan -refresh-only -refresh=false', 'terraform plan -refresh-only -replace=aws_instance.payments_worker')
+    expect(out[1].exitCode).toBe(1)
+    expect(out[1].output + out[1].output).toContain('Incompatible refresh-only and refresh options')
+    expect(out[2].output).toContain('Incompatible refresh-only and replace options')
+  })
+
+  it('(n) stuck: a broken main.tf plans nothing and credits nothing, and fixing the syntax goes on as before', async () => {
+    const { sh, out } = await play('cd ~/infra', 'echo "resource {" >> main.tf', 'terraform plan')
+    expect(out[2].exitCode).toBe(1)
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+})
+
+describe('codify spelled with variables and locals', () => {
+  const CIDR_RULE = (cidr: string) => NARROW.replace('"198.51.100.16/28"', cidr)
+  const cases: [string, string[]][] = [
+    ['var default', ['cat > vars.tf <<\'EOF\'\nvariable "partner" {\n  default = "198.51.100.16/28"\n}\nEOF', MAIN(INTERNAL + CIDR_RULE('var.partner'))]],
+    ['local', ['cat > locals.tf <<\'EOF\'\nlocals {\n  partner = "198.51.100.16/28"\n}\nEOF', MAIN(INTERNAL + CIDR_RULE('local.partner'))]],
+    ['variables.tf', ['cat > variables.tf <<\'EOF\'\nvariable "partner_cidr" {\n  default = "198.51.100.16/28"\n}\nEOF', MAIN(INTERNAL + CIDR_RULE('var.partner_cidr'))]],
+  ]
+  for (const [name, lines] of cases)
+    it(`${name} is credited`, async () => {
+      const { sh, out } = await play('cd ~/infra', ...lines, APPLY)
+      expect(out.at(-1)!.output).toContain('Apply complete!')
+      expect(await detectedAll(sh)).toEqual(FIXED)
+    })
+  it('state rm of the group (a plan that would create it) is not credited', async () => {
+    const { sh } = await play('cd ~/infra', "terraform state rm aws_security_group.payments", 'terraform plan')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+})
+
+describe('set-valued attributes compare without order', () => {
+  it('ingress rules in another order are the same set, and a different set is not', async () => {
+    const { equalSet } = await import('../src/game/terraform/eval.ts')
+    const a = { p: 1 }
+    const b = { p: 2 }
+    expect(equalSet([a, b], [b, a])).toBe(true)
+    expect(equalSet([a, a], [a, b])).toBe(false)
+    expect(equalSet([a], [a, b])).toBe(false)
+    expect(equalSet('x', 'x')).toBe(true)
+  })
+})

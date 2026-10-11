@@ -13,7 +13,7 @@ ticket:
     We're retiring the old reporting stack. The teardown job (terraform
     destroy -auto-approve, run from CI) fails at the end and the log bucket,
     acme-reports-logs, is still there; a re-run fails the same way. The logs
-    in it were copied to the archive account last quarter and the reporting
+    in it were copied to the archive account (bucket acme-archive-reports, prefix reports-logs/) last quarter and the reporting
     team signed off on deleting the stack, so nothing in the bucket needs
     keeping. Somebody suggested the CI role is missing a permission. The
     repo is checked out in ~/reporting-infra. Please get the stack fully
@@ -50,6 +50,34 @@ terminal:
       evidence: bucket-has-objects
       output: |
                                    PRE logs/
+    - match_regex: "^aws s3 ls s3://acme-archive-reports/reports-logs/? --recursive$"
+      example: "aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive"
+      evidence: archive-verified
+      output: |
+        2026-08-30 02:11:40      48213 reports-logs/2026-08-29-access.log.gz
+        2026-08-31 02:11:38      51877 reports-logs/2026-08-30-access.log.gz
+        2026-09-01 02:11:41      50342 reports-logs/2026-08-31-access.log.gz
+    - match_regex: "^aws s3api get-bucket-versioning(?=.*--bucket[ =]acme-reports-logs(?: |$))(?: --bucket[ =]acme-reports-logs| --region[ =]us-east-1| --no-cli-pager)+$"
+      example: "aws s3api get-bucket-versioning --bucket acme-reports-logs"
+      evidence: not-versioned
+      output: |
+        {}
+    - match_regex: "^aws s3api list-object-versions(?=.*--bucket[ =]acme-reports-logs(?: |$))(?: --bucket[ =]acme-reports-logs| --region[ =]us-east-1| --no-cli-pager)+$"
+      example: "aws s3api list-object-versions --bucket acme-reports-logs"
+      when_actions: [empty-bucket]
+      evidence: not-versioned
+      output: ""
+    - match_regex: "^aws s3api list-object-versions(?=.*--bucket[ =]acme-reports-logs(?: |$))(?: --bucket[ =]acme-reports-logs| --region[ =]us-east-1| --no-cli-pager)+$"
+      example: "aws s3api list-object-versions --bucket acme-reports-logs"
+      evidence: not-versioned
+      output: |
+        {
+            "Versions": [
+                { "ETag": "\"9b2cf535f27731c974343645a3985328\"", "Size": 48213, "StorageClass": "STANDARD", "Key": "logs/2026-08-29-access.log.gz", "VersionId": "null", "IsLatest": true, "LastModified": "2026-08-30T02:00:14+00:00" },
+                { "ETag": "\"1c9d6a0be7f84a2d5c3e8f1b7a406d92\"", "Size": 51877, "StorageClass": "STANDARD", "Key": "logs/2026-08-30-access.log.gz", "VersionId": "null", "IsLatest": true, "LastModified": "2026-08-31T02:00:09+00:00" },
+                { "ETag": "\"e4a7b8c2d1f0935a6b7c8d9e0f1a2b3c\"", "Size": 50342, "StorageClass": "STANDARD", "Key": "logs/2026-08-31-access.log.gz", "VersionId": "null", "IsLatest": true, "LastModified": "2026-09-01T02:00:11+00:00" }
+            ]
+        }
     - match: "aws sts get-caller-identity"
       evidence: admin-role
       output: |
@@ -168,7 +196,7 @@ actions:
         - state_lacks: aws_s3_bucket.logs
         - reality_lacks: { type: aws_s3_bucket, id: acme-reports-logs }
         - file_contains: { path: /home/you/reporting-infra/main.tf, matches: '^[ \t]*force_destroy[ \t]*=[ \t]*true[ \t]*$' }
-    feedback: "Terraform deleted the objects with the bucket: force_destroy only counts once an apply has written it into state, which is why editing the file alone changed nothing. The stack is gone. Remember that force_destroy is a data-loss switch; here the logs were disposable."
+    feedback: "Terraform deleted the objects with the bucket: force_destroy only counts once an apply has written it into state, which is why editing the file alone changed nothing. The stack is gone. force_destroy is a data-loss switch: it was safe here only because the archive copy matches, so check that first, and delete the flag with the retired configuration so a later stack cannot inherit it."
   - id: empty-bucket
     label: "Empty the bucket with the AWS CLI (aws s3 rm s3://acme-reports-logs --recursive)"
     kind: fix
@@ -204,18 +232,20 @@ solution_paths:
   - [force-destroy-route]
   - [empty-bucket, destroy-after-emptying]
 
-key_evidence: [bucket-not-empty, force-destroy-false, bucket-has-objects, admin-role]
+key_evidence: [bucket-not-empty, force-destroy-false, bucket-has-objects, admin-role, archive-verified, not-versioned]
 
 evidence_labels:
   bucket-not-empty: "terraform destroy stops with BucketNotEmpty on the bucket"
   force-destroy-false: "The bucket's state records force_destroy = false"
   bucket-has-objects: "The bucket still holds log objects"
   admin-role: "Your role is an admin role in the account"
+  not-versioned: "The bucket is not versioned: every object has the null version, so there are no old versions or delete markers to clear"
+  archive-verified: "The archive bucket holds the same three log files, with the same sizes, so deleting the originals loses nothing"
 
 hints:
   nudge: "Read the error code S3 returned. What does it say about the bucket, and what did Terraform delete before it got there?"
   direction: "BucketNotEmpty means the bucket has objects. Check what is in it (aws s3 ls) and what Terraform's state records for force_destroy (terraform state show aws_s3_bucket.logs). Terraform acts on the state, not on the file."
-  answer: "Either set force_destroy = true in main.tf, run terraform apply (so state records it), then terraform destroy; or empty the bucket yourself with aws s3 rm s3://acme-reports-logs --recursive and run terraform destroy again."
+  answer: "First confirm the archive copy matches (aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive) and that the bucket has no versions. Then either empty the bucket yourself with aws s3 rm s3://acme-reports-logs --recursive and run terraform destroy again (nothing left behind in code), or set force_destroy = true in main.tf, terraform apply it so state records it, and terraform destroy."
 
 analogy:
   title: "The locked storage unit"
@@ -237,11 +267,15 @@ debrief:
   ideal_path:
     - "Read the error: BucketNotEmpty, not AccessDenied or a dependency error."
     - "List the bucket and check state show for force_destroy."
-    - "Confirm the data is disposable (the ticket says the logs were archived)."
-    - "Either set force_destroy = true, apply, destroy, or empty the bucket and destroy."
+    - "Verify the archive copy rather than trusting the ticket: list the archive bucket and compare the files and sizes."
+    - "Check the bucket for versions (aws s3api list-object-versions): aws s3 rm leaves old versions and delete markers behind."
+    - "Either empty the bucket and destroy (nothing to clean up in code), or set force_destroy = true, apply, destroy and remove the flag with the retired configuration."
   real_world: |
     force_destroy on a bucket with production data is a data-loss switch: set it
-    only when the contents are disposable, and prefer removing it again afterwards.
+    only when the contents are verifiably disposable (check the copy, do not
+    trust the ticket), prefer emptying the bucket by hand and keeping the flag
+    out of the code, and never let a teardown run from CI with -auto-approve
+    against a bucket nobody has looked at.
     Versioned buckets also need every version and delete marker removed, which
     aws s3 rm does not do; force_destroy handles versions, a manual cleanup needs
     list-object-versions. Never use terraform state rm to get past this: it leaves a
@@ -273,3 +307,6 @@ command_notes:
   "aws sts get-caller-identity": "An admin role in the stack's account: a permission problem would be AccessDenied, not BucketNotEmpty."
   "aws s3 ls s3://acme-reports-logs --recursive": "Lists every object in the bucket: three log files, which is why S3 refuses to delete it."
   "aws s3 ls s3://acme-reports-logs": "Top level of the bucket: there is a logs/ prefix, so it is not empty."
+  "aws s3 ls s3://acme-archive-reports/reports-logs/ --recursive": "The archive account's copy: the same three files with the same sizes as the original bucket."
+  "aws s3api get-bucket-versioning --bucket acme-reports-logs": "An empty answer means versioning was never enabled, so aws s3 rm leaves nothing behind."
+  "aws s3api list-object-versions --bucket acme-reports-logs": "Every object has the null version and there are no delete markers, so emptying with aws s3 rm is enough."

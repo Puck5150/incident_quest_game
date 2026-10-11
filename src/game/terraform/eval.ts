@@ -93,6 +93,12 @@ export function equal(a: Value, b: Value): boolean {
   return a === b
 }
 
+// Equality for a nested-block attribute the provider treats as a set (an ingress list): order does not matter.
+export function equalSet(a: Value, b: Value): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b)) return equal(a, b)
+  return a.length === b.length && a.every((x) => b.some((y) => equal(x, y))) && b.every((y) => a.some((x) => equal(x, y)))
+}
+
 function binary(op: string, l: Value, r: Value): Value {
   if (op === '&&' || op === '||') {
     // Decided by one side even if the other is unknown.

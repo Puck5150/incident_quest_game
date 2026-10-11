@@ -78,9 +78,9 @@ hypotheses:
 
 actions:
   - id: import-block
-    label: "Add an import block (to = aws_s3_bucket.analytics_raw, id = \"acme-analytics-raw\") to the PR, check the plan says \"1 to import\" with no other changes, then apply"
+    label: "Add an import block (to = aws_s3_bucket.analytics_raw, id = \"acme-analytics-raw\") to the PR, check the plan says \"1 to import\" with no other changes, put lifecycle { prevent_destroy = true } on the block (it holds 9 TB), then apply"
     kind: fix
-    feedback: "Terraform adopts the existing bucket into state without touching it, and from now on manages it like any other resource. The import is reviewed in the PR."
+    feedback: "Terraform adopts the existing bucket into state without touching it, and from now on manages it like any other resource. The import is reviewed in the PR, and prevent_destroy means a later careless change cannot delete 9 TB through Terraform. Before trusting the bucket, audit it: a hand-made bucket often lacks a public access block, default encryption, versioning and a TLS-only policy, and the code does not declare any of them yet. Add those as reviewed changes after the import."
   - id: rename
     label: "Change the bucket name in code to acme-analytics-raw-2"
     kind: wrong
@@ -108,7 +108,7 @@ evidence_labels:
 hints:
   nudge: "Terraform wrote down nothing about this bucket. How would it know it already exists?"
   direction: "Check state for the bucket, then look at how Terraform adopts an existing object."
-  answer: "Existing objects must be imported. Add an import block for acme-analytics-raw and check the plan says \"1 to import\"."
+  answer: "Existing objects must be imported. Add an import block for acme-analytics-raw, check the plan says \"1 to import\" with no other changes, and add prevent_destroy because it holds 9 TB. Then audit the bucket's public access block, encryption and versioning, which the code does not declare."
 
 analogy:
   title: "Registering a car you already own"
@@ -129,11 +129,15 @@ debrief:
     - "Read the apply error: you already own the bucket."
     - "Check state: no entry for it."
     - "See why: the plan treats it as new."
-    - "Add an import block, confirm the plan imports with no other changes, then apply."
+    - "Add an import block, confirm the plan imports with no other changes, add prevent_destroy, then apply."
+    - "Audit the imported bucket (public access block, default encryption, versioning, TLS-only policy) and bring any gaps into code through review."
   real_world: |
     Import blocks (Terraform 1.5+) put imports through code review and can
     generate configuration for you with -generate-config-out. Always check
-    the post-import plan for unexpected changes before applying.
+    the post-import plan for unexpected changes before applying. Put
+    prevent_destroy on anything that holds data you cannot recreate, and
+    treat a hand-made resource as unaudited until you have checked its
+    security settings: importing it makes it manageable, not safe.
 
 concepts:
   - term: "Terraform state"

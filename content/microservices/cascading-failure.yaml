@@ -129,14 +129,14 @@ terminal:
       output: |
         200 0.048
     - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' https://shop.example.com/api/cart"
-      when_actions: [rollback-inventory]
+      when_actions: [restore-index]
       output: |
         200 0.051
     - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' https://shop.example.com/api/cart"
       output: |
         504 30.002
     - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
-      when_actions: [rollback-inventory]
+      when_actions: [restore-index]
       output: |
         200 0.271
     - match: "curl -s -o /dev/null -w '%{http_code} %{time_total}\\n' -X POST https://shop.example.com/api/checkout"
@@ -162,14 +162,26 @@ hypotheses:
     feedback: "inventory-svc's error rate is 0%. Every request succeeds, just after about 9 s. That's why its dashboard is green, and why this was hard to spot."
 
 actions:
-  - id: rollback-inventory
-    label: "Roll back inventory-svc to v3.3.2 and restore the idx_stock_sku index"
+  - id: restore-index
+    label: "Recreate the missing index with CREATE INDEX CONCURRENTLY idx_stock_sku ON stock (sku) and confirm with EXPLAIN that the stock query uses it"
     kind: fix
-    feedback: "Stock lookups are back to milliseconds. The trigger is gone and checkout's workers drain."
+    feedback: "Stock lookups are back to milliseconds. The cause was migration 0042 dropping the index, so that is what is repaired; building it concurrently doesn't block writes while it builds. Fix the migration too, so the next deploy doesn't drop it again."
+  - id: rollback-inventory
+    label: "Roll back inventory-svc to v3.3.2"
+    kind: wrong
+    feedback: "A code rollback doesn't undo migration 0042: the table is still rebuilt without idx_stock_sku, and v3.3.2 may not even match the new table. The slow query stays. Restore the index."
   - id: add-timeout
     label: "Give checkout's inventory client a 1 s timeout, 1 retry with jittered backoff, and a circuit breaker"
     kind: fix
     feedback: "The next slow dependency can't hold checkout hostage: calls fail fast, the breaker opens, and unrelated endpoints like /cart keep working."
+  - id: bulkhead
+    label: "Give each dependency its own concurrency limit in checkout-svc (a bulkhead, for example at most 16 of 64 workers for inventory) so one slow dependency can't take every worker"
+    kind: fix
+    feedback: "A timeout bounds how long a worker is held; a bulkhead bounds how many. With both, /cart keeps its workers even when inventory is slow."
+  - id: migration-guard
+    label: "Fix migration 0042 to recreate idx_stock_sku, and add a CI check that fails when a migration drops or leaves out an index on a hot query (EXPLAIN against a production-sized copy) plus an alert on inventory p99 latency"
+    kind: fix
+    feedback: "The outage began as a migration that silently dropped an index and was noticed through checkout, not inventory. A guard in CI and a latency alert on inventory itself catch it at the source."
   - id: scale-checkout
     label: "Scale checkout-svc from 4 to 12 replicas"
     kind: wrong
@@ -188,7 +200,7 @@ actions:
     feedback: "payments-svc was healthy. Restarting it only added failures of its own."
 
 solution_paths:
-  - [rollback-inventory, add-timeout]
+  - [restore-index, add-timeout, bulkhead, migration-guard]
 
 key_evidence: [slow-inventory, workers-saturated, no-timeout]
 evidence_labels:
@@ -199,7 +211,7 @@ evidence_labels:
 hints:
   nudge: "Every request that fails takes almost exactly 30 seconds. What is it waiting on?"
   direction: "Open a trace for a failed checkout and look for the longest bar. Then compare checkout's busy workers with its pool size, and check how the HTTP client is configured."
-  answer: "inventory-svc's stock query went from ~80 ms to ~9 s after the 14:05 migration dropped an index. checkout calls it with no timeout and 3 retries, so all 64 workers block and even /cart can't get a worker. Roll back inventory, and add a timeout and circuit breaker to the client."
+  answer: "inventory-svc's stock query went from ~80 ms to ~9 s after the 14:05 migration dropped an index. checkout calls it with no timeout and 3 retries, so all 64 workers block and even /cart can't get a worker. Recreate the index (a rollback doesn't undo the migration), and add a timeout, circuit breaker and bulkhead to the client."
 
 analogy:
   title: "Waiters stuck at the dessert station"
@@ -229,7 +241,7 @@ debrief:
     - "Check checkout's worker pool: pinned at 64/64. Cart traces show time spent waiting for a worker."
     - "Find the trigger: inventory v3.4.0's migration dropped an index at 14:05."
     - "Find the amplifier: checkout's inventory client has no timeout and 3 retries with no backoff."
-    - "Mitigate by rolling back inventory; fix the client with a timeout, bounded retries with jitter, and a circuit breaker."
+    - "Restore the index (CREATE INDEX CONCURRENTLY): a code rollback does not undo the migration. Fix the client with a timeout, bounded retries with jitter, a circuit breaker and a bulkhead. Guard migrations in CI and alert on inventory latency."
     - "Verify: /cart and /checkout return 200 in milliseconds."
   real_world: |
     The Google SRE book's chapter on cascading failures describes exactly this:

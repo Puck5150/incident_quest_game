@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Scenario } from '../../schema/scenario.ts'
+import type { Action, Scenario } from '../../schema/scenario.ts'
+import { commandNamesFile, fileFixed, gateOk } from '../../game/fileFix.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
-import { actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
+import { actionFor, actionsTaken, commandsRun, complete, engineHandles, missingPrereq, quoteHint, namedRootCause, notYetAfter, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
 import { detectAction } from './detect.ts'
 
@@ -10,7 +11,7 @@ export type Line = { id: number; prompt: string; input: string; output: string; 
 // The terminal's welcome line.
 export const hint = (scenario: Scenario) =>
   "Type help to see some commands. It's a real shell: pipes, files, cd and variables work. Tab completes, ↑/↓ for history." +
-  ([scenario, ...(scenario.stages ?? [])].some((x) => x.actions.some((a) => a.match_regex)) ? ' Once you have named the root cause, you can type fixes here too.' : '')
+  ([scenario, ...(scenario.stages ?? [])].some((x) => x.actions.some((a) => a.match_regex || a.iam_policy || a.endpoint_policy)) ? ' Once you have named the root cause, you can type fixes here too.' : '')
 
 // The prompt on another host: "ops@media-01:~$" after ssh db-01 is "ops@db-01:~$".
 const onHost = (prompt: string, host: string | undefined) => (host ? prompt.replace(/^([\w.-]+@)[\w.-]+/, `$1${host}`) : prompt)
@@ -122,12 +123,13 @@ export function useTerminalSession(
     const cur = atStage(scenario, stageAt(now))
     const taken = take ? new Set([...actionsTaken(now), ...sent.current]) : actionsTaken(now)
     const notes: string[] = []
-    const fileMatches = async (f: { path: string; matches: string }) => {
+    const fileMatches = async (f: NonNullable<Action['file']>) => {
       const text = await sh.read(f.path)
-      return text !== undefined && new RegExp(f.matches, 'm').test(text)
+      return text !== undefined && fileFixed(f, text)
     }
     for (const a of cur.actions) {
       if (!(await detectAction(a, { taken, fileMatches, doneWhen: (p) => sh.doneWhen(p) }))) continue
+      if (missingPrereq(cur, a, taken)) continue // not yet: the world shows it, but its after: prerequisites aren't taken
       if (namedRootCause(scenario, now)) {
         if (take && onTakeAction) {
           sent.current.add(a.id)
@@ -189,7 +191,7 @@ export function useTerminalSession(
             replayAnswers.current = undefined
           }
           const note = await checkFixes(sh, snapshot.slice(0, next < 0 ? undefined : next), false)
-          output = [output, note].filter(Boolean).join('\n')
+          output = [output, note, quoteHint(atStage(scenario, stageAt(before)), cmd)].filter(Boolean).join('\n')
         }
         rebuilt.push({ id: id(), prompt, input: cmd, output })
       }
@@ -212,6 +214,30 @@ export function useTerminalSession(
       onRun(cmd)
       setHistory((h) => [...h, cmd])
       if (cmd === 'clear') return { line, done: Promise.resolve(line), clear: true }
+      // A typed fix that counts only while a file on disk is right at this moment (requires_file): the
+      // command prints its scripted output either way; the file is read through the shell, now.
+      const gated = actionFor(atStage(scenario, stageAt(before)), cmd)
+      const need = gated?.requires_file
+      if (gated && need) {
+        const l = { ...line, output: terminalOutput(scenario, cmd, before) }
+        const done = (queue.current = queue.current.then(async () => {
+          const sh = await getShell()
+          const text = await sh.read(need.path)
+          let note = ''
+          let pre: Action | undefined
+          if (text === undefined || !commandNamesFile(cmd, need.path, sh.cwd, sh.home) || !gateOk(need, text))
+            note = `(It ran, but ${need.path.split('/').pop()} does not satisfy this fix's file check right now (or the command does not point at it), so the game does not count it as the fix.)`
+          else if (!namedRootCause(scenario, latest.current)) note = NOT_YET
+          else if ((pre = missingPrereq(atStage(scenario, stageAt(latest.current)), gated, actionsTaken(latest.current)))) note = notYetAfter(pre)
+          else if (!actionsTaken(latest.current).has(gated.id) && !sent.current.has(gated.id)) {
+            sent.current.add(gated.id)
+            onTakeAction?.(gated.id)
+            note = gated.feedback
+          }
+          return { ...l, output: [l.output, note].filter(Boolean).join('\n') }
+        })) as Promise<Line>
+        return { line: { ...l, pending: true }, done }
+      }
       if (engineHandles(scenario, cmd, before)) {
         const l = { ...line, output: terminalOutput(scenario, cmd, before) }
         return { line: l, done: Promise.resolve(l) }
@@ -223,7 +249,7 @@ export function useTerminalSession(
         setHost(sh.currentHost)
         if (r.hits.length) onShellRan?.(r.hits)
         const note = await checkFixes(sh, latest.current)
-        return { ...line, output: [r.output, note].filter(Boolean).join('\n') }
+        return { ...line, output: [r.output, note, quoteHint(atStage(scenario, stageAt(before)), cmd)].filter(Boolean).join('\n') }
       })) as Promise<Line>
       return { line: { ...line, pending: true }, done }
     },

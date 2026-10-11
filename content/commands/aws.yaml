@@ -161,6 +161,8 @@
   summary: "Lists VPC endpoints (gateway and interface)."
   parts:
     - { token: "--filters Name=vpc-id,Values=vpc-0shop", meaning: "Only endpoints in this VPC." }
+    - { token: "--vpc-endpoint-ids vpce-0s3gw", meaning: "(Other form) only this endpoint, by its ID." }
+    - { token: "--query VpcEndpoints[0].PolicyDocument", meaning: "Keep just the first endpoint's endpoint policy, the document that limits what can be reached through it." }
   why: "Shows whether S3 or DynamoDB traffic can bypass the NAT gateway through a gateway endpoint."
   alternatives:
     - { command: "aws ec2 describe-route-tables --route-table-ids RTB", note: "A gateway endpoint appears as a prefix-list route in the tables it's attached to." }
@@ -372,6 +374,16 @@
     - { command: "aws rds describe-events --source-identifier NAME --source-type db-instance", note: "Recent events such as failovers." }
   docs: { title: "AWS CLI: describe-db-instances", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/rds/describe-db-instances.html" }
 
+- id: aws-rds-describe-snapshots
+  match: "^aws rds describe-db-snapshots"
+  summary: "Shows RDS DB snapshots: status, source instance, and whether each one is encrypted."
+  parts:
+    - { token: "--db-snapshot-identifier NAME", meaning: "Only this snapshot." }
+  why: "A snapshot copy made with a KMS key reports Encrypted = true once it is available; a restore from it gives an encrypted instance."
+  alternatives:
+    - { command: "aws rds describe-db-snapshots --db-instance-identifier NAME", note: "Every snapshot of one instance." }
+  docs: { title: "AWS CLI: describe-db-snapshots", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/rds/describe-db-snapshots.html" }
+
 - id: aws-route53-health-status
   match: "^aws route53 get-health-check-status"
   summary: "Shows what each Route 53 health checker region currently reports for a health check."
@@ -423,6 +435,26 @@
   alternatives:
     - { command: "S3 console > bucket > Permissions > Object Ownership", note: "The same setting." }
   docs: { title: "AWS CLI: get-bucket-ownership-controls", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-ownership-controls.html" }
+
+- id: aws-s3api-bucket-versioning
+  match: "^aws s3api get-bucket-versioning"
+  summary: "Shows whether versioning is enabled or suspended on a bucket; an empty answer means it was never enabled."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "A versioned bucket keeps old versions and delete markers that aws s3 rm does not remove, and S3 will not delete the bucket until they are gone."
+  alternatives:
+    - { command: "aws s3api list-object-versions --bucket B", note: "Lists the versions and delete markers themselves." }
+  docs: { title: "AWS CLI: get-bucket-versioning", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/get-bucket-versioning.html" }
+
+- id: aws-s3api-list-object-versions
+  match: "^aws s3api list-object-versions"
+  summary: "Lists every version and delete marker in a bucket."
+  parts:
+    - { token: "--bucket NAME", meaning: "The bucket." }
+  why: "Shows whether anything is left after aws s3 rm: versions and delete markers also block DeleteBucket."
+  alternatives:
+    - { command: "aws s3 ls s3://B --recursive", note: "Only the current objects, not old versions." }
+  docs: { title: "AWS CLI: list-object-versions", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/s3api/list-object-versions.html" }
 
 - id: aws-s3api-list-objects-owner
   match: "^aws s3api list-objects-v2"
@@ -630,3 +662,37 @@
   alternatives:
     - { command: "aws sqs list-queues --queue-name-prefix app-", note: "Every queue whose name starts with the prefix." }
   docs: { title: "AWS CLI: sqs get-queue-url", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/sqs/get-queue-url.html" }
+
+- id: aws-lambda-event-source-mapping
+  match: "^aws lambda (list-event-source-mappings|get-event-source-mapping)"
+  summary: "Shows how a function is fed from a queue or stream: the mapping's UUID, batch size and scaling configuration."
+  parts:
+    - { token: "--function-name NAME", meaning: "(list) Only the mappings that invoke this function." }
+    - { token: "--uuid ID", meaning: "(get) One mapping, by the UUID the list shows." }
+    - { token: "ScalingConfig.MaximumConcurrency", meaning: "In the output: the most concurrent invocations the queue poller is allowed to start for this mapping." }
+  why: "For a queue consumer, the mapping is where its concurrency is controlled without making Lambda throttle the messages."
+  alternatives:
+    - { command: "aws lambda get-function-concurrency --function-name NAME", note: "The function-level reserved concurrency, a different control." }
+  docs: { title: "AWS CLI: lambda list-event-source-mappings", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/list-event-source-mappings.html" }
+
+- id: aws-lambda-esm-max-concurrency
+  match: "^aws lambda update-event-source-mapping"
+  summary: "Changes an event source mapping; --scaling-config MaximumConcurrency caps how many invocations an SQS queue may drive at once."
+  parts:
+    - { token: "--uuid ID", meaning: "The mapping to change." }
+    - { token: "--scaling-config MaximumConcurrency=50", meaning: "The poller stops starting new invocations beyond 50 at a time; extra messages simply wait in the queue." }
+  why: "Caps a batch consumer without throttling: messages are not received and failed, so they do not burn their retries toward a dead-letter queue."
+  alternatives:
+    - { command: "aws lambda put-function-concurrency --function-name NAME --reserved-concurrent-executions N", note: "Caps the whole function, but the poller keeps invoking into throttles, returning messages to the queue." }
+  docs: { title: "AWS CLI: lambda update-event-source-mapping", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/update-event-source-mapping.html" }
+
+- id: aws-ec2-modify-vpc-endpoint
+  match: "^aws ec2 modify-vpc-endpoint"
+  summary: "Changes a VPC endpoint, including the endpoint policy that limits what can be reached through it."
+  parts:
+    - { token: "--vpc-endpoint-id vpce-0s3gw", meaning: "The endpoint to change." }
+    - { token: "--policy-document JSON", meaning: "The new endpoint policy: an inline JSON document, or file://path." }
+  why: "A gateway endpoint starts with a policy that allows everything; this is where you narrow it to the buckets and actions the workload needs."
+  alternatives:
+    - { command: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id ID --reset-policy", note: "Puts the default allow-everything policy back." }
+  docs: { title: "AWS CLI: modify-vpc-endpoint", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/modify-vpc-endpoint.html" }

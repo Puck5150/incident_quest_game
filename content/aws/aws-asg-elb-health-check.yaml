@@ -114,12 +114,31 @@ actions:
   - id: elb-health-check
     label: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB --health-check-grace-period 300"
     kind: fix
-    match_regex: "^aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB( --health-check-grace-period \\d+)?$"
+    match_regex: "^aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB --health-check-grace-period[ =]([1-9][0-9]{2}|1[0-7][0-9]{2}|1800)$"
     feedback: "With ELB health checks on, Auto Scaling marks instances the load balancer reports Unhealthy as unhealthy on its next check and replaces them. The four hung instances are swapped for fresh ones, which keep the grace period to boot."
   - id: alarm-unhealthy
     label: "Alarm on UnHealthyHostCount > 0 for 10 minutes, and fix the hang bug as a follow-up"
     kind: fix
     feedback: "Self-healing hides the bug as much as it fixes the outage. An alarm makes sure someone sees that instances keep hanging, so the leak actually gets fixed."
+  - id: grace-zero
+    label: "aws autoscaling update-auto-scaling-group ... --health-check-type ELB --health-check-grace-period 0 (or any value under 100)"
+    kind: wrong
+    match_regex: "^aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB --health-check-grace-period[ =][0-9]{1,2}$"
+    feedback: "With no time to boot, every new instance is judged on the load balancer's first checks, fails them while it is still starting, is terminated, and is replaced by another that does the same: a churn loop that is worse than the original outage. The grace period must cover real boot time (300 here)."
+  - id: grace-too-long
+    label: "aws autoscaling update-auto-scaling-group ... --health-check-type ELB --health-check-grace-period <over 1800> (for example 86400)"
+    kind: wrong
+    match_regex: "^aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB --health-check-grace-period[ =](180[1-9]|18[1-9][0-9]|19[0-9]{2}|[2-9][0-9]{3}|[0-9]{5,})$"
+    feedback: "While the grace period runs, Auto Scaling ignores the load balancer's verdict on the instance. A day-long grace means a hung instance is kept in service, serving errors, for hours before it is replaced: the original bug with extra steps. Tie the grace period to real boot time (300 here)."
+  - id: grace-unset
+    label: "aws autoscaling update-auto-scaling-group ... --health-check-type ELB (no --health-check-grace-period)"
+    kind: wrong
+    match_regex: "^aws autoscaling update-auto-scaling-group --auto-scaling-group-name web-asg --health-check-type ELB$"
+    feedback: "Switching to ELB checks without choosing the grace period leaves whatever value the group had. State it deliberately, sized to boot time (300 here), so new instances are not judged while they are still starting."
+  - id: maintenance-policy
+    label: "Set an instance maintenance policy on web-asg (MinHealthyPercentage 100, MaxHealthyPercentage 110) so replacements launch before old instances are terminated"
+    kind: fix
+    feedback: "ELB health checks hand the group the power to replace every instance the load balancer dislikes. If a bad deploy or a wrong health path ever makes all targets unhealthy, the group would terminate the whole fleet. A maintenance policy makes it launch replacements first and keep capacity up while it does."
   - id: raise-desired
     label: "Raise desired capacity from 6 to 12"
     kind: wrong
@@ -130,7 +149,7 @@ actions:
     feedback: "That takes the two working instances down as well: the site is fully down until six new instances boot and pass health checks. Fix the health check type and let the group replace only the broken ones."
 
 solution_paths:
-  - [elb-health-check, alarm-unhealthy]
+  - [elb-health-check, maintenance-policy, alarm-unhealthy]
 
 key_evidence: [unhealthy-hosts, asg-thinks-healthy, ec2-only]
 
@@ -167,12 +186,16 @@ debrief:
     - "Check the group's health check type: EC2."
     - "Turn on ELB health checks, keeping a grace period for new instances to boot."
     - "Watch the hung instances get replaced and healthy hosts return to six."
+    - "Add an instance maintenance policy, so a bad health signal is far less likely to take the whole fleet out at once."
     - "Alarm on unhealthy hosts, and fix the hang itself."
   real_world: |
     For instances behind a load balancer, ELB health checks are almost always
     what you want: they check the app, not just the machine. Pair them with a
     sensible grace period, and keep alarming on unhealthy hosts so
-    self-healing doesn't quietly hide a recurring bug.
+    self-healing doesn't quietly hide a recurring bug. Remember that ELB
+    health checks let the load balancer's verdict drive terminations: a wrong
+    health path or security group can make the group replace every instance,
+    so guard it with an instance maintenance policy and a grace period.
 
 concepts:
   - term: "Auto Scaling health checks"

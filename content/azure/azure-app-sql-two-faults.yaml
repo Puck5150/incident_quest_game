@@ -90,6 +90,10 @@ actions:
     label: "Add a server firewall rule for each of the app's possible outbound IP addresses (az sql server firewall-rule create, once per address)"
     kind: fix
     feedback: "The app picks one of its outbound addresses at random for each connection, so all four are now allowed, and nothing else new is."
+  - id: firewall-iac
+    label: "Declare the firewall rules (or, better, a private endpoint plus VNet integration) in the server's template, so re-applying it does not remove them"
+    kind: fix
+    feedback: "The server was created by the platform template, so rules added by hand are lost, or flagged as drift, the next time it is applied. Declaring them with the server keeps the fix. A private endpoint with VNet integration is the longer-term answer: no public addresses to maintain."
   - id: allow-azure
     label: "Turn on \"Allow Azure services and resources to access this server\""
     kind: wrong
@@ -104,7 +108,7 @@ actions:
     feedback: "That opens the database's public endpoint to the whole internet, protected only by sign-in. The firewall exists so that isn't the only line of defence."
 
 solution_paths:
-  - [allow-outbound-ips]
+  - [allow-outbound-ips, firewall-iac]
 
 key_evidence: [firewall-40615, office-only, app-ips]
 

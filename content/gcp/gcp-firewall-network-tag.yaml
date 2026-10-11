@@ -77,8 +77,12 @@ actions:
     kind: fix
     match_regex: "^gcloud compute instances add-tags app-3 --zone[ =]us-central1-a --tags[ =]app$"
     feedback: "app-3 now matches allow-app-8080's target tag, so the rule applies to it and the frontends get through. Tags can be added while the VM is running."
+  - id: sa-target
+    label: "Stronger alternative to the tag: first run app-1, app-2 and app-3 as one dedicated service account (app-3 must be stopped to change it), then switch allow-app-8080 to --target-service-accounts and drop the tag target. A rule's target tags and target service accounts cannot be combined, so switching before every VM runs as the account would cut off the tag-only ones"
+    kind: fix
+    feedback: "Anyone with compute.instances.setTags can give any VM the tag and inherit the allow; changing a VM's service account needs permission on the account itself. Targeting by service account ties the rule to an identity, not a label."
   - id: template
-    label: "Create app servers from the instance template the others use, not by hand"
+    label: "Replace hand-made app-3 with a server created from the instance template the others use, so tags, service account and everything else match"
     kind: fix
     feedback: "The template includes the network tag (and everything else the others have), so the next server can't miss it."
   - id: restart
@@ -96,6 +100,7 @@ actions:
 
 solution_paths:
   - [add-tag, template]
+  - [sa-target, template]
 
 key_evidence: [no-tag, rule-targets-tag]
 
@@ -144,7 +149,7 @@ concepts:
     text: "Every VPC network has an implied rule that denies all incoming traffic and one that allows all outgoing traffic, unless other rules say otherwise."
     url: "https://docs.cloud.google.com/firewall/docs/firewalls"
   - term: "Network tags"
-    text: "Labels on a VM that firewall rules (and routes) use to pick which VMs they apply to. A rule with a target tag only applies to VMs that have that tag."
+    text: "Labels on a VM that firewall rules (and routes) use to pick which VMs they apply to. A rule with a target tag only applies to VMs that have that tag. Tags are mutable by anyone allowed to set them, so any VM given the tag inherits the allow; target service accounts are the stronger control."
     url: "https://docs.cloud.google.com/vpc/docs/add-remove-network-tags"
 
 sources:

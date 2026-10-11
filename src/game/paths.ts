@@ -13,6 +13,13 @@ export const homeOf = (scenario: Scenario) => (userOf(scenario) === 'root' ? '/r
 // database prompt ("postgres=#", "mysql>") isn't, and stays scripted only.
 export const isShellPrompt = (scenario: Scenario) => /^[\w.-]+@[\w.-]+:/.test(scenario.terminal?.prompt ?? '')
 
+// How a typed line is read for the typed-line guard: a SQL client ("postgres=#", "shop=>", "mysql>", "sqlite>")
+// takes statements; EVERYTHING else (user@host:~$, [admin@docs-01 ~]$, PS C:\>) is a shell. SQL is explicit.
+export const typedMode = (scenario: Scenario): 'shell' | 'sql' | 'mysql' => {
+  const p = scenario.terminal?.prompt ?? ''
+  return /^mysql>/.test(p) ? 'mysql' : /^(?:[\w.-]+[=-][#>]|sqlite>)/.test(p) ? 'sql' : 'shell'
+}
+
 // The directory the prompt starts in: "you@laptop:~/infra$" -> /home/you/infra.
 export function startDir(scenario: Scenario): string {
   const home = homeOf(scenario)
@@ -73,6 +80,8 @@ export function filesOnDisk(scenario: Scenario): Map<string, string> {
   if (tf) {
     const files = labFiles(tf, cwd, home)
     for (const f of files) if (!out.has(f.path)) out.set(f.path, f.content)
+    // The state file's text is the lab's to say (the shell mounts it); here it only exists, so readers of it run on the disk.
+    if (tf.state_file && tf.state !== undefined && !files.some((f) => /^\s*backend\s+"/m.test(f.content))) out.set(`${labDir(tf, cwd, home)}/terraform.tfstate`, '')
     const lock = `${labDir(tf, cwd, home)}/.terraform.lock.hcl`
     if (tf.initialized !== false) {
       if (!out.has(lock)) out.set(lock, mountedLock(tf, files))

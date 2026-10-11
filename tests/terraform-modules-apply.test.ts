@@ -265,6 +265,17 @@ describe('terraform modules: predicates through the shell', () => {
     expect(await sh.doneWhen({ applied: { op: 'delete', address: 'module.net' } })).toBe(true)
   })
 
+  it('plan_has no_change covers module children and is false for a replace inside the module', async () => {
+    const s = scenario()
+    const sh = new IncidentShell(s)
+    await sh.run('terraform apply -auto-approve', s, new Set())
+    expect(await sh.doneWhen({ plan_has: { no_change: ['module.net'] } })).toBe(true)
+    await sh.run("sed -i 's#\"10.0.0.0/16\"#\"10.9.0.0/16\"#' main.tf", s, new Set())
+    expect(await sh.doneWhen({ plan_has: { no_change: ['module.net'] } })).toBe(false)
+    expect(await sh.doneWhen({ plan_has: { no_change: ['module.net.aws_vpc.main'] } })).toBe(false)
+    expect(await sh.doneWhen({ plan_has: { no_change: ['module.other'] } })).toBe(true)
+  })
+
   it('plan_has no_destroy is false when the plan would destroy a module resource', async () => {
     const s = scenario()
     const sh = new IncidentShell(s)

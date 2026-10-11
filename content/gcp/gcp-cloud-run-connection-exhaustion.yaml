@@ -116,10 +116,10 @@ hypotheses:
 
 actions:
   - id: cap-instances
-    label: "gcloud run services update signup-api --region us-central1 --max 20"
+    label: "gcloud run services update signup-api --region us-central1 --max-instances 20 (a cap of 16-40 leaves room for the launch's peak; the connection budget only holds together with the right-sized pool, because the shipped pool of 20 per instance already breaks 500 at 26 instances), and set the same cap in the IaC that owns the service"
     kind: fix
-    match_regex: "^gcloud run services update signup-api .*--max(-instances)?[ =]20( .*)?$"
-    feedback: "At most 20 instances × 20 connections = 400, under the 500 limit with room for admin and migrations. Cloud Run's docs list limiting database connections as a reason to set max instances."
+    match_regex: "^gcloud run services update signup-api(?: --region[= ]us-central1)? --max-instances[= ](?:1[6-9]|2[0-9]|3[0-9]|40)(?: --region[= ]us-central1)?$"
+    feedback: "Put the same limit in the Terraform or service YAML that owns signup-api, or the next apply reverts it. Once the pool is right-sized to 5+5 (10 per instance), 20 instances × 10 = 200, well under the 500 limit. The cap alone is not enough: at the shipped 20 per instance, 26 or more instances already exceed 500. A cap much lower than 16 would throttle a launch that wanted 64 with room for admin and migrations. Cloud Run's docs list limiting database connections as a reason to set max instances."
   - id: right-size-pool
     label: "Lower the pool to pool_size=5, max_overflow=5 and document the budget: max instances × per-instance max < max_connections"
     kind: fix
@@ -182,12 +182,13 @@ debrief:
     - "Check Cloud Run: instances jumped from 4 to 64 with no max set (default 100)."
     - "Do the math: instances × pool per instance vs. max_connections."
     - "Cap max instances and shrink the per-instance pool so the total fits, with headroom."
+    - "Record the cap in the IaC (a console or gcloud edit drifts back on the next apply) and add an alert on database connections near max_connections."
     - "Verify: sign-ups return 201 and connections stay under the limit."
   real_world: |
     Google's Cloud Run and Cloud SQL docs spell out the math: each Cloud Run
     instance can open up to 100 connections, so total connections grow as the
     service scales. Use a pool, cap instances, and consider Cloud SQL's managed
-    connection pooling for spiky traffic. Capping instances trades database
+    connection pooling for spiky traffic. The Cloud SQL Auth Proxy or language connectors, or a pooler, centralise connections across instances. Capping instances trades database
     overload for 429s at the edge, so size it deliberately.
 
 sources:

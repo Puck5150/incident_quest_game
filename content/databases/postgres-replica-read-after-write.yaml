@@ -84,9 +84,17 @@ hypotheses:
 
 actions:
   - id: read-your-writes
-    label: "Read from the primary for requests that follow the user's own write (for example, for a few seconds after a save, or for the account pages)"
+    label: "After a user's own write, remember the commit's LSN (pg_current_wal_lsn()) and serve their reads from a replica only once pg_last_wal_replay_lsn() has passed it, otherwise from the primary (or pin that session to the primary)"
     kind: fix
-    feedback: "Users always see their own change; other reads can still go to the replica, which keeps most of the load off the primary."
+    feedback: "Users always see their own change however far behind the replica is, because the decision is made from the replica's actual position, not a guess; other reads can still go to the replica, which keeps most of the load off the primary."
+  - id: fixed-window
+    label: "Read from the primary for a fixed 5 seconds after a save"
+    kind: wrong
+    feedback: "It is a guess: replay lag here already reaches 4.4 s and will pass any fixed window during a bigger import, and the window wastes primary capacity when the replica is current. Compare LSNs instead."
+  - id: lag-alert
+    label: "Alert on replica replay lag (pg_stat_replication replay_lag, or now() - pg_last_xact_replay_timestamp()) well before users would notice, e.g. over 2 s for 5 minutes"
+    kind: fix
+    feedback: "You hear about a growing lag before customers see stale pages, and the LSN check keeps correctness even while you investigate."
   - id: sync-apply
     label: "Make replication synchronous with synchronous_commit = remote_apply for all transactions"
     kind: wrong
@@ -101,7 +109,7 @@ actions:
     feedback: "The primary takes all the load during the import, and you lose your standby for failover."
 
 solution_paths:
-  - [read-your-writes]
+  - [read-your-writes, lag-alert]
 
 key_evidence: [replay-lag, lag-evenings, reads-to-replica]
 
@@ -113,15 +121,17 @@ evidence_labels:
 hints:
   nudge: "The write worked. Where does the next page read from?"
   direction: "Check how far behind the replica is during the evening, and where the account page reads."
-  answer: "Reads after a user's own write go to an asynchronous replica a few seconds behind. Read those from the primary (read-your-writes)."
+  answer: "Reads after a user's own write go to an asynchronous replica a few seconds behind. Remember the write's LSN and read from a replica only once its replay LSN has passed it (otherwise the primary), and alert on replay lag."
 
 analogy:
   title: "Asking the copy, not the original"
   text: |
     You hand an updated form to the front desk, and a clerk photocopies
     it for the records room a few minutes later. If you then ask the records
-    room straight away, they read you the old copy. For the next few
-    minutes, ask the front desk.
+    room straight away, they read you the old copy. Don't guess "wait five
+    minutes": take the number stamped on your receipt and only ask the
+    records room once its log shows it has filed up to that number;
+    until then, ask the front desk.
 
 debrief:
   root_cause: |
@@ -135,7 +145,8 @@ debrief:
     - "Notice the pattern: correct a few seconds later, worse in the evening."
     - "Measure replica lag: replay_lag about 4 seconds during the import."
     - "Find where the next page reads: the replica."
-    - "Read a user's own data from the primary after they write it."
+    - "After a user's write, note the commit LSN; read their data from a replica only once pg_last_wal_replay_lsn() has passed it, else from the primary."
+    - "Alert on replay lag so growth is seen before users see it."
   real_world: |
     Read replicas trade freshness for capacity. Decide per query whether
     stale data is acceptable; for "I just changed this" screens it never

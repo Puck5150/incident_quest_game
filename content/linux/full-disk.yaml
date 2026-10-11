@@ -133,12 +133,13 @@ actions:
   - id: truncate-log
     label: "Truncate app.log in place (: > /var/log/app/app.log)"
     kind: fix
+    allow_shell: true # the fix IS a redirection; both branches of the regex are fully anchored
     match_regex: "^(: ?> ?|> ?)/var/log/app/app\\.log$|^(sudo )?truncate -s ?0 /var/log/app/app\\.log$"
-    feedback: "Output redirection truncates an existing file to zero size. The app keeps its open file handle, and the space comes back immediately."
+    feedback: "Output redirection truncates an existing file to zero size. The app keeps its open file handle, and the space comes back immediately. It also destroys the 29 GB of log: if the last hour of entries mattered, save a tail to another volume first (tail -n 5000 app.log > /somewhere/else), and note that a log this large usually means something is far too verbose."
   - id: fix-logrotate
     label: "Fix the path typo in /etc/logrotate.d/app (/var/log/ap → /var/log/app)"
     kind: fix
-    feedback: "logrotate will now find and rotate app.log daily, so this won't recur."
+    feedback: "logrotate will now find and rotate app.log daily, so this won't recur. Prove it before trusting it: logrotate -d /etc/logrotate.d/app (debug, changes nothing) should list /var/log/app/app.log, and a size cap (maxsize) stops a runaway day from filling the disk before the next rotation."
     # Editing the file (nano, vi or sed -i) is the fix too.
     file:
       path: /etc/logrotate.d/app
@@ -198,7 +199,8 @@ debrief:
     - "Find the culprit with du and ls: one 29G app.log."
     - "Free space by truncating the file in place. Deleting a file the app holds open frees nothing."
     - "Fix the root cause: the logrotate path typo."
-    - "Verify: df -h shows free space, and the nginx access log shows 200s again."
+    - "Verify: df -h shows free space, logrotate -d (a dry run, not simulated here) should list app.log, and the nginx access log shows 200s again."
+    - "Follow up: add a disk-usage alert (80% warn, 90% page) so the next runaway log is caught early."
   real_world: |
     Full disks are one of the most common production incidents, and logs are
     the usual culprit. Alert on disk usage trends (not just 100%), and treat

@@ -22,69 +22,86 @@ environment: |
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "terraform plan"
-      when_actions: [codify]
+    - match: "git log --oneline -3"
       output: |
-        aws_security_group.payments: Refreshing state... [id=sg-0payments]
+        c3f81a7 payments: tag the worker with its cost center
+        9be40d2 payments: security group and worker
+        51d7e08 infra: provider pin
 
-        Terraform will perform the following actions:
-
-          # aws_instance.payments_worker will be updated in-place
-          ~ resource "aws_instance" "payments_worker" {
-              ~ tags = {
-                  + "cost-center" = "payments"
-                }
+terraform:
+  dir: "~/infra"
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
             }
+          }
+        }
 
-        Plan: 0 to add, 1 to change, 0 to destroy.
-    - match: "terraform plan"
-      evidence: plan-removes-rule
-      output: |
-        aws_security_group.payments: Refreshing state... [id=sg-0payments]
+        provider "aws" {
+          region = "us-east-1"
+        }
 
-        Terraform will perform the following actions:
+        resource "aws_security_group" "payments" {
+          name        = "payments"
+          description = "Payments service"
+          vpc_id      = "vpc-0payments"
 
-          # aws_instance.payments_worker will be updated in-place
-          ~ resource "aws_instance" "payments_worker" {
-              ~ tags = {
-                  + "cost-center" = "payments"
-                }
-            }
+          ingress {
+            description = "internal clients"
+            from_port   = 443
+            to_port     = 443
+            protocol    = "tcp"
+            cidr_blocks = ["10.20.0.0/16"]
+          }
+        }
 
-          # aws_security_group.payments will be updated in-place
-          ~ resource "aws_security_group" "payments" {
-              ~ ingress = [
-                  - {
-                      - cidr_blocks = ["198.51.100.0/24"]
-                      - from_port   = 8443
-                      - to_port     = 8443
-                      - protocol    = "tcp"
-                      - description = "partner hotfix"
-                    },
-                    # (1 unchanged element hidden)
-                ]
-            }
+        resource "aws_instance" "payments_worker" {
+          ami           = "ami-0abc1234def567890"
+          instance_type = "t3.small"
 
-        Plan: 0 to add, 2 to change, 0 to destroy.
-    - match: "terraform plan -refresh-only"
-      evidence: drift
-      output: |
-        Note: Objects have changed outside of Terraform
-
-        Terraform detected the following changes made outside of Terraform since the last "terraform apply":
-
-          # aws_security_group.payments has changed
-          ~ resource "aws_security_group" "payments" {
-              ~ ingress = [
-                  + {
-                      + cidr_blocks = ["198.51.100.0/24"]
-                      + description = "partner hotfix"
-                      + from_port   = 8443
-                      + protocol    = "tcp"
-                      + to_port     = 8443
-                    },
-                ]
-            }
+          tags = {
+            cost-center = "payments"
+          }
+        }
+  state:
+    - type: aws_security_group
+      name: payments
+      attrs:
+        id: sg-0payments
+        arn: "arn:aws:ec2:us-east-1:123456789012:security-group/sg-0payments"
+        name: payments
+        description: "Payments service"
+        vpc_id: vpc-0payments
+        ingress: [{ cidr_blocks: ["10.20.0.0/16"], description: "internal clients", from_port: 443, protocol: tcp, to_port: 443 }]
+        egress: []
+        tags_all: {}
+    - type: aws_instance
+      name: payments_worker
+      attrs:
+        id: i-0payments
+        arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0payments"
+        ami: ami-0abc1234def567890
+        instance_type: t3.small
+        tags: {}
+        tags_all: {}
+  cloud:
+    patch:
+      - type: aws_security_group
+        id: sg-0payments
+        set:
+          ingress: [{ cidr_blocks: ["10.20.0.0/16"], description: "internal clients", from_port: 443, protocol: tcp, to_port: 443 }, { cidr_blocks: ["198.51.100.0/24"], description: "partner hotfix", from_port: 8443, protocol: tcp, to_port: 8443 }]
+  evidence:
+    - evidence: plan-removes-rule
+      command: plan
+      contains: "ingress"
+    - evidence: drift
+      command: plan
+      contains: "has changed"
 
 logs:
   - name: "#incidents (last night)"
@@ -92,6 +109,17 @@ logs:
     lines: |
       23:48 on-call: partner moved to 198.51.100.0/24, their callbacks are failing
       23:52 on-call: opened 8443 from 198.51.100.0/24 on sg-0payments in the console, callbacks OK. Will codify tomorrow.
+      23:53 on-call: used the whole /24 because I did not have their exact callback addresses. Needs checking with the partner and narrowing.
+
+files:
+  - path: "Partner onboarding ticket SEC-4417 (excerpt)"
+    evidence: partner-range
+    content: |
+      Callbacks to payments (TCP 8443) come only from the partner's two NAT
+      gateways: 198.51.100.17 and 198.51.100.18 (198.51.100.16/28). The rest
+      of 198.51.100.0/24 belongs to other customers of their hosting provider.
+      Any change to the allowed range needs their confirmation and a security
+      review of the pull request.
 
 hypotheses:
   - id: drift
@@ -109,12 +137,48 @@ hypotheses:
 
 actions:
   - id: codify
-    label: "Add the 198.51.100.0/24 rule on 8443 to the security group in code (reviewed), so the plan no longer removes it"
+    label: "Put the rule in code through a reviewed PR, narrowed to the partner's verified callback range 198.51.100.16/28 on 8443 and nothing else added, and apply, so the group matches the code and the plan stops removing it"
     kind: fix
-    feedback: "The code now matches what's really needed, the plan shows only the tag change, and the hotfix is reviewed and recorded."
+    done_when:
+      all:
+        - state_has: aws_security_group.payments
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 443, exact: true, cidr: 10.20.0.0/16 }
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.16/28 }
+        - sg_only: { group_id: sg-0payments, direction: ingress, cidrs: [10.20.0.0/16, 198.51.100.16/28] }
+        - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
+        - plan_has: { no_change: [aws_security_group.payments] }
+    feedback: "The code, the state and the group now agree on the narrowest range the partner's own ticket supports for the callbacks: TCP 8443 from 198.51.100.16/28, not the whole /24 the console fix opened, and the group has no other source on any port. Callbacks keep working, the plan shows only the tag, and the change went through review instead of staying a console one-off."
+  - id: codify-nat
+    label: "Put the rule in code through a reviewed PR, narrowed to the partner's two NAT gateways 198.51.100.17/32 and 198.51.100.18/32 on 8443 and nothing else added, and apply"
+    kind: fix
+    done_when:
+      all:
+        - state_has: aws_security_group.payments
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 443, exact: true, cidr: 10.20.0.0/16 }
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.17/32 }
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.18/32 }
+        - sg_only: { group_id: sg-0payments, direction: ingress, cidrs: [10.20.0.0/16, 198.51.100.17/32, 198.51.100.18/32] }
+        - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
+        - plan_has: { no_change: [aws_security_group.payments] }
+    feedback: "Even tighter: only the two gateway addresses the partner's ticket names can reach 8443, and nothing else was added to the group. The cost is that a change on their side (a third gateway) needs another reviewed change, which is the point of least privilege."
+  - id: codify-wide
+    label: "Codify the console rule as it is (198.51.100.0/24 on 8443), or with the /28 plus a wider or extra source, so the plan stops removing it"
+    kind: wrong
+    done_when:
+      all:
+        - state_has: aws_security_group.payments
+        - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443 }
+        - not: { sg_only: { group_id: sg-0payments, direction: ingress, port: 8443, cidrs: [198.51.100.16/28, 198.51.100.17/32, 198.51.100.18/32] } }
+        - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
+        - plan_has: { no_change: [aws_security_group.payments] }
+    feedback: "The plan goes quiet, but 8443 is now open to more than the partner needs. On-call used the whole /24 as a guess because they did not have the exact addresses; the partner's ticket (SEC-4417) says callbacks come only from 198.51.100.16/28 (the NAT gateways .17 and .18), and the rest of the /24 belongs to other customers of their provider. Codifying drift means verifying it first: confirm the source with the partner, narrow it, add nothing else, and put it through review."
   - id: apply-anyway
     label: "Apply the plan as it is"
     kind: destructive
+    done_when:
+      all:
+        - applied: { op: update, address: aws_security_group.payments }
+        - not: { sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443 } }
     feedback: "Terraform removes the rule, and the partner's callbacks fail again, recreating last night's outage."
   - id: target-instance
     label: "Apply with -target=aws_instance.payments_worker to skip the security group"
@@ -127,18 +191,20 @@ actions:
 
 solution_paths:
   - [codify]
+  - [codify-nat]
 
-key_evidence: [plan-removes-rule, drift, hotfix-note]
+key_evidence: [plan-removes-rule, drift, hotfix-note, partner-range]
 
 evidence_labels:
   plan-removes-rule: "The plan removes a 198.51.100.0/24 rule on 8443 from the payments security group"
   drift: "A refresh-only plan shows that rule was added outside Terraform"
-  hotfix-note: "On-call added it in the console last night to fix partner callbacks"
+  hotfix-note: "On-call added it in the console last night to fix partner callbacks, using the whole /24 as a guess"
+  partner-range: "The partner's ticket says callbacks come only from 198.51.100.16/28"
 
 hints:
   nudge: "Nobody removed that rule in code. Was it ever in code?"
-  direction: "Run a refresh-only plan to see what changed outside Terraform, then check last night's incident notes."
-  answer: "The rule was a console hotfix, so it's drift. Add it to the code and the plan stops removing it."
+  direction: "Run a refresh-only plan to see what changed outside Terraform, then check last night's incident notes and the partner's ticket. Is the range on the rule the range the partner actually needs?"
+  answer: "The rule was a console hotfix, so it's drift, and the /24 was a guess. Read the partner ticket, put the rule in code narrowed to 198.51.100.16/28 (or just the two NAT gateways, .17/32 and .18/32) on 8443 through a reviewed PR, add no other source, and apply. Copying the /24 as it is would make the guess permanent."
 
 analogy:
   title: "The plan of the house vs the house"
@@ -154,16 +220,24 @@ debrief:
     added in the console, so it existed in AWS but not in the configuration:
     drift. Every plan from then on would remove it, and tonight's routine
     apply would have broken the partner's callbacks again. Codifying the
-    hotfix makes the code the truth again.
+    hotfix makes the code the truth again, but only after it is verified:
+    on-call opened the whole /24 as a guess, and the partner's ticket says
+    only 198.51.100.16/28 sends callbacks. The code should say that, not
+    the guess.
   ideal_path:
     - "Read the plan: it removes a rule nobody touched in code."
     - "Run a refresh-only plan: the rule was added outside Terraform."
     - "Match it to last night's console hotfix."
-    - "Add the rule to the code; plan again and see only the intended change."
+    - "Read the partner ticket: callbacks come only from 198.51.100.16/28, so the console's /24 is wider than needed."
+    - "Add the rule to the code narrowed to that range, through review; plan again and see the group narrowed plus the tag, then apply."
   real_world: |
-    Console hotfixes are sometimes necessary; the follow-up is to codify
-    them the next day. Scheduled refresh-only plans (drift detection) catch
-    the ones that get forgotten.
+    Console hotfixes are sometimes necessary; the follow-up is to verify
+    them, narrow them and codify them through a pull request the next day,
+    with the ticket or approver in the rule description. An emergency rule
+    is a guess made under pressure: confirm the source with the owner and
+    security before it becomes permanent. Scheduled refresh-only plans
+    (drift detection) catch the ones that get forgotten, and restricting
+    console write access to security groups prevents most of them.
 
 concepts:
   - term: "Drift"
@@ -180,3 +254,6 @@ sources:
   - title: "Terraform: terraform plan (-refresh-only, -target)"
     url: "https://developer.hashicorp.com/terraform/cli/commands/plan"
     retrieved: 2026-10-02
+
+command_notes:
+  "git log --oneline -3": "The top commit added tonight's tag; the others are what main last applied."

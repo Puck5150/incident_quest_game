@@ -54,6 +54,27 @@ describe('predicates', () => {
     expect(await ev({ plan_has: { no_destroy: [] } }, world({ plan: () => undefined }))).toBe(false)
     expect(await ev({ plan_has: { no_destroy: [] } }, world({ tf: 'resource "aws_vpc" "main" {' }))).toBe(false)
   })
+  it('plan_has.no_change', async () => {
+    const upd = 'resource "aws_vpc" "main" {\n  cidr_block = "10.0.0.0/16"\n  enable_dns_hostnames = true\n}\n'
+    const rep = 'resource "aws_vpc" "main" {\n  cidr_block = "10.1.0.0/16"\n}\n'
+    const nc = (a: string[], w: World) => ev({ plan_has: { no_change: a } }, w)
+    expect(await nc(['aws_vpc.main'], world({ tf: upd }))).toBe(false)
+    expect(await ev({ plan_has: { no_destroy: ['aws_vpc.main'] } }, world({ tf: upd }))).toBe(true)
+    expect(await nc(['aws_vpc.main'], world({ tf: rep }))).toBe(false)
+    expect(await nc(['aws_vpc.main'], world())).toBe(true)
+    expect(await nc(['aws_vpc.main'], world({ tf: upd + 'resource "aws_s3_bucket" "x" {\n  bucket = "x"\n}\n' }))).toBe(false)
+    expect(await nc(['aws_s3_bucket.x'], world({ tf: upd + 'resource "aws_s3_bucket" "x" {\n  bucket = "x"\n}\n' }))).toBe(true) // a create is not a change
+    expect(await nc(['aws_vpc.main'], world({ tf: 'resource "aws_vpc" "main" {' }))).toBe(false)
+    expect(await nc(['aws_vpc.main'], world({ plan: () => undefined }))).toBe(false)
+  })
+  it('plan_has.no_change covers keyed instances and modules', async () => {
+    const st = stateOf({ type: 'aws_s3_bucket', name: 'b', key: 'x', attrs: { id: 'x', bucket: 'x', force_destroy: false, tags: {}, tags_all: {} } })
+    const tf = 'resource "aws_s3_bucket" "b" {\n  for_each = toset(["x"])\n  bucket = each.key\n  force_destroy = true\n}\n'
+    const w = () => world({ state: st, reality: { [realityKey('aws_s3_bucket', 'x')]: { id: 'x', bucket: 'x', force_destroy: false } }, tf })
+    expect(await ev({ plan_has: { no_change: ['aws_s3_bucket.b'] } }, w())).toBe(false)
+    expect(await ev({ plan_has: { no_change: ['aws_s3_bucket.b["x"]'] } }, w())).toBe(false)
+    expect(await ev({ plan_has: { no_change: ['aws_s3_bucket.b["y"]'] } }, w())).toBe(true)
+  })
   it('state_has / state_lacks, instance vs resource address', async () => {
     const w = world({ state: stateOf({ type: 'aws_s3_bucket', name: 'b', key: 'x', attrs: { id: 'x' } }) })
     expect(await ev({ state_has: 'aws_s3_bucket.b["x"]' }, w)).toBe(true)

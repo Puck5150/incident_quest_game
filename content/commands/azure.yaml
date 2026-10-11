@@ -265,6 +265,17 @@
     - { command: "az storage account show -n ACCOUNT --query allowBlobPublicAccess", note: "Whether the account allows public containers at all." }
   docs: { title: "Azure CLI: az storage container", url: "https://learn.microsoft.com/en-us/cli/azure/storage/container?view=azure-cli-latest" }
 
+- id: az-storage-account-show
+  match: "^az storage account show"
+  summary: "Shows a storage account's settings; --query picks one property."
+  parts:
+    - { token: "-n shopdocsprod -g rg-shop-prod", meaning: "The storage account and its resource group." }
+    - { token: "--query allowBlobPublicAccess", meaning: "Whether any container in the account may be made anonymously readable." }
+  why: "false means no container setting can expose blobs anonymously, which is the guardrail that survives a bad module default."
+  alternatives:
+    - { command: "az storage container show-permission --name CONTAINER --account-name ACCOUNT", note: "One container's own access level." }
+  docs: { title: "Azure CLI: az storage account", url: "https://learn.microsoft.com/en-us/cli/azure/storage/account?view=azure-cli-latest" }
+
 - id: az-vm-list
   match: "^az vm list"
   summary: "Lists virtual machines."

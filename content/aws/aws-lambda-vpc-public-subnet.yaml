@@ -103,7 +103,7 @@ hypotheses:
     feedback: "The same calls worked until the function was attached to the VPC this morning, and EC2 services reach the provider through the NAT gateway right now."
   - id: security-group
     text: "The function's security group blocks outbound traffic."
-    feedback: "sg-0webhook allows all outbound traffic, and the database writes through it work. A security group problem wouldn't explain internet-only failures."
+    feedback: "The database writes through sg-0webhook work, so its outbound rules are not what blocks the payment call; a security group problem wouldn't explain internet-only failures. (Its outbound rule is wide open, which a least-privilege group would narrow to 5432 to the database and 443 out, but that is a hardening step, not this fault.)"
   - id: timeout-too-short
     text: "30 seconds is too short for the payment API."
     feedback: "The API normally answers in under a second. The call never gets an answer at all; a longer timeout would just wait longer for nothing."
@@ -166,12 +166,16 @@ debrief:
     - "Check its subnets: public, with only an internet gateway route."
     - "Remember the rule: Lambda in a VPC never gets a public IP, so it needs a NAT gateway for internet access."
     - "Move it to the private subnets (route to the NAT gateway) and verify payments."
+    - "Follow up: tighten the security group's egress, and plan a NAT gateway per zone so one outage does not stop payments."
   real_world: |
     "We put the Lambda in a public subnet so it can reach the internet" is
     one of the most common Lambda networking mistakes. Attach functions to
     private subnets with a NAT gateway route (or use VPC endpoints for AWS
     services), and only attach to a VPC when the function needs private
-    resources.
+    resources. Afterwards, harden: narrow the function's security group
+    egress to what it uses, and note that one NAT gateway in one zone serves
+    both private subnets, so a NAT or zone failure would stop payments again;
+    run one NAT gateway per zone for production.
 
 concepts:
   - term: "Lambda in a VPC"

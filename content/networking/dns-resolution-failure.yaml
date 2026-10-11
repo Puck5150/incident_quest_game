@@ -125,13 +125,14 @@ hypotheses:
 
 actions:
   - id: update-resolv
-    label: "Point /etc/resolv.conf at 10.0.0.2 and 10.0.0.3"
+    label: "Point /etc/resolv.conf at 10.0.0.2 and 10.0.0.3 and remove the dead 10.0.0.53"
     kind: fix
-    feedback: "reports-01 now asks the live DNS servers. The report job can resolve the API again."
+    feedback: "reports-01 now asks both live DNS servers (one is redundancy) and no longer waits on the dead one. The report job can resolve the API again. This hand edit is the quick repair; the role keeps it right."
     # Editing the file (nano, vi or sed -i) is the fix too.
     file:
       path: /etc/resolv.conf
-      matches: '^nameserver 10\.0\.0\.2\s*$'
+      # both new resolvers present, the dead 10.0.0.53 gone (lookbehind pins the check to the whole file, not a later line)
+      matches: '(?<![\s\S])(?![\s\S]*^[ \t]*nameserver[ \t]+10\.0\.0\.53[ \t]*([#;].*)?$)(?=[\s\S]*^[ \t]*nameserver[ \t]+10\.0\.0\.2[ \t]*([#;].*)?$)(?=[\s\S]*^[ \t]*nameserver[ \t]+10\.0\.0\.3[ \t]*([#;].*)?$)'
       after: |
         search example.com
         nameserver 10.0.0.2
@@ -139,7 +140,11 @@ actions:
   - id: add-to-inventory
     label: "Add reports-01 to the Ansible inventory so the resolv role manages it"
     kind: fix
-    feedback: "Next time DNS changes, this host gets updated with everyone else. That's the real fix for why it was missed."
+    feedback: "Next time DNS changes, this host gets updated with everyone else. That's the real fix for why it was missed, but the host only follows the role once the role has run against it."
+  - id: run-role
+    label: "From the Ansible server, run the resolv role against reports-01 (check mode first), and confirm it converges with no further changes"
+    kind: fix
+    feedback: "The role now owns /etc/resolv.conf on reports-01: it reports no drift after your hand edit, and any future DNS change rolls out to this host with the rest. Adding a host to the inventory without running the role proves nothing."
   - id: hosts-entry
     label: "Add api.internal.example.com to /etc/hosts"
     kind: wrong
@@ -155,7 +160,7 @@ actions:
     feedback: "You removed this host's firewall protection to fix a problem that had nothing to do with the firewall."
 
 solution_paths:
-  - [update-resolv, add-to-inventory]
+  - [update-resolv, add-to-inventory, run-role]
 
 key_evidence: [resolve-fail, stale-resolver, new-dns-works]
 evidence_labels:
@@ -166,7 +171,7 @@ evidence_labels:
 hints:
   nudge: "The error says 'could not resolve host'. Which part of the system turns names into IP addresses?"
   direction: "Look at which DNS server this host asks, and whether that server is still alive. There's a change record in the home directory."
-  answer: "/etc/resolv.conf still lists 10.0.0.53, which CHANGE-2291 decommissioned. dig @10.0.0.2 works. Update resolv.conf, then add the host to the Ansible inventory."
+  answer: "/etc/resolv.conf still lists 10.0.0.53, which CHANGE-2291 decommissioned. dig @10.0.0.2 works. Update resolv.conf (both new servers, drop the old), add the host to the Ansible inventory, and run the resolv role so the host is really managed."
 
 analogy:
   title: "A speed-dial to an empty desk"
@@ -187,7 +192,7 @@ debrief:
     - "Check which resolver the host uses: cat /etc/resolv.conf."
     - "Test that resolver vs. a known-good one: dig times out, dig @10.0.0.2 answers."
     - "Find why: CHANGE-2291 moved DNS, and the host isn't in the inventory."
-    - "Fix the config, then fix the process gap (inventory) so it can't happen again."
+    - "Fix the config, then fix the process gap: add the host to the inventory and run the resolv role (check mode first) until it converges."
     - "Verify: dig and curl succeed from reports-01."
   real_world: |
     "It's always DNS" is a joke because it's so often true. Hand-built "snowflake"

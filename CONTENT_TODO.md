@@ -62,16 +62,6 @@ from your own experience and tick them off.
       line: format varies by systemd version.
 - [ ] `free -h` layout: representative.
 
-## iac/terraform-state-lock
-- [ ] The `Error acquiring the state lock` block (box-drawing borders, Lock Info
-      fields, closing paragraph) isn't printed in the HashiCorp docs.
-      The behavior (lock blocks the run, force-unlock takes the lock ID, docs warn
-      against -lock=false) is sourced.
-- [ ] `aws s3 ls` output layout and the `terraform.tfstate.tflock` object name: the
-      S3 backend docs confirm the `.tflock` suffix.
-- [ ] GitHub Actions cancelled-step message `Error: The operation was canceled.`: representative.
-- [ ] terraform plan output formatting: representative.
-
 ## cicd/failing-github-actions
 - [ ] npm ci error lines (`npm error code EUSAGE`, the "can only install packages
       when your package.json and package-lock.json ... are in sync" sentence, the
@@ -692,7 +682,7 @@ TF5 batch status: four failed-apply incidents on the simulator, each with a play
 - terraform-partial-apply-iam: no rollback; read `with ADDR,` and the AccessDenied caller/action; fix the permission (as the right identity) and apply again, never destroy to start clean.
 - terraform-vcpu-limit: a cloud-side quota stops one resource; two real fixes (right-size in code, or a Service Quotas increase), and the re-run only creates what's missing.
 - terraform-cancelled-ci-lock: a cancelled CI run leaves the lock held; prove the holder is dead, force-unlock, read the plan, finish the apply; never -lock=false.
-- terraform-sg-cycle: `Error: Cycle` from two groups referencing each other; break one edge in code (CIDR or a separate rule), apply in place, never recreate the groups or open the port to the internet.
+- terraform-sg-cycle: `Error: Cycle` from two groups referencing each other; split every rule into its own rule resource by group id (clearing the groups' old inline rules first), apply in place; a CIDR is wrong, never recreate the groups or open the port to the internet.
 
 Open simulator defects found in TF5 (not fixed):
 - [ ] Address-keyed faults can be bypassed by renaming: a fault's `at` is an address, so renaming the resource in the `.tf` (or `state mv` plus a rename) makes a new address the fault doesn't cover, and the create succeeds. In terraform-partial-apply-iam a renamed db would still be denied in reality. Simulator limit; a fault keyed on the type/natural id (or on the provider call) would close it.
@@ -739,9 +729,7 @@ terraform-sg-cycle:
 - [x] Verified 2026-10-09: aws_security_group `ingress` is a set block without ForceNew and changes go through `updateSecurityGroupRules` (in place); delete retries DependencyViolation/InvalidGroup.InUse for the delete timeout (15m) and then fails with `deleting Security Group (%s): %s`; create fails with `creating Security Group (%s): %s` (provider v5.67.0 internal/service/ec2/vpc_security_group.go). Provider docs: "When a security group is associated with a resource, the delete won't succeed"; inline rules discouraged in favour of aws_vpc_security_group_ingress_rule, and not to be mixed with rule resources; one of cidr_blocks/ipv6_cidr_blocks/prefix_list_ids/security_groups is needed (website/docs/r/security_group.html.markdown). AWS API reference: DeleteSecurityGroup fails with DependencyViolation for a group associated with an instance or ENI or referenced by another group in the same VPC; EC2 error codes: InvalidGroup.Duplicate for a second group of the same name in a VPC. VPC User Guide (security-group-rules): a rule may reference another group in the same VPC (or peered/transit gateway); nothing forbids two groups referencing each other (the docs don't address mutual references explicitly).
 - [ ] Error message texts from real-world reports, not AWS docs: `resource sg-... has a dependent object` (DependencyViolation on DeleteSecurityGroup), `The subnet 'subnet-...' has dependencies and cannot be deleted.` (DeleteSubnet), `The security group 'NAME' already exists for VPC 'vpc-...'` (InvalidGroup.Duplicate). The SDK v2 wrapper and the 400 status are the usual EC2 shape. The simulator's own generic SG DependencyViolation text (src/game/terraform/provider.ts `dependencyViolation`) lacks the `operation error EC2: DeleteSecurityGroup, https response error ...` part; this incident's faults supply the full shape.
 - [ ] The destructive trap (recreate the groups) is button-only: every terminal route is refused by AWS in this world (delete faults for both groups and both subnets: the hosts use them; create faults for a second checkout-web/checkout-app). The fix's done_when still excludes any applied delete/create of either group. `state rm` then apply fails on InvalidGroup.Duplicate; `terraform import` brings the group back and the fix is earnable again.
-- [ ] The fix's file checks are line-anchored (`^[ \t]*...`), so commented-out lines (`#`, `//`) never count: one live `security_groups = [aws_security_group.web|app.id]` line; an `ingress { ... }` block for 8080 and one for 8443, each with a live non-empty `cidr_blocks` or `security_groups` line (so `self = true` or a rule deleted down to a comment isn't credited); and no 8080/8443 block with a live `cidr_blocks` containing "0.0.0.0/0" or `ipv6_cidr_blocks` containing "::/0". The block regexes use `[^{}]*`, so a brace inside a comment in the block, a `/* */` comment, or a port given by a variable defeats them. A broader private CIDR (the whole VPC) is accepted.
-- [ ] `open-callbacks-to-internet` (destructive, world-detected): the same "open" regex as the fix's negative clause AND plan_clean, i.e. the open rule is what's applied. Closing it afterwards can still earn the fix; the session has already recorded the destructive mistake.
-- [ ] Not simulated: `terraform graph` (mentioned in the debrief), `aws_security_group_rule`/`aws_vpc_security_group_ingress_rule` (the idiomatic fix, in real_world only), `gh pr checks`, describe-security-groups by vpc-id (would list the VPC's default group too).
+- [ ] Not simulated: `terraform graph` (mentioned in the debrief), `gh pr checks`, describe-security-groups by vpc-id (would list the VPC's default group too). (The separate rule resources are now simulated; see the 2026-10-10 rework section.)
 - [ ] describe-security-groups output: field names from the AWS CLI reference example; the field order (GroupId, IpPermissionsEgress, VpcId, SecurityGroupArn, OwnerId, GroupName, Description, IpPermissions, Tags) is from experience with recent CLI v2 output, not docs. `gh pr diff` prints the same unified diff as `git diff main` (gh manual: shows the PR's changes; exact header lines not checked).
 - [ ] Invented: ids, RequestIDs, PR #318, commit hashes, branch callbacks-8443, the people, the 8443 callback story.
 
@@ -749,7 +737,7 @@ terraform-sg-cycle:
 
 - [x] Done in TF7a Task 1 (was: a hypothetical engine defect; no shipped incident uses `create_before_destroy`, terraform-sg-cycle does not): `create_before_destroy` was ignored by apply ordering (src/game/terraform/apply.ts): a `+/-` replacement still deletes first. In terraform-sg-cycle a renamed group with create_before_destroy fails on the old group's DependencyViolation before creating the new one; real Terraform would create the new group, then fail deleting the old one and keep it as deposed.
 - [x] Done in TF7a Task 4 (was: lock bypass history for state-writing CLI commands): `state rm`/`mv`, `taint`, `untaint`, `import`, `workspace new`/`delete` record a history line with ` (lock bypassed)` when `-lock=false` ran past a held lock; `lock_bypassed: true` is the any-bypass leaf.
-- [ ] Retire content/iac/terraform-state-lock.yaml (scripted, S3 use_lockfile): terraform-cancelled-ci-lock supersedes it on the simulator. (It also uses the evidence tag `partial-apply`, as terraform-partial-apply-iam does; tags are per incident, so no clash.)
+- [x] Done in TF7b Task 3: content/iac/terraform-state-lock.yaml retired; terraform-cancelled-ci-lock supersedes it on the simulator. (The retired file also used the evidence tag `partial-apply`, as terraform-partial-apply-iam does; tags are per incident, so no clash.)
 - [ ] Unverified (TF7a Task 3): `NotFound` wording on a `-refresh=false` update of a vanished object: EC2 `updating EC2 Instance (ID): operation error EC2: ModifyInstanceAttribute, ... api error InvalidInstanceID.NotFound: The instance ID 'ID' does not exist` (operation name chosen, not traced), S3 `updating S3 Bucket (ID) tags: ... PutBucketTagging ... StatusCode: 404 ... NoSuchBucket: The specified bucket does not exist`, every other type a generic `updating TYPE (ID): NotFound: the object does not exist`. A delete of a vanished object succeeds silently (providers treat NotFound as gone; not checked per resource type in provider v5.70.0).
 - [ ] Limitations (TF7a Task 3): the NotFound update texts hardcode the operation (`ModifyInstanceAttribute`, `PutBucketTagging ... tags`) whatever attribute changed; a `cloud.release` and a `cloud.add`/state object with the same `type:id` act on the one cloud entry (the release deletes it once its actions are taken), and a release is applied at the next shell sync, `done_when` check or terraform command, not at the instant of the action.
 - [ ] Apply ordering is sequential and ignores `-parallelism` (see the TF5 defect list); create_before_destroy ordering landed in TF7a Task 1 without it.
@@ -959,3 +947,277 @@ terraform-sg-cycle:
 - Known limits: the provider retries a DeleteSubnet DependencyViolation for a long while before failing (from memory; the lab fails at once, feedback says "eventually"); a failed `terraform destroy -lock=false` (nothing applied) records no bypass marker, so it is not a trap although it ran past the lock; the lab destroy does not enforce `skip_final_snapshot` on an imported db (debrief says real Terraform needs it applied first); scripted `describe-*` follow only `destroy-environment`, so after the duplicate-worker trap they show the original only. 
 - Command library: `aws-ec2-describe-instances` and `aws-rds-describe-instances` already cover the scripted describes; no new entries.
 - [ ] Late root-cause naming vs transient fix predicates (found in TF7a terraform-orphans-after-state-rm review): `checkFixes` takes a fix action only when the root cause is named at that moment, so a fix credited by `state_has`/`state_lacks` is lost if a later step (a destroy) changes state before the player names the cause. Fixed for orphans-after-state-rm with history-based `applied import`. Same exposure, unchecked in play: partial-apply-iam and vcpu-limit (`finish-apply`, second step of the path is the riskiest), module-key-removed (both paths), cancelled-ci-lock, count-to-for-each, forgotten-taint, module-refactor, state-lost, sg-cycle, deleted-out-of-band (`apply-reconcile`). Final TF7a review: severity LOW for published incidents (their fix predicates are essentially monotone; loss needs more state-changing work between fixing and naming). Do not add a generic latch (in-memory only, differs after remount, can credit an undone fix); prefer per-incident persistent predicates, or latch only YAML-flagged actions.
+
+## terraform TF7b (engine, task 1)
+
+- [ ] Unverified: `random_password` argument set from memory of the random provider v3.x docs (every configurable argument is `RequiresReplace`; `id` is the literal `none`; `result` sensitive; default special alphabet `!@#$%&*()-_=+[]{}<>:?`; no `min_*`, `bcrypt_hash`). Could not fetch the provider docs offline. The provider version printed on `init` follows the lab default (5.67.0), not a real random provider version.
+- Known limit: resource blocks do not reject arguments missing from the schema (`min_special = 2` is accepted and shown as an attribute); this is true for every type, not only `random_password`.
+- Note: an initialised lab's mounted lock is AWS-only, so `random_password` needs `initialized: false` or a shipped `.terraform.lock.hcl` with a random block (AUTHORING). The `random` provider defaults to 3.6.3 (unverified as the current release).
+- Note: the at-least-one-key refine on `plan_has` (`no_destroy` or `no_change`) is not representable in schemas/incident.json; zod enforces it.
+
+## terraform TF7b (engine, task 2)
+
+- [x] Verified 2026-10-10 against Terraform v1.9.8 source (raw GitHub): `internal/command/meta_backend.go` (the `Backend initialization required, please run "terraform init"` error with `Reason:` and the errBackendInit body; `Backend initialization required: please run ...` with a colon for a changed block; `Backend configuration changed` with the `-migrate-state` / `-reconfigure` advice; `Successfully configured the backend`, `Successfully unset the backend`, the `Backend configuration changed!` and unconfiguring notices), `meta_backend_migrate.go` (the copy question and its text; `-force-copy` skips it; no way to ask is an error), `statemgr/filesystem.go` (migration writes a nil state: the local file is truncated to zero bytes and `.backup` gets the previous snapshot) and `arguments/init.go` (the `-migrate-state` / `-reconfigure` exclusion).
+- Deviation from the Task 2 brief, following the source: a FIRST backend block (state in the local file, nothing recorded) does not fail with `Backend configuration changed`; `init` goes straight to the copy question, and `-reconfigure` does not skip it (only an already-recorded backend gets the changed/removed errors and a copy-free `-reconfigure`). The brief's flow applies once a backend is recorded.
+- [ ] Unverified: blank-line spacing of the init output around the copy question and the `Successfully configured` text; the exact error for "cannot ask" (real: an `errInteractiveInputDisabled` error; the lab prints it as a boxed error); the wrapped width of the boxed errors. The `.terraform/terraform.tfstate` record is not a file in the lab.
+- [ ] Unverified: `-reconfigure` that removes a backend block clears the record here; real Terraform's handling of the stale record afterwards was not traced.
+- Simplifications: one remote backend type (every `backend "X"` behaves alike, a `local` block with a different path is not modelled as a file move); no `workspace_key_prefix` handling; only the default workspace's state is mirrored in the file (real: other workspaces under `terraform.tfstate.d/`); `init-migrate TYPE` is a history line but not yet an `applied` op in the schema (add it to the enum when an incident needs to credit it); `terraform init -backend=false` and `-backend-config` are ignored.
+
+
+## terraform migrations (TF7b)
+
+Batch status: Tasks 4 to 6 done (terraform-count-index-shift, terraform-drift-hotfix, terraform-ignore-changes-autoscaling). Tasks 7 to 10 pending.
+
+### terraform-count-index-shift (Task 4)
+
+- Migrated onto the simulator; same id, learning goal, hypotheses, hints, analogy, debrief, concepts and sources (verbatim). The scripted `terraform plan` / `state list | grep` commands and the `queues.tf` file artifact are gone; `queues.tf` is the lab's PR-branch file. Real plan output: two `must be replaced`, one `will be destroyed`, `Plan: 2 to add, 0 to change, 3 to destroy.`
+- Changed text: the old scripted plan showed the replaced resources as diffs of only `name`; the real one lists the computed attributes (`arn`, `id`, `url`, `tags_all`) as `-> (known after apply)`. The destroyed `queue[3]` now carries `(because index [3] is out of range for count)`. Both are the engine's output.
+- [ ] Unverified against a real provider run: `(because index [3] is out of range for count)` on the destroyed `queue[3]`, and the computed-attribute lines in the replace diffs.
+- Fix routes credited by world state: (a) `for_each` + `moved` blocks, (b) `for_each` + `terraform state mv`, (c) stay on `count` and shuffle state (returns parked at a free index or rotated to index 3). A `moved` block for `returns` is optional. Deviation from the brief: its fix predicate said `not applied delete queue[1..3]`, but the correct fix itself deletes returns at `[1]` (route a) or at the index it was parked on (route c, any of 1 to 4), so the fix and the trap both use `create`: the fix requires `not applied create aws_sqs_queue.queue`, the trap `apply-anyway` is `applied create aws_sqs_queue.queue` or any of the three live queue URLs missing from reality. A replaced queue keeps its URL, so the replacement is detectable only by the `create` in history.
+- Action label of `for-each-moved` reworded to the lab's flow (returns is already out of the list; moved blocks only for the live queues); id unchanged.
+- Evidence `count-list` is earned by the first `plan` (`is out of range for count`), not by a file read, so `cat queues.tf` is the real live file (a scripted `cat` would go stale after edits). The only scripted command is `git log --oneline -3` (invented commit subjects, unverified). `state-rm` followed by `import` of the three live queues under for_each keys plans clean but leaves `returns` in the cloud, so it is not credited (the old incident called state surgery error-prone but "can be made to work").
+- Command library: none of the scripted entries were library entries; nothing removed.
+- [ ] Unverified: the exact `QueueNameExists` text for a re-create after `state rm` (modelled in the simulator, TF4).
+
+### terraform-drift-hotfix (Task 5)
+
+- Migrated onto the simulator; same id, learning goal, hypotheses, hints, analogy, debrief, concepts, sources, `#incidents` log (evidence `hotfix-note`), action ids/kinds and `solution_paths`. Scripted `terraform plan`, `plan -refresh-only` and their `when_actions` variants are gone. The only scripted command is an invented `git log --oneline -3` (commit hashes and subjects invented; unverified).
+- Engine gaps found and closed here (the brief assumed them): (1) `plan -refresh-only` / `apply -refresh-only` were "not simulated yet"; now implemented (`cmdRefreshOnly` in cli.ts, `renderRefreshOnly` in render.ts). (2) `set` attributes (`ingress`) were compared in order, so a codified rule written before the existing one showed a bogus SG change; now order-insensitive (`equalSet`, used by the plan diff and by refresh).
+- [ ] Unverified against real Terraform 1.9: the refresh-only plan text (the `This is a refresh-only plan, so Terraform will not take any actions to undo these...` paragraph; the no-drift sentence `No changes. Your infrastructure still matches the configuration.`), the `Would you like to update the Terraform state to reflect these detected changes?` prompt text, and `Apply complete! Resources: 0 added, 0 changed, 0 destroyed.` after a refresh-only apply. Written from memory. Flag combinations rejected: `-destroy` (not simulated), `-replace`, `-refresh=false` (messages from memory); `-target` or a plan file with `-refresh-only` answer "not simulated".
+- Deviation: a plain `terraform plan` here prints NO "Objects have changed outside of Terraform" note. The engine (like real Terraform) reports drift only for objects the planned change refers to, and the security group is the object being changed. Evidence `drift` therefore comes only from `plan -refresh-only` (output contains `has changed`), as the old text intended. `plan-removes-rule` is the plain plan (contains `ingress`).
+- Fix credited by world state (revised after review): `codify` = the group is in state, reality still holds both rules, the plan leaves the group alone, no SG `update` was ever applied, and `main.tf` has no `ignore_changes` (so literals, `var.x`, `local.x` and other files all work). Superseded detail follows. Old wording: `main.tf` holds the CIDR inside a `cidr_blocks` list AND `plan_has.no_change` for the SG AND no `update` ever applied to the SG. Routes accepted: the rule added in main.tf in either block order, any attribute order, CIDR list spacing; before or after a refresh-only apply. Not credited on purpose: `ignore_changes = [ingress]` (clean plan, but the hotfix stays undocumented in code), a comment with the CIDR, a rule whose description or port differs from the console change (plan still updates the group). The rule must live in `main.tf` (the lab's only file); moving the group to another file is not credited.
+- Traps: `apply-anyway` (destructive) = any applied `update` of the SG; a codified rule written after that applies as an update too, so the fix is unearnable (tested). `target-instance` and `refresh-apply` stay button-only wrong actions (no typed predicate: the instance update also happens on the ideal path; a refresh-only apply is not visible to `done_when`). Their typed forms are tested to leave the group alone / keep removing the rule.
+- Known limit: a player who codifies with a different description (e.g. "partner") sees the group still change; applying it then updates only the description but flags `apply-anyway` (the history leaf cannot tell the harmless update from the rule removal).
+- Unsupported spellings of the codified rule (engine limits): `dynamic "ingress"` blocks and separate `aws_security_group_rule` resources. `ignore_changes` is only detected in `main.tf`.
+- Nit fixed: the refresh-only "No changes" paragraph is wrapped at 78 columns (text itself still unverified).
+
+### terraform-ignore-changes-autoscaling (Task 6)
+
+- Migrated onto the simulator; same id, learning goal, hypotheses, hints, analogy, debrief, concepts, sources, action ids/kinds/labels and `solution_paths`. Lab: `ecs.tf` with `aws_ecs_service.checkout` (literal `cluster = "prod"`, `task_definition = "checkout:42"`, `desired_count = 2`; there is no `aws_ecs_cluster` in resources.ts); the autoscaler is `cloud.patch` setting reality to 12. Scripted `terraform plan` (both variants) and the `ecs.tf (excerpt)` file artifact are gone (a scripted read would go stale). Remaining scripted commands are the two `aws` ones (autoscaler min/max, which keeps evidence `autoscaling`, and `describe-services` = 12, which stays 12 even after an apply: known limit).
+- Evidence: `plan-reset` (plan contains `desired_count`) and `desired-fixed` (plan contains `12 -> 2`, i.e. the code's value) come from the real plan. `desired-fixed` was a file read of `ecs.tf` in the old version; its label ("The code sets desired_count = 2") still holds.
+- Fix `ignore-desired` by world state: service in state, reality still 12, `ecs.tf` matches `ignore_changes = [... desired_count ...]` (one- or multi-line list, other attributes allowed, quoted names fine), clean plan, no `update` of the service ever applied. Not credited on purpose: `ignore_changes = all` (too broad), ignoring a different attribute (plan still resets), hard-coding `desired_count = 12` (`set-12`, clean plan but no `ignore_changes`). `ignore_changes` is only detected in `ecs.tf`.
+- Deviation from the brief: `apply-at-night` (wrong, label unchanged) has `done_when: applied update` of the service, so a typed `terraform apply` while the service is at 12 is the flagged trap (it resets reality to 2, so the fix is unearnable). `set-12` and `remove-autoscaling` remain button-only (the autoscaling target is not a modelled type).
+- Engine note: the typo `ignore_change = [...]` fails the plan with `Invalid reference` (not `Unsupported argument`, which real Terraform would also report); the lifecycle block does not reject unknown arguments (see TF7b engine, task 1 limit).
+- [ ] Unverified: `task_definition = "checkout:42"` (a family:revision string is accepted by the AWS provider; the real lab would reference a task definition resource) and the autoscaler's `describe-scalable-targets` output shape (carried over from the old incident).
+- [ ] nginx-permission-denied (fix-quality rework 2026-10-10): the chown(1) man page source has `retrieved: 2026-10-10` but was not read; verify. Design question for the user: crediting `chown -R www-data:www-data` makes the web worker the owner of the docroot (a compromised worker can rewrite pages); a stricter pattern is owner = deploy user, group = www-data, mode 750 dirs / 640 files. Group route (`chgrp www-data` + `chmod 750`) deliberately not credited for now.
+- [ ] aws-route53-failover (fix-quality rework 2026-10-10): AWS docs confirm AWS-managed prefix lists exist for Route 53 health checks but the exact list name (e.g. `com.amazonaws.global.route53-healthchecks`) was NOT verified, so the credited action accepts either any `pl-` prefix list ID or public CIDRs of /16 or narrower (not 0.0.0.0/0, private or office ranges), on 443 only; the sim outputs use an invented `pl-0r53hc`. Also unverified: that the primary ALB is public 443 behind a WAF (invented to give the standby a defined target audience), CHG-2371 and the change-process log text, and curl timeout wording. Design note: with public 443 on the standby, the explicit health-checker rule is technically redundant; kept so a later tightening cannot silently kill checks.
+
+## fix-quality rework (2026-10-10)
+
+### terraform-partial-apply-iam
+
+- The simulator has no IAM model, so the grant is judged by PARSING the typed command (`iam_policy` on an action, `src/game/awsPolicyCheck.ts`). Credited (`grant-rds-permission`): admin-profile `aws iam put-role-policy` for role orders-ci-deploy, one aws command and no shell operators, a policy name that is not `terraform-deploy` (case-insensitive), and an inline `--policy-document` (single- or double-quoted, any key order, Condition allowed) in which EVERY statement is Effect Allow with Resource exactly `arn:aws:rds:us-east-1:123456789012:db:orders-db` (string or one-element list), the union of actions is within {rds:CreateDBInstance, rds:AddTagsToResource} (case-insensitive) and includes rds:CreateDBInstance. Any other key (NotAction, NotResource, Principal) or an extra action/statement/resource is not credited. Evasion is closed in the helper: every word outside the policy document must be plain (no `$ \\ { } * ? ~ ! #`, `$'…'`, or expansion in double quotes), repeated JSON keys are rejected, top-level keys are limited to Version (2012-10-17 if present), Statement and Id, and names compare in ASCII lowercase. Wrong actions are judged first: `grant-wildcard` (any `*` in the document, any case, even on a compound line) and `overwrite-deploy-policy` (reusing `terraform-deploy`). Neither lifts the denial (the engine's `until_actions` is "all", so only the real grant does).
+- Known limits: `file://` documents cannot be inspected (the lab has no policy file), so a scripted note asks for an inline document; the action button credits the grant directly. Subnet-group/parameter-group ARNs are not accepted because nothing in the incident's error names them. Variations such as `--cli-input-json` are not credited. NotAction/Principal/extra-action documents earn no verdict at all (neither credit nor the wildcard feedback), so the wildcard feedback only ever follows a real `*`; a separate "not least-privilege shape" wrong action could be added if playtesting shows players need that nudge.
+- [ ] Unverified: whether real RDS needs more than `rds:CreateDBInstance` on the db ARN for this create (RDS may also evaluate subnet-group, parameter-group and option-group ARNs and `rds:AddTagsToResource`; a first RDS use also needs the service-linked role). The lab credits the single action the error named.
+- [ ] Unverified wording: the `(lab)` note for `file://` policy documents, and the reworded feedback on both wrong actions.
+- Action ids `grant-rds-permission`, `finish-apply` unchanged; two ids added.
+
+### terraform-module-upgrade
+
+- `override-the-input` is now `kind: wrong` (flagged when main.tf sets `storage_encrypted = false`); it is out of `solution_paths`. Only `pin-the-module` is a fix, and it now also requires main.tf to hold an exact `version = "2.0.x"` (optionally `= `), besides the installed 2.0.x in modules.json, a clean plan and no module delete. Ranges that resolve to 2.0.1 (`~> 2.0.1`, `< 2.1`) plan clean but are no longer credited.
+- [x] RESOLVED (2026-10-11): the stage 2 migration was built (decision by the coordinator, user standard "no unencrypted prod DB at completion"). `pin-the-module` is the interim stage-1 fix; stage 2 requires the ordered typed `aws rds create-db-snapshot` -> `copy-db-snapshot --kms-key-id` -> `restore-db-instance-from-db-snapshot` (identifiers orders-db-pre-2-1, orders-db-enc-2-1, orders-db-v2). Cutover, importing the new instance into module.db and raising the pin to 2.1.0 are taught only.
+- [ ] Unverified: the snapshot, KMS-encrypted copy, restore, cut-over description for encrypting an existing RDS instance (matches the RDS encryption docs from memory; no new source read).
+
+### Decision for the user (terraform-module-upgrade)
+
+- [x] RESOLVED (2026-10-11): see above, the stage 2 is built; the earlier question is closed.
+- [ ] aws-route53-failover review fix (2026-10-10): accepting any public CIDR / any `pl-` id as the checker rule was a defect, now fixed: only the lab's exact prefix list `pl-0r53hc` or one of the three CIDRs in the scripted `curl .../ip-ranges.json` excerpt (15.177.0.0/18, 54.239.98.0/24, 54.240.217.160/29: invented values, not the real ROUTE53_HEALTHCHECKS list), tcp 443 only, no shell operators, no world-open range; weak actions are evaluated first. A CIDR route needs one command per range and the first credits the action (a prefix list is the cleaner route). Unverified, from memory: that Route 53 HealthCheckStatus metrics live in us-east-1 (CloudWatch metric doc not read), the invented alarm names/`describe-alarms` text, the managed prefix list name. Sources list not extended (health-check/CloudWatch docs not read in full; the ip-addresses page was fetched and confirms prefix lists and ROUTE53_HEALTHCHECKS).
+- [ ] aws-route53-failover second review fix (2026-10-10): the checker-rule regex is now a flag grammar (match_regex is the only matcher the engine offers, so no tokenizer): allow-list `--group-id --protocol --port --cidr --ip-permissions --region us-west-2 --profile --output --no-cli-pager`, each once, space or `=` forms, bare/single/double-quoted exact values; duplicate or unknown flags (`--port 22` after a valid line, a second `--group-id`, `--group-name`, `--description`, `--dry-run`) are not credited, and unquoted shell-active characters cannot appear. `--ip-permissions` must be a quoted document (single quotes, or double quotes without `$ \` ! backtick) or a bare token without brackets/braces; the unquoted `[{...}]` shorthand is no longer credited. Weak forms now flagged wrong/destructive: `modify-security-group-rules` and `authorize-security-group-egress` with a world-open range, and quoted or `=` group ids. Known limit: a quoted ip-permissions document is judged by lookaheads over its text, not parsed as JSON.
+
+### azure fix-quality rework (2026-10-10)
+
+- [ ] Unverified Azure facts (from memory, no new source read): Website Contributor's allowed actions include Microsoft.Web/sites/publishxml/action (azure-rbac-wrong-scope credits it on the site scope); `az functionapp scale config set --maximum-instance-count` accepts -g/-n and the flag spellings in the matcher; Front Door HTTPS origin validation needs a certificate bound for the forwarded host name, and AzureFrontDoor.Backend plus X-Azure-FDID is the supported origin lockdown (azure-front-door-host-header); `az storage account show` library entry text (azure-public-blob-container).
+- [ ] azure-rbac-wrong-scope: the credited role is now Website Contributor on web-prod; the click-only `use-federated-credential` step assumes the lab's SP uses a client secret (environment text added). If a harder variant is wanted, add an `az ad app federated-credential create` typed command.
+- [ ] Deferred (large redesign, only taught as required click steps, no verification commands): azure-app-sql-two-faults private endpoint + VNet integration as the primary fix; azure-slot-swap-key-vault-two-faults per-slot user-assigned identities; azure-service-bus-dead-letter idempotency check and contract test are in the action labels only, not verified by a terminal command.
+
+### terraform-sg-cycle (fix-quality rework, 2026-10-10)
+
+- Credited fix is now the separate-rule-resource split by group id (`aws_vpc_security_group_{ingress,egress}_rule` or `aws_security_group_rule`), judged on world state (new `sg_rule` predicate: effective rules of both groups in the cloud, exact 8080/8443 from the peer group, web 443 and egress kept, no CIDR source on 8080/8443, nothing on 22, plan clean). Subnet/VPC CIDR is `widen-callbacks-to-cidr` (wrong); world-open is still `open-callbacks-to-internet` (destructive). Action ids `break-the-cycle` and `open-callbacks-to-internet` unchanged; `widen-callbacks-to-cidr` added.
+- Verified from the provider docs (raw GitHub markdown, 2026-10-10): rule resource argument names; the warning against mixing inline rules with rule resources; that removing `ingress`/`egress` does not revoke existing rules and `ingress = []` / `egress = []` does.
+- [ ] Unverified (lab model, from memory): which rule-resource attributes force replacement (the lab: only `security_group_id`; for `aws_security_group_rule` everything but `description`); the `sgr-` / `sgrule-` id shapes; the `InvalidPermission.Duplicate` error text and the "creating VPC Security Group Ingress Rule" prefix; that the real provider errors on a rule duplicating a live inline rule (believed so: AuthorizeSecurityGroupIngress duplicate).
+- Lab limits: the real provider does not warn at plan time about inline + rule resources (it shows perpetual diffs); the lab prints a warning ("Security group rules are managed twice") and `plan_clean` refuses it. Mixing `aws_security_group_rule` with `aws_vpc_security_group_*_rule` on one group (also warned against by the docs) is not flagged. Rule-resource required-argument checks (one source, ip_protocol) are not validated. Importing the existing live rules by `sgr-` id (the no-gap migration) is not modelled; the debrief mentions it.
+- Design note: the credited path takes a brief gap (old rules revoked, new created in one apply), taught in `real_world`.
+
+### content/aws rework (2026-10-10)
+
+- [ ] aws-cross-account-replication-dr: key policy via put-key-policy file:// cannot be inspected (lab has no policy file): regex pins DR key ARN, policy name default, safe filename, --profile dr; inline wildcard-principal docs are flagged destructive. Batch job regex is a lookahead grammar on --account-id, S3ReplicateObject, source bucket ARN, ObjectReplicationStatuses exactly NONE+FAILED; the exact create-job JSON shape is from memory (unverified). Unverified: kms:ViaService works for the cross-account replication role; BucketOwnerEnforced taking ownership of already-delivered replicas (about-object-ownership). owner-override kept wrong (insufficient alone) with honest feedback.
+- [ ] aws-lambda-concurrency-starved: unverified from memory: update-event-source-mapping --scaling-config MaximumConcurrency syntax and its 2..1000 range, the invented mapping UUID, and the claim that a function reserved-concurrency cap on an SQS consumer sends throttled messages back to the queue toward the DLQ (documented on the Lambda SQS scaling page; page not re-read). Credited range 20-300 for the mapping, 200-500 for checkout's reservation are teaching choices. DLQ/maxReceiveCount setup not required (ESM cap avoids throttling).
+- [ ] aws-single-az-database: unverified from memory: a promoted replica inheriting BackupRetentionPeriod 0 (scenario assumes the reporting replica had none), that stop-db-instance works on an instance in an impaired AZ and that RDS auto-restarts a stopped instance after 7 days, the fenced-output text, backup retention bound 7-35 (teaching choice). Repointing is still a label-only click (private Route 53 CNAME): the lab has no DNS state to check.
+- [ ] aws-sqs-visibility-timeout: credited timeout 90-600 s is a teaching choice (p95 ~47 s); DLQ/idempotency actions are label-only clicks (no queue/DB state in the lab).
+- [ ] aws-access-keys-to-role: CloudTrail lookup output (foreign IP 198.51.100.77 calls) is invented for teaching; IMDSv2 only mentioned. role contents/env cleanup remain label-only clicks.
+- [ ] aws-alb-migration-two-faults: stale-rule revoke assumes alb-shop is idle (stage-2 premise); IaC change is prose only.
+- [ ] aws-asg-elb-health-check: unverified: the instance maintenance policy (MinHealthyPercentage/MaxHealthyPercentage) governing replacement of health-check-failed instances (docs not re-read); label-only click; grace period credited 100-9999 s.
+- [ ] aws-dynamodb-gsi-throttle: on-demand can be switched once per 24 h (from memory, not re-read); fixed 2000 WCU floor and autoscaling bounds are prose only (labels), not regex-checked.
+- [ ] aws-nat-gateway-cost: endpoint policy is checked by a regex over an inline single-quoted JSON document (must name arn:aws:s3:::acme-media-*, no Resource "*", no Action "*" or "s3:*"); it is not a JSON parse (limit; a reordered or exotic document may be missed or flagged). Unverified: modify-vpc-endpoint --policy-document syntax and the default endpoint policy text from memory. lambda-vpc-public-subnet: NAT-per-zone/egress hardening is prose only (large redesign if required).
+- [ ] aws-s3-glacier-lifecycle: unverified: Glacier Instant Retrieval 90-day minimum storage duration; versioned copy-in-place behaviour. Fixes remain label-only (lifecycle lives in IaC, no lab state). Standard-IA / Intelligent-Tiering Archive Instant Access not credited as alternatives (pricing not verified).
+- [ ] aws-s3-sse-kms-decrypt: unverified: kms:ViaService condition works for the viewer's GetObject path (S3 calling KMS on the caller's behalf); Bucket Keys cost claim from memory; re-encryption is a label-only click (no lab state).
+- [ ] aws-security-group-port: ALB egress narrowing and SSM-instead-of-SSH are prose only in the ideal path (large redesign if required).
+- Design note (all aws scenarios above): label-only steps (IaC codification, alarms, DLQ, re-encryption, repointing DNS) are credited by click because the lab holds no state to check; they are required in solution_paths so they cannot be skipped, but their content is not verified.
+
+- terraform-sg-cycle: the fix and the traps are judged by the cloud's effective rules (`sg_rule` predicate), not by file regexes; `open-callbacks-to-internet` fires on 0.0.0.0/0 or ::/0 on 8080/8443 once applied, `widen-callbacks-to-cidr` on the subnet or VPC CIDR. Only those exact CIDRs are flagged as the wrong trap; any other CIDR is just not credited.
+#### azure fix-quality rework: honesty notes (nit round, 2026-10-10)
+
+- [ ] Click-only required steps (credited by clicking, never verified by a typed command or file check): azure-files-port-445 `disable-public-access` (ordering is only taught via the 443 check output and feedback, not enforced); azure-public-blob-container `assess-exposure`, `disallow-account-anon`; azure-rbac-wrong-scope `use-federated-credential`; azure-orders-backlog-major `remove-sas`, `cap-calls`, `backoff-429`; azure-appgw-health-probe `probe-in-iac`; azure-private-endpoint-dns `zone-in-iac`; azure-nsg-rule-priority `nsg-in-iac`; azure-vnet-peering-one-way `scope-nsg`; azure-front-door-host-header `bind-certificate`, `lock-origin`, `fix-bicep`; azure-app-sql-two-faults `firewall-iac`; azure-slot-swap-connection-string `clean-staging-data`, `migrate-orders`; azure-slot-swap-key-vault-two-faults `revoke-staging-prod`; azure-cosmos-hot-partition `new-partition-key`, `lower-rus`, `alert-hot-partition`; azure-vm-stopped-not-deallocated `replace-cron`; azure-service-bus-dead-letter `fix-consumer`, `resubmit`, `dlq-alert`.
+- [ ] azure-orders-backlog-major: `az functionapp scale config set/show` and `--maximum-instance-count` are Flex Consumption commands; the environment text does state Flex Consumption, but the matcher spellings are from memory.
+- [ ] From-memory claims, not re-checked against docs: NormalizedRUConsumption by partition key range as the skew metric (cosmos), the contents of the Website Contributor and Virtual Machine Contributor roles and the Website Contributor GUID de139f84-1756-47ae-9be6-808fbbe81aa3 (also the Contributor and Owner GUIDs b24988ac-... and 8e3af657-... used in wrong-action matchers), swap-with-preview as the way to check a slot swap, SMB 3.x with encryption in transit as the Azure Files setting.
+- [ ] azure-policy-allowed-locations: solution_paths changed from one path needing both steps to two alternative paths (allowed region, or exemption); progress or scoring that assumed both steps should be re-checked.
+
+### linux/networking/containers fix-quality rework (2026-10-10)
+
+- [ ] Unverified facts (from memory, docs not re-read): chgrp(1) man page cited in nginx-permission-denied (`retrieved` set but not opened); `install -d -o -g -m` flag semantics (ssh-strictmodes); systemd `StateDirectory=`/`PrivateTmp=` wording; `findmnt --verify` output and `RequiresMountsFor=` behaviour with `nofail` (media-disk-migration-major); ICMPv6 packet-too-big is type 2 and allowing it narrowly is the recommended practice (pmtu-black-hole); Redis ACL/`requirepass` guidance (duplicate-ip-cache-major); LimitRange/ResourceQuota defaults wording and report-builder sizing 6Gi request / 7Gi limit on 8 GiB nodes (evicted-checkout-major, a teaching choice); CPU request 300m (pending-insufficient-cpu, teaching choice); `openssl x509 -checkend` use and 21-day alert threshold (expired-tls-certificate).
+- [ ] Label-only (click) steps with no lab state to verify: ssh-strictmodes `point-app`; media-disk-migration-major `cleanup-hidden` (a typed delete of the hidden copy is deliberately not credited, order of verify-before-delete can't be enforced) and `guard-service`; pmtu-black-hole `allow-frag-needed` and `mss-clamp` (firewall/gateway rules, no lab state); duplicate-ip-cache-major `persist-isolation`, `persist-nft`, `redis-auth`, `decommission-old`; evicted-checkout-major `namespace-defaults`, `capture-resources`; cron-environment `backup-alert`; load-average-nfs `nfs-alert`; dns-resolution-failure `run-role`; expired-tls-certificate `add-expiry-monitor`. A remote-file predicate (files on other hosts via ssh) would let nft/netplan/fstab persistence be checked; not available in the lab today.
+- [ ] Not changed (deliberate, would need a large redesign or new command-library entries): scripted `diff -r` / `logrotate -d` / `findmnt --verify` outputs (each scripted command needs a content/commands entry); the nginx lab does not model per-file modes, so `mode-750` is judged by regex (chmod 750 on the folder, or `-R u=rwX,g=rX,o=` spellings), not by world state; an explicit `chmod -R 750` (executable files) is simply not credited.
+- Design note: in nginx-permission-denied `chown-www` (owner www-data) is now `wrong`, owner stays alice with group www-data, directories 750 / files 640. pmtu-black-hole: `mss-clamp` is credited only together with `allow-frag-needed`.
+- [ ] full-disk: the disk-usage alert is only a debrief follow-up, not a required step: full-disk is the shared fixture of many engine/scoring/UI tests (tests/engine, scoring, incident, shift-ui, routing), so changing its solution path means reworking all of them. Revisit if those fixtures move to a dedicated test scenario.
+
+### content/aws rework, review follow-up (2026-10-10)
+
+- [ ] aws-nat-gateway-cost: the earlier note about a regex over the endpoint policy is superseded. `endpoint_policy` (src/game/awsPolicyCheck.ts, documented in AUTHORING.md) now parses the inline document: Allow only, Principal exactly "*", actions inside {GetObject, PutObject, ListBucket, GetBucketLocation} with GetObject and PutObject required, Resource only acme-media-* bucket ARNs (objects as /*). Known limits: `file://` documents are not judged (scripted note; the action button credits); Condition blocks are accepted unexamined (they can only narrow an Allow); the `Version` 2008-10-17 default is accepted. Unverified: modify-vpc-endpoint syntax and that real endpoint policies need Principal "*".
+- [ ] aws-cross-account-replication-dr: the batch-job matcher is still a regex (lookahead grammar) over the command text, not a parse of the manifest-generator JSON. It now requires ExpectedBucketOwner 111122223333, EligibleForReplication true, statuses exactly NONE+FAILED, and rejects CreatedAfter/CreatedBefore/KeyNameConstraint/MatchAny and repeated --account-id/--operation/--manifest-generator/--role-arn; narrower jobs are flagged wrong (`batch-narrow-job`). Other valid spellings (JSON from a file, --cli-input-json) are not credited.
+- [ ] aws-asg-elb-health-check: grace period credited 100-1800 s only and must be stated; the 1800 cap is a teaching choice.
+- [ ] aws-single-az-database: `promote-with-backups` (promote-read-replica --backup-retention-period 7-35) is the preferred spelling and is a second solution path. Unverified: that promote-read-replica accepts --backup-retention-period (from memory of the CLI reference).
+- [ ] Accepted limits of the aws batch-job matcher (review nit 4): lowercase filter keys, an S3ReplicateObjectX operation prefix and unknown manifest-generator keys are still credited because the matcher is a regex over the command text, not a parse.
+
+### cicd and databases fix-quality rework (2026-10-10)
+
+- [ ] Unverified (from memory, docs not re-read): `gh workflow run --ref` accepts a tag and the dispatch then checks out the tagged commit (release-pipeline-major); `actions/create-github-app-token` as the per-run App token source; gh flag spellings -r/-f/-F/--field/--raw-field; the tj-actions/changed-files 2025 compromise wording (required-check-path-filter); org default workflow permissions path (github-token-permissions); environment deployment-branch policy and prevent-self-review (oidc-environment-subject).
+- [ ] pgbouncer-transaction-pooling-major: PgBouncer's config page (fetched) does not say whether max_prepared_statements applies on RELOAD or needs a restart; the label now says RELOAD with a rolling restart if needed. Unverified.
+- Click-only required steps (no lab state): release-pipeline-major `app-token`/`workflow-call`; postgres-lock-queue `migration-lock-timeout`, `analyst-replica`; postgres-too-many-clients `pooler-compat`, `pooler-auth`, `connection-budget`; oidc `restrict-environment`; github-token-permissions `org-default-read`; fork-pr-secrets `permissions-block`, `reviewed-run`; postgres-listen-localhost `tls`; pitr `lockdown-restore`, `least-priv-cleanup`; replica `lag-alert`; pgbouncer `void-and-refund`. The `read-your-writes` LSN approach is also a click.
+- postgres-pitr-accidental-delete: `when_actions: [restore-side, copy-back]` is all-of in the engine (`every`), so no change was needed there.
+- postgres-too-many-clients: `smaller-pool` alone no longer completes; it pairs with `connection-budget`. Teaching choice.
+- Not changed (hint/debrief only or deferred): required-check-path-filter (label + real_world; no new required step), failing-github-actions (labels + real_world); scripted `SELECT rolconfig` verification for postgres-lock-queue not added (needs a content/commands entry).
+- [ ] Deferred nits (review round): nginx lab credits no `install -d -o alice -g www-data -m 750 /srv/www/promo` (it sets only the folder, not contents, and would credit two steps from one command), no `chown root:www-data` (root-owned content is a valid deploy model but the lab's deploy user is alice); no scripted `diff -r` / `logrotate -d` / `findmnt --verify` outputs (each needs a content/commands entry); the pending-insufficient-cpu 14-day history excerpt and VPA 270m target are invented lab data.
+
+### gcp + microservices fix-quality rework (2026-10-10)
+
+- [x] gcp-scan-ingest-major (review rework): `perimeters update` has only `--set-ingress-policies=YAML_FILE` (replaces all) and `--clear-ingress-policies`; there is no `--add-ingress-policies`. The scenario now teaches describe -> merge the existing bi-export policy into ingress.yaml -> `perimeters dry-run update` -> apply with `--set-ingress-policies`. The file is judged by parsing (src/game/vpcscIngress.ts, `ingress_policy` on the `file` action) and the typed apply is credited by the terminal only while the file on disk passes (`requires_file`). Limits: a broad apply is not a separate wrong action (it just does not count, with a note); the order dry-run-before-apply is taught, not enforced; the ingress YAML key names (`identities`, `sources[].resource`, `ingressTo.operations[].methodSelectors[].method`, `resources`) and the dry-run command are from memory of the docs; `dlq-alert` is label-only; the bi-export policy is invented for the lab. Replaying a saved game rebuilds the apply's scripted output but not the check note.
+- [ ] gcp-lifecycle-deleted-objects: clearing the rule before restoring is only taught in feedback (both are required but the order is not enforced). Restore start time credited 16:30-16:41Z on 2026-09-30 (teaching choice). `exports-rule` credits `--lifecycle-file=exports-cleanup.json` on acme-exports; `protect-docs` is label-only (retention policy/object holds need legal input).
+- [ ] gcp-cloud-run-connection-exhaustion: cap credited 5-40 instances (teaching choice, pool 10 per instance < 500); IaC sync is in the label only. gcp-bigquery-full-scan `cap-bytes`, gcp-service-account-no-role `audit-default-sa` (org policy `iam.automaticIamGrantsForDefaultServiceAccounts`, from memory), gcp-regional-cpu-quota `alert-quota`/`isolate-batch`, jwt-clock-skew `check-fleet`/`clock-alert` (cart-02/search-01/notify-01 added to the maintenance log), breaking-api-field `contract-tests`, cascading-failure `bulkhead`/`migration-guard`, poison-message-loop `repair-replay`/`queue-alerts`, trace-context-dropped `fix-scan`/`propagation-test`, consumer-rebalance-storm-major `idempotent-sends`/`rebalance-alert`: all label-only clicks.
+- [ ] gcp-firewall-network-tag `sa-target`: unverified that changing a VM's service account requires the VM to be stopped (from memory) and that `firewall-rules update --target-service-accounts` replaces tag targets without a separate flag to clear tags.
+- [ ] idempotency-double-charge: unverified (Stripe docs not re-read): keys expire after 24 h; same key with different parameters errors; saved result replays errors too.
+- [ ] poison-message-loop: verified against rabbitmq.com/docs/quorum-queues (2026-10-10): at-most-once is the default dead-letter-strategy, at-least-once needs overflow reject-publish; basic.nack does not increment delivery-count, basic.reject does; delivery-limit default 20 since 4.0. Still unverified: the "since 4.3 the limit counts failed deliveries" wording in the hypotheses/debrief (docs show the behaviour from 4.0).
+
+#### cicd and databases fix-quality rework, review round 2 (2026-10-10)
+
+- [ ] pgbouncer-transaction-pooling-major: the order void-and-refund before unique-index is taught but not enforced (both are required; the lab cannot tell which came first). Building the unique index before voiding the duplicates fails or leaves an INVALID index; the `count = 0` output now needs both actions.
+- [ ] fork-pr-secrets `reviewed-run`: wording is a workflow_dispatch from the base repo given a reviewed commit SHA, with the key in an environment that has required reviewers. A label trigger on a fork PR only yields secrets via pull_request_target, so it is deliberately not described. Click-only; the pattern itself (checking out the SHA only after review) is unverified against GitHub's secure-use page.
+- [ ] release-pipeline-major: fixed publish.yml lives on main and checks out `ref: inputs.tag`; dispatching on the tag ref runs the tag's older publish.yml (stage 1 still builds the tag commit, and stage 3 builds with main's fixed workflow). Unverified: `gh release upload` accepting `refs/tags/<tag>` (credited as a spelling only). Per-file uploads form a second solution path.
+- [ ] postgres-lock-queue: the cancel path now also requires terminate-idle (ALTER ROLE ... SET only affects new sessions). Role timeouts credited 1min to 10min only; sub-minute values are `analyst-timeout-short` (wrong). Only analyst2 is covered by the typed matcher; other roles are in the label.
+
+### iac fix-quality rework (2026-10-10)
+
+- [ ] Invented scenario fiction (not sourced facts), review wording: terraform-drift-hotfix partner ticket SEC-4417 (callbacks only from 198.51.100.16/28, the rest of the /24 belongs to other customers of their hosting provider) and the 23:53 on-call log line; terraform-destroy-dependency-violation `#ingest-platform` thread (Priya confirms the ENI) and the CloudTrail output (DetachNetworkInterface on 2026-09-30 by ingest-platform-deploy); terraform-destroy-nonempty-bucket archive bucket `acme-archive-reports/reports-logs/`; terraform-count-index-shift get-queue-attributes output (all zero).
+- [ ] terraform-forces-replacement: now two stages. Stage 1 credits only the revert as an interim step; stage 2 requires create-snapshot, copy-encrypted (needs `--kms-key-id`), restore-encrypted (typed `aws rds` commands, regex only, no lab state; the order is not enforced and names are pinned to the runbook names in the stage update). NOT modelled: the cutover, importing `orders-db-v2` into Terraform with `storage_encrypted = true` and prevent_destroy, and retiring the old instance (the simulator has no snapshot restore). Same design question as the open terraform-module-upgrade stage 2: confirm the user wants staged migrations for these two. Unverified from memory: `copy-db-snapshot --kms-key-id` accepts an alias, and the AWS CLI error wording for DBSnapshotNotFound.
+- [ ] terraform-state-lost: now requires `backend.tf` with `backend "s3"` (bucket, key, encrypt = true, and use_lockfile = true or a dynamodb_table), a `terraform init` that migrated the state (the local terraform.tfstate emptied) and a clean plan. The file name backend.tf is required by the check (a backend in main.tf is not credited). Not checked: versioning/bucket policy on the state bucket, deleting terraform.tfstate.backup (taught in feedback/hints).
+- [ ] terraform-module-key-removed: `stop-managing-west` is now a wrong action (no credited state rm route). If the user wants a gated route (export confirmed + snapshot + owner recorded) that needs a snapshot/confirmation step first; not built.
+- [ ] terraform-drift-hotfix: `codify` needs the rule narrowed to 198.51.100.16/28 AND applied (reality changes), checked by sg_rule leaves; other narrow ranges (e.g. 10.0.0.0/8 on 8443 alongside) are not individually excluded. After the `apply-anyway` trap a correct narrowed apply still earns the fix (the trap predicate is world-based and no longer holds then); the destructive mark stays latched in the log.
+- [ ] terraform-destroy-dependency-violation: reading the owner confirmation and CloudTrail evidence is encouraged (methodical bonus, key_evidence) but the typed delete is not gated on it (the engine has no evidence-gate for typed actions).
+- [ ] terraform-vcpu-limit: quota credited 98 to 192 vCPUs (teaching choice); above 192 is `request-excessive-quota` (wrong). `right-size` is now wrong because the ticket says the soak test is sized to the 96-vCPU generator. Lowering the quota after teardown is taught only.
+- [ ] Text-only follow-ups (taught in hints/debrief/feedback, not enforced): terraform-ignore-changes-autoscaling (autoscaling target and policy into code); terraform-destroy-nonempty-bucket (delete-marker cleanup of a versioned bucket, flag removal); terraform-import-existing (prevent_destroy is in the label but the choice has no done_when; post-import bucket hardening); terraform-state-in-git (bucket controls, .tfstate.backup purge, managed master password, clone/login audit); terraform-orphans-after-state-rm (the default password and skip_final_snapshot remain in the lab config; the final snapshot itself is now an enforced typed step); wrong-workspace-major (the new `workspace-guard` is a click-only required step with no lab state).
+
+## Typed-line guard: actions the validator cannot check yet
+The validator (src/schema/scenario.ts) tries every action's `example`, and the command written in its label when the
+`match_regex` accepts it, against the typed-line guard (shell syntax, repeated flags on a fix). These 84 actions
+with a `match_regex` have neither, so the check is skipped for them; the existing tests cover their canonical lines
+(all of which pass the guard). Add an `example:` (one typed line the regex accepts) to each and tick it off.
+Known: lines that spell unquoted `[`, `{`, `*`, `?` (AWS shorthand like `Rules=[{...}]` or `gs://bucket/**`,
+`--ip-permissions IpProtocol=...,PrefixListIds=[{...}]`) are rejected by the guard even where a regex accepts them;
+the labels and tests use the quoted form.
+- [ ] aws-access-keys-to-role/attach-role
+- [ ] aws-asg-elb-health-check/grace-zero
+- [ ] aws-asg-elb-health-check/grace-too-long
+- [ ] aws-asg-elb-health-check/grace-unset
+- [ ] aws-cross-account-replication-dr/open-key
+- [ ] aws-cross-account-replication-dr/grant-key
+- [ ] aws-cross-account-replication-dr/batch-failed-only
+- [ ] aws-cross-account-replication-dr/batch-none-failed
+- [ ] aws-cross-account-replication-dr/batch-narrow-job
+- [ ] aws-lambda-concurrency-starved/reserve-checkout-small
+- [ ] aws-lambda-concurrency-starved/reserve-checkout-big
+- [ ] aws-lambda-export-two-faults/timeout-too-short
+- [ ] aws-lambda-export-two-faults/timeout-too-long
+- [ ] aws-route53-failover/open-all-ports
+- [ ] aws-route53-failover/open-standby-direct
+- [ ] aws-route53-failover/remove-vpn-rule
+- [ ] aws-route53-failover/allow-health-checkers
+- [ ] aws-single-az-database/multi-az-deferred
+- [ ] aws-single-az-database/reboot-db
+- [ ] aws-single-az-database/delete-primary
+- [ ] aws-sqs-visibility-timeout/timeout-too-low
+- [ ] aws-sqs-visibility-timeout/timeout-too-high
+- [ ] azure-appgw-health-probe/widen-probe
+- [ ] azure-appgw-health-probe/restart-vms
+- [ ] azure-appgw-health-probe/recreate-gateway
+- [ ] azure-cosmos-hot-partition/raise-rus
+- [ ] azure-front-door-host-header/custom-domain
+- [ ] azure-key-vault-wrong-role/secrets-user
+- [ ] azure-orders-backlog-major/cap-concurrency
+- [ ] azure-private-endpoint-dns/link-zone
+- [ ] azure-rbac-wrong-scope/owner-subscription
+- [ ] azure-rbac-wrong-scope/subscription-contributor
+- [ ] azure-rbac-wrong-scope/contributor-rg
+- [ ] azure-vnet-peering-one-way/create-other-side
+- [ ] failing-github-actions/delete-lock
+- [ ] failing-github-actions/force-push
+- [ ] release-pipeline-major/dispatch-main
+- [ ] release-pipeline-major/dispatch-tag
+- [ ] release-pipeline-major/clobber-binaries
+- [ ] release-pipeline-major/upload-binaries
+- [ ] release-pipeline-major/upload-darwin
+- [ ] release-pipeline-major/upload-windows
+- [ ] release-pipeline-major/upload-sums
+- [ ] crashloopbackoff/rollback
+- [ ] crashloopbackoff/delete-pods
+- [ ] crashloopbackoff/delete-deployment
+- [ ] evicted-checkout-major/run-capture
+- [ ] image-pull-backoff/recreate-deployment
+- [ ] postgres-lock-queue/cancel-migration
+- [ ] postgres-lock-queue/analyst-timeout
+- [ ] postgres-lock-queue/analyst-timeout-off
+- [ ] postgres-lock-queue/analyst-timeout-short
+- [ ] gcp-cloud-run-connection-exhaustion/cap-instances
+- [ ] gcp-cloud-run-connection-exhaustion/raise-max
+- [ ] gcp-cloud-run-connection-exhaustion/lower-concurrency
+- [ ] gcp-cloud-run-connection-exhaustion/restart-sql
+- [ ] gcp-lifecycle-deleted-objects/bulk-restore
+- [ ] gcp-lifecycle-deleted-objects/exports-rule
+- [ ] gcp-lifecycle-deleted-objects/reapply-docs
+- [ ] gcp-scan-ingest-major/clear-ingress
+- [ ] gcp-scan-ingest-major/ingress-rule
+- [ ] gcp-scan-ingest-major/redrive
+- [ ] terraform-destroy-dependency-violation/release-eni
+- [ ] terraform-destroy-nonempty-bucket/empty-bucket
+- [ ] terraform-moved-block/state-mv
+- [ ] terraform-orphans-after-state-rm/snapshot-before-destroy
+- [ ] terraform-vcpu-limit/request-quota-increase
+- [ ] terraform-vcpu-limit/request-excessive-quota
+- [ ] wrong-workspace-major/prod-apply
+- [ ] wrong-workspace-major/apply-now
+- [ ] full-disk/truncate-log
+- [ ] full-disk/reboot
+- [ ] media-disk-migration-major/recover-hidden
+- [ ] nginx-permission-denied/chmod-loose
+- [ ] oom-killed-service/kill-python
+- [ ] jwt-clock-skew/fix-ntp
+- [ ] poison-message-loop/lower-delivery-limit
+- [ ] poison-message-loop/scale-workers
+- [ ] dns-resolution-failure/flush-firewall
+- [ ] duplicate-ip-cache-major/isolate-old
+- [ ] duplicate-ip-cache-major/allow-subnet
+- [ ] duplicate-ip-cache-major/copy-carts
+- [ ] expired-tls-certificate/renew
+- [ ] expired-tls-certificate/restart-nginx
+
+### iac fix-quality rework, round 2 (2026-10-11)
+
+- [ ] terraform-module-upgrade stage 2 and terraform-forces-replacement stage 2 share the same typed AWS steps (regex only, ordered with `after:`; no lab state, so a wrong id is simply not credited). Unverified from memory: `copy-db-snapshot --kms-key-id` accepts an alias; DBSnapshotNotFound wording.
+- [ ] terraform-drift-hotfix: new `sg_only` leaf (every rule on the group comes from the listed peers). Routes: /28 or the two NAT /32s; extra sources of any kind (a /25, /23, 10.0.0.0/8, SSH from anywhere) are not credited; extra 8443 sources are the wrong action `codify-wide`, an extra rule on another port just never earns the fix (no feedback).
+- [ ] terraform-state-lost: new `config_matches` leaf (any .tf in the lab dir, comments removed). The backend must have bucket, key, `encrypt = true` and `use_lockfile = true` or a `dynamodb_table`, each on its own line inside the `backend "s3"` block; `weak-backend` (wrong) fires on a declared backend that fails this.
+- [ ] terraform-orphans-after-state-rm: `snapshot-before-destroy` is a typed step and `destroy-environment` has `after: [snapshot-before-destroy]`. Limit: the destroy fix is world-detected, so a player who destroys first can still type the snapshot afterwards (the snapshot of a deleted DB would fail in real life) and get credit.
+- [ ] terraform-destroy-nonempty-bucket: `get-bucket-versioning` and `list-object-versions` now run (scripted, unversioned bucket) with command-library entries. Versioned-bucket cleanup (delete markers) is still taught only.
+- [ ] Regex hygiene: vcpu quota, forces-replacement and module-upgrade snapshot regexes are anchored with a flag-grammar tail (`--flag value`, value not starting with `-`); delete-network-interface accepts `--network-interface-id=`; prod-apply accepts `-var-file prod.tfvars`/`-var-file=…`/`--var-file`, with `-auto-approve` either side; the SQS drain check accepts `--region`. Compound commands, substitutions and repeated flags are now rejected by the engine guard, not by these regexes.
+- [ ] Not changed: the 9-tail `restore-unencrypted` / `delete-old-first` regexes are deliberately unanchored so variants are still caught as wrong/destructive.
+- [ ] (round 3, 2026-10-11) terraform-state-lost now judges the backend `terraform init` recorded (new `backend` predicate: literal attributes only, so comments, tags, heredocs and nested blocks cannot satisfy it); a declared-but-uninitialised backend, or a failed init, is neither credited nor flagged `weak-backend`. Two backend blocks give `Duplicate backend configuration` (wording from memory, unverified).
+- [ ] (round 3) Typed stage-2 `aws rds` commands accept `--flag=value`, quotes, `aws --region us-east-1 rds ...` and the harmless `--no-cli-pager`/`--output`/`--region us-east-1`; other extra flags (e.g. `--copy-tags`) are still not credited, with no specific feedback. `--kms-key-id alias/aws/rds` (the AWS-managed default key) is the wrong action `copy-default-key`; the runbook in the stage text names the customer-managed alias/orders-db, which is what supports this. Any other key value is credited.
+- [ ] (round 3) wrong-workspace-major: `prod-apply` also accepts `-auto-approve`; the label says "after reading the plan" but that is taught only, not enforced.
+- [ ] (round 3) terraform-destroy-nonempty-bucket: list-object-versions output now has ETag and LastModified fields (invented values) and prints nothing once the bucket is emptied; get-bucket-versioning prints `{}` for an unversioned bucket (real CLI output wording from memory).

@@ -80,15 +80,17 @@ async function mount(id: string) {
     expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
     expect(score(scenario, box.saved!.log).mistakes.destructive).toBe(1)
   }
-  return { run, declare, click, taken, settle, remount, closeClean, trapped, box }
+  const wrongCount = () => score(scenario, box.saved!.log).mistakes.wrongActions
+  return { run, declare, click, taken, settle, remount, closeClean, trapped, wrongCount, box }
 }
 
 const NOT_YET = /Not run: that changes the system\. Declare a root cause first/g
 
 describe('terraform-partial-apply-iam through the UI', () => {
   const ROOT = /isn't allowed rds:CreateDBInstance/
-  const GRANT = 'aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document file://orders-rds.json'
-  const GRANT_BUTTON = /^Add rds:CreateDBInstance to the orders-ci-deploy role's policy/
+  const GRANT =
+    `aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["rds:CreateDBInstance"],"Resource":"arn:aws:rds:us-east-1:123456789012:db:orders-db"}]}'`
+  const GRANT_BUTTON = /^Grant orders-ci-deploy only rds:CreateDBInstance/
   const DENIED = /not authorized to perform: rds:CreateDBInstance/g
   const ADDED = /Apply complete! Resources: 1 added, 0 changed, 0 destroyed\./
 
@@ -165,15 +167,17 @@ describe('terraform-vcpu-limit through the UI', () => {
     'aws ec2 describe-instance-types --instance-types c5.24xlarge --query "InstanceTypes[].VCpuInfo.DefaultVCpus"',
   ]
 
-  it('ideal path, right-size: c5.12xlarge fits and the apply only adds loadgen', async () => {
+  it('weak route, right-size: c5.12xlarge fits and the apply only adds loadgen, but it changes the test: one wrong action, no close-out', async () => {
     const g = await mount('terraform-vcpu-limit')
     await g.run(...INVESTIGATE)
     await waitFor(() => expect(output()).toMatch(/VcpuLimitExceeded[\s\S]*Plan: 1 to add, 0 to change, 0 to destroy\./))
     g.declare(ROOT)
     await g.run("sed -i 's/c5\\.24xlarge/c5.12xlarge/' compute.tf", 'terraform apply -auto-approve', 'terraform plan')
     await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 1 added, 0 changed, 0 destroyed\.[\s\S]*No changes\./))
-    const s = await g.closeClean('right-size')
-    expect(s.lines.map((l) => l.label).join('\n')).toMatch(/Methodical/)
+    await g.settle()
+    expect(g.taken()).toEqual(['right-size'])
+    expect(g.wrongCount()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
   })
 
   it('typed quota request: held until the root cause is named, then c5.24xlarge launches; a remount keeps the gating', async () => {
@@ -288,16 +292,30 @@ describe('terraform-cancelled-ci-lock through the UI', () => {
 
 describe('terraform-sg-cycle through the UI', () => {
   const ROOT = /web's new rule refer to app's group id/
-  const WEB_BY_CIDR = "sed -i 's/security_groups = \\[aws_security_group\\.app\\.id\\]/cidr_blocks = [aws_subnet.app.cidr_block]/' security.tf"
-  const TO_WORLD = "sed -i 's/security_groups = \\[aws_security_group\\.app\\.id\\]/cidr_blocks = [\"0.0.0.0\\/0\"]/' security.tf"
+  // security.tf with every rule its own resource; `clear` leaves ingress = [] and egress = [] in the groups. One printf line, as the terminal takes one line.
+  const SPLIT = (clear: boolean, web8443 = 'referenced_security_group_id = aws_security_group.app.id') => {
+    const group = (n: string) => `resource "aws_security_group" "${n}" {\\n  name = "checkout-${n}"\\n  description = "checkout ${n} tier"\\n  vpc_id = aws_vpc.checkout.id\\n${clear ? '  ingress = []\\n  egress = []\\n' : ''}}\\n`
+    const rule = (kind: string, n: string, g: string, rest: string) => `resource "aws_vpc_security_group_${kind}_rule" "${n}" {\\n  security_group_id = aws_security_group.${g}.id\\n  ${rest}\\n}\\n`
+    const body = [
+      group('web'),
+      group('app'),
+      rule('ingress', 'https', 'web', 'cidr_ipv4 = "0.0.0.0/0"\\n  from_port = 443\\n  to_port = 443\\n  ip_protocol = "tcp"'),
+      rule('ingress', 'callbacks', 'web', `${web8443}\\n  from_port = 8443\\n  to_port = 8443\\n  ip_protocol = "tcp"`),
+      rule('egress', 'web_out', 'web', 'cidr_ipv4 = "0.0.0.0/0"\\n  ip_protocol = "-1"'),
+      rule('ingress', 'api', 'app', 'referenced_security_group_id = aws_security_group.web.id\\n  from_port = 8080\\n  to_port = 8080\\n  ip_protocol = "tcp"'),
+      rule('egress', 'app_out', 'app', 'cidr_ipv4 = "0.0.0.0/0"\\n  ip_protocol = "-1"'),
+    ].join('\\n')
+    return `printf '%b' '${body}' > security.tf`
+  }
+  const TO_WORLD = SPLIT(true, 'cidr_ipv4 = "0.0.0.0/0"')
 
-  it('ideal path: investigate, name the cycle, sed web\'s 8443 rule to the app subnet CIDR, apply in place, close', async () => {
+  it('ideal path: investigate, name the cycle, split the rules by group id, clear and apply, drop the clearing, close', async () => {
     const g = await mount('terraform-sg-cycle')
     await g.run('terraform plan', 'terraform validate', 'git diff main', 'terraform state list')
     await waitFor(() => expect(output()).toMatch(/Error: Cycle: aws_security_group\.app, aws_security_group\.web[\s\S]*aws_vpc\.checkout/))
     g.declare(ROOT)
-    await g.run(WEB_BY_CIDR, 'terraform plan', 'terraform apply -auto-approve', 'terraform plan')
-    await waitFor(() => expect(output()).toMatch(/Plan: 0 to add, 2 to change, 0 to destroy\.[\s\S]*Apply complete! Resources: 0 added, 2 changed, 0 destroyed\.[\s\S]*No changes\./))
+    await g.run(SPLIT(true), 'terraform plan', 'terraform apply -auto-approve', SPLIT(false), 'terraform plan')
+    await waitFor(() => expect(output()).toMatch(/Plan: 5 to add, 2 to change, 0 to destroy\.[\s\S]*Apply complete! Resources: 5 added, 2 changed, 0 destroyed\.[\s\S]*No changes\./))
     const s = await g.closeClean('break-the-cycle')
     expect(s.lines.map((l) => l.label).join('\n')).toMatch(/Methodical/)
   })
@@ -305,8 +323,8 @@ describe('terraform-sg-cycle through the UI', () => {
   it('trap, terminal: open 8443 to 0.0.0.0/0 and apply: destructive once, no fix while it is open', async () => {
     const g = await mount('terraform-sg-cycle')
     g.declare(ROOT)
-    await g.run(TO_WORLD, 'terraform apply -auto-approve', 'terraform plan')
-    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 2 changed[\s\S]*No changes\./))
+    await g.run(TO_WORLD, 'terraform apply -auto-approve', SPLIT(false, 'cidr_ipv4 = "0.0.0.0/0"'), 'terraform plan')
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 5 added, 2 changed[\s\S]*No changes\./))
     await g.trapped('open-callbacks-to-internet')
   })
 

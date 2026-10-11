@@ -86,13 +86,13 @@ hypotheses:
 
 actions:
   - id: allow-frag-needed
-    label: "On the HQ firewall, allow ICMP type 3 code 4 (fragmentation needed) ahead of the ICMP block"
+    label: "On the HQ firewall baseline, allow ICMP type 3 code 4 (fragmentation needed) ahead of the ICMP block, and ICMPv6 packet-too-big (type 2) for IPv6; keep every other ICMP type blocked"
     kind: fix
-    feedback: "The VPN gateway's \"fragmentation needed\" messages reach the servers again, which lower their packet size for Leeds to 1400. Large pages load."
+    feedback: "The VPN gateway's \"fragmentation needed\" messages reach the servers again, which lower their packet size for Leeds to 1400. Large pages load, for TCP and for UDP and anything else, and the security team's block still covers the rest of ICMP. Put it in the baseline itself so the next rule push doesn't remove it."
   - id: mss-clamp
-    label: "On the Leeds VPN gateway, clamp TCP MSS to the path MTU (iptables TCPMSS --clamp-mss-to-pmtu)"
+    label: "On the Leeds VPN gateway, clamp TCP MSS to the path MTU (iptables TCPMSS --clamp-mss-to-pmtu), saved so it survives a reboot"
     kind: fix
-    feedback: "TCP connections through the tunnel now agree on segments small enough to fit, so TCP traffic works even without the ICMP messages."
+    feedback: "Good belt-and-braces: TCP connections through the tunnel agree on segments that fit. On its own it is a mitigation, not the fix: it covers only TCP through this gateway, UDP and every other path stay black-holed, and the firewall is still dropping the ICMP that path MTU discovery needs. Allow ICMP type 3 code 4 as well."
   - id: lower-client-mtu
     label: "Set the MTU to 1400 on every Leeds PC"
     kind: wrong
@@ -108,7 +108,7 @@ actions:
 
 solution_paths:
   - [allow-frag-needed]
-  - [mss-clamp]
+  - [allow-frag-needed, mss-clamp]
 
 key_evidence: [big-hangs, small-df-ok, big-df-silent, icmp-blocked]
 
@@ -121,7 +121,7 @@ evidence_labels:
 hints:
   nudge: "It's size, not the page. What happens to a packet that's too big for the tunnel?"
   direction: "Test packet sizes with ping -M do, then check what the new firewall rules do to ICMP."
-  answer: "Path MTU discovery depends on ICMP \"fragmentation needed\", which the new baseline blocks. Allow ICMP type 3 code 4 (or clamp TCP MSS on the VPN gateway)."
+  answer: "Path MTU discovery depends on ICMP \"fragmentation needed\", which the new baseline blocks. Allow ICMP type 3 code 4 (and ICMPv6 packet-too-big, type 2, for IPv6) in the firewall baseline, keeping the rest of the ICMP block. A TCP MSS clamp on the VPN gateway is a useful addition but doesn't fix the black hole alone."
 
 analogy:
   title: "The low bridge with no warning sign"
@@ -144,11 +144,14 @@ debrief:
     - "Notice the pattern: small responses work, large ones hang."
     - "Test sizes with Don't Fragment: 1400 bytes pass, 1500 vanish without an error."
     - "Find what removed the error: the new rule drops all ICMP."
-    - "Allow ICMP fragmentation-needed (or clamp TCP MSS at the VPN), then reload a large page."
+    - "Allow only ICMP fragmentation-needed (type 3 code 4; packet-too-big for IPv6) in the baseline, keeping the rest of the block, then reload a large page."
+    - "Optionally add a persisted TCP MSS clamp at the VPN gateway as belt-and-braces; it does not replace the ICMP rule."
   real_world: |
     "Blocking ICMP" breaks path MTU discovery; firewall baselines should
-    allow fragmentation-needed (and packet-too-big for IPv6). On tunnels,
-    MSS clamping is a common belt-and-braces addition.
+    allow fragmentation-needed (and packet-too-big for IPv6) narrowly, not
+    all ICMP. On tunnels, MSS clamping is a common belt-and-braces addition
+    for TCP, but it only helps TCP through that gateway and doesn't cover
+    UDP or other paths.
 
 concepts:
   - term: "MTU"

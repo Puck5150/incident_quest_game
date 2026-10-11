@@ -7,9 +7,11 @@
 // from it by the helpers at the bottom, so there's one source of truth.
 
 import { artifacts } from '../schema/constants.ts'
-import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
+import type { Action, ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
-import { isShellPrompt, readsFileOnDisk } from './paths.ts'
+import { endpointPolicyVerdict, iamPolicyVerdict } from './awsPolicyCheck.ts'
+import { isShellPrompt, readsFileOnDisk, typedMode } from './paths.ts'
+import { hasShellOperators, hasUnsafeSyntax, onlyNeedsQuoting, repeatsFlag } from './typedLine.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
@@ -70,6 +72,8 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       const ran = { ...s, log: [...s.log, e] }
       const a = actionFor(cur, e.input)
       if (!a) return ran
+      // A file-gated fix is credited by the terminal after it reads the file (session.ts), never here.
+      if (a.requires_file) return ran
       if (s.phase === 'investigating') return { ...ran, feedback: { tone: 'bad', text: NOT_YET } }
       return step(scenario, ran, { type: 'TAKE_ACTION', id: a.id, at: e.at })
     }
@@ -99,6 +103,9 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       if (s.phase !== 'acting') return s
       const a = cur.actions.find((x) => x.id === e.id)
       if (!a) return s
+      // `after:` prerequisites: refused (and not recorded) until they are taken, whichever way it was asked for.
+      const first = missingPrereq(cur, a, actionsTaken(s.log))
+      if (first) return { ...s, feedback: { tone: 'bad', text: notYetAfter(first) } }
       const log = [...s.log, e]
       const tone = a.kind === 'fix' ? 'good' : a.kind === 'wrong' ? 'bad' : 'danger'
       const done = fixComplete(cur, log) && !fixComplete(cur, s.log)
@@ -126,23 +133,37 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
 // Collapse runs of spaces so "df  -h " matches "df -h".
 export const normalize = (input: string) => input.trim().replace(/\s+/g, ' ')
 
-// Whether a line uses shell operators (pipes, lists, redirection) outside quotes.
-export function hasShellOperators(cmd: string): boolean {
-  let quote: string | undefined
-  for (const ch of cmd) {
-    if (quote) {
-      if (ch === quote) quote = undefined
-    } else if (ch === '"' || ch === "'") quote = ch
-    else if ('|;&<>'.includes(ch)) return true
-  }
-  return false
-}
+export { hasShellOperators, hasUnsafeSyntax, repeatsFlag }
 
 export const NOT_YET = 'Not run: that changes the system. Declare a root cause first, then fix it.'
 
+// The first `after:` prerequisite of `a` that has not been taken, if any.
+export const missingPrereq = (cur: Scenario, a: Action, taken: Set<string>) =>
+  (a.after ?? []).map((id) => cur.actions.find((x) => x.id === id)).find((p) => p && !taken.has(p.id))
+export const notYetAfter = (p: Action) => `Not yet: do this first: ${p.label}`
+
 // The action a typed command takes, if any (first match wins).
 export const actionFor = (scenario: Scenario, input: string) =>
-  scenario.actions.find((a) => a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input)))
+  scenario.actions.find((a) => {
+    if (!a.allow_shell && hasUnsafeSyntax(input, typedMode(scenario))) return false
+    // Repeats only void a FIX: a repeated flag on a wrong/destructive command still lands the penalty.
+    if (a.kind === 'fix' && repeatsFlag(normalize(input))) return false
+    return (
+      (a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input))) ||
+      (a.iam_policy !== undefined && iamPolicyVerdict(input, a.iam_policy) === a.iam_policy.verdict) ||
+      (a.endpoint_policy !== undefined && endpointPolicyVerdict(input, a.endpoint_policy) === a.endpoint_policy.verdict)
+    )
+  })
+
+// A line the guard rejects ONLY for an unquoted glob/brace/~/# (`gs://b/**`, `Rules=[{..}]`) that would earn an
+// action if it were quoted: tell the player, since the shell's own answer says nothing about it.
+export const QUOTE_HINT = '(Not counted: the shell would expand unquoted * ? [ {} ~ # before the command sees them. Quote that argument, e.g. \'gs://bucket/**\'.)'
+export const quoteHint = (scenario: Scenario, input: string): string | undefined => {
+  if (typedMode(scenario) !== 'shell' || !onlyNeedsQuoting(input)) return undefined
+  const line = normalize(input)
+  const quoted = line.split(' ').map((w) => (/[*?[\]{}~#]/.test(w) && !/^['"]/.test(w) ? `'${w}'` : w)).join(' ')
+  return scenario.actions.some((a) => a.match_regex !== undefined && !a.allow_shell && (new RegExp(a.match_regex).test(line) || new RegExp(a.match_regex).test(quoted))) ? QUOTE_HINT : undefined
+}
 
 // What the fake shell prints for `input`, given which actions have been taken.
 // `clear` and `history` are handled by the Terminal component because they
@@ -281,7 +302,9 @@ export function terminalOutput(scenario: Scenario, input: string, before: GameEv
   // it's visible without looking away.
   const action = ran.scripted ? undefined : actionFor(cur, cmd)
   if (!action) return ran.output
-  return namedRootCause(scenario, before) ? action.feedback : NOT_YET
+  if (!namedRootCause(scenario, before)) return NOT_YET
+  const first = missingPrereq(cur, action, actionsTaken(before))
+  return first ? notYetAfter(first) : action.feedback
 }
 
 // Whether the player has named this stage's root cause (so fixes count).

@@ -17,7 +17,9 @@ ticket:
 environment: |
   app-03 runs Ubuntu with OpenSSH's sshd at its default settings. The
   deploy pipeline signs in as deploy with an SSH key listed in
-  /home/deploy/.ssh/authorized_keys. Password sign-in is disabled.
+  /home/deploy/.ssh/authorized_keys. Password sign-in is disabled. The
+  deploy-agent service on app-03 also runs as deploy and needs somewhere
+  writable for its upload scratch files (it used to point at /home/deploy).
 
 terminal:
   prompt: "admin@app-03:~$"
@@ -38,6 +40,13 @@ terminal:
         drwxrwxrwx 6 deploy deploy 4096 Oct  2 11:58 /home/deploy
         drwx------ 2 deploy deploy 4096 Sep  1 08:10 /home/deploy/.ssh
         -rw------- 1 deploy deploy  398 Sep  1 08:10 /home/deploy/.ssh/authorized_keys
+    - match: "ls -ld /var/lib/deploy-agent/tmp"
+      when_actions: [app-tempdir]
+      output: |
+        drwx------ 2 deploy deploy 4096 Oct  2 12:55 /var/lib/deploy-agent/tmp
+    - match: "ls -ld /var/lib/deploy-agent/tmp"
+      output: |
+        ls: cannot access '/var/lib/deploy-agent/tmp': No such file or directory
     - match: "sudo sshd -T | grep -i strictmodes"
       evidence: strictmodes-yes
       output: |
@@ -84,8 +93,23 @@ actions:
   - id: fix-home
     label: "sudo chmod 755 /home/deploy"
     kind: fix
-    match_regex: "^(sudo )?chmod (755|750|700|go-w|g-w,o-w|o-w,g-w) /home/deploy/?$"
-    feedback: "Only deploy can write to its home directory again, so sshd trusts the keys file and the deploy key works. (Give the app its own temp directory for uploads instead.)"
+    match_regex: "^(sudo )?chmod (0?755|0?750|0?700|go-w|g-w,o-w|o-w,g-w) /home/deploy/?$"
+    feedback: "Only deploy can write to its home directory again, so sshd trusts the keys file and the deploy key works. That alone leaves the reason it was opened unsolved: the app still has no scratch directory, and the next admin will chmod 777 again."
+  - id: app-tempdir
+    label: "sudo install -d -o deploy -g deploy -m 700 /var/lib/deploy-agent/tmp"
+    kind: fix
+    # install -d with -o deploy, -m 700|750 (optionally -g deploy), each flag once in any order, exactly this path.
+    match_regex: "^(sudo )?install -d (?=.*-o ?deploy )(?=.*-m ?[0-7])(?!.*(-o .*-o |-m.*-m |-g .*-g ))((-o ?deploy|-g ?deploy|-m ?0?7[05]0) ){2,3}/var/lib/deploy-agent/tmp/?$"
+    feedback: "A dedicated directory owned by deploy, mode 700, outside the home directory: the app gets the write access it needed, nobody else does, and sshd's home-directory check is never involved."
+  - id: point-app
+    label: "Point deploy-agent at /var/lib/deploy-agent/tmp (systemd StateDirectory=deploy-agent or TMPDIR in its unit), restart it, and check an upload works"
+    kind: fix
+    feedback: "The directory only helps once the service uses it. systemd's StateDirectory= creates and owns /var/lib/deploy-agent for the service, and PrivateTmp= gives it its own /tmp, so no one has to touch the home directory's mode again."
+  - id: tempdir-777
+    label: "sudo chmod 777 /var/lib/deploy-agent/tmp"
+    kind: wrong
+    match_regex: "^(sudo )?chmod (-R )?(0?777|1777|0?77[5-6]|0?66[0-6]|a\\+rwx|o\\+(w|rwx?)|g\\+w|ugo\\+rwx) /var/lib/deploy-agent(/tmp)?/?$"
+    feedback: "The same shortcut moved one directory down. The app runs as deploy, so it never needed group or world write (775, 666 and 1777 included, and a sticky bit does not make a shared directory private): owner deploy with mode 700 is enough."
   - id: strictmodes-no
     label: "Set StrictModes no in sshd_config and reload sshd"
     kind: destructive
@@ -100,7 +124,7 @@ actions:
     feedback: "That weakens sign-in for the server, and the pipeline has no password to use anyway."
 
 solution_paths:
-  - [fix-home]
+  - [fix-home, app-tempdir, point-app]
 
 key_evidence: [bad-modes, home-777, strictmodes-yes]
 
@@ -112,7 +136,7 @@ evidence_labels:
 hints:
   nudge: "The key didn't change. Read sshd's own reason in the auth log."
   direction: "sshd checks who can write to the keys file and every folder above it. Look at the home directory's mode."
-  answer: "/home/deploy was chmod 777. Make it 755 (no group or world write) and sshd will use authorized_keys again."
+  answer: "/home/deploy was chmod 777. Make it 755 (no group or world write) and sshd will use authorized_keys again. Then fix why it was opened: create a dedicated directory the app owns (sudo install -d -o deploy -g deploy -m 700 /var/lib/deploy-agent/tmp) and point the service at it."
 
 analogy:
   title: "A guest list on a public noticeboard"
@@ -133,11 +157,15 @@ debrief:
     - "Read sshd's reason in the auth log: bad modes for /home/deploy."
     - "Check the modes along the path: the home directory is drwxrwxrwx."
     - "Remove group and world write from /home/deploy."
+    - "Solve the original need: create /var/lib/deploy-agent/tmp owned by deploy, mode 700 (install -d), and point the service at it (StateDirectory=/TMPDIR), so nobody reaches for chmod 777 again."
     - "Run a deploy to confirm the key works."
   real_world: |
     "Permission denied (publickey)" from the client rarely says why; the
     server's auth log does. chmod 777 is almost never the right fix: give
-    the app its own writable directory instead.
+    the app its own writable directory (systemd StateDirectory=, PrivateTmp=
+    or an install -d owned by the service user) and keep home directories
+    at 755 or 700. Config management that enforces the home mode stops the
+    drift from coming back.
 
 concepts:
   - term: "authorized_keys"

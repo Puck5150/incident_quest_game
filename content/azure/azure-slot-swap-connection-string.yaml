@@ -89,11 +89,15 @@ actions:
   - id: sticky-setting
     label: "Mark OrdersDb as a deployment slot setting in both slots, with each slot's own database (--slot-settings OrdersDb)"
     kind: fix
-    feedback: "Slot settings stay with their slot during a swap, so production always keeps orders-db-prod and staging always keeps orders-db-staging. Now 4.0 can be swapped in safely."
+    feedback: "Slot settings stay with their slot during a swap, so production always keeps orders-db-prod and staging always keeps orders-db-staging. Now 4.0 can be swapped in safely, ideally with swap-with-preview first, and with the slot settings declared in Bicep rather than only set by hand."
   - id: migrate-orders
-    label: "Copy the orders written to orders-db-staging since 10:00 into orders-db-prod, and tell the warehouse"
+    label: "Copy the orders written to orders-db-staging since 10:00 into orders-db-prod (checking for duplicate or colliding order IDs), and tell the warehouse"
     kind: fix
     feedback: "Those 463 orders are real customers' paid orders. Without moving them, they'd never be shipped."
+  - id: clean-staging-data
+    label: "After verifying the copy, remove the real customer orders from orders-db-staging and restore it to test data only"
+    kind: fix
+    feedback: "orders-db-staging is a test database with test-grade access controls, and it now holds real customers' paid orders and personal data. Once production has them, delete them from staging so personal data is not left outside production's protections."
   - id: edit-prod-only
     label: "Change production's OrdersDb value to orders-db-prod (without making it a slot setting)"
     kind: wrong
@@ -108,7 +112,7 @@ actions:
     feedback: "That deletes 463 real, paid customer orders that exist nowhere else. Move them to production first."
 
 solution_paths:
-  - [swap-back, sticky-setting, migrate-orders]
+  - [swap-back, sticky-setting, migrate-orders, clean-staging-data]
 
 key_evidence: [prod-uses-staging-db, swap-at-10, orders-in-staging]
 

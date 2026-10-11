@@ -42,7 +42,7 @@ terminal:
       when_actions: [idempotency-keys]
       output: |
         attempt 1: timeout after 5000 ms
-        attempt 2: 201 Created charge ch_T41 (replayed result for Idempotency-Key ord_test_42)
+        attempt 2: 201 Created charge ch_T41 (replayed result for Idempotency-Key 6f1c2e9a-5b7d-4c1e-9a3f-2d8e4b6a1c90, same key as attempt 1)
         provider charges for ord_test_42: 1
     - match: "./replay-slow-charge.sh ord_test_42"
       output: |
@@ -86,11 +86,11 @@ hypotheses:
 
 actions:
   - id: idempotency-keys
-    label: "Send an idempotency key derived from the order (for example the order id) with every charge request, so a retry returns the first request's result instead of charging again"
+    label: "Generate one idempotency key (a random UUID) per payment attempt in order-service, reuse it on every retry of that attempt, send it as Idempotency-Key to payment-service, and have payment-service store key and result (with an expiry) and forward the key to the provider"
     kind: fix
-    feedback: "The provider saves the result for each key; a retried request with the same key gets the same answer, so a retry can't create a second charge."
+    feedback: "A retry of the same attempt carries the same key, so payment-service replays the saved result instead of charging again. The key is per attempt, not per order: a customer's second try after a decline gets a new key, where an order-wide key would keep replaying the first failure. Keep the key for a bounded time and reject the same key with different parameters."
   - id: refund
-    label: "Refund the 41 duplicate charges and tell the affected customers"
+    label: "Reconcile payment-service charges against the provider's list, refund every duplicate (not only the 41 who complained) and tell the affected customers"
     kind: fix
     feedback: "The customers get their money back. Find all pairs (same order, same amount, seconds apart), not just the ones who complained."
   - id: no-retries
@@ -116,7 +116,7 @@ evidence_labels:
 hints:
   nudge: "Follow one double-charged order through both services' logs."
   direction: "The retry came from order-service. What would let payment-service recognise a retry as the same request?"
-  answer: "Retries of a non-idempotent charge created a second charge. Send an idempotency key (the order id) with each charge, and refund the duplicates."
+  answer: "Retries of a non-idempotent charge created a second charge. Send an idempotency key (one per payment attempt, reused on retries) with each charge, honour it in payment-service, and reconcile and refund the duplicates."
 
 analogy:
   title: "Asking twice at the counter"
@@ -138,7 +138,8 @@ debrief:
     - "Follow one order: a timeout, then a retry from order-service."
     - "See both requests succeed in payment-service."
     - "Note no idempotency key is sent."
-    - "Send a stable idempotency key per order, refund duplicates, and replay a slow charge to confirm one charge."
+    - "Generate a key per payment attempt, reuse it on retries, and have payment-service store and replay results by key (with an expiry)."
+    - "Reconcile against the provider, refund duplicates, and replay a slow charge to confirm one charge."
   real_world: |
     Any operation retried across a network must be idempotent or carry an
     idempotency key, especially anything that moves money or sends

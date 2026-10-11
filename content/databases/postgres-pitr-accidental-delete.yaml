@@ -80,6 +80,14 @@ actions:
     label: "Copy the customers missing from production from db-restore back into production (for example, export them with \\copy and insert them back)"
     kind: fix
     feedback: "The 48,213 customers are back, with this morning's orders untouched. Check foreign keys and any changes made to those customers in between."
+  - id: lockdown-restore
+    label: "Treat db-restore as a full production PII copy: limit access to the people doing the recovery while it exists, and once the copy-back is verified, wipe it (stop PostgreSQL, destroy the data directory and volume, expire the base-backup copy)"
+    kind: fix
+    feedback: "The recovery copy holds every customer, including the ones that were never deleted. It's restricted while it exists and destroyed after, so the fix doesn't leave a second, unmanaged copy of the data."
+  - id: least-priv-cleanup
+    label: "Remove the unrestricted DELETE on customers from the cleanup script's role (soft-delete or a narrow, reviewed function), and run bulk deletes in a transaction that checks the row count before COMMIT"
+    kind: fix
+    feedback: "The script can no longer wipe the table by losing a WHERE clause: it has no such right, and a count guard stops a bulk delete that touches more rows than expected."
   - id: restore-in-place
     label: "Stop production and restore it to 10:42:06"
     kind: destructive
@@ -90,7 +98,7 @@ actions:
     feedback: "That stops it happening again tomorrow, but doesn't bring back today's 48,213 customers."
 
 solution_paths:
-  - [restore-side, copy-back]
+  - [restore-side, copy-back, lockdown-restore, least-priv-cleanup]
 
 key_evidence: [delete-time, archiving-ok, orders-today]
 
@@ -102,7 +110,7 @@ evidence_labels:
 hints:
   nudge: "You need the customers as they were one second before 10:42:07, without losing anything else. Where could that version of the data exist?"
   direction: "Check that WAL archiving is healthy, then think about restoring somewhere other than production."
-  answer: "Do a point-in-time recovery of last night's backup onto db-restore, stopping just before 10:42:07, and copy the deleted customers back into production."
+  answer: "Do a point-in-time recovery of last night's backup onto db-restore, stopping just before 10:42:07, copy the deleted customers back into production, then lock down and wipe db-restore (a full PII copy) and take the unrestricted DELETE away from the cleanup role."
 
 analogy:
   title: "A photo and a diary"
@@ -111,7 +119,9 @@ analogy:
     change since. Someone emptied one aisle at 10:42. Build a copy of the
     warehouse next door from the photo and the diary, stopping at 10:41,
     and carry just that aisle's boxes back. Don't rebuild the main
-    warehouse, where the morning's deliveries are.
+    warehouse, where the morning's deliveries are. When the aisle is back,
+    lock the copy warehouse and clear it out, and take the broom away from
+    the cleaner who had the whole building's keys.
 
 debrief:
   root_cause: |
@@ -126,11 +136,17 @@ debrief:
     - "Confirm WAL archiving is healthy, so recovery can reach that time."
     - "Restore last night's base backup on db-restore with recovery_target_time just before it."
     - "Copy the missing customers back into production; check related data."
+    - "Lock down db-restore while it exists, then wipe it: it holds a full copy of production PII."
+    - "Remove the cleanup role's unrestricted DELETE; run bulk deletes in a transaction with a row-count check."
   real_world: |
     Practise point-in-time recovery before you need it, and keep base
     backups plus archived WAL long enough to cover mistakes noticed late.
     For risky scripts, run deletes in a transaction and check the row count
-    before committing.
+    before committing, and give the script's role only the rights it needs
+    (no unbounded DELETE). A restored copy is production data: restrict it
+    and destroy it when done. Set recovery_target_action ('promote' or
+    'pause') so the restored server is queryable, and copy back with care
+    for foreign keys and rows recreated since.
 
 concepts:
   - term: "Base backup"

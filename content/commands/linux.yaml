@@ -67,6 +67,20 @@
     - { command: "sudo -u www-data cat /srv/www/promo/index.html", note: "Test access as the web server's user directly." }
   docs: { title: "namei(1)", url: "https://man7.org/linux/man-pages/man1/namei.1.html" }
 
+- id: chown-recursive
+  match: "^(sudo )?chown "
+  summary: "Changes the owner (and optionally the group) of a file or directory, here for everything under it."
+  parts:
+    - { token: "chown", meaning: "Change file owner and group." }
+    - { token: "-R", meaning: "Recurse into the directory and change everything below it." }
+    - { token: "www-data:www-data", meaning: "user:group to set; the web server's account in this scenario." }
+    - { token: "/srv/www/promo", meaning: "The path to change." }
+  why: "Permission checks start with who owns the file. Giving the web user ownership of its own site is narrower than loosening the mode for everyone."
+  alternatives:
+    - { command: "sudo install -d -o www-data -g www-data -m 750 /srv/www/promo", note: "Creates the folder with the right owner and mode in one step." }
+    - { command: "sudo chgrp -R www-data /srv/www/promo", note: "Group only; pair it with a group-readable mode such as 750." }
+  docs: { title: "chown(1)", url: "https://man7.org/linux/man-pages/man1/chown.1.html" }
+
 - id: ls-selinux
   match: "^ls -Z"
   summary: "Lists files with their SELinux security context (label)."

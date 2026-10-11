@@ -228,6 +228,14 @@ stages:
     diagram_status: { alb2: ok, api: degraded }
     terminal:
       commands:
+        - match: "aws ec2 describe-security-groups --group-ids sg-0api --query SecurityGroups[0].IpPermissions"
+          when_actions: [retire-old-alb-rule]
+          output: |
+            [
+                { "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080,
+                  "UserIdGroupPairs": [ { "GroupId": "sg-0alb2", "Description": "from alb-shop-2" } ] },
+                { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "UserIdGroupPairs": [ { "GroupId": "sg-0bastion" } ] }
+            ]
         - match: "aws autoscaling describe-scaling-activities --auto-scaling-group-name asg-api --max-items 2 --query Activities[].[StartTime,Description,Cause]"
           when_actions: [fix-hc-path]
           output: |
@@ -267,6 +275,16 @@ stages:
         kind: fix
         match_regex: "^aws elbv2 modify-target-group --target-group-arn arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api-v2/9f3c2b7a1d4e5f60 --health-check-path /health$"
         feedback: "Health checks now ask for /health, which returns 200. Targets go healthy after the healthy threshold, and the Auto Scaling group stops replacing them."
+      - id: retire-old-alb-rule
+        label: "aws ec2 revoke-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --source-group sg-0alb"
+        kind: fix
+        match_regex: "^aws ec2 revoke-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --source-group sg-0alb$"
+        feedback: "alb-shop carries no traffic any more, so its 8080 rule only widens who can reach the instances. Revoking it leaves exactly one path in, from alb-shop-2. Make the same change in the infrastructure code so the next apply does not bring it back."
+      - id: revoke-new-alb-rule
+        label: "aws ec2 revoke-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --source-group sg-0alb2"
+        kind: destructive
+        match_regex: "^aws ec2 revoke-security-group-ingress --group-id sg-0api --protocol tcp --port 8080 --source-group sg-0alb2$"
+        feedback: "That removes the rule the live load balancer uses: every request is a 504 again. The stale rule is the one for sg-0alb, the old load balancer."
       - id: widen-matcher
         label: "Change the target group's success codes to 200-499"
         kind: wrong
@@ -280,7 +298,7 @@ stages:
         kind: destructive
         feedback: "The load balancer's listener loses its target, so every request fails until the new group is attached, and the defaults bring back path /."
     solution_paths:
-      - [fix-hc-path]
+      - [fix-hc-path, retire-old-alb-rule]
     key_evidence: [hc-404, hc-path-root, root-404, asg-churn]
     evidence_labels:
       hc-404: "Health checks now fail with code 404"
@@ -290,7 +308,7 @@ stages:
     hints:
       nudge: "The load balancer gets an answer now. Which page is it asking for?"
       direction: "Compare the new target group's health check path with what the API serves, and with the old target group's settings."
-      answer: "api-v2 was created with the default health check path, /, which returns 404. Set the health check path to /health."
+      answer: "api-v2 was created with the default health check path, /, which returns 404. Set the health check path to /health, then revoke the stale sg-0alb rule on sg-0api."
     debrief:
       root_cause: |
         api-v2 was created with the default health check path, /, and the API
@@ -305,5 +323,6 @@ stages:
         - "Read the health check settings: path / (the default)."
         - "Confirm what the API serves: / is 404, /health is 200; the old target group used /health."
         - "Set api-v2's health check path to /health, then confirm targets go healthy."
+        - "Clean up: revoke the 8080 rule from the old load balancer's security group (sg-0alb) now that alb-shop carries no traffic, and make the same change in the infrastructure code."
 command_notes:
   "curl -s -o /dev/null -w '%{http_code}\\n' http://10.0.11.21:8080/": "Asking the target directly gets 404 on /, so a health check on / fails no matter what the security group allows: that's the second fault."

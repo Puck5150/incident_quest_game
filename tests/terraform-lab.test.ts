@@ -274,6 +274,10 @@ describe('done_when in the scenario schema', () => {
     const leaves = [
       { plan_clean: true },
       { plan_has: { no_destroy: ['aws_vpc.main', 'aws_s3_bucket.b["x"]', 'aws_instance.web[0]'] } },
+      { plan_has: { no_change: ['aws_security_group.payments', 'module.net', 'aws_s3_bucket.b["x"]'] } },
+      { plan_has: { no_destroy: ['aws_vpc.main'], no_change: ['aws_vpc.main'] } },
+      { plan_has: { no_change: ['aws_vpc.main'] } },
+      { reality_has: { type: 'random_password', id: 'none' } },
       { state_has: 'aws_vpc.main' },
       { state_lacks: 'data.aws_ami.x' },
       { lock_free: true },
@@ -302,6 +306,10 @@ describe('done_when in the scenario schema', () => {
   it('rejects malformed predicates', () => {
     expect(dw({ plan_clear: true })).not.toEqual([])
     expect(dw({ plan_clean: true, lock_free: true })).not.toEqual([])
+    expect(dw({ plan_has: {} })).not.toEqual([])
+    expect(dw({ plan_has: { no_change: [] } })).not.toEqual([])
+    expect(dw({ plan_has: { no_change: ['aws_vpc.main'], other: ['x'] } })).not.toEqual([])
+    expect(dw({ plan_has: { no_change: ['nope'] } }).join()).toMatch(/^actions\.0\.done_when\.plan_has\.no_change\.0: /)
     expect(dw({ plan_clean: false })).not.toEqual([])
     expect(dw({ lock_bypassed: false })).not.toEqual([])
     expect(dw({ all: [{ all: [{ lock_bypassed: true }] }] })).not.toEqual([])

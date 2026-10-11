@@ -37,6 +37,21 @@ terminal:
   commands:
     - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db$"
       example: "aws rds describe-db-instances --db-instance-identifier shop-db"
+      when_actions: [fence-old-primary]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db",
+                    "DBInstanceStatus": "stopped",
+                    "AvailabilityZone": "us-east-1a",
+                    "MultiAZ": false,
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db$"
+      example: "aws rds describe-db-instances --db-instance-identifier shop-db"
       evidence: single-az
       output: |
         {
@@ -55,6 +70,38 @@ terminal:
         }
     - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
       example: "aws rds describe-db-instances --db-instance-identifier shop-db-reports"
+      when_actions: [enable-multi-az, set-backup-retention]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "modifying",
+                    "AvailabilityZone": "us-east-1b",
+                    "BackupRetentionPeriod": 7,
+                    "MultiAZ": false,
+                    "PendingModifiedValues": { "MultiAZ": true },
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      when_actions: [enable-multi-az, promote-with-backups]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "modifying",
+                    "AvailabilityZone": "us-east-1b",
+                    "BackupRetentionPeriod": 7,
+                    "MultiAZ": false,
+                    "PendingModifiedValues": { "MultiAZ": true },
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
       when_actions: [enable-multi-az]
       output: |
         {
@@ -63,8 +110,39 @@ terminal:
                     "DBInstanceIdentifier": "shop-db-reports",
                     "DBInstanceStatus": "modifying",
                     "AvailabilityZone": "us-east-1b",
+                    "BackupRetentionPeriod": 0,
                     "MultiAZ": false,
                     "PendingModifiedValues": { "MultiAZ": true },
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      when_actions: [set-backup-retention]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "available",
+                    "AvailabilityZone": "us-east-1b",
+                    "BackupRetentionPeriod": 7,
+                    "MultiAZ": false,
+                    ...
+                }
+            ]
+        }
+    - match_regex: "^aws rds describe-db-instances --db-instance-identifier shop-db-reports$"
+      when_actions: [promote-with-backups]
+      output: |
+        {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "shop-db-reports",
+                    "DBInstanceStatus": "available",
+                    "AvailabilityZone": "us-east-1b",
+                    "BackupRetentionPeriod": 7,
+                    "MultiAZ": false,
                     ...
                 }
             ]
@@ -78,6 +156,7 @@ terminal:
                     "DBInstanceIdentifier": "shop-db-reports",
                     "DBInstanceStatus": "available",
                     "AvailabilityZone": "us-east-1b",
+                    "BackupRetentionPeriod": 0,
                     "MultiAZ": false,
                     ...
                 }
@@ -157,16 +236,41 @@ actions:
     label: "aws rds promote-read-replica --db-instance-identifier shop-db-reports"
     kind: fix
     match_regex: "^aws rds promote-read-replica --db-instance-identifier shop-db-reports$"
-    feedback: "RDS stops replication, reboots the replica, and it becomes a standalone read-write instance in us-east-1b. Writes from the last ~1.4 s of replica lag may be lost; say so in the incident notes."
-  - id: repoint-app
-    label: "Point the app's DB endpoint at shop-db-reports and roll the web tier"
+    feedback: "RDS stops replication, reboots the replica, and it becomes a standalone read-write instance in us-east-1b. This cannot be undone, and writes from the last ~1.4 s of replica lag may be lost: accept that deliberately and record it (the RPO) in the incident notes."
+  - id: promote-with-backups
+    label: "aws rds promote-read-replica --db-instance-identifier shop-db-reports --backup-retention-period 7"
     kind: fix
-    feedback: "The app now writes to the promoted instance in the healthy zone. Orders start succeeding."
+    match_regex: "^aws rds promote-read-replica --db-instance-identifier shop-db-reports --backup-retention-period ([7-9]|[12][0-9]|3[0-5])$"
+    feedback: "The same irreversible promotion, but the new primary starts with automated backups on (7 days), so there is point-in-time recovery from the first minute. This is the preferred spelling: it also covers the backup-retention step. Still accept and record the ~1.4 s of possible lost writes."
+  - id: repoint-app
+    label: "Point the stable DNS name the app connects through (a private Route 53 CNAME) at shop-db-reports' endpoint, and recycle the web tier's connections"
+    kind: fix
+    feedback: "The app now writes to the promoted instance in the healthy zone through a name you control, so the next failover or rebuild is a DNS change, not an app deploy. Orders start succeeding."
+  - id: multi-az-deferred
+    label: "aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az (no --apply-immediately)"
+    kind: wrong
+    match_regex: "^aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az$"
+    feedback: "Without --apply-immediately the change waits for the next maintenance window, so the new primary stays a single point of failure, in the middle of an incident, for days. Apply it now."
   - id: enable-multi-az
     label: "aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az --apply-immediately"
     kind: fix
-    match_regex: "^aws rds modify-db-instance --db-instance-identifier shop-db-reports --multi-az( --apply-immediately)?$"
+    match_regex: "^aws rds modify-db-instance --db-instance-identifier shop-db-reports (--multi-az --apply-immediately|--apply-immediately --multi-az)$"
     feedback: "The new primary gets a synchronous standby in another zone, so the next zone failure is an automatic failover instead of an outage."
+  - id: set-backup-retention
+    label: "aws rds modify-db-instance --db-instance-identifier shop-db-reports --backup-retention-period 7 --apply-immediately"
+    kind: fix
+    match_regex: "^aws rds modify-db-instance --db-instance-identifier shop-db-reports --backup-retention-period ([7-9]|[12][0-9]|3[0-5]) --apply-immediately$"
+    feedback: "A reporting replica was built without automated backups, so the new primary had none: no point-in-time recovery for the production database. Seven days or more of retention fixes that."
+  - id: fence-old-primary
+    label: "aws rds stop-db-instance --db-instance-identifier shop-db"
+    kind: fix
+    match_regex: "^aws rds stop-db-instance --db-instance-identifier shop-db$"
+    feedback: "The old primary is stopped, not deleted: when us-east-1a recovers, nothing holding the old endpoint can write to a database that has diverged (split brain), and its data is kept in case you need to reconcile the last second of writes. Take a snapshot of it first if you can, because RDS starts a stopped instance again after seven days and you need a decision on its fate before then."
+  - id: new-reports-replica
+    label: "aws rds create-db-instance-read-replica --db-instance-identifier shop-db-analytics --source-db-instance-identifier shop-db-reports"
+    kind: fix
+    match_regex: "^aws rds create-db-instance-read-replica --db-instance-identifier (?!shop-db(-reports)? )[a-z][a-z0-9-]{1,39}[a-z0-9] --source-db-instance-identifier shop-db-reports( --db-instance-class db\\.[a-z0-9]+\\.[a-z0-9]+)?$"
+    feedback: "The analytics team's dashboards had been fed by the replica that is now the production primary, so they were querying production directly. A new replica of the new primary under a new name gives them a read-only copy again."
   - id: reboot-db
     label: "Reboot shop-db"
     kind: wrong
@@ -183,7 +287,8 @@ actions:
     feedback: "You destroyed the only copy of the writes that hadn't replicated yet, while the zone might have recovered. Rename or repoint instead; never delete during an incident."
 
 solution_paths:
-  - [promote-replica, repoint-app, enable-multi-az]
+  - [promote-replica, repoint-app, set-backup-retention, enable-multi-az, fence-old-primary, new-reports-replica]
+  - [promote-with-backups, repoint-app, enable-multi-az, fence-old-primary, new-reports-replica]
 
 key_evidence: [az-event, single-az, replica-in-b]
 evidence_labels:
@@ -194,7 +299,7 @@ evidence_labels:
 hints:
   nudge: "The web servers in one zone are fine. What do they all depend on, and where does it live?"
   direction: "Compare where the database runs with the zone named in the AWS Health event. Then look for any copy of the data somewhere else."
-  answer: "shop-db is MultiAZ: false in us-east-1a, the impaired zone. Promote the us-east-1b read replica, point the app at it, then enable Multi-AZ on it."
+  answer: "shop-db is MultiAZ: false in us-east-1a, the impaired zone. Promote the us-east-1b read replica, point the app at it through a stable DNS name, then on the new primary turn on backups and Multi-AZ (--apply-immediately), stop the old primary so it cannot take writes when the zone recovers, and give analytics a new replica. The ~1.4 s of lost writes is an accepted trade-off to record."
 
 analogy:
   title: "One bridge to the island"
@@ -217,14 +322,19 @@ debrief:
     - "Check the AWS Health event: us-east-1a is impaired."
     - "Describe shop-db: us-east-1a, MultiAZ false."
     - "Find a copy elsewhere: shop-db-reports in us-east-1b, ~1.4 s of lag."
-    - "Promote it, repoint the app, and record the possible data loss."
-    - "Enable Multi-AZ on the new primary, then verify /api/health."
+    - "Decide knowingly: promotion is irreversible and loses up to ~1.4 s of writes (the alternatives are waiting for the zone or restoring a snapshot into us-east-1b, both slower). Promote it and record the possible data loss."
+    - "Repoint the app through a stable DNS name, then verify /api/health."
+    - "Check the new primary's BackupRetentionPeriod (a replica starts at 0) and set it, so point-in-time recovery exists."
+    - "Enable Multi-AZ with --apply-immediately, so it does not wait for a maintenance window."
+    - "Fence the old primary (snapshot it first if you can, then stop it; never delete it) so it cannot take writes when us-east-1a recovers."
+    - "Create a new read replica for the analytics team off the new primary."
   real_world: |
     With Multi-AZ, RDS keeps a synchronous standby in another zone and fails
     over automatically, typically in 60–120 seconds, by switching the DNS
     record. Apps should reconnect and not cache DNS forever. Promoting an
     asynchronous read replica is a valid recovery plan too, but only if you
-    accept a small window of lost writes.
+    accept a small window of lost writes, and then the old primary must be
+    fenced off so a recovering zone cannot bring back a second writer.
 
 sources:
   - title: "Amazon RDS: Multi-AZ DB instance deployments"

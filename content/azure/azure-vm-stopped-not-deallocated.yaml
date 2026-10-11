@@ -82,15 +82,17 @@ actions:
   - id: deallocate-now
     label: "az vm deallocate --ids $(az vm list -g rg-test --query \"[].id\" -o tsv)"
     kind: fix
+    allow_shell: true # the $(az vm list …) is the command; the regex pins the whole line, substitution included
     match_regex: "^az vm deallocate --ids \\$\\(az vm list (-g|--resource-group) rg-test --query \"?\\[\\]\\.id\"? (-o|--output) tsv\\)$"
     feedback: "Deallocated VMs release their hardware, and compute charges stop. Disks (and any static public IPs) are still billed, as the docs warn."
   - id: replace-cron
-    label: "Replace the in-VM cron with a scheduled job that runs az vm deallocate at 19:00 (and remove the shutdown cron)"
+    label: "Replace the in-VM cron with Azure-side scheduling at 19:00 (VM auto-shutdown, or an Automation/Functions job running az vm deallocate as a managed identity holding only a VM-deallocate role such as Virtual Machine Contributor scoped to rg-test, no stored credentials), and remove the shutdown cron"
     kind: fix
-    feedback: "Deallocation is something only Azure can do: the VM's own operating system can only switch itself off, which leaves the VM allocated and billed. Scheduling it from outside makes the nightly saving real."
+    feedback: "Deallocation is something only Azure can do: the VM's own operating system can only switch itself off, which leaves the VM allocated and billed. Scheduling it from outside makes the nightly saving real. Give the scheduler a managed identity with a role scoped to rg-test only; a stored service-principal secret or a subscription-wide role would turn a cost job into a standing privilege."
   - id: az-vm-stop
     label: "az vm stop --ids $(az vm list -g rg-test --query \"[].id\" -o tsv)"
     kind: wrong
+    allow_shell: true
     match_regex: "^az vm stop --ids \\$\\(az vm list (-g|--resource-group) rg-test --query \"?\\[\\]\\.id\"? (-o|--output) tsv\\)$"
     feedback: "az vm stop powers the VMs off but keeps them allocated: the CLI's own help says the VM will continue to be billed. You've rebuilt the same problem from outside."
   - id: smaller-size

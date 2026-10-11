@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { atStage } from '../src/schema/stages.ts'
-import { runCommand } from '../src/game/engine.ts'
+import { actionFor, runCommand } from '../src/game/engine.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
 const scenario = loadIncident('terraform-module-upgrade')
@@ -86,13 +86,24 @@ describe('terraform-module-upgrade on the simulator', () => {
     }
   })
 
-  it('(b2) any spelling that leaves 2.0.x installed and the plan clean is the pin route; the manifest bytes are the real compact JSON', async () => {
-    const spellings = ['~> 2.0.0', '~> 2.0.1', '= 2.0.1', '2.0.1', '>= 2.0.0, < 2.1.0', '< 2.1', '!= 2.1.0, ~> 2.0', '<2.1.0']
-    for (const v of spellings) {
+  it('(b2) only an exact pin to a 2.0.x release is the fix; ranges that merely happen to resolve to 2.0.1 plan clean but are not credited; the manifest bytes are the real compact JSON', async () => {
+    for (const v of ['= 2.0.1', '2.0.1', '=2.0.1', ' 2.0.1 ']) {
       const { sh, out } = await play('cd ~/infra', `sed -i 's/version = "~> 2.0"/version = "${v}"/' main.tf`, 'terraform init', 'terraform plan', 'cat .terraform/modules/modules.json')
       expect(out[3].output, v).toContain('No changes.')
       expect(out[4].output, v).toBe(`{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"db","Source":"${REG}","Version":"2.0.1","Dir":".terraform/modules/db"}]}`)
       expect(await detectedAll(sh), v).toEqual(PINNED)
+    }
+    // an optional trailing comment after the exact pin is fine
+    for (const c of ['# last known good', '// last known good']) {
+      const { sh } = await play('cd ~/infra', `sed -i 's|version = "~> 2.0"|version = "2.0.1" ${c}|' main.tf`, 'terraform init', 'terraform plan')
+      expect(await detectedAll(sh), c).toEqual(PINNED)
+    }
+    // floating or range constraints still resolve to 2.0.1 and plan clean, but a range is not a pin: no credit
+    for (const v of ['~> 2.0.0', '~> 2.0.1', '>= 2.0.0, < 2.1.0', '< 2.1', '!= 2.1.0, ~> 2.0', '<2.1.0']) {
+      const { sh, out } = await play('cd ~/infra', `sed -i 's/version = "~> 2.0"/version = "${v}"/' main.tf`, 'terraform init', 'terraform plan', 'cat .terraform/modules/modules.json')
+      expect(out[3].output, v).toContain('No changes.')
+      expect(out[4].output, v).toContain('"Version":"2.0.1"')
+      expect(await detectedAll(sh), v).toEqual(NONE)
     }
     // a constraint that still allows 2.1.0 plus init -upgrade lands on 2.1.0: nothing credited
     const no = await play('cd ~/infra', "sed -i 's/~> 2.0/~> 2.0/' main.tf", 'terraform init -upgrade', 'terraform plan')
@@ -104,11 +115,11 @@ describe('terraform-module-upgrade on the simulator', () => {
     expect(await detectedAll(to210.sh)).toEqual(NONE)
   })
 
-  it('(b2a) override and pin together do not plan: 2.0.1 has no storage_encrypted input, so neither route is credited', async () => {
+  it('(b2a) override and pin together do not plan: 2.0.1 has no storage_encrypted input, so the pin is not credited (the override is still flagged wrong)', async () => {
     const { sh, out } = await play('cd ~/infra', INPUT, PIN, 'terraform init', 'terraform plan')
     expect(out[4].exitCode).toBe(1)
     expect(out[4].output).toContain('Unsupported argument')
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(OVERRIDDEN)
   })
 
   it('(b2b) changing the cached module default to false quiets the plan but is the wrong action, not a fix', async () => {
@@ -125,7 +136,7 @@ describe('terraform-module-upgrade on the simulator', () => {
     expect(await detectedAll(initOnly.sh)).toEqual(NONE)
   })
 
-  it('(c) route B: keep 2.1.0 and set the input that restores the old behaviour; the plan is clean and the version stays', async () => {
+  it('(c) disabling encryption: keeping 2.1.0 and setting storage_encrypted = false plans clean, but it is a wrong action and never the fix', async () => {
     const { sh, out } = await play('cd ~/infra', INPUT, 'cat main.tf', 'terraform plan', 'terraform state show module.db.aws_db_instance.main')
     expect(out[2].output).toContain('  storage_encrypted = false')
     expect(out[3].exitCode).toBe(0)
@@ -133,6 +144,22 @@ describe('terraform-module-upgrade on the simulator', () => {
     expect(out[4].output).toContain(`"${DB}"`)
     expect(await manifestVersion(sh)).toBe('2.1.0')
     expect(await detectedAll(sh)).toEqual(OVERRIDDEN)
+    // the weak route is flagged wrong, is not a solution path, and its feedback teaches the secure route
+    const weak = scenario.actions.find((a) => a.id === 'override-the-input')!
+    expect(weak.kind).toBe('wrong')
+    expect(scenario.solution_paths.flat()).not.toContain('override-the-input')
+    expect(scenario.solution_paths).toEqual([['pin-the-module']])
+    expect(weak.feedback).toMatch(/unencrypted/i)
+    // other spellings of switching it off are flagged too; setting it true is not
+    const spaced = await play('cd ~/infra', "sed -i 's/identifier.*/&\\n  storage_encrypted   =   false/' main.tf")
+    expect((await detectedAll(spaced.sh))['override-the-input']).toBe(true)
+    const on = await play('cd ~/infra', "sed -i 's/identifier.*/&\\n  storage_encrypted = true/' main.tf")
+    expect((await detectedAll(on.sh))['override-the-input']).toBe(false)
+  })
+
+  it('(c2) the pin must be in main.tf: an unchanged floating constraint with a manually edited manifest is not credited', async () => {
+    const { sh } = await play('cd ~/infra', "sed -i 's/2.1.0/2.0.1/' .terraform/modules/modules.json", 'terraform plan')
+    expect(await detectedAll(sh)).toEqual(NONE)
   })
 
   it('(d) init -upgrade and get -update on the floating constraint pick 2.1.0 again, so they are not the fix', async () => {
@@ -180,7 +207,7 @@ describe('terraform-module-upgrade on the simulator', () => {
   })
 
   it('(h) both fix routes keep the same database; re-applying is a no-op', async () => {
-    for (const [route, want] of [[[PIN, 'terraform init'], PINNED], [[INPUT], OVERRIDDEN]] as const) {
+    for (const [route, want] of [[[PIN, 'terraform init'], PINNED]] as const) {
       const { sh, out } = await play('cd ~/infra', ...route, 'terraform apply -auto-approve', 'terraform apply -auto-approve', 'terraform state show module.db.aws_db_instance.main')
       expect(out.at(-3)!.output).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
       expect(out.at(-2)!.output).toContain('Apply complete! Resources: 0 added, 0 changed, 0 destroyed.')
@@ -215,5 +242,42 @@ describe('terraform-module-upgrade on the simulator', () => {
       ...lines.map((l) => runCommand(atStage(scenario, 0), l, new Set()).evidence),
     ])
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
+  })
+
+  it('the pin is only interim: stage 2 requires the ordered snapshot, encrypted copy and restore (unencrypted restore wrong, deleting the old instance destructive)', () => {
+    expect(scenario.actions.find((a) => a.id === 'pin-the-module')!.label).toMatch(/interim/)
+    expect(scenario.stages).toHaveLength(1)
+    const two = atStage(scenario, 1)
+    expect(two.solution_paths).toEqual([['create-snapshot', 'copy-encrypted', 'restore-encrypted']])
+    const by = (id: string) => two.actions.find((a) => a.id === id)!
+    expect(by('copy-encrypted').after).toEqual(['create-snapshot'])
+    expect(by('restore-encrypted').after).toEqual(['copy-encrypted'])
+    expect(by('restore-unencrypted').kind).toBe('wrong')
+    expect(by('delete-old-first').kind).toBe('destructive')
+    const id = (cmd: string) => actionFor(two, cmd)?.id
+    expect(id('aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-2-1')).toBe('create-snapshot')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/orders-db')).toBe('copy-encrypted')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1')).toBeUndefined()
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-enc-2-1')).toBe('restore-encrypted')
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-pre-2-1')).toBe('restore-unencrypted')
+    expect(id('aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot')).toBe('delete-old-first')
+  })
+
+  it('stage 2 typed commands accept = forms, quotes, harmless flags and global flags before the service; the AWS-managed default key and extra flags are not credited', () => {
+    const two = atStage(scenario, 1)
+    const id = (cmd: string) => actionFor(two, cmd)?.id
+    expect(id('aws rds create-db-snapshot --db-instance-identifier=orders-db --db-snapshot-identifier=orders-db-pre-2-1 --no-cli-pager')).toBe('create-snapshot')
+    expect(id('aws --region us-east-1 rds create-db-snapshot --db-instance-identifier "orders-db" --db-snapshot-identifier orders-db-pre-2-1 --output json')).toBe('create-snapshot')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier=orders-db-pre-2-1 --target-db-snapshot-identifier=orders-db-enc-2-1 --kms-key-id=alias/orders-db --region=us-east-1')).toBe('copy-encrypted')
+    expect(id("aws rds copy-db-snapshot --source-db-snapshot-identifier 'orders-db-pre-2-1' --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id 'alias/orders-db'")).toBe('copy-encrypted')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/aws/rds')).toBe('copy-default-key')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id=alias/aws/rds')).toBe('copy-default-key')
+    expect(id('aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/orders-db --copy-tags')).toBeUndefined()
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier=orders-db-v2 --db-snapshot-identifier=orders-db-enc-2-1 --no-cli-pager')).toBe('restore-encrypted')
+    expect(id('aws rds restore-db-instance-from-db-snapshot --db-instance-identifier=orders-db-v2 --db-snapshot-identifier=orders-db-pre-2-1')).toBe('restore-unencrypted')
+    expect(id('aws --region us-east-1 rds delete-db-instance --db-instance-identifier "orders-db" --skip-final-snapshot')).toBe('delete-old-first')
+    expect(id("aws rds delete-db-instance --db-instance-identifier='orders-db'")).toBe('delete-old-first')
+    expect(id('aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-2-1 --region us-west-2')).toBeUndefined()
+    expect(two.actions.find((a) => a.id === 'copy-default-key')!.kind).toBe('wrong')
   })
 })
