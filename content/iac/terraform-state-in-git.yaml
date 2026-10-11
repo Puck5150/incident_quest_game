@@ -113,13 +113,13 @@ hypotheses:
 
 actions:
   - id: remote-backend
-    label: "Move state to the encrypted, access-controlled S3 backend (terraform init -migrate-state), remove terraform.tfstate* from git and add them to .gitignore"
+    label: "Move state to the S3 backend (encrypt = true, locking, bucket versioning, a bucket policy and public access block limiting it to the pipeline and the engineers who run Terraform) with terraform init -migrate-state, then git rm --cached terraform.tfstate and terraform.tfstate.backup, add both to .gitignore and delete other local copies"
     kind: fix
-    feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest. The file is gone from the tip of the repository; its history still has the old password."
+    feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest, versioned and locked. The files are gone from the tip of the repository; the history still has the old password, and so do any laptops that cloned it, including the terraform.tfstate.backup that the migration leaves behind."
   - id: rotate
-    label: "Rotate the database password (replace random_password.db) and have security purge the file from git history"
+    label: "Rotate the database password (replace random_password.db, or better switch to manage_master_user_password so it lives in Secrets Manager and out of state), have security purge the file from git history and every clone, and review the database's login logs and the repo's clone history for use of the old password"
     kind: fix
-    feedback: "The leaked password no longer works, and the history cleanup limits further copies. Assume anyone with repo access may have seen it."
+    feedback: "The leaked password no longer works, the history cleanup limits further copies, and the login and clone review tells you whether it was used. Assume anyone with repo access may have seen it. A new random_password would still be written to state, now encrypted and access-controlled; a managed master password keeps it out of state altogether."
   - id: gitignore-only
     label: "Add terraform.tfstate to .gitignore"
     kind: wrong
@@ -142,7 +142,7 @@ evidence_labels:
 hints:
   nudge: "Nobody typed the password. Which file holds every resource's attributes?"
   direction: "Check what git tracks, whether a backend is configured, and what state stores."
-  answer: "State stores the generated password in plain text and was committed. Move to the encrypted S3 backend, stop tracking state, and rotate the password."
+  answer: "State stores the generated password in plain text and was committed. Move to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, stop tracking state (and delete terraform.tfstate.backup), rotate the password (preferably a managed master password), purge the history and check the database logs for use of the old one."
 
 analogy:
   title: "The inventory list that includes the safe's combination"
@@ -162,8 +162,8 @@ debrief:
   ideal_path:
     - "Confirm the password is in terraform.tfstate."
     - "See that state is a tracked file with no backend configured."
-    - "Move state to the encrypted, restricted S3 backend and stop tracking it."
-    - "Rotate the password, and purge the file from history."
+    - "Move state to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, and stop tracking it (also the .backup file and other local copies)."
+    - "Rotate the password (a managed master password keeps it out of state), purge the file from history and clones, and check the database logs and clone history for use of the old password."
   real_world: |
     Never commit state. Use a remote backend with encryption and access
     control from the first apply, and treat state as a secret. Where possible,

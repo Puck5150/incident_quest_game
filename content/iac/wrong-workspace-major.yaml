@@ -114,10 +114,14 @@ hypotheses:
 
 actions:
   - id: prod-apply
-    label: "terraform apply -var-file=prod.tfvars (in the prod workspace), and add a check that the tfvars' environment matches terraform.workspace"
+    label: "terraform apply -var-file=prod.tfvars (in the prod workspace, after confirming the workspace and reading the plan)"
     kind: fix
     match_regex: "^terraform apply -var-file=prod\\.tfvars$"
-    feedback: "Terraform sets orders-prod back to prod's values. Check what RDS did with that change."
+    feedback: "Terraform sets orders-prod back to prod's values. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
+  - id: workspace-guard
+    label: "Open a PR that makes the plan fail when the tfvars environment doesn't match terraform.workspace (a variable validation or precondition on the environment name), and stop applying prod by hand from the shared ops box"
+    kind: fix
+    feedback: "With the check in code, applying staging.tfvars in the prod workspace fails before it plans anything. Applying prod from a pipeline with its own credentials (or a directory per environment) removes the chance of choosing the pair by hand at all."
   - id: select-staging
     label: "terraform workspace select staging, then apply staging.tfvars"
     kind: wrong
@@ -132,7 +136,7 @@ actions:
     feedback: "Fixes the symptom but goes around Terraform; prod's settings belong in prod.tfvars, applied in the prod workspace."
 
 solution_paths:
-  - [prod-apply]
+  - [prod-apply, workspace-guard]
 
 key_evidence: [db-small, ws-prod, history, tfvars]
 
@@ -150,7 +154,7 @@ red_herrings:
 hints:
   nudge: "Terraform changed the database. Which inputs did it use, and for which environment?"
   direction: "Check the workspace on ops-01, the shell history, and what each tfvars file sets."
-  answer: "staging.tfvars was applied in the prod workspace. Apply prod.tfvars in prod, and add a guard that the two match."
+  answer: "staging.tfvars was applied in the prod workspace. Apply prod.tfvars in prod, then close the gap that allowed it: a check in code that the tfvars environment matches terraform.workspace, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
 
 analogy:
   title: "The right recipe in the wrong kitchen"
@@ -172,12 +176,14 @@ debrief:
     - "Check orders-prod's class: db.t4g.medium."
     - "See who changed it: Terraform on ops-01 at 16:41."
     - "Find why: prod workspace selected, staging.tfvars applied."
-    - "Apply prod.tfvars in prod; add a workspace/tfvars guard."
+    - "Apply prod.tfvars in prod."
+    - "Add the workspace/tfvars guard through a PR, and move prod applies off the hand-picked workspace and tfvars pair (pipeline or per-environment directory)."
   real_world: |
     A precondition or validation that compares an environment variable
     with terraform.workspace stops this before planning. Many teams also
-    give each environment its own directory or pipeline, so a person never
-    chooses the pair by hand.
+    give each environment its own directory or pipeline, with credentials
+    only the pipeline holds for prod, so a person never chooses the pair
+    by hand and a prod apply always follows a reviewed plan.
 
 concepts:
   - term: "Terraform workspaces"
