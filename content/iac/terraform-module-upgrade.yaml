@@ -473,29 +473,34 @@ stages:
       - id: create-snapshot
         label: "aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-2-1"
         kind: fix
-        match_regex: "^aws rds create-db-snapshot(?=.*--db-instance-identifier orders-db(\\s|$))(?=.*--db-snapshot-identifier orders-db-pre-2-1(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(db-instance-identifier|db-snapshot-identifier|region)[ =][^\\s-]\\S*){2,3}$"
+        match_regex: "^aws(?: (?:--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))* rds create-db-snapshot(?=.*--db-instance-identifier[ =][\"\\']?orders-db[\"\\']?(?:\\s|$))(?=.*--db-snapshot-identifier[ =][\"\\']?orders-db-pre-2-1[\"\\']?(?:\\s|$))(?!.*--region[ =](?!us-east-1(?:\\s|$)))(?: (?:--db-instance-identifier[ =][\"\\']?orders-db[\"\\']?|--db-snapshot-identifier[ =][\"\\']?orders-db-pre-2-1[\"\\']?|--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))+$"
         feedback: "A manual snapshot of the unencrypted instance exists. It is also your rollback point: nothing has changed on orders-db."
       - id: copy-encrypted
         label: "aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-2-1 --target-db-snapshot-identifier orders-db-enc-2-1 --kms-key-id alias/orders-db"
         kind: fix
         after: [create-snapshot]
-        match_regex: "^aws rds copy-db-snapshot(?=.*--source-db-snapshot-identifier orders-db-pre-2-1(\\s|$))(?=.*--target-db-snapshot-identifier orders-db-enc-2-1(\\s|$))(?=.*--kms-key-id[ =][^\\s-][^\\s]*(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(source-db-snapshot-identifier|target-db-snapshot-identifier|kms-key-id|region)[ =][^\\s-]\\S*){3,4}$"
+        match_regex: "^aws(?: (?:--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))* rds copy-db-snapshot(?=.*--source-db-snapshot-identifier[ =][\"\\']?orders-db-pre-2-1[\"\\']?(?:\\s|$))(?=.*--target-db-snapshot-identifier[ =][\"\\']?orders-db-enc-2-1[\"\\']?(?:\\s|$))(?=.*--kms-key-id[ =][\"\\']?[^\\s\"\\'-][^\\s\"\\']*[\"\\']?(?:\\s|$))(?!.*--kms-key-id[ =][\"\\']?alias/aws/rds[\"\\']?(?:\\s|$))(?!.*--region[ =](?!us-east-1(?:\\s|$)))(?: (?:--source-db-snapshot-identifier[ =][\"\\']?orders-db-pre-2-1[\"\\']?|--target-db-snapshot-identifier[ =][\"\\']?orders-db-enc-2-1[\"\\']?|--kms-key-id[ =][\"\\']?[^\\s\"\\'-][^\\s\"\\']*[\"\\']?|--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))+$"
         feedback: "The copy is encrypted with the KMS key. Check it is available before restoring from it."
+      - id: copy-default-key
+        label: "aws rds copy-db-snapshot ... --kms-key-id alias/aws/rds (the AWS-managed default key)"
+        kind: wrong
+        match_regex: "^aws(?: (?:--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))* rds copy-db-snapshot(?=.*--source-db-snapshot-identifier[ =][\"\\']?orders-db-pre-2-1[\"\\']?(?:\\s|$))(?=.*--target-db-snapshot-identifier[ =][\"\\']?orders-db-enc-2-1[\"\\']?(?:\\s|$))(?=.*--kms-key-id[ =][\"\\']?alias/aws/rds[\"\\']?(?:\\s|$))"
+        feedback: "alias/aws/rds is the AWS-managed default key. Encryption works, but you cannot see or edit its key policy, grant it to another account, disable it or control its rotation, and every RDS database in the account shares it. The runbook names a customer-managed key (alias/orders-db) for exactly that reason: copy with it."
       - id: restore-encrypted
         label: "aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-enc-2-1"
         kind: fix
         after: [copy-encrypted]
-        match_regex: "^aws rds restore-db-instance-from-db-snapshot(?=.*--db-instance-identifier orders-db-v2(\\s|$))(?=.*--db-snapshot-identifier orders-db-enc-2-1(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))( --(db-instance-identifier|db-snapshot-identifier|region)[ =][^\\s-]\\S*){2,3}$"
+        match_regex: "^aws(?: (?:--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))* rds restore-db-instance-from-db-snapshot(?=.*--db-instance-identifier[ =][\"\\']?orders-db-v2[\"\\']?(?:\\s|$))(?=.*--db-snapshot-identifier[ =][\"\\']?orders-db-enc-2-1[\"\\']?(?:\\s|$))(?!.*--region[ =](?!us-east-1(?:\\s|$)))(?: (?:--db-instance-identifier[ =][\"\\']?orders-db-v2[\"\\']?|--db-snapshot-identifier[ =][\"\\']?orders-db-enc-2-1[\"\\']?|--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))+$"
         feedback: "orders-db-v2 is being created encrypted, from the data in the snapshot. orders-db keeps serving. Next, in the window: stop writes, take a last snapshot and restore from its encrypted copy (or replay changes), cut the applications over, import orders-db-v2 into Terraform with storage_encrypted = true and prevent_destroy, and retire the old instance only after the checks pass."
       - id: restore-unencrypted
         label: "aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-pre-2-1"
         kind: wrong
-        match_regex: "^aws rds restore-db-instance-from-db-snapshot (?=.*--db-instance-identifier orders-db-v2(\\s|$))(?=.*--db-snapshot-identifier orders-db-pre-2-1(\\s|$))"
+        match_regex: "^aws(?: (?:--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))* rds restore-db-instance-from-db-snapshot(?=.*--db-instance-identifier[ =][\"\\']?orders-db-v2[\"\\']?(?:\\s|$))(?=.*--db-snapshot-identifier[ =][\"\\']?orders-db-pre-2-1[\"\\']?(?:\\s|$))"
         feedback: "A restore from the unencrypted snapshot gives an unencrypted instance. Copy the snapshot with a KMS key first and restore from the copy."
       - id: delete-old-first
         label: "aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot (to clear the way for the encrypted one)"
         kind: destructive
-        match_regex: "^aws rds delete-db-instance (?=.*--db-instance-identifier[ =]orders-db(\\s|$))"
+        match_regex: "^aws(?: (?:--no-cli-pager|--output[ =](?:json|text|table|yaml)|--region[ =]us-east-1))* rds delete-db-instance(?=.*--db-instance-identifier[ =][\"\\']?orders-db[\"\\']?(?:\\s|$))"
         feedback: "That deletes the live production database (with or without a final snapshot) before anything has been restored, verified or cut over. The new instance comes after the checks, and the old one is retired last."
     solution_paths:
       - [create-snapshot, copy-encrypted, restore-encrypted]
