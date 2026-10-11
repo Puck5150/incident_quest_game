@@ -115,3 +115,28 @@ describe('terraform-ignore-changes-autoscaling through the UI', () => {
     expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
   })
 })
+
+describe('terraform-import-existing through the UI', () => {
+  const ROOT = /Terraform doesn't know the bucket exists/
+  const BLOCK = `printf 'import {\\n  to = aws_s3_bucket.analytics_raw\\n  id = "acme-analytics-raw"\\n}\\n' > import.tf`
+
+  it('ideal path: state show, plan, import block, plan, apply', async () => {
+    const g = await mount('terraform-import-existing')
+    await g.run('terraform state show aws_s3_bucket.analytics_raw', 'terraform plan', 'aws s3api head-bucket --bucket acme-analytics-raw')
+    g.declare(ROOT)
+    await g.run(BLOCK, 'terraform plan', 'terraform apply -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Plan: 1 to import, 0 to add, 0 to change, 0 to destroy\./))
+    await g.settle()
+    expect(g.taken()).toEqual(['import-block'])
+    await g.closeClean('import-block')
+  })
+
+  it('trap: force_destroy then destroy of the imported bucket is a destructive mistake (the import itself was taken first)', async () => {
+    const g = await mount('terraform-import-existing')
+    g.declare(ROOT)
+    await g.run('terraform import aws_s3_bucket.analytics_raw acme-analytics-raw', "sed -i 's/bucket = \"acme-analytics-raw\"/&\\n  force_destroy = true/' main.tf", 'terraform apply -auto-approve', 'terraform destroy -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Destroy complete!/))
+    await g.settle()
+    expect(g.taken()).toEqual(['import-block', 'delete-recreate'])
+  })
+})
