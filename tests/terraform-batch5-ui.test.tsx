@@ -115,3 +115,36 @@ describe('terraform-count-index-shift through the UI', () => {
     expect(g.taken()).toEqual(['apply-anyway'])
   })
 })
+
+describe('wrong-workspace-major through the UI', () => {
+  const ROOT = /Yesterday at 16:40 staging\.tfvars was applied/
+
+  it('ideal path: prod.tfvars applied in prod is detected, then the guard; stage 2 starts', async () => {
+    const g = await mount('wrong-workspace-major')
+    await g.run('terraform workspace show', 'terraform plan -var-file=prod.tfvars')
+    await waitFor(() => expect(output()).toMatch(/Plan: 0 to add, 1 to change, 0 to destroy\./))
+    g.declare(ROOT)
+    await g.run('terraform apply -auto-approve -var-file=prod.tfvars')
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 1 changed, 0 destroyed\./))
+    await g.settle()
+    expect(g.taken()).toEqual(['prod-apply'])
+    g.click(/Open a PR that makes the plan fail/)
+    expect(g.taken()).toEqual(['prod-apply', 'workspace-guard'])
+  })
+
+  it('trap: state rm in prod is destructive once, and the prod apply afterwards earns nothing', async () => {
+    const g = await mount('wrong-workspace-major')
+    g.declare(ROOT)
+    await g.run('terraform state rm aws_db_instance.orders', 'terraform apply -auto-approve -var-file=prod.tfvars')
+    await g.trapped('state-rm')
+  })
+
+  it('wrong: selecting staging and applying staging.tfvars changes only staging', async () => {
+    const g = await mount('wrong-workspace-major')
+    g.declare(ROOT)
+    await g.run('terraform workspace select staging', 'terraform apply -auto-approve -var-file=staging.tfvars')
+    await g.settle()
+    expect(g.taken()).toEqual(['select-staging'])
+    expect(g.wrongCount()).toBe(1)
+  })
+})
