@@ -205,7 +205,7 @@ export const LeafSchema = z.union([
       any_of: z.array(z.record(z.string(), z.union([z.string().min(1), z.number(), z.boolean()]))).min(1).optional(),
     }),
   }),
-  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
+  z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget', 'state-mv', 'state-rm']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
 const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])

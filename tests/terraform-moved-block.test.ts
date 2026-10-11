@@ -83,11 +83,9 @@ describe('terraform-moved-block on the simulator', () => {
     expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-mv': true })
   })
 
-  it('(d2) state mv followed by the moved block in code is the fix: the move is now in the PR', async () => {
+  it('(d2) state mv followed by the moved block: the fix is credited and the surgery is still flagged wrong', async () => {
     const { sh } = await play('cd ~/infra-prod', `terraform state mv ${OLD} ${NEW}`, MOVED(), 'terraform plan')
-    const d = await detectedAll(sh)
-    expect(d['moved-block']).toBe(true)
-    expect(d['state-mv']).toBe(false)
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'moved-block': true, 'state-mv': true })
   })
 
   it('(e) state rm of the old address then import at the new one is the same one-off surgery: wrong, not the fix', async () => {
@@ -130,6 +128,56 @@ describe('terraform-moved-block on the simulator', () => {
     const { sh, out } = await play('cd ~/infra-prod', MOVED('module.database.aws_db_instance.orders_v2'), 'terraform plan')
     const text = out[2].output
     expect(out[2].exitCode !== 0 || text.includes('will be destroyed')).toBe(true)
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  // Review round 1: every hole.
+  it('(i) destroying the database after the moved block credits nothing and is destructive', async () => {
+    const { sh } = await play('cd ~/infra-prod', MOVED(), 'terraform destroy -auto-approve')
+    expect(await sh.doneWhen({ reality_has: { type: 'aws_db_instance', id: DB_ID } } as never)).toBe(false)
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'merge-with-snapshot': true })
+  })
+
+  it('(j) state rm of the old address plus the moved block orphans the live database: no credit', async () => {
+    const { sh, out } = await play('cd ~/infra-prod', `terraform state rm ${OLD}`, MOVED(), 'terraform plan')
+    expect(out[3].output).toContain('1 to add')
+    const d = await detectedAll(sh)
+    expect(d['moved-block']).toBe(false)
+    expect(d['state-mv']).toBe(true)
+  })
+
+  it('(j2) the moved block applied, then state rm of the module address: no longer tracked, no credit', async () => {
+    const { sh } = await play('cd ~/infra-prod', MOVED(), A, `terraform state rm ${NEW}`)
+    expect((await detectedAll(sh))['moved-block']).toBe(false)
+  })
+
+  it('(k) a commented-out moved block plus state mv is not the fix', async () => {
+    const { sh } = await play('cd ~/infra-prod', `printf '# moved {\\n#   from = ${OLD}\\n#   to = ${NEW}\\n# }\\n' >> main.tf`, `terraform state mv ${OLD} ${NEW}`, 'terraform plan')
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-mv': true })
+  })
+
+  it('(l) the moved block in moved.tf is credited', async () => {
+    const { sh } = await play('cd ~/infra-prod', MOVED().replace('main.tf', 'moved.tf').replace('>>', '>'), 'terraform plan')
+    expect((await detectedAll(sh))['moved-block']).toBe(true)
+  })
+
+  it('(m) to before from inside the block is credited', async () => {
+    const { sh } = await play('cd ~/infra-prod', `cat >> main.tf <<'EOF'\nmoved {\n  to   = ${NEW}\n  from = ${OLD}\n}\nEOF`, 'terraform plan')
+    expect((await detectedAll(sh))['moved-block']).toBe(true)
+  })
+
+  it('(n) removing the moved block after the apply (cleanup) flags nothing', async () => {
+    const { sh } = await play('cd ~/infra-prod', MOVED(), A, "sed -i '/^moved {/,/^}/d' main.tf", 'terraform plan')
+    expect(await detectedAll(sh)).toEqual(NONE)
+  })
+
+  it('(o) state mv plus a moved block with the wrong to address: surgery flagged, no fix', async () => {
+    const { sh } = await play('cd ~/infra-prod', `terraform state mv ${OLD} ${NEW}`, MOVED('module.database.aws_db_instance.orders_v2'), 'terraform plan')
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-mv': true })
+  })
+
+  it('(p) a moved block for an unrelated pair does not count', async () => {
+    const { sh } = await play('cd ~/infra-prod', `cat >> main.tf <<'EOF'\nmoved {\n  from = aws_vpc.old\n  to   = aws_vpc.main\n}\nEOF`, 'terraform plan')
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 })

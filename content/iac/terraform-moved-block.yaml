@@ -210,24 +210,26 @@ hypotheses:
 
 actions:
   - id: moved-block
-    label: "Add a moved block (from = aws_db_instance.orders, to = module.database.aws_db_instance.orders) to the PR's main.tf and re-plan: it must show \"has moved to\" and nothing to destroy"
+    label: "Add a moved block (from = aws_db_instance.orders, to = module.database.aws_db_instance.orders) to the PR's root configuration and re-plan: it must show \"has moved to\" and nothing to destroy"
     kind: fix
     done_when:
       all:
-        - file_contains: { path: /home/you/infra-prod/main.tf, matches: 'moved\s*\{[^}]*from\s*=\s*aws_db_instance\.orders(?![\w.\[-])[^}]*to\s*=\s*module\.database\.aws_db_instance\.orders(?![\w.\[-])' }
-        - plan_has: { no_destroy: [aws_db_instance.orders, module.database.aws_db_instance.orders] }
+        - config_matches: { dir: /home/you/infra-prod, matches: 'moved\s*\{(?=[^}]*\bfrom\s*=\s*aws_db_instance\.orders(?![\w.\[-]))(?=[^}]*\bto\s*=\s*module\.database\.aws_db_instance\.orders(?![\w.\[-]))' }
+        - plan_has: { no_destroy: [aws_db_instance.orders, module.database.aws_db_instance.orders], no_change: [aws_db_instance.orders, module.database.aws_db_instance.orders] }
+        - not: { applied: { op: state-rm, address: aws_db_instance.orders } }
+        - not: { applied: { op: state-rm, address: module.database.aws_db_instance.orders } }
+        - reality_has: { type: aws_db_instance, id: db-ORDERSPROD7Q2X, attr: identifier, equals: orders-prod }
         - not: { applied: { op: delete, address: aws_db_instance.orders } }
+        - not: { applied: { op: delete, address: module.database.aws_db_instance.orders } }
     feedback: "Before planning, Terraform finds the existing object at the from address and records it at the to address, so the plan shows \"has moved to\" and 0 to destroy. The move is declarative and reviewed in the PR, it is applied by the same merge that changes the code, and it travels to every workspace and environment that uses this code, each moving its own state the first time it applies."
   - id: state-mv
     label: "Fix prod state by hand: terraform state mv aws_db_instance.orders module.database.aws_db_instance.orders (or state rm the old address and import it at the new one)"
     kind: wrong
     done_when:
-      all:
-        - state_has: module.database.aws_db_instance.orders
-        - state_lacks: aws_db_instance.orders
-        - not: { file_contains: { path: /home/you/infra-prod/main.tf, matches: 'moved\s*\{' } }
-        - not: { applied: { op: delete, address: aws_db_instance.orders } }
-    feedback: "It does avoid the destroy in this one state (so does state rm plus import, with a gap where Terraform is not tracking the database), but it is one-off, imperative state surgery that is not in the PR: nobody reviews it, and it does not travel to staging, DR or any other workspace that applies this code, where the plan still destroys the database. It also changes production state before the code is merged, so until #318 merges, main's code still says aws_db_instance.orders and any plan from main wants to destroy the module address and create the old one. The durable fix is a moved block in the code (Terraform v1.1 and later), which keeps the move reviewable and repeatable."
+      any:
+        - applied: { op: state-mv, address: aws_db_instance.orders }
+        - applied: { op: state-rm, address: aws_db_instance.orders }
+    feedback: "terraform state mv is a legitimate tool, the right one when an object has to move between state files or backends and for emergency repair, and it does avoid the destroy in this one state (so does state rm plus import, with a gap where Terraform is not tracking the database). But here the move is inside one configuration that several environments apply: a state edit is a one-off command nobody reviews and it does not travel with the code, so staging, DR and any other workspace still plans to destroy its database, and until #318 merges, main's code (still aws_db_instance.orders) wants to destroy the module address in the state you edited. A moved block in the PR (Terraform v1.1 and later) makes the move reviewable, repeatable in every state and part of the same merge."
   - id: prevent-destroy
     label: "Add lifecycle { prevent_destroy = true } to the resource in the new module"
     kind: wrong
@@ -237,7 +239,10 @@ actions:
   - id: merge-with-snapshot
     label: "Merge it: take a final snapshot first, then restore it into the new instance"
     kind: destructive
-    done_when: { applied: { op: delete, address: aws_db_instance.orders } }
+    done_when:
+      any:
+        - applied: { op: delete, address: aws_db_instance.orders }
+        - applied: { op: delete, address: module.database.aws_db_instance.orders }
     feedback: "The apply deletes orders-prod and creates an empty database with the same name. Every order placed between the snapshot and the end of the restore is lost, and checkout is down for the whole restore. A one-line moved block avoids all of it."
 
 solution_paths:
@@ -252,7 +257,7 @@ evidence_labels:
 hints:
   nudge: "Read the destroy line's second comment. Why does Terraform think the database is not in configuration?"
   direction: "Compare the address in state (terraform state list) with the address in the PR's code. How do you tell Terraform they're the same thing?"
-  answer: "The PR moved the resource into a module, so its address changed. Add moved { from = aws_db_instance.orders, to = module.database.aws_db_instance.orders } to the PR and re-plan: it shows \"has moved to\" and nothing to destroy. terraform state mv would avoid the destroy in this one state, but it is not in the code and does not reach other environments."
+  answer: "The PR moved the resource into a module, so its address changed. Add moved { from = aws_db_instance.orders, to = module.database.aws_db_instance.orders } to the PR and re-plan: it shows \"has moved to\" and nothing to destroy. terraform state mv would avoid the destroy in the one state you run it against (the right tool when an object must move between state files), but here one configuration serves several environments, so the move belongs in the code where it is reviewed and reaches every state."
 
 analogy:
   title: "Moving the filing cabinet"
@@ -279,7 +284,7 @@ debrief:
     - "Take \"will be destroyed\" on a database seriously, whatever the PR description says."
     - "Read why: \"aws_db_instance.orders is not in configuration\" next to a create at a new module address."
     - "Confirm with terraform state list: state tracks the database at the old address."
-    - "Add a moved block from the old address to the new one, in the same PR (not a one-off terraform state mv, which no reviewer sees and other environments never get)."
+    - "Add a moved block from the old address to the new one, in the same PR (a one-off terraform state mv is the right tool across state files, but within one shared configuration no reviewer sees it and other environments never get it)."
     - "Re-plan: \"has moved to\" and Plan: 0 to add, 0 to change, 0 to destroy."
   real_world: |
     Refactors that move resources into modules are one of the most common
