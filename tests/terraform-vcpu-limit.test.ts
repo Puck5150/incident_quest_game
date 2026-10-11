@@ -269,6 +269,16 @@ describe('terraform-vcpu-limit on the simulator', () => {
       expect((await detectedAll(sh))['finish-apply']).toBe(false)
     })
 
+    it('shrink, apply, raise the quota, resize back and apply again: still not the fix (created small)', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform apply -auto-approve')
+      await run(sh, "sed -i 's/c5\\.12xlarge/c5.24xlarge/' compute.tf", QUOTA)
+      expect((await run(sh, 'terraform apply -auto-approve', QUOTA)).exitCode).toBe(0)
+      const d = await detectedAll(sh)
+      expect(d['finish-apply']).toBe(false)
+    })
+
     it('stopgap flags on the applying run credit neither', async () => {
       for (const flags of ['-target=aws_instance.loadgen', '-lock=false', '-refresh=false', '-var=x=1']) {
         const { sh } = await failedApply()
@@ -286,6 +296,17 @@ describe('terraform-vcpu-limit on the simulator', () => {
       await run(sh, SIZE('c5.12xlarge'))
       await run(sh, 'terraform apply -auto-approve', QUOTA)
       await run(sh, "sed -i 's/c5\\.12xlarge/c5.24xlarge/' compute.tf", QUOTA)
+      expect((await detectedAll(sh))['finish-apply']).toBe(false)
+    })
+
+    it('resizing back up in place is limited by the quota like a create: without the increase the second apply fails and nothing is credited', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform apply -auto-approve')
+      await run(sh, "sed -i 's/c5\\.12xlarge/c5.24xlarge/' compute.tf")
+      const up = await run(sh, 'terraform apply -auto-approve')
+      expect(up.exitCode).toBe(1)
+      expect(up.output).toContain(LIMIT)
       expect((await detectedAll(sh))['finish-apply']).toBe(false)
     })
   })

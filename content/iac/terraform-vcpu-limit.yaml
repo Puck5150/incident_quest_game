@@ -241,6 +241,11 @@ terraform:
       if: { attr: instance_type, matches: "^(?!(a1|z1d|m5zn)\\.metal$)(i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\\.((1[6-9]|[2-9][0-9]|[1-9][0-9]{2})xlarge|metal(-[0-9]+xl)?)$" }
       error: "creating EC2 Instance: operation error EC2: RunInstances, https response error StatusCode: 400, RequestID: 3f9c2a71-5d8e-4b06-a1c4-7e2d9b0f6a53, api error VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 64 allows for the instance bucket that the specified instance type belongs to. Please visit http://aws.amazon.com/contact-us/ec2-request to request an adjustment to this limit."
       until_actions: [request-quota-increase]
+    - at: aws_instance.loadgen
+      on: update
+      if: { attr: instance_type, matches: "^(?!(a1|z1d|m5zn)\\.metal$)(i[ms]4g[a-z]*|[acdhimrtz][0-9][a-z0-9-]*)\\.((1[6-9]|[2-9][0-9]|[1-9][0-9]{2})xlarge|metal(-[0-9]+xl)?)$" }
+      error: "creating EC2 Instance: operation error EC2: RunInstances, https response error StatusCode: 400, RequestID: 3f9c2a71-5d8e-4b06-a1c4-7e2d9b0f6a53, api error VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 64 allows for the instance bucket that the specified instance type belongs to. Please visit http://aws.amazon.com/contact-us/ec2-request to request an adjustment to this limit."
+      until_actions: [request-quota-increase]
   evidence:
     - evidence: quota-error
       command: apply
@@ -296,6 +301,7 @@ actions:
       all:
         - applied: { op: create, address: aws_instance.loadgen }
         - not: { applied: { op: create, address: aws_instance.loadgen, deviant: true } }
+        - not: { applied: { op: update, address: aws_instance.loadgen } }
         - plan_has: { no_change: [aws_instance.loadgen] }
         - file_contains:
             path: /home/you/loadtest-infra/compute.tf

@@ -320,6 +320,12 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       expect((await detectedAll(sh))['finish-apply']).toBe(true)
     })
 
+    it('survives a plan-dirtying tag edit in db.tf after the fix (old state_has + plan_clean lost it)', async () => {
+      const sh = await fixedRun("sed -i 's/orders-db/orders-db2/' db.tf")
+      expect(await sh.doneWhen({ plan_clean: true })).toBe(false)
+      expect((await detectedAll(sh))['finish-apply']).toBe(true)
+    })
+
     it('the destroy-dependencies trap never credits it, nor does a later recreate', async () => {
       const { sh } = await play('cd ~/orders-infra', 'terraform destroy -auto-approve')
       await run(sh, 'terraform apply -auto-approve', GRANTED)
