@@ -153,3 +153,74 @@ export function iamPolicyVerdict(input: string, spec: IamPolicySpec): IamVerdict
   }
   return spec.required_actions.every((a) => seen.has(asciiLower(a))) ? 'ok' : null
 }
+
+// ---- VPC endpoint policy (`aws ec2 modify-vpc-endpoint --policy-document '<json>'`) -------------
+// Same tokenizer and evasion rules as above. ok: every statement is Effect Allow, Principal exactly "*"
+// (endpoint policies require one), Action inside allowed_actions (and required_actions all present),
+// every Resource an S3 ARN of a bucket named <bucket_prefix>… (a trailing "*" in the bucket name is the
+// prefix wildcard; objects only as "/*"). broad: a parseable document that is anything else (a Deny,
+// a "*" action or resource, another bucket, extra keys). null: not this command, a file:// document
+// (cannot be read here), a malformed document, or any shell trick.
+export interface EndpointPolicySpec {
+  endpoint_id: string
+  allowed_actions: string[]
+  required_actions: string[]
+  bucket_prefix: string // e.g. "acme-media-"
+}
+export type EndpointVerdict = 'ok' | 'broad'
+
+export function endpointPolicyVerdict(input: string, spec: EndpointPolicySpec): EndpointVerdict | null {
+  const line = input.trim().replace(/\s+/g, ' ')
+  const ws = words(line)
+  if (ws?.[0]?.text !== 'aws') return null
+  const rest = ws.slice(1)
+  const opts = new Map<string, string>()
+  const pos: string[] = []
+  let loose = false
+  for (let i = 0; i < rest.length; i++) {
+    const f = rest[i]
+    const m = /^--([\w-]+)(?:=([\s\S]*))?$/.exec(f.text)
+    if (!m) {
+      pos.push(f.text)
+      loose ||= !f.plain || f.dqEscape
+      continue
+    }
+    const val = m[2] !== undefined ? f : rest[++i]
+    if (opts.has(m[1])) return null // a repeated flag
+    opts.set(m[1], m[2] ?? val?.text ?? '')
+    loose ||= !f.plain || !(val?.plain ?? true) || (m[1] !== 'policy-document' && !!val?.dqEscape)
+  }
+  if (pos.join(' ') !== 'ec2 modify-vpc-endpoint' || opts.get('vpc-endpoint-id') !== spec.endpoint_id) return null
+  if ([...opts.keys()].some((k) => !['vpc-endpoint-id', 'policy-document'].includes(k))) return null
+  const doc = opts.get('policy-document') ?? ''
+  if (loose || /[`]|\$\(/.test(doc) || /[;&|`<>]|\$\(/.test(line.replace(doc, '')) || rest.some((x) => x.text === 'aws')) return null
+  if (!doc.startsWith('{') || hasDuplicateKeys(doc)) return null
+  let j: unknown
+  try {
+    j = JSON.parse(doc)
+  } catch {
+    return null
+  }
+  if (typeof j !== 'object' || j === null || Array.isArray(j)) return null
+  const top = j as Record<string, unknown>
+  if (Object.keys(top).some((k) => !['Version', 'Statement', 'Id'].includes(k)) || (top.Version !== undefined && top.Version !== '2012-10-17' && top.Version !== '2008-10-17')) return 'broad'
+  const stmts = top.Statement
+  const list = Array.isArray(stmts) ? stmts : stmts === undefined ? [] : [stmts]
+  if (!list.length) return 'broad'
+  const allowed = new Set(spec.allowed_actions.map(asciiLower))
+  const bucket = new RegExp(`^arn:aws:s3:::${spec.bucket_prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\*|[a-z0-9][a-z0-9.-]*[a-z0-9])(/\\*)?$`)
+  const seen = new Set<string>()
+  for (const s of list) {
+    if (typeof s !== 'object' || s === null || Array.isArray(s)) return 'broad'
+    const st = s as Record<string, unknown>
+    if (Object.keys(st).some((k) => !['Sid', 'Effect', 'Principal', 'Action', 'Resource', 'Condition'].includes(k))) return 'broad' // NotAction, NotResource, NotPrincipal
+    const actions = strings(st.Action)
+    const res = strings(st.Resource)
+    if (st.Effect !== 'Allow' || st.Principal !== '*' || !actions?.length || !res?.length || !res.every((r) => bucket.test(r))) return 'broad'
+    for (const a of actions) {
+      if (!allowed.has(asciiLower(a))) return 'broad'
+      seen.add(asciiLower(a))
+    }
+  }
+  return spec.required_actions.every((a) => seen.has(asciiLower(a))) ? 'ok' : 'broad'
+}

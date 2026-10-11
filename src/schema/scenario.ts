@@ -9,7 +9,7 @@
 import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
-import { asciiLower, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
+import { asciiLower, endpointPolicyVerdict, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
 import { filesOnDisk } from '../game/paths.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
@@ -207,6 +207,18 @@ const ActionsSchema = z
           required_actions: z.array(z.string().min(1)).min(1),
           resource: z.string().min(1),
           // One concrete command that earns `verdict` (the validator checks it does).
+          example: z.string().min(1),
+        })
+        .optional(),
+      // Typing an `aws ec2 modify-vpc-endpoint --policy-document '<json>'` whose parsed document earns this verdict
+      // takes the action (src/game/awsPolicyCheck.ts). A file:// document is never judged.
+      endpoint_policy: z
+        .strictObject({
+          verdict: z.enum(['ok', 'broad']),
+          endpoint_id: z.string().min(1),
+          allowed_actions: z.array(z.string().min(1)).min(1),
+          required_actions: z.array(z.string().min(1)).min(1),
+          bucket_prefix: z.string().min(1),
           example: z.string().min(1),
         })
         .optional(),
@@ -603,6 +615,24 @@ export const ScenarioSchema = z
         v.terminal?.commands.forEach((c) => {
           const text = c.match ?? c.example
           if (text !== undefined && iamPolicyVerdict(text, p) !== null) issue(`also matches the scripted command "${text}"`, at('actions', i, 'iam_policy'))
+        })
+      })
+      const epSpecs = v.actions.filter((a) => a.endpoint_policy)
+      v.actions.forEach((a, i) => {
+        const p = a.endpoint_policy
+        if (!p) return
+        if (!v.terminal) issue('endpoint_policy needs a terminal to type into', at('actions', i, 'endpoint_policy'))
+        const allowed = new Set(p.allowed_actions.map(asciiLower))
+        if (!p.required_actions.every((r) => allowed.has(asciiLower(r)))) issue('required_actions must be inside allowed_actions', at('actions', i, 'endpoint_policy', 'required_actions'))
+        if (endpointPolicyVerdict(p.example, p) !== p.verdict) issue(`example doesn't earn the "${p.verdict}" verdict`, at('actions', i, 'endpoint_policy', 'example'))
+        const { verdict: _v, example: _e, ...core } = p
+        epSpecs.forEach((o) => {
+          const { verdict: _w, example: _x, ...oc } = o.endpoint_policy!
+          if (JSON.stringify(oc) !== JSON.stringify(core)) issue(`endpoint_policy of "${o.id}" differs from "${a.id}": actions that share the check must share an identical spec`, at('actions', i, 'endpoint_policy'))
+        })
+        v.terminal?.commands.forEach((c) => {
+          const text = c.match ?? c.example
+          if (text !== undefined && endpointPolicyVerdict(text, p) !== null) issue(`also matches the scripted command "${text}"`, at('actions', i, 'endpoint_policy'))
         })
       })
       v.actions.forEach((a, i) => {

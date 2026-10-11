@@ -119,6 +119,14 @@ stage reopens the incident into the next one (see below).
   validator checks that `required_actions` are inside `allowed_actions`, that each
   `example` earns its verdict, that the specs match, and that no scripted terminal
   command is also matched. The document must be inline (`file://` is not readable).
+- **Judging a VPC endpoint policy:** `endpoint_policy: { verdict: ok|broad, endpoint_id,
+  allowed_actions, required_actions, bucket_prefix, example }` judges `aws ec2
+  modify-vpc-endpoint --vpc-endpoint-id ID --policy-document '<json>'` with the same
+  tokenizer and evasion rules as `iam_policy`: every statement Effect Allow, Principal
+  exactly `"*"`, Action inside `allowed_actions`, every Resource an S3 ARN of a bucket
+  named `<bucket_prefix>…` (objects as `/*`). A parseable document that is anything else
+  earns `broad`; `file://`, malformed or shell-tricked lines earn nothing. Same spec rules
+  as `iam_policy` (identical across the actions that share it).
 - **Every investigation command is discoverable.** A `match_regex` command needs an
   `example`: one concrete command its pattern accepts (the validator checks it
   matches). `help` lists `match` commands as written and pattern commands by their

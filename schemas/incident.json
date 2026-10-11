@@ -1298,6 +1298,55 @@
             ],
             "additionalProperties": false
           },
+          "endpoint_policy": {
+            "type": "object",
+            "properties": {
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "broad"
+                ]
+              },
+              "endpoint_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required_actions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "bucket_prefix": {
+                "type": "string",
+                "minLength": 1
+              },
+              "example": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "verdict",
+              "endpoint_id",
+              "allowed_actions",
+              "required_actions",
+              "bucket_prefix",
+              "example"
+            ],
+            "additionalProperties": false
+          },
           "file": {
             "type": "object",
             "properties": {
@@ -3606,6 +3655,55 @@
                     "allowed_actions",
                     "required_actions",
                     "resource",
+                    "example"
+                  ],
+                  "additionalProperties": false
+                },
+                "endpoint_policy": {
+                  "type": "object",
+                  "properties": {
+                    "verdict": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "broad"
+                      ]
+                    },
+                    "endpoint_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "allowed_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required_actions": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "bucket_prefix": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "example": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "endpoint_id",
+                    "allowed_actions",
+                    "required_actions",
+                    "bucket_prefix",
                     "example"
                   ],
                   "additionalProperties": false

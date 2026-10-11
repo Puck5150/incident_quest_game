@@ -655,3 +655,14 @@
   alternatives:
     - { command: "aws lambda put-function-concurrency --function-name NAME --reserved-concurrent-executions N", note: "Caps the whole function, but the poller keeps invoking into throttles, returning messages to the queue." }
   docs: { title: "AWS CLI: lambda update-event-source-mapping", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/lambda/update-event-source-mapping.html" }
+
+- id: aws-ec2-modify-vpc-endpoint
+  match: "^aws ec2 modify-vpc-endpoint"
+  summary: "Changes a VPC endpoint, including the endpoint policy that limits what can be reached through it."
+  parts:
+    - { token: "--vpc-endpoint-id vpce-0s3gw", meaning: "The endpoint to change." }
+    - { token: "--policy-document JSON", meaning: "The new endpoint policy: an inline JSON document, or file://path." }
+  why: "A gateway endpoint starts with a policy that allows everything; this is where you narrow it to the buckets and actions the workload needs."
+  alternatives:
+    - { command: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id ID --reset-policy", note: "Puts the default allow-everything policy back." }
+  docs: { title: "AWS CLI: modify-vpc-endpoint", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/modify-vpc-endpoint.html" }

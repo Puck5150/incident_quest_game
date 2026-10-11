@@ -9,7 +9,7 @@
 import { artifacts } from '../schema/constants.ts'
 import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
-import { iamPolicyVerdict } from './awsPolicyCheck.ts'
+import { endpointPolicyVerdict, iamPolicyVerdict } from './awsPolicyCheck.ts'
 import { isShellPrompt, readsFileOnDisk } from './paths.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
@@ -144,7 +144,8 @@ export const NOT_YET = 'Not run: that changes the system. Declare a root cause f
 // The action a typed command takes, if any (first match wins).
 export const actionFor = (scenario: Scenario, input: string) =>
   scenario.actions.find(
-    (a) => (a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input))) || (a.iam_policy !== undefined && iamPolicyVerdict(input, a.iam_policy) === a.iam_policy.verdict),
+    (a) => (a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input))) || (a.iam_policy !== undefined && iamPolicyVerdict(input, a.iam_policy) === a.iam_policy.verdict) ||
+      (a.endpoint_policy !== undefined && endpointPolicyVerdict(input, a.endpoint_policy) === a.endpoint_policy.verdict),
   )
 
 // What the fake shell prints for `input`, given which actions have been taken.

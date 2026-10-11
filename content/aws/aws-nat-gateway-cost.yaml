@@ -99,6 +99,10 @@ terminal:
             { "DestinationCidrBlock": "10.20.0.0/16", "GatewayId": "local" },
             { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-0a1b2c" }
         ]
+    - match_regex: "^aws ec2 modify-vpc-endpoint .*--policy-document file://\\S+"
+      example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document file://endpoint-policy.json"
+      output: |
+        (lab) Policy files are not readable here, so this command is not judged. Type the policy inline in single quotes, or use the action button once you are sure the file allows only the media buckets.
     - match: "aws s3api get-bucket-location --bucket acme-media-originals"
       output: |
         {
@@ -126,14 +130,26 @@ actions:
     match_regex: "^aws ec2 create-vpc-endpoint --vpc-id vpc-0shop (--vpc-endpoint-type Gateway )?--service-name com\\.amazonaws\\.us-east-1\\.s3 --route-table-ids rtb-0private$"
     feedback: "A gateway endpoint adds a route for S3's addresses to the private route table. It's more specific than 0.0.0.0/0, so S3 traffic now goes straight to S3, and gateway endpoints have no additional charge. Nothing changes in image-resizer."
   - id: endpoint-policy-wide
-    label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '<allows all actions on all resources>'"
+    label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '<a policy that allows everything, a Deny, other buckets or wildcard actions>'"
     kind: wrong
-    match_regex: "^aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document (?!\\x27(?=\\{)(?=.*arn:aws:s3:::acme-media-\\*)(?!.*\"Resource\"\\s*:\\s*(\\[\\s*)?\"\\*\")(?!.*\"Action\"\\s*:\\s*(\\[\\s*)?\"(\\*|s3:\\*)\")(?!.*\"Principal\"\\s*:\\s*(\\{\\s*\"AWS\"\\s*:\\s*)?\"?\\*\"\\s*\\}?\\s*,\\s*\"Action\"\\s*:\\s*\"?\\*)[^\\x27`$;&|\\\\]*\\x27$)"
-    feedback: "That is the default policy again (or worse): through this endpoint any principal in the subnets could read or write any bucket in any account, including an attacker's. Scope it to the acme-media-* buckets and the actions image-resizer needs."
+    endpoint_policy:
+      verdict: broad
+      endpoint_id: vpce-0s3gw
+      allowed_actions: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+      required_actions: [s3:GetObject, s3:PutObject]
+      bucket_prefix: "acme-media-"
+      example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}'"
+    feedback: "That policy is wider than the media workload needs (a wildcard action or resource, another bucket, or not a plain Allow). Through this endpoint any principal in the subnets could then reach more than acme-media-*, including a bucket in someone else's account. Allow only the actions image-resizer uses, on acme-media-* buckets and objects only."
   - id: endpoint-policy
-    label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{...Allow s3:GetObject/PutObject/ListBucket on arn:aws:s3:::acme-media-* and arn:aws:s3:::acme-media-*/*...}'"
+    label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{...Allow s3:GetObject/PutObject/ListBucket, Principal \"*\", on arn:aws:s3:::acme-media-* and arn:aws:s3:::acme-media-*/*...}'"
     kind: fix
-    match_regex: "^aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document \\x27(?=\\{)(?=.*arn:aws:s3:::acme-media-\\*)(?!.*\"Resource\"\\s*:\\s*(\\[\\s*)?\"\\*\")(?!.*\"Action\"\\s*:\\s*(\\[\\s*)?\"(\\*|s3:\\*)\")(?!.*\"Principal\"\\s*:\\s*(\\{\\s*\"AWS\"\\s*:\\s*)?\"?\\*\"\\s*\\}?\\s*,\\s*\"Action\"\\s*:\\s*\"?\\*)[^\\x27`$;&|\\\\]*\\x27$"
+    endpoint_policy:
+      verdict: ok
+      endpoint_id: vpce-0s3gw
+      allowed_actions: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+      required_actions: [s3:GetObject, s3:PutObject]
+      bucket_prefix: "acme-media-"
+      example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::acme-media-*\",\"arn:aws:s3:::acme-media-*/*\"]}]}'"
     feedback: "A gateway endpoint is created with a policy that allows everything. Replacing it with one limited to the media buckets means a compromised instance cannot use the endpoint to copy data out to a bucket in someone else's account. If other workloads in these subnets need S3 (package repositories, other buckets), add exactly those buckets first. Also consider an aws:SourceVpce condition on the media buckets' own policies."
   - id: budget-alert
     label: "Set up an AWS Budgets alert (or cost anomaly alert) on the account, sent to engineering as well as finance"
