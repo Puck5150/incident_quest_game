@@ -133,6 +133,7 @@ actions:
   - id: truncate-log
     label: "Truncate app.log in place (: > /var/log/app/app.log)"
     kind: fix
+    allow_shell: true # the fix IS a redirection; both branches of the regex are fully anchored
     match_regex: "^(: ?> ?|> ?)/var/log/app/app\\.log$|^(sudo )?truncate -s ?0 /var/log/app/app\\.log$"
     feedback: "Output redirection truncates an existing file to zero size. The app keeps its open file handle, and the space comes back immediately. It also destroys the 29 GB of log: if the last hour of entries mattered, save a tail to another volume first (tail -n 5000 app.log > /somewhere/else), and note that a log this large usually means something is far too verbose."
   - id: fix-logrotate
