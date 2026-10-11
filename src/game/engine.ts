@@ -71,6 +71,8 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       const ran = { ...s, log: [...s.log, e] }
       const a = actionFor(cur, e.input)
       if (!a) return ran
+      // A file-gated fix is credited by the terminal after it reads the file (session.ts), never here.
+      if (a.requires_file) return ran
       if (s.phase === 'investigating') return { ...ran, feedback: { tone: 'bad', text: NOT_YET } }
       return step(scenario, ran, { type: 'TAKE_ACTION', id: a.id, at: e.at })
     }

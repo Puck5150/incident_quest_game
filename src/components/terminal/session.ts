@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Scenario } from '../../schema/scenario.ts'
+import type { Action, Scenario } from '../../schema/scenario.ts'
+import { fileFixed } from '../../game/fileFix.ts'
+import { ingressPolicyOk } from '../../game/vpcscIngress.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
-import { actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
+import { actionFor, actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
 import { detectAction } from './detect.ts'
 
@@ -122,9 +124,9 @@ export function useTerminalSession(
     const cur = atStage(scenario, stageAt(now))
     const taken = take ? new Set([...actionsTaken(now), ...sent.current]) : actionsTaken(now)
     const notes: string[] = []
-    const fileMatches = async (f: { path: string; matches: string }) => {
+    const fileMatches = async (f: NonNullable<Action['file']>) => {
       const text = await sh.read(f.path)
-      return text !== undefined && new RegExp(f.matches, 'm').test(text)
+      return text !== undefined && fileFixed(f, text)
     }
     for (const a of cur.actions) {
       if (!(await detectAction(a, { taken, fileMatches, doneWhen: (p) => sh.doneWhen(p) }))) continue
@@ -212,6 +214,28 @@ export function useTerminalSession(
       onRun(cmd)
       setHistory((h) => [...h, cmd])
       if (cmd === 'clear') return { line, done: Promise.resolve(line), clear: true }
+      // A typed fix that counts only while a file on disk is right at this moment (requires_file): the
+      // command prints its scripted output either way; the file is read through the shell, now.
+      const gated = actionFor(atStage(scenario, stageAt(before)), cmd)
+      const need = gated?.requires_file
+      if (gated && need) {
+        const l = { ...line, output: terminalOutput(scenario, cmd, before) }
+        const done = (queue.current = queue.current.then(async () => {
+          const sh = await getShell()
+          const text = await sh.read(need.path)
+          let note = ''
+          if (text === undefined || !ingressPolicyOk(text, need.ingress_policy))
+            note = `(It ran, but ${need.path.split('/').pop()} is not exactly the merged narrow rule on disk right now, so the game does not count it as the fix.)`
+          else if (!namedRootCause(scenario, latest.current)) note = NOT_YET
+          else if (!actionsTaken(latest.current).has(gated.id) && !sent.current.has(gated.id)) {
+            sent.current.add(gated.id)
+            onTakeAction?.(gated.id)
+            note = gated.feedback
+          }
+          return { ...l, output: [l.output, note].filter(Boolean).join('\n') }
+        })) as Promise<Line>
+        return { line: { ...l, pending: true }, done }
+      }
       if (engineHandles(scenario, cmd, before)) {
         const l = { ...line, output: terminalOutput(scenario, cmd, before) }
         return { line: l, done: Promise.resolve(l) }

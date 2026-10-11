@@ -13,3 +13,12 @@ describe('jwt-clock-skew', () => {
       expect(credit(l)).toBeUndefined()
   })
 })
+
+describe('jwt-clock-skew: behaviour', () => {
+  it('chrony on wishlist-01 alone does not complete it', async () => {
+    const { fixComplete } = await import('../src/game/engine.ts')
+    const take = (...ids: string[]) => ids.map((id, i) => ({ type: 'TAKE_ACTION' as const, id, at: i }))
+    expect(fixComplete(sc, take('fix-ntp'))).toBe(false)
+    expect(fixComplete(sc, take('fix-ntp', 'check-fleet', 'clock-alert'))).toBe(true)
+  })
+})

@@ -1360,12 +1360,182 @@
               },
               "after": {
                 "type": "string"
+              },
+              "ingress_policy": {
+                "type": "object",
+                "properties": {
+                  "narrow": {
+                    "type": "object",
+                    "properties": {
+                      "identity": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "service": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "method": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "identity",
+                      "source",
+                      "service",
+                      "method",
+                      "target"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "keep": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "identity": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "source": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "service": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "method": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "target": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "identity",
+                        "source",
+                        "service",
+                        "method",
+                        "target"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "narrow"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
               "path",
               "matches",
               "after"
+            ],
+            "additionalProperties": false
+          },
+          "requires_file": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^\\/"
+              },
+              "ingress_policy": {
+                "type": "object",
+                "properties": {
+                  "narrow": {
+                    "type": "object",
+                    "properties": {
+                      "identity": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "service": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "method": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "target": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "identity",
+                      "source",
+                      "service",
+                      "method",
+                      "target"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "keep": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "identity": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "source": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "service": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "method": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "target": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "identity",
+                        "source",
+                        "service",
+                        "method",
+                        "target"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "narrow"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "path",
+              "ingress_policy"
             ],
             "additionalProperties": false
           },
@@ -3721,12 +3891,182 @@
                     },
                     "after": {
                       "type": "string"
+                    },
+                    "ingress_policy": {
+                      "type": "object",
+                      "properties": {
+                        "narrow": {
+                          "type": "object",
+                          "properties": {
+                            "identity": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "service": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "method": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "identity",
+                            "source",
+                            "service",
+                            "method",
+                            "target"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "keep": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "identity": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "service": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "method": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "identity",
+                              "source",
+                              "service",
+                              "method",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "narrow"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
                     "path",
                     "matches",
                     "after"
+                  ],
+                  "additionalProperties": false
+                },
+                "requires_file": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "pattern": "^\\/"
+                    },
+                    "ingress_policy": {
+                      "type": "object",
+                      "properties": {
+                        "narrow": {
+                          "type": "object",
+                          "properties": {
+                            "identity": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "service": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "method": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "target": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "identity",
+                            "source",
+                            "service",
+                            "method",
+                            "target"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "keep": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "identity": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "service": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "method": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "identity",
+                              "source",
+                              "service",
+                              "method",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "narrow"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "ingress_policy"
                   ],
                   "additionalProperties": false
                 },

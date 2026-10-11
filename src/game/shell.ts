@@ -9,6 +9,7 @@
 import { Bash, defineCommand, getCommandNames, type CommandName } from 'just-bash'
 import type { Scenario } from '../schema/scenario.ts'
 import { normalize } from './engine.ts'
+import { fileFixed } from './fileFix.ts'
 import { diskPath, filesOnDisk, homeOf, impliedFile, resolveFrom, startDir } from './paths.ts'
 import { runTerraform, worldPlan, type CliContext } from './terraform/cli.ts'
 import { evalPredicate, type Leaf, type Predicate } from './terraform/predicates.ts'
@@ -251,7 +252,7 @@ export class IncidentShell {
       if (!a.file || !taken.has(a.id) || this.mounted.has(key)) continue
       this.mounted.add(key)
       const now = (await fs.exists(a.file.path)) ? await fs.readFile(a.file.path) : ''
-      if (!new RegExp(a.file.matches, 'm').test(now)) await put(a.file.path, a.file.after)
+      if (!fileFixed(a.file, now)) await put(a.file.path, a.file.after)
     }
     // Post-fix versions: a scripted `cat FILE` that only shows once actions
     // are taken, and terminal files' `changes`, latest first.

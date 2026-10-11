@@ -316,6 +316,20 @@ simulated Linux host. What that means for an incident:
       after: |                            # what the button writes
         /var/log/app/*.log { ... }
   ```
+- **Judging an ingress-policy file.** A regex cannot tell a narrow VPC Service Controls
+  ingress rule from a lookalike. Give the `file` an `ingress_policy: { keep: [rule...],
+  narrow: rule }` (a rule is `{ identity, source, service, method, target }`) and the file
+  counts as fixed only if it ALSO passes `src/game/vpcscIngress.ts`: one YAML document
+  (no aliases, no duplicate keys, at most 8000 characters) holding exactly the `keep`
+  policies plus the `narrow` rule, each with one identity, source, operation, method and
+  target and no other key anywhere (so `permission:`, `access_level`, extra identities,
+  wildcards and a second document all fail; flow style, quotes and comments are fine).
+  `matches` stays required as a cheap prefilter (use `ingressFrom`).
+- **A typed fix that depends on a file.** `requires_file: { path, ingress_policy }` on an
+  action with a `match_regex` makes the typed command count only if that file passes the
+  check at the moment the command runs (the terminal reads the file through the shell).
+  The engine never credits such an action by itself, and the button is unchanged. Script the
+  command's output with a `match_regex` terminal command so it prints the same either way.
 - **Hosts.** The prompt's host is where the player starts. Hosts in scripted
   `ssh HOST ...` lines exist: `ssh HOST cmd` runs there, `ssh HOST` logs in
   until `exit`. Local scripts (`./order-sync`) exist and answer from their

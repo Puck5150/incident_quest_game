@@ -42,7 +42,7 @@ terminal:
   prompt: "you@cloudshell:~ (apps-prod)$"
   commands:
     - match: "kubectl logs deploy/scan-ingest -n scans --since=10m"
-      when_actions: [bind-wi, ingress-file, ingress-rule]
+      when_actions: [bind-wi, ingress-rule]
       output: |
         10:31:04 INFO  SCN-91877 written gs://acme-scans-raw/2026-10-02/SCN-91877.pdf (generation 1759401064112093)
         10:31:05 INFO  SCN-91878 written gs://acme-scans-raw/2026-10-02/SCN-91878.pdf (generation 1759401065240117)
@@ -251,10 +251,22 @@ stages:
     terminal:
       commands:
         - match: "gcloud access-context-manager perimeters describe pr_datalake --policy=518273645190 --format=\"yaml(status.resources,status.restrictedServices,status.ingressPolicies)\""
-          when_actions: [ingress-file, ingress-rule]
+          when_actions: [ingress-rule]
           output: |
             status:
               ingressPolicies:
+              - ingressFrom:
+                  identities:
+                  - serviceAccount:bi-export@reporting-prod.iam.gserviceaccount.com
+                  sources:
+                  - resource: projects/580012345678
+                ingressTo:
+                  operations:
+                  - serviceName: bigquery.googleapis.com
+                    methodSelectors:
+                    - method: google.cloud.bigquery.v2.TableDataService.List
+                  resources:
+                  - projects/731904428156
               - ingressFrom:
                   identities:
                   - serviceAccount:scan-ingest@apps-prod.iam.gserviceaccount.com
@@ -273,14 +285,31 @@ stages:
               - storage.googleapis.com
               - bigquery.googleapis.com
         - match: "gcloud access-context-manager perimeters describe pr_datalake --policy=518273645190 --format=\"yaml(status.resources,status.restrictedServices,status.ingressPolicies)\""
-          evidence: no-ingress
+          evidence: existing-ingress
           output: |
             status:
+              ingressPolicies:
+              - ingressFrom:
+                  identities:
+                  - serviceAccount:bi-export@reporting-prod.iam.gserviceaccount.com
+                  sources:
+                  - resource: projects/580012345678
+                ingressTo:
+                  operations:
+                  - serviceName: bigquery.googleapis.com
+                    methodSelectors:
+                    - method: google.cloud.bigquery.v2.TableDataService.List
+                  resources:
+                  - projects/731904428156
               resources:
               - projects/731904428156
               restrictedServices:
               - storage.googleapis.com
               - bigquery.googleapis.com
+        - match_regex: "^gcloud access-context-manager perimeters (?:dry-run )?update pr_datalake .*--set-ingress-policies"
+          example: "gcloud access-context-manager perimeters dry-run update pr_datalake --policy=518273645190 --set-ingress-policies=ingress.yaml"
+          output: |
+            Updated [pr_datalake].
     logs:
       - name: "CHG-3318 change record (10-01 16:00)"
         evidence: enforced
@@ -309,18 +338,34 @@ stages:
         text: "An organization policy constraint blocks the write."
         feedback: "The unique identifier leads to a VPC Service Controls audit entry with an ingress violation on pr_datalake. That's the perimeter."
     actions:
-      - id: set-ingress
-        label: "Replace the perimeter's ingress policies with the file (perimeters update ... --set-ingress-policies=ingress.yaml)"
-        kind: wrong
-        match_regex: "^gcloud access-context-manager perimeters update pr_datalake .*--set-ingress-policies"
-        feedback: "--set-ingress-policies overwrites every ingress policy on the perimeter. It happens to be empty today, but the habit removes other teams' rules the first time it isn't. Use --add-ingress-policies, or the IaC that owns the perimeter."
+      - id: clear-ingress
+        label: "Clear the perimeter's ingress policies first (perimeters update ... --clear-ingress-policies), then add the new rule"
+        kind: destructive
+        match_regex: "^gcloud access-context-manager perimeters update pr_datalake .*--clear-ingress-policies"
+        feedback: "That drops every ingress policy on pr_datalake, including the BI export's, and breaks that consumer until someone notices. --set-ingress-policies already replaces the whole list, so the file must carry the existing policies."
       - id: ingress-file
-        label: "Edit ingress.yaml into one narrow rule: identity scan-ingest@apps-prod, source project 412345678901 (apps-prod), storage.googleapis.com google.storage.objects.create, resource project 731904428156 only; no ANY_IDENTITY and no '*'"
+        label: "Edit ingress.yaml into the perimeter's existing bi-export policy unchanged plus ONE new narrow rule: scan-ingest@apps-prod from project 412345678901 (apps-prod), storage.googleapis.com google.storage.objects.create, target project 731904428156 only (no ANY_IDENTITY, no '*', no extra keys)"
         kind: fix
         file:
           path: /home/you/ingress.yaml
-          matches: '(?<![\s\S])(?![\s\S]*(?:ANY_|\*|accessLevel|identityType|user:|group:|principal|serviceAccount:[\s\S]*serviceAccount:|resource: [\s\S]*resource: |serviceName:[\s\S]*serviceName:|method:[\s\S]*method:|- [''"]?projects/[\s\S]*- [''"]?projects/))(?=[\s\S]*^\s*- serviceAccount:scan-ingest@apps-prod\.iam\.gserviceaccount\.com\s*$)(?=[\s\S]*^\s*- resource: [''"]?projects/412345678901[''"]?\s*$)(?=[\s\S]*^\s*(?:- )?serviceName: storage\.googleapis\.com\s*$)(?=[\s\S]*^\s*- method: google\.storage\.objects\.create\s*$)(?=[\s\S]*^\s*- [''"]?projects/731904428156[''"]?\s*$)'
+          matches: 'ingressFrom'
+          ingress_policy: &ingress
+            keep:
+              - { identity: "serviceAccount:bi-export@reporting-prod.iam.gserviceaccount.com", source: "projects/580012345678", service: "bigquery.googleapis.com", method: "google.cloud.bigquery.v2.TableDataService.List", target: "projects/731904428156" }
+            narrow: { identity: "serviceAccount:scan-ingest@apps-prod.iam.gserviceaccount.com", source: "projects/412345678901", service: "storage.googleapis.com", method: "google.storage.objects.create", target: "projects/731904428156" }
           after: |
+            - ingressFrom:
+                identities:
+                - serviceAccount:bi-export@reporting-prod.iam.gserviceaccount.com
+                sources:
+                - resource: projects/580012345678
+              ingressTo:
+                operations:
+                - serviceName: bigquery.googleapis.com
+                  methodSelectors:
+                  - method: google.cloud.bigquery.v2.TableDataService.List
+                resources:
+                - projects/731904428156
             - ingressFrom:
                 identities:
                 - serviceAccount:scan-ingest@apps-prod.iam.gserviceaccount.com
@@ -333,12 +378,15 @@ stages:
                   - method: google.storage.objects.create
                 resources:
                 - projects/731904428156
-        feedback: "One identity from one project may create objects in one project's storage and nothing else. A wide draft (ANY_IDENTITY, '*') would open the perimeter this change exists to enforce."
+        feedback: "The file now holds the existing policy untouched and one rule that lets one identity from one project create objects in one project. A wide draft (ANY_IDENTITY, '*') would open the perimeter this change exists to enforce; dropping the BI policy would break that consumer."
       - id: ingress-rule
-        label: "Add the rule to pr_datalake without touching existing policies (gcloud access-context-manager perimeters update pr_datalake --policy=518273645190 --add-ingress-policies=ingress.yaml)"
+        label: "Apply the merged file: gcloud access-context-manager perimeters update pr_datalake --policy=518273645190 --set-ingress-policies=ingress.yaml (it REPLACES all ingress policies; try it with perimeters dry-run update first, and keep the rule in the IaC that owns the perimeter)"
         kind: fix
-        match_regex: "^gcloud access-context-manager perimeters update pr_datalake (?:--policy[= ]518273645190 --add-ingress-policies[= ](?:\\./)?ingress\\.yaml|--add-ingress-policies[= ](?:\\./)?ingress\\.yaml --policy[= ]518273645190)$"
-        feedback: "The narrow rule is added next to whatever policies the perimeter already has. Keep it in the IaC that owns the perimeter too, and test new rules in dry-run before enforcing."
+        match_regex: "^gcloud access-context-manager perimeters update pr_datalake (?:--policy[= ]518273645190 --set-ingress-policies[= ][\"']?(?:\\./)?ingress\\.yaml[\"']?|--set-ingress-policies[= ][\"']?(?:\\./)?ingress\\.yaml[\"']? --policy[= ]518273645190)$"
+        requires_file:
+          path: /home/you/ingress.yaml
+          ingress_policy: *ingress
+        feedback: "The perimeter now has the BI export's rule and the narrow scan-ingest rule, nothing else. Everything else stays outside the perimeter."
       - id: add-project
         label: "Add the apps-prod project to the pr_datalake perimeter"
         kind: wrong
@@ -353,16 +401,16 @@ stages:
         feedback: "VPC Service Controls is checked separately from IAM. More IAM permission doesn't get a request through a perimeter."
     solution_paths:
       - [ingress-file, ingress-rule]
-    key_evidence: [vpcsc-403, ingress-violation, no-ingress, enforced]
+    key_evidence: [vpcsc-403, ingress-violation, existing-ingress, enforced]
     evidence_labels:
       vpcsc-403: "Writes fail with \"Request is prohibited by organization's policy\""
       ingress-violation: "The audit log records an ingress violation on pr_datalake for scan-ingest"
-      no-ingress: "The perimeter restricts storage and has no ingress policies"
+      existing-ingress: "The perimeter already has one ingress policy (the BI export) and none for scan-ingest"
       enforced: "pr_datalake went from dry-run to enforced yesterday at 16:00"
     hints:
       nudge: "A different 403. What does \"prohibited by organization's policy\" with a unique identifier point to?"
       direction: "Look up the identifier in data-lake-prod's audit logs and read the perimeter's configuration."
-      answer: "pr_datalake was enforced yesterday with no ingress rules. Narrow ingress.yaml to scan-ingest@apps-prod creating objects in data-lake-prod, then add it with --add-ingress-policies."
+      answer: "pr_datalake was enforced yesterday with no ingress rule for scan-ingest. Describe the perimeter, put its existing policy plus one narrow rule (scan-ingest@apps-prod creating objects in data-lake-prod) in ingress.yaml, then apply with --set-ingress-policies, which replaces the whole list."
     debrief:
       root_cause: |
         At 16:00 yesterday security switched the pr_datalake perimeter from
@@ -374,9 +422,9 @@ stages:
       ideal_path:
         - "Read the new error: prohibited by organization's policy, with a unique identifier."
         - "Find it in the audit log: an ingress violation on pr_datalake."
-        - "Read the perimeter: storage restricted, no ingress policies; enforced yesterday."
-        - "Narrow the draft ingress.yaml to one identity, one source project, one method and one target project, with no ANY_IDENTITY or '*'."
-        - "Add it with --add-ingress-policies (never --set on a live perimeter), then check the logs for written objects."
+        - "Read the perimeter: storage restricted, one ingress policy for the BI export, none for scan-ingest; enforced yesterday."
+        - "Rewrite ingress.yaml as the existing policy unchanged plus one narrow rule: one identity, one source project, one method, one target project; no ANY_IDENTITY or '*'. --set-ingress-policies replaces everything, so anything left out is deleted."
+        - "Try it with perimeters dry-run update, then apply with --set-ingress-policies (and put the rule in the IaC that owns the perimeter). Check the logs for written objects."
         - "Follow-up: put the rule in the IaC that owns the perimeter, and before enforcing any perimeter review its dry-run violations for real traffic instead of dismissing them. Dry-run logged this exact request daily for a month."
 
   - id: replay
@@ -456,7 +504,7 @@ stages:
     hints:
       nudge: "Pub/Sub stopped retrying after 5 attempts. Where did those messages go?"
       direction: "Read scan-ingest-sub's dead-letter policy, and check the dead-letter topic has a subscription."
-      answer: "They're in scan-ingest-dlq-sub. Republish them to scans; the ifGenerationMatch=0 precondition makes it safe."
+      answer: "They're in scan-ingest-dlq-sub. Republish them to scans (the ifGenerationMatch=0 precondition makes it safe), then add an alert on the dead-letter subscription's depth and age so it never grows unnoticed."
     debrief:
       root_cause: |
         Every failed message was delivered 5 times and then forwarded to

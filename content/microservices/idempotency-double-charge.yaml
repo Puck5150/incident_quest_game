@@ -42,7 +42,7 @@ terminal:
       when_actions: [idempotency-keys]
       output: |
         attempt 1: timeout after 5000 ms
-        attempt 2: 201 Created charge ch_T41 (replayed result for Idempotency-Key ord_test_42)
+        attempt 2: 201 Created charge ch_T41 (replayed result for Idempotency-Key 6f1c2e9a-5b7d-4c1e-9a3f-2d8e4b6a1c90, same key as attempt 1)
         provider charges for ord_test_42: 1
     - match: "./replay-slow-charge.sh ord_test_42"
       output: |

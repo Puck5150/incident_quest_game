@@ -78,7 +78,7 @@ actions:
     match_regex: "^gcloud compute instances add-tags app-3 --zone[ =]us-central1-a --tags[ =]app$"
     feedback: "app-3 now matches allow-app-8080's target tag, so the rule applies to it and the frontends get through. Tags can be added while the VM is running."
   - id: sa-target
-    label: "Stronger alternative to the tag: target allow-app-8080 by service account (gcloud compute firewall-rules update allow-app-8080 --target-service-accounts=app-server@shop-prod.iam.gserviceaccount.com, dropping the tag target) and run app-3 as that account (stop it, set-service-account, start)"
+    label: "Stronger alternative to the tag: first run app-1, app-2 and app-3 as one dedicated service account (app-3 must be stopped to change it), then switch allow-app-8080 to --target-service-accounts and drop the tag target. A rule's target tags and target service accounts cannot be combined, so switching before every VM runs as the account would cut off the tag-only ones"
     kind: fix
     feedback: "Anyone with compute.instances.setTags can give any VM the tag and inherit the allow; changing a VM's service account needs permission on the account itself. Targeting by service account ties the rule to an identity, not a label."
   - id: template

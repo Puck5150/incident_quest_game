@@ -11,6 +11,8 @@ import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { asciiLower, endpointPolicyVerdict, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
 import { filesOnDisk } from '../game/paths.ts'
+import { fileFixed } from '../game/fileFix.ts'
+import { ingressPolicyOk } from '../game/vpcscIngress.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
 import { isRegistrySource, normalizeRegistry, REGISTRY_SOURCE, registryDir } from '../game/terraform/layout.ts'
@@ -186,6 +188,16 @@ const LeafOrNot = z.union([LeafSchema, z.strictObject({ not: LeafSchema })])
 const PredicateSchema = z.union([LeafOrNot, z.strictObject({ all: z.array(LeafOrNot).min(1) }), z.strictObject({ any: z.array(LeafOrNot).min(1) })])
 export type Leaf = z.infer<typeof LeafSchema>
 export type Predicate = z.infer<typeof PredicateSchema>
+// A VPC Service Controls ingress file judged by parsing it (src/game/vpcscIngress.ts): exactly the `keep`
+// policies plus the one `narrow` rule, nothing else.
+const IngressRuleSchema = z.strictObject({
+  identity: z.string().min(1),
+  source: z.string().min(1),
+  service: z.string().min(1),
+  method: z.string().min(1),
+  target: z.string().min(1),
+})
+const IngressSpecSchema = z.strictObject({ narrow: IngressRuleSchema, keep: z.array(IngressRuleSchema).optional() })
 const ActionsSchema = z
   .array(
     z.strictObject({
@@ -225,8 +237,11 @@ const ActionsSchema = z
       // A fix made by editing a file (PLAN_TERMINAL.md T4): the action is taken
       // once the file on disk matches `matches`; the button writes `after`.
       file: z
-        .strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: z.string().min(1), after: z.string() })
+        .strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: z.string().min(1), after: z.string(), ingress_policy: IngressSpecSchema.optional() })
         .optional(),
+      // A typed command (match_regex) that takes this action only while the file on disk passes the ingress check at
+      // the moment it is run; otherwise it runs but does not count. Needs a match_regex.
+      requires_file: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), ingress_policy: IngressSpecSchema }).optional(),
       // A Terraform fix (TF3d): taken once this holds of the lab's world. Needs a terraform block.
       done_when: PredicateSchema.optional(),
     }),
@@ -710,18 +725,27 @@ export const ScenarioSchema = z
       part.actions.forEach((act, i) => {
         if (!act.file) return
         const at = (...p: (string | number)[]) => (k === 0 ? ['actions', i, 'file', ...p] : ['stages', k - 1, 'actions', i, 'file', ...p])
-        let rx: RegExp
         try {
-          rx = new RegExp(act.file.matches, 'm')
+          new RegExp(act.file.matches, 'm')
         } catch (e) {
           return issue(`invalid regex: ${(e as Error).message}`, at('matches'))
         }
         const initial = filesOnDisk(atStage(s, k)).get(act.file.path)
         if (initial === undefined) issue(`${act.file.path} isn't on disk at this stage (add it as a file, a log with that name, or a scripted cat)`, at('path'))
-        else if (rx.test(initial)) issue('the file already matches before any fix', at('matches'))
-        if (!rx.test(act.file.after)) issue("`after` doesn't match `matches`", at('after'))
+        else if (initial !== undefined && fileFixed(act.file, initial)) issue('the file already matches before any fix', at('matches'))
+        if (!fileFixed(act.file, act.file.after)) issue("`after` doesn't match `matches`", at('after'))
       })
     })
+    ;[s, ...stages].forEach((part, k) =>
+      part.actions.forEach((act, i) => {
+        if (!act.requires_file) return
+        const at = (...p: (string | number)[]) => (k === 0 ? ['actions', i, 'requires_file', ...p] : ['stages', k - 1, 'actions', i, 'requires_file', ...p])
+        if (act.match_regex === undefined) issue('requires_file needs a match_regex', at())
+        const initial = filesOnDisk(atStage(s, k)).get(act.requires_file.path)
+        if (initial === undefined) issue(`${act.requires_file.path} isn't on disk at this stage`, at('path'))
+        else if (ingressPolicyOk(initial, act.requires_file.ingress_policy)) issue('the file already passes before any fix', at('path'))
+      }),
+    )
 
     // Difficulty 5 is a major incident (PLAN_DIFFICULTY_5.md section 2).
     if (s.ticket.severity === 'SEV1' && s.difficulty !== 5) issue('SEV1 is reserved for major incidents (difficulty 5)', ['ticket', 'severity'])

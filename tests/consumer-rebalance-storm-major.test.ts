@@ -15,3 +15,15 @@ describe('consumer-rebalance-storm-major', () => {
     expect(sc.actions.find((a) => a.id === 'reset-latest')?.kind).toBe('destructive')
   })
 })
+
+describe('consumer-rebalance-storm-major: behaviour', () => {
+  it('cap-records alone does not complete stage 1, all three do', async () => {
+    const { fixComplete } = await import('../src/game/engine.ts')
+    const take = (...ids: string[]) => ids.map((id, i) => ({ type: 'TAKE_ACTION' as const, id, at: i }))
+    expect(fixComplete(sc, take('cap-records'))).toBe(false)
+    expect(fixComplete(sc, take('cap-records', 'idempotent-sends', 'rebalance-alert'))).toBe(true)
+  })
+  it('idempotent-sends survives a crash between send and mark', () => {
+    expect(sc.actions.find((a) => a.id === 'idempotent-sends')?.label).toMatch(/in-progress.*sent|idempotency key/)
+  })
+})
