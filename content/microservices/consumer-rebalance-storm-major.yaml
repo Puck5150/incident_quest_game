@@ -120,6 +120,14 @@ actions:
     label: "Set max.poll.records=50 (50 x 0.9 s is about 45 s per poll, well inside 300 s) and roll out"
     kind: fix
     feedback: "Each poll's batch now finishes and commits long before the deadline. The rebalances stop, and with them the duplicates."
+  - id: idempotent-sends
+    label: "Make sends idempotent: record each event id before sending (or pass it as the provider's idempotency key) so a redelivered event is skipped, never sent twice"
+    kind: fix
+    feedback: "Kafka delivery is at-least-once, so a rebalance or retry can always redeliver. Dedupe by event id means the next rebalance can't send a second one-time code or receipt. Expire the records after the redelivery window."
+  - id: rebalance-alert
+    label: "Alert on consumer-group rebalance rate and on lag (records and time) for notification-service, and re-derive max.poll.records from measured send time when it changes"
+    kind: fix
+    feedback: "The storm ran unnoticed because nothing watched rebalances or lag. 50 records at 0.9 s is only right for 0.9 s; the alert and a re-check keep the sizing honest."
   - id: raise-interval
     label: "Set max.poll.interval.ms to 3600000 (1 hour)"
     kind: wrong
@@ -134,7 +142,7 @@ actions:
     feedback: "That skips 200,000 notifications, including receipts and password-reset codes customers are waiting for."
 
 solution_paths:
-  - [cap-records]
+  - [cap-records, idempotent-sends, rebalance-alert]
 
 key_evidence: [churn, poll-timeout, send-0-9, dupes]
 
@@ -243,7 +251,7 @@ stages:
       - id: pooled-client
         label: "Use one long-lived httpx.Client (connection pool, keep-alive) and pass the per-tenant Authorization header per request"
         kind: fix
-        feedback: "Connections are set up once and reused; a send is ~0.12 s again, and the backlog drains about 7x faster."
+        feedback: "Connections are set up once and reused; a send is ~0.12 s again, and the backlog drains about 7x faster. Per-tenant keys travel per request: keep them out of logs, traces and error messages."
       - id: more-cpu
         label: "Give notification-service more CPU"
         kind: wrong
@@ -310,7 +318,7 @@ stages:
         feedback: "Receipts and shipping confirmations are still correct and some customers need them; only the time-boxed messages are wrong now."
     actions:
       - id: skip-stale
-        label: "Set NOTIFY_MAX_AGE_delivery.out_for_delivery=2h and NOTIFY_MAX_AGE_account.password_reset=15m, then let the backlog drain"
+        label: "Set NOTIFY_MAX_AGE_delivery.out_for_delivery=2h and NOTIFY_MAX_AGE_account.password_reset=15m, then let the backlog drain. Skipped events are logged by event id and customer id only, never the code, phone number or message body"
         kind: fix
         feedback: "Stale delivery windows and expired codes are skipped and logged for follow-up; receipts and shipping confirmations go out. Customer care gets the list of skipped customers."
       - id: reset-offsets
@@ -343,4 +351,4 @@ stages:
         - "Break the backlog down by type and age."
         - "Decide per type: wrong-if-late versus late-but-fine."
         - "Set max ages for the time-boxed types, then let it drain."
-        - "Hand customer care the skipped list."
+        - "Hand customer care the skipped list (event and customer ids; the log must not hold codes or phone numbers)."
