@@ -159,3 +159,41 @@ describe('terraform-import-existing through the UI', () => {
     expect(score(item.scenario, g.box.saved!.log).mistakes.destructive).toBe(1)
   })
 })
+
+describe('terraform-moved-block through the UI', () => {
+  const ROOT = /The resource's address changed/
+  const MOVED = `printf 'moved {\\n  from = aws_db_instance.orders\\n  to   = module.database.aws_db_instance.orders\\n}\\n' >> main.tf`
+
+  it('ideal path: plan, state list, moved block, plan, apply keeps the database', async () => {
+    const g = await mount('terraform-moved-block')
+    await g.run('terraform plan', 'terraform state list', 'git diff main')
+    await waitFor(() => expect(output()).toMatch(/Plan: 1 to add, 0 to change, 1 to destroy\./))
+    g.declare(ROOT)
+    await g.run(MOVED, 'terraform plan', 'terraform apply -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/has moved to module\.database\.aws_db_instance\.orders/))
+    await g.closeClean('moved-block')
+  })
+
+  it('terraform state mv is wrong, not the fix: no credit, no Close out, not destructive', async () => {
+    const g = await mount('terraform-moved-block')
+    g.declare(ROOT)
+    await g.run('terraform state mv aws_db_instance.orders module.database.aws_db_instance.orders', 'terraform plan')
+    await g.settle()
+    expect(g.taken()).toEqual(['state-mv'])
+    expect(g.wrongCount()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
+    const { score } = await import('../src/game/scoring.ts')
+    const item = await (await import('virtual:content')).loadItem('terraform-moved-block')
+    if (item.kind !== 'incident') throw new Error('expected an incident')
+    expect(score(item.scenario, g.box.saved!.log).mistakes.destructive).toBe(0)
+  })
+
+  it('trap: applying the untouched PR destroys the database: destructive once, the moved block afterwards earns nothing', async () => {
+    const g = await mount('terraform-moved-block')
+    g.declare(ROOT)
+    await g.run('terraform apply -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 1 added, 0 changed, 1 destroyed\./))
+    await g.run(MOVED, 'terraform plan')
+    await g.trapped('merge-with-snapshot')
+  })
+})
