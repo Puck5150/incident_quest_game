@@ -126,4 +126,37 @@ describe('terraform-state-in-git on the simulator', () => {
     const again = await play(CD, ...FIX, ROTATE)
     expect(await detectedAll(again.sh)).toEqual(await detectedAll(first.sh))
   })
+
+  it('(o) the backend may live in main.tf, or lock with dynamodb_table instead of use_lockfile', async () => {
+    const MAIN = `cat >> main.tf <<'EOF'\nterraform {\n  backend "s3" {\n    bucket = "acme-tfstate"\n    key    = "a/terraform.tfstate"\n    region = "us-east-1"\n    encrypt = true\n    use_lockfile = true\n  }\n}\nEOF`
+    const a = await play(CD, MAIN, INIT, IGNORE, RM_BACKUP)
+    expect(await detectedAll(a.sh)).toEqual({ ...NONE, 'remote-backend': true })
+    const b = await play(CD, BACKEND('  dynamodb_table = "tf-locks"\n'), INIT, IGNORE, RM_BACKUP)
+    expect(await detectedAll(b.sh)).toEqual({ ...NONE, 'remote-backend': true })
+  })
+
+  it('(p) taint then apply rotates the password and credits rotate', async () => {
+    const { sh } = await play(CD, 'terraform taint random_password.db', A)
+    expect(await detectedAll(sh)).toEqual({ ...NONE, rotate: true })
+  })
+
+  it('(q) .gitignore must cover the state file itself and the backup', async () => {
+    const ONLY = (lines: string) => `printf '${lines}' >> .gitignore`
+    for (const [name, lines, ok] of [
+      ['backup only', 'terraform.tfstate.backup\\n', false],
+      ['state only', 'terraform.tfstate\\n', false],
+      ['*.tfstate*', '*.tfstate*\\n', true],
+      ['both globs', '*.tfstate\\n*.tfstate.*\\n', true],
+      ['commented out', '# *.tfstate*\\n', false],
+    ] as const) {
+      const { sh } = await play(CD, BACKEND(), INIT, ONLY(lines), RM_BACKUP)
+      expect((await detectedAll(sh))['remote-backend'], name).toBe(ok)
+    }
+  })
+
+  it('(r) the lab runs a Terraform that supports use_lockfile (1.10 or later), and git ls-files keeps listing the tracked state', async () => {
+    const { out } = await play(CD, 'terraform version', ...FIX, 'git ls-files | grep tfstate')
+    expect(out[1].output).toMatch(/Terraform v1\.11\.0/)
+    expect(out[out.length - 1].output).toContain('terraform.tfstate.backup')
+  })
 })

@@ -405,3 +405,48 @@ describe('lab history', () => {
     expect(w.lab.history).toEqual(['delete aws_db_instance.main'])
   })
 })
+
+describe('apply -replace with a dependent', () => {
+  const PW = (n: number) => `Old-password-${n}`
+  const pwState = (name: string, key?: number) => ({ type: 'random_password', name, ...(key === undefined ? {} : { key }), attrs: { id: 'none', length: 16, special: true, upper: true, lower: true, numeric: true, result: PW(key ?? 0) } })
+  const dbState = (pw: string) => ({ ...DB_STATE, attrs: { ...DB_STATE.attrs, password: pw } })
+  const cfg = (pwExtra: string, ref: string, pwHead = 'resource "random_password" "db" {\n  length = 16\n') =>
+    `${pwHead}${pwExtra}}\n\nresource "aws_db_instance" "main" {\n  identifier     = "orders"\n  engine         = "postgres"\n  instance_class = "db.t3.micro"\n  username       = "app"\n  password       = ${ref}\n}\n`
+  const dbPassword = async (w: ReturnType<typeof world>) => {
+    const st = JSON.parse((await w.run('state', 'pull')).stdout) as { resources: { type: string; instances: { attributes: { password: string } }[] }[] }
+    return st.resources.find((r) => r.type === 'aws_db_instance')!.instances[0].attributes.password
+  }
+  const check = async (w: ReturnType<typeof world>, addr: string, before: string) => {
+    expect((await w.run('init')).exitCode).toBe(0)
+    const r = await w.run('apply', '-auto-approve', `-replace=${addr}`)
+    expect(r.exitCode, r.stderr).toBe(0)
+    expect(r.stdout).toContain('aws_db_instance.main: Modifications complete')
+    const after = await dbPassword(w)
+    expect(after).not.toBe(before)
+    expect(typeof after).toBe('string')
+    expect((await w.run('plan')).stdout).toContain('No changes.')
+  }
+
+  it('updates the dependent in the same apply and the next plan is clean', async () => {
+    const w = world({ files: [{ path: 'main.tf', content: cfg('', 'random_password.db.result') }], state: [pwState('db'), dbState(PW(0))] as never })
+    await check(w, 'random_password.db', PW(0))
+  })
+
+  it('works with create_before_destroy on the replaced resource', async () => {
+    const files = [{ path: 'main.tf', content: NET.replace('resource "aws_vpc" "main" {\n', 'resource "aws_vpc" "main" {\n  lifecycle {\n    create_before_destroy = true\n  }\n') }]
+    const SUBNET = { type: 'aws_subnet', name: 'a', attrs: { id: 'subnet-1', arn: 'arn:subnet-1', vpc_id: 'vpc-1', cidr_block: '10.0.1.0/24', availability_zone: 'us-east-1a', map_public_ip_on_launch: false, tags: {}, tags_all: {} } }
+    const w = world({ files, state: [VPC, SUBNET] as never })
+    const r = await w.run('apply', '-auto-approve', '-replace=aws_vpc.main')
+    expect(r.exitCode, r.stdout + r.stderr).toBe(0)
+    const st = JSON.parse((await w.run('state', 'pull')).stdout) as { resources: { type: string; instances: { attributes: Record<string, unknown> }[] }[] }
+    const at = (t: string) => st.resources.find((x) => x.type === t)!.instances[0].attributes
+    expect(at('aws_vpc').id).not.toBe('vpc-1')
+    expect(at('aws_subnet').vpc_id).toBe(at('aws_vpc').id)
+    expect((await w.run('plan')).stdout).toContain('No changes.')
+  })
+
+  it('works with a keyed address', async () => {
+    const w = world({ files: [{ path: 'main.tf', content: cfg('', 'random_password.db[1].result', 'resource "random_password" "db" {\n  count  = 2\n  length = 16\n') }], state: [pwState('db', 0), pwState('db', 1), dbState(PW(1))] as never })
+    await check(w, 'random_password.db[1]', PW(1))
+  })
+})

@@ -25,9 +25,6 @@ terminal:
   prompt: "you@laptop:~/analytics-infra$"
   commands:
     - match: "git ls-files | grep tfstate"
-      when_actions: [remote-backend]
-      output: ""
-    - match: "git ls-files | grep tfstate"
       evidence: state-tracked
       output: |
         terraform.tfstate
@@ -38,6 +35,7 @@ terminal:
 
 terraform:
   dir: "~/analytics-infra"
+  version: 1.11.0
   state_file: true
   files:
     - path: .gitignore
@@ -175,12 +173,13 @@ actions:
         - state_has: random_password.db
         - state_has: aws_db_instance.analytics
         - not: { applied: { op: delete, address: aws_db_instance.analytics } }
-        - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*|terraform)\.tfstate' }
+        - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*\.tfstate(\*|\.\*)?|terraform\.tfstate(\*)?)[ \t]*$' }
+        - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*\.tfstate\.\*|\*\.tfstate\*|terraform\.tfstate\.backup|\*\.backup)[ \t]*$' }
         - not: { file_contains: { path: /home/you/analytics-infra/terraform.tfstate, matches: '"result"' } }
         - not: { file_contains: { path: /home/you/analytics-infra/terraform.tfstate.backup, matches: '"result"' } }
-    feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest and locked; init copied it, so the plan is clean and the same database is still tracked. The local terraform.tfstate was emptied and you removed the terraform.tfstate.backup the migration leaves behind, which still held every secret in plain text. The files are out of the working tree and ignored, and git rm --cached takes them out of the tip of the repository. The history still has the old password, and so do any laptops that cloned it: that is what rotating is for."
+    feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest and locked; init copied it, so the plan is clean and the same database is still tracked. The local terraform.tfstate was emptied and you removed the terraform.tfstate.backup the migration leaves behind, which still held every secret in plain text. The files are out of the working tree and ignored; running git rm --cached on them (the lab cannot check git) is what stops the repository tracking them at its tip. The history still has the old password, and so do any laptops that cloned it: that is what rotating is for."
   - id: rotate
-    label: "Rotate the database password (replace random_password.db, or better switch to manage_master_user_password so it lives in Secrets Manager and out of state), have security purge the file from git history and every clone, and review the database's login logs and the repo's clone history for use of the old password"
+    label: "Rotate the database password (replace random_password.db; in a real account, consider manage_master_user_password so the password lives in Secrets Manager and out of state, which this lab does not model), have security purge the file from git history and every clone, and review the database's login logs and the repo's clone history for use of the old password"
     kind: fix
     done_when:
       all:
@@ -211,7 +210,7 @@ evidence_labels:
 hints:
   nudge: "Nobody typed the password. Which file holds every resource's attributes?"
   direction: "Check what git tracks, whether a backend is configured, and what state stores. Editing a backend block does nothing until terraform init has run, and init leaves a copy behind."
-  answer: "State stores the generated password in plain text and was committed. Move to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, run terraform init and answer yes to copy the state (it leaves terraform.tfstate.backup holding every secret: delete it), stop tracking state with .gitignore and git rm --cached, rotate the password (preferably a managed master password), purge the history and check the database logs for use of the old one."
+  answer: "State stores the generated password in plain text and was committed. Move to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, run terraform init and answer yes to copy the state (it leaves terraform.tfstate.backup holding every secret: delete it), stop tracking state with .gitignore and git rm --cached, rotate the password (in a real account a managed master password also keeps it out of state), purge the history and check the database logs for use of the old one."
 
 analogy:
   title: "The inventory list that includes the safe's combination"
