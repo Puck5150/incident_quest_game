@@ -8,6 +8,8 @@ import { groupHasRule, groupOnly, MIXED_SUMMARY } from './sgrules.ts'
 import { listAddresses, type State } from './state.ts'
 
 import type { Leaf, Predicate } from '../../schema/scenario.ts'
+const KNOWN_MARK = /^(.*) \((targeted|refresh skipped|cli vars|lock off|lock bypassed|var-file [^()]+)\)$/
+
 export type { Leaf, Predicate }
 
 export interface World {
@@ -96,10 +98,14 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
   if (has(l, 'applied')) {
     const { op, address, lock_bypassed, var_file, deviant } = l.applied
     return w.history.some((h) => {
-      // "OP ADDRESS" then markers like " (lock bypassed)" or " (var-file prod.tfvars)"
-      const cut = h.indexOf(' (')
-      const marks = cut < 0 ? [] : [...h.slice(cut).matchAll(/\(([^)]*)\)/g)].map((m) => m[1])
-      const rest = cut < 0 ? h : h.slice(0, cut)
+      // "OP ADDRESS" then known markers like " (lock bypassed)" or " (var-file prod.tfvars)", peeled from the
+      // end so a " (" inside a for_each key (x["a (b)"]) is not mistaken for a marker.
+      const marks: string[] = []
+      let rest = h
+      for (let m = KNOWN_MARK.exec(rest); m; m = KNOWN_MARK.exec(rest)) {
+        marks.unshift(m[2])
+        rest = m[1]
+      }
       const files = marks.filter((m) => m.startsWith('var-file '))
       if (lock_bypassed && !marks.includes('lock bypassed')) return false
       if (var_file !== undefined && !(files.length === 1 && files[0] === `var-file ${var_file}`)) return false

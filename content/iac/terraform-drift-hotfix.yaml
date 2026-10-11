@@ -146,6 +146,7 @@ actions:
         - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.16/28 }
         - sg_only: { group_id: sg-0payments, direction: ingress, cidrs: [10.20.0.0/16, 198.51.100.16/28] }
         - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
+        - not: { applied: { op: update, address: aws_security_group.payments, deviant: true } }
         - plan_has: { no_change: [aws_security_group.payments] }
     feedback: "The code, the state and the group now agree on the narrowest range the partner's own ticket supports for the callbacks: TCP 8443 from 198.51.100.16/28, not the whole /24 the console fix opened, and the group has no other source on any port. Callbacks keep working, the plan shows only the tag, and the change went through review instead of staying a console one-off."
   - id: codify-nat
@@ -159,6 +160,7 @@ actions:
         - sg_rule: { group_id: sg-0payments, direction: ingress, port: 8443, exact: true, cidr: 198.51.100.18/32 }
         - sg_only: { group_id: sg-0payments, direction: ingress, cidrs: [10.20.0.0/16, 198.51.100.17/32, 198.51.100.18/32] }
         - not: { config_matches: { dir: /home/you/infra, matches: 'ignore_changes' } }
+        - not: { applied: { op: update, address: aws_security_group.payments, deviant: true } }
         - plan_has: { no_change: [aws_security_group.payments] }
     feedback: "Even tighter: only the two gateway addresses the partner's ticket names can reach 8443, and nothing else was added to the group. The cost is that a change on their side (a third gateway) needs another reviewed change, which is the point of least privilege."
   - id: codify-wide

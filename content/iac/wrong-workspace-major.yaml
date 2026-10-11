@@ -201,6 +201,9 @@ actions:
         - applied: { op: update, address: aws_db_instance.orders, var_file: prod.tfvars }
         - not: { applied: { op: update, address: aws_db_instance.orders, deviant: true } }
         - file_contains: { path: /home/you/infra/data/prod.tfvars, matches: '^db_instance_class = "db\.r6g\.xlarge"$' }
+        - file_contains: { path: /home/you/infra/data/prod.tfvars, matches: '^db_apply_immediately = false$' }
+        - config_matches: { dir: /home/you/infra/data, matches: '^[ \t]*instance_class[ \t]*=[ \t]*var\.db_instance_class[ \t]*$' }
+        - config_matches: { dir: /home/you/infra/data, matches: '^[ \t]*apply_immediately[ \t]*=[ \t]*var\.db_apply_immediately[ \t]*$' }
         - not: { applied: { op: delete, address: aws_db_instance.orders } }
         - not: { applied: { op: state-rm, address: aws_db_instance.orders } }
     feedback: "Terraform sets orders-prod back to prod's values, through the same tool and state that changed it, with the whole configuration and prod's own var-file. Targeting one resource, overriding values with -var, skipping the refresh or the lock are ways around the safeguards, not the fix. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
@@ -252,7 +255,7 @@ command_notes:
 hints:
   nudge: "Terraform changed the database. Which inputs did it use, and for which environment?"
   direction: "Check the workspace on ops-01, the shell history, and what each tfvars file sets."
-  answer: "staging.tfvars was applied in the prod workspace. Check the plan, then apply prod.tfvars in prod (no -target, -var or -lock=false). Then close the gap that allowed it: a precondition that the environment input matches terraform.workspace, ideally a workspace-keyed map so no pair is chosen by hand, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
+  answer: "staging.tfvars was applied in the prod workspace. Check the plan, then apply prod.tfvars in prod (no -target, -var, -refresh=false or -lock=false), leaving prod.tfvars and the variables in main.tf as they are. Then close the gap that allowed it: a precondition that the environment input matches terraform.workspace, ideally a workspace-keyed map so no pair is chosen by hand, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
 
 analogy:
   title: "The right recipe in the wrong kitchen"

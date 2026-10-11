@@ -218,6 +218,8 @@ actions:
         - plan_has: { no_destroy: [aws_db_instance.orders, module.database.aws_db_instance.orders], no_change: [aws_db_instance.orders, module.database.aws_db_instance.orders] }
         - not: { applied: { op: state-rm, address: aws_db_instance.orders } }
         - not: { applied: { op: state-rm, address: module.database.aws_db_instance.orders } }
+        - not: { applied: { op: state-mv, address: aws_db_instance.orders } }
+        - not: { applied: { op: state-mv, address: module.database.aws_db_instance.orders } }
         - reality_has: { type: aws_db_instance, id: db-ORDERSPROD7Q2X, attr: identifier, equals: orders-prod }
         - not: { applied: { op: delete, address: aws_db_instance.orders } }
         - not: { applied: { op: delete, address: module.database.aws_db_instance.orders } }

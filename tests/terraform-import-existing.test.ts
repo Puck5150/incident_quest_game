@@ -76,6 +76,11 @@ describe('terraform-import-existing on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
+  it('(c2) applying the import with -target (a stopgap form) is never credited, even with prevent_destroy', async () => {
+    const { sh } = await play('cd ~/infra', BLOCK(), PD, 'terraform apply -auto-approve -target=aws_s3_bucket.analytics_raw')
+    expect((await detectedAll(sh))['import-block']).toBe(false)
+  })
+
   it('(d) CLI terraform import plus prevent_destroy is detected without an apply; import alone is not', async () => {
     const { sh, out } = await play('cd ~/infra', IMPORT, 'terraform plan')
     expect(out[1].exitCode).toBe(0)

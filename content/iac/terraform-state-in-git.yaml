@@ -174,13 +174,14 @@ actions:
         - state_has: aws_db_instance.analytics
         - not: { applied: { op: delete, address: aws_db_instance.analytics } }
         - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*\.tfstate(\*|\.\*)?|terraform\.tfstate(\*)?)[ \t]*$' }
-        - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*\.tfstate\.\*|\*\.tfstate\*|terraform\.tfstate\.backup|\*\.backup)[ \t]*$' }
+        - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*\.tfstate\.\*|\*\.tfstate\*|\*\.tfstate\.backup|terraform\.tfstate\*|terraform\.tfstate\.backup|\*\.backup)[ \t]*$' }
         - not: { file_contains: { path: /home/you/analytics-infra/terraform.tfstate, matches: '"result"' } }
         - not: { file_contains: { path: /home/you/analytics-infra/terraform.tfstate.backup, matches: '"result"' } }
     feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest and locked; init copied it, so the plan is clean and the same database is still tracked. The local terraform.tfstate was emptied and you removed the terraform.tfstate.backup the migration leaves behind, which still held every secret in plain text. The files are out of the working tree and ignored; running git rm --cached on them (the lab cannot check git) is what stops the repository tracking them at its tip. The history still has the old password, and so do any laptops that cloned it: that is what rotating is for."
   - id: rotate
     label: "Rotate the database password (replace random_password.db; in a real account, consider manage_master_user_password so the password lives in Secrets Manager and out of state, which this lab does not model), have security purge the file from git history and every clone, and review the database's login logs and the repo's clone history for use of the old password"
     kind: fix
+    after: [remote-backend]
     done_when:
       all:
         - applied: { op: create, address: random_password.db }

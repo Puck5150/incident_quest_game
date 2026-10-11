@@ -152,7 +152,12 @@ actions:
         - reality_has: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/refunds" }
         - reality_has: { type: aws_sqs_queue, id: "https://sqs.us-east-1.amazonaws.com/123456789012/shipping" }
         - not: { applied: { op: create, address: aws_sqs_queue.queue } }
-    feedback: "Each queue is now tracked by its name, so the moves are recognised without touching the queues, and removing \"returns\" destroys only \"returns\"."
+        - config_matches: { dir: /home/you/infra, matches: 'moved\s*\{(?=[^}]*\bfrom\s*=\s*aws_sqs_queue\.queue\[0\](?![\w.\[-]))(?=[^}]*\bto\s*=\s*aws_sqs_queue\.queue\["orders"\])' }
+        - config_matches: { dir: /home/you/infra, matches: 'moved\s*\{(?=[^}]*\bfrom\s*=\s*aws_sqs_queue\.queue\[2\](?![\w.\[-]))(?=[^}]*\bto\s*=\s*aws_sqs_queue\.queue\["refunds"\])' }
+        - config_matches: { dir: /home/you/infra, matches: 'moved\s*\{(?=[^}]*\bfrom\s*=\s*aws_sqs_queue\.queue\[3\](?![\w.\[-]))(?=[^}]*\bto\s*=\s*aws_sqs_queue\.queue\["shipping"\])' }
+        - not: { applied: { op: state-mv, address: aws_sqs_queue.queue } }
+        - not: { applied: { op: state-rm, address: aws_sqs_queue.queue } }
+    feedback: "Each queue is now tracked by its name, and the moved blocks (declarative, reviewed in the PR) map each live index to its key without touching the queues, so removing \"returns\" destroys only \"returns\". The same code works in every workspace and environment that applies it."
   - id: apply-anyway
     label: "Apply the plan; the queues come back with the same names"
     kind: destructive
@@ -167,10 +172,18 @@ actions:
     label: "Leave \"returns\" in the list forever and just stop using it"
     kind: wrong
     feedback: "Nothing is destroyed, but the dead queue lives on, and the next removal hits the same trap."
+  - id: state-mv
+    label: "Fix this state by hand: terraform state mv each queue[N] to its new address (a for_each key, or a shifted count index)"
+    kind: wrong
+    done_when:
+      applied: { op: state-mv, address: aws_sqs_queue.queue }
+    feedback: "terraform state mv is a legitimate tool, the right one when an object has to move between state files or backends and for emergency repair, and it does avoid recreating the queues in this one state. But here the move is inside one configuration that other workspaces and environments apply too: a state edit is a one-off command nobody reviews and it does not travel with the code, so every other state still plans to replace queues and lose their messages. moved blocks in the PR make the move reviewable, repeatable in every state and part of the same merge, so they are the only fix that is credited."
   - id: state-rm
     label: "terraform state rm all the queues and import them again"
     kind: wrong
-    feedback: "It can be made to work, but it's error-prone surgery on live state. moved blocks do the same safely, reviewed in the PR."
+    done_when:
+      applied: { op: state-rm, address: aws_sqs_queue.queue }
+    feedback: "It can be made to work in this one state, but it is error-prone surgery on live state, a one-off nobody reviews that does not travel to other workspaces, and there is a gap where Terraform is not tracking the queues. moved blocks do the same safely, reviewed in the PR."
 
 solution_paths:
   - [for-each-moved]
@@ -186,7 +199,7 @@ evidence_labels:
 hints:
   nudge: "How does Terraform know which queue is which: by name, or by position?"
   direction: "Look at the resource addresses in state, and at how the PR changed the list."
-  answer: "count tracks queues by position, so removing one from the middle shifts the rest. Switch to for_each keyed by name, with moved blocks from the old indexes, and confirm the \"returns\" queue is drained (get-queue-attributes shows no messages) before the apply destroys it."
+  answer: "count tracks queues by position, so removing one from the middle shifts the rest. Switch to for_each keyed by name, with moved blocks from the old indexes (terraform state mv would avoid the replacement in the one state you run it against, but it is a one-off edit that does not reach other environments, so the moves belong in the code), and confirm the \"returns\" queue is drained (get-queue-attributes shows no messages) before the apply destroys it."
 
 analogy:
   title: "Lockers numbered by row"
@@ -209,7 +222,7 @@ debrief:
     - "Read the plan: two replacements and a destroy, not one."
     - "Check state: queues are addressed by index."
     - "See the shift: removing from the middle renumbers everything after it."
-    - "Move to for_each keyed by name with moved blocks, then remove \"returns\"; plan shows one destroy."
+    - "Move to for_each keyed by name with moved blocks (declarative and reviewed; a state mv is a one-off edit that does not reach other environments), then remove \"returns\"; plan shows one destroy."
     - "Before applying that destroy, check \"returns\" is drained (ApproximateNumberOfMessages, NotVisible and Delayed all 0) and that no producer or consumer still uses it."
   real_world: |
     Use count for interchangeable copies and for_each when each instance has
