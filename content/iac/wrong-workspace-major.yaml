@@ -38,10 +38,6 @@ diagram:
 terminal:
   prompt: "you@ops-01:~/infra/data$"
   commands:
-    - match: "terraform workspace show"
-      evidence: ws-prod
-      output: |
-        prod
     - match: "aws rds describe-db-instances --db-instance-identifier orders-prod --query \"DBInstances[0].[DBInstanceClass,PendingModifiedValues,PreferredMaintenanceWindow]\""
       when_actions: [prod-apply, apply-now]
       output: |
@@ -84,6 +80,89 @@ terminal:
             ]
         }
 
+terraform:
+  dir: "~/infra/data"
+  workspace: prod
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        variable "db_instance_class" {
+          type = string
+        }
+
+        variable "db_apply_immediately" {
+          type = bool
+        }
+
+        resource "aws_db_instance" "orders" {
+          identifier          = "orders-${terraform.workspace}"
+          engine              = "postgres"
+          instance_class      = var.db_instance_class
+          multi_az            = true
+          skip_final_snapshot = false
+          apply_immediately   = var.db_apply_immediately
+        }
+    - path: prod.tfvars
+      content: |
+        db_instance_class = "db.r6g.xlarge"
+        db_apply_immediately = false
+    - path: staging.tfvars
+      content: |
+        db_instance_class = "db.t4g.medium"
+        db_apply_immediately = true
+  workspaces:
+    prod:
+      state:
+        - type: aws_db_instance
+          name: orders
+          attrs:
+            id: orders-prod
+            arn: "arn:aws:rds:us-east-1:123456789012:db:orders-prod"
+            identifier: orders-prod
+            engine: postgres
+            engine_version: "15.4"
+            instance_class: db.t4g.medium
+            apply_immediately: true
+            allocated_storage: 20
+            storage_encrypted: false
+            multi_az: true
+            skip_final_snapshot: false
+            endpoint: "orders-prod.c1a2b3c4d5.us-east-1.rds.amazonaws.com:5432"
+    staging:
+      state:
+        - type: aws_db_instance
+          name: orders
+          attrs:
+            id: orders-staging
+            arn: "arn:aws:rds:us-east-1:123456789012:db:orders-staging"
+            identifier: orders-staging
+            engine: postgres
+            engine_version: "15.4"
+            instance_class: db.r6g.large
+            apply_immediately: true
+            allocated_storage: 20
+            storage_encrypted: false
+            multi_az: true
+            skip_final_snapshot: false
+            endpoint: "orders-staging.c1a2b3c4d5.us-east-1.rds.amazonaws.com:5432"
+  evidence:
+    - evidence: ws-prod
+      command: workspace show
+      contains: prod
+
 logs:
   - name: "ops-01: shell history (user dana, 10-01)"
     evidence: history
@@ -114,26 +193,40 @@ hypotheses:
 
 actions:
   - id: prod-apply
-    label: "terraform apply -var-file=prod.tfvars (in the prod workspace, after confirming the workspace and reading the plan)"
+    label: "Apply prod.tfvars in the prod workspace (terraform apply -var-file=prod.tfvars), with no -target, -var, -refresh=false or -lock=false"
     kind: fix
-    match_regex: "^terraform apply( -auto-approve)? --?var-file[ =]prod\\.tfvars( -auto-approve)?$"
-    feedback: "Terraform sets orders-prod back to prod's values. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
+    done_when:
+      all:
+        - reality_has: { type: aws_db_instance, id: orders-prod, attr: instance_class, equals: db.r6g.xlarge }
+        - applied: { op: update, address: aws_db_instance.orders, var_file: prod.tfvars }
+        - not: { applied: { op: update, address: aws_db_instance.orders, deviant: true } }
+        - file_contains: { path: /home/you/infra/data/prod.tfvars, matches: '^db_instance_class = "db\.r6g\.xlarge"$' }
+        - not: { applied: { op: delete, address: aws_db_instance.orders } }
+        - not: { applied: { op: state-rm, address: aws_db_instance.orders } }
+    feedback: "Terraform sets orders-prod back to prod's values, through the same tool and state that changed it, with the whole configuration and prod's own var-file. Targeting one resource, overriding values with -var, skipping the refresh or the lock are ways around the safeguards, not the fix. Check what RDS did with that change. The apply restores the symptom's cause; it does not stop the next person making the same mistake, which is the next action."
   - id: workspace-guard
-    label: "Open a PR that makes the plan fail when the tfvars environment doesn't match terraform.workspace (a variable validation or precondition on the environment name), and stop applying prod by hand from the shared ops box"
+    label: "Open a PR that makes the plan fail when the tfvars environment doesn't match terraform.workspace (a lifecycle precondition on the database comparing an environment input with terraform.workspace), and stop choosing the workspace and tfvars pair by hand: prod applied from a pipeline or its own directory"
     kind: fix
-    feedback: "With the check in code, applying staging.tfvars in the prod workspace fails before it plans anything. Applying prod from a pipeline with its own credentials (or a directory per environment) removes the chance of choosing the pair by hand at all."
+    feedback: "With the check in code, planning staging.tfvars in the prod workspace fails the plan (a precondition is evaluated while planning, after the variables load). Even better is to remove the choice: derive the instance class from a map keyed by terraform.workspace, or apply prod from a pipeline with its own credentials (or a directory per environment), so nobody picks the pair by hand."
   - id: select-staging
     label: "terraform workspace select staging, then apply staging.tfvars"
     kind: wrong
-    feedback: "That's what Dana meant to do, and staging should get it, but it doesn't touch prod."
+    done_when: { reality_has: { type: aws_db_instance, id: orders-staging, attr: instance_class, equals: db.t4g.medium } }
+    feedback: "That's what Dana meant to do, and staging should get it, but it changes only the staging database. Prod's state and orders-prod are untouched, still a db.t4g.medium."
   - id: state-rm
     label: "terraform state rm aws_db_instance.orders so Terraform stops touching it"
     kind: destructive
-    feedback: "Terraform would forget the production database exists (and plan to create a new one next time). The state is right; the inputs were wrong."
+    done_when: { applied: { op: state-rm, address: aws_db_instance.orders } }
+    feedback: "Terraform would forget the production database exists (and plan to create a new one next time, failing on the name that already exists). The state is right; the inputs were wrong."
+  - id: destroy-prod
+    label: "terraform destroy in the prod workspace, then apply prod.tfvars to get a clean database of the right size"
+    kind: destructive
+    done_when: { applied: { op: delete, address: aws_db_instance.orders } }
+    feedback: "That deletes the production orders database and creates an empty one. The data is the one thing the class change never touched; resizing is a modify, not a rebuild."
   - id: console-resize
     label: "Resize orders-prod in the console"
     kind: wrong
-    feedback: "Fixes the symptom but goes around Terraform; prod's settings belong in prod.tfvars, applied in the prod workspace."
+    feedback: "Fixes the symptom but goes around Terraform; prod's settings belong in prod.tfvars, applied in the prod workspace, and the next plan would try to undo a hand-made change."
 
 solution_paths:
   - [prod-apply, workspace-guard]
@@ -151,10 +244,15 @@ red_herrings:
     label: "The nightly drift report"
     why: "It flags finance's cost-center tags on the exports bucket, every night since 09-12. Real drift, harmless, and nothing to do with the database's class, which Terraform itself changed."
 
+command_notes:
+  "aws rds describe-db-instances --db-instance-identifier orders-prod --query \"DBInstances[0].[DBInstanceClass,PendingModifiedValues,PreferredMaintenanceWindow]\"": "RDS's view of orders-prod: its class, anything queued for the maintenance window, and when that window is."
+  "grep -E 'instance_class|apply_immediately' staging.tfvars prod.tfvars": "What each environment's tfvars file sets for the class and for applying changes immediately."
+  "aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=ModifyDBInstance --max-results 1": "Who last modified the instance: the Terraform user on ops-01, not a person in the console."
+
 hints:
   nudge: "Terraform changed the database. Which inputs did it use, and for which environment?"
   direction: "Check the workspace on ops-01, the shell history, and what each tfvars file sets."
-  answer: "staging.tfvars was applied in the prod workspace. Apply prod.tfvars in prod, then close the gap that allowed it: a check in code that the tfvars environment matches terraform.workspace, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
+  answer: "staging.tfvars was applied in the prod workspace. Check the plan, then apply prod.tfvars in prod (no -target, -var or -lock=false). Then close the gap that allowed it: a precondition that the environment input matches terraform.workspace, ideally a workspace-keyed map so no pair is chosen by hand, and prod applied from a pipeline or its own directory rather than by hand on the shared box."
 
 analogy:
   title: "The right recipe in the wrong kitchen"
@@ -176,11 +274,14 @@ debrief:
     - "Check orders-prod's class: db.t4g.medium."
     - "See who changed it: Terraform on ops-01 at 16:41."
     - "Find why: prod workspace selected, staging.tfvars applied."
-    - "Apply prod.tfvars in prod."
-    - "Add the workspace/tfvars guard through a PR, and move prod applies off the hand-picked workspace and tfvars pair (pipeline or per-environment directory)."
+    - "Read the plan with prod.tfvars in the prod workspace: the class goes back up (and apply_immediately back to false)."
+    - "Apply prod.tfvars in prod, with no -target, -var, -refresh=false or -lock=false."
+    - "Add the workspace/tfvars guard through a PR (a precondition comparing an environment input with terraform.workspace), and remove the hand-picked pair: a workspace-keyed map for the class, or a pipeline or per-environment directory for prod."
   real_world: |
-    A precondition or validation that compares an environment variable
-    with terraform.workspace stops this before planning. Many teams also
+    A lifecycle precondition that compares an environment input with
+    terraform.workspace makes the plan fail instead of applying the wrong
+    pair. Better still is to derive the class from a map keyed by
+    terraform.workspace so there is no pair to choose. Many teams also
     give each environment its own directory or pipeline, with credentials
     only the pipeline holds for prod, so a person never chooses the pair
     by hand and a prod apply always follows a reviewed plan.

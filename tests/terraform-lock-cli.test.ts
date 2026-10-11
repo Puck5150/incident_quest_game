@@ -146,7 +146,7 @@ describe('a held state lock', () => {
     const w = world({})
     w.disk[`${DIR}/main.tf`] = VPC_TF
     expect((await w.run('apply', '-lock=false', '-auto-approve')).exitCode).toBe(0)
-    expect(w.lab.history).toEqual(['delete aws_s3_bucket.b'])
+    expect(w.lab.history).toEqual(['delete aws_s3_bucket.b (lock off)']) // no lock was held: only the run marker
   })
 
   it('argument and configuration errors come before the lock error', async () => {

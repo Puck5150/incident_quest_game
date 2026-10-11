@@ -237,7 +237,7 @@ describe('-target on apply', () => {
   it('records history like any apply and leaves done_when plans unclean', async () => {
     const w = world()
     await w.run('apply', '-auto-approve', '-target=aws_subnet.a')
-    expect(w.lab.history).toEqual(['create aws_vpc.main', 'create aws_subnet.a'])
+    expect(w.lab.history).toEqual(['create aws_vpc.main (targeted)', 'create aws_subnet.a (targeted)'])
     const plan = await worldPlan(w.ctx)
     expect(plan!.items.filter((i) => i.action !== 'noop').map((i) => i.address)).toEqual(['aws_s3_bucket.b["x"]', 'aws_s3_bucket.b["y"]', 'aws_s3_bucket.c[0]', 'aws_s3_bucket.c[1]'])
   })

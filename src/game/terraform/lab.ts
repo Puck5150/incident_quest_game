@@ -22,6 +22,7 @@ export interface SavedPlan {
   serial: number
   lineage: string
   workspace: string
+  tokens?: string[] // how the plan was made (history markers): var files, -var, -target, -refresh=false
 }
 
 export interface Lab {
@@ -48,7 +49,7 @@ export interface Lab {
   faults: Fault[]
   attempts: Map<number, number>
   savedPlans: Map<string, SavedPlan>
-  history: string[] // "OP ADDRESS" per apply step or state-writing command (state-rm, state-mv, taint, untaint, import, workspace-new/delete) that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock
+  history: string[] // "OP ADDRESS" per apply step or state-writing command (state-rm, state-mv, taint, untaint, import, workspace-new/delete) that completed, in order, across workspaces; " (lock bypassed)" appended when -lock=false skipped a held lock; apply steps also get " (targeted)", " (refresh skipped)", " (cli vars)", " (lock off)" and " (var-file NAME)" markers for how the apply was run
 }
 
 const depKey = (r: StateResource) => staticKey({ module: stepsOf(r.module), mode: r.mode, type: r.type, name: r.name })

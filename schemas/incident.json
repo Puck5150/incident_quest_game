@@ -1939,6 +1939,14 @@
                               "lock_bypassed": {
                                 "type": "boolean",
                                 "const": true
+                              },
+                              "var_file": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "deviant": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": [
@@ -2364,6 +2372,14 @@
                                     "type": "string"
                                   },
                                   "lock_bypassed": {
+                                    "type": "boolean",
+                                    "const": true
+                                  },
+                                  "var_file": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "deviant": {
                                     "type": "boolean",
                                     "const": true
                                   }
@@ -2806,6 +2822,14 @@
                                     "lock_bypassed": {
                                       "type": "boolean",
                                       "const": true
+                                    },
+                                    "var_file": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "deviant": {
+                                      "type": "boolean",
+                                      "const": true
                                     }
                                   },
                                   "required": [
@@ -3231,6 +3255,14 @@
                                           "type": "string"
                                         },
                                         "lock_bypassed": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "var_file": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "deviant": {
                                           "type": "boolean",
                                           "const": true
                                         }
@@ -3680,6 +3712,14 @@
                                     "lock_bypassed": {
                                       "type": "boolean",
                                       "const": true
+                                    },
+                                    "var_file": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "deviant": {
+                                      "type": "boolean",
+                                      "const": true
                                     }
                                   },
                                   "required": [
@@ -4105,6 +4145,14 @@
                                           "type": "string"
                                         },
                                         "lock_bypassed": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "var_file": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "deviant": {
                                           "type": "boolean",
                                           "const": true
                                         }
@@ -5373,6 +5421,14 @@
                                     "lock_bypassed": {
                                       "type": "boolean",
                                       "const": true
+                                    },
+                                    "var_file": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "deviant": {
+                                      "type": "boolean",
+                                      "const": true
                                     }
                                   },
                                   "required": [
@@ -5798,6 +5854,14 @@
                                           "type": "string"
                                         },
                                         "lock_bypassed": {
+                                          "type": "boolean",
+                                          "const": true
+                                        },
+                                        "var_file": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "deviant": {
                                           "type": "boolean",
                                           "const": true
                                         }
@@ -6240,6 +6304,14 @@
                                           "lock_bypassed": {
                                             "type": "boolean",
                                             "const": true
+                                          },
+                                          "var_file": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "deviant": {
+                                            "type": "boolean",
+                                            "const": true
                                           }
                                         },
                                         "required": [
@@ -6665,6 +6737,14 @@
                                                 "type": "string"
                                               },
                                               "lock_bypassed": {
+                                                "type": "boolean",
+                                                "const": true
+                                              },
+                                              "var_file": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "deviant": {
                                                 "type": "boolean",
                                                 "const": true
                                               }
@@ -7114,6 +7194,14 @@
                                           "lock_bypassed": {
                                             "type": "boolean",
                                             "const": true
+                                          },
+                                          "var_file": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "deviant": {
+                                            "type": "boolean",
+                                            "const": true
                                           }
                                         },
                                         "required": [
@@ -7539,6 +7627,14 @@
                                                 "type": "string"
                                               },
                                               "lock_bypassed": {
+                                                "type": "boolean",
+                                                "const": true
+                                              },
+                                              "var_file": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "deviant": {
                                                 "type": "boolean",
                                                 "const": true
                                               }
