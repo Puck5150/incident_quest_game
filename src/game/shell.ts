@@ -490,7 +490,21 @@ export class IncidentShell {
         return Object.hasOwn(l, 'plan_clean') || Object.hasOwn(l, 'plan_has')
       })
       const plan = wantsPlan ? await worldPlan(ctx) : undefined
-      return await evalPredicate(pred, { state: lab.state, reality: lab.reality, lock: lab.lock, history: lab.history, plan: () => plan, readFile: (p) => this.read(p) })
+      return await evalPredicate(pred, { state: lab.state, reality: lab.reality, lock: lab.lock, history: lab.history, plan: () => plan,
+        readFile: (p) => this.read(p),
+        listFiles: async (dir) => {
+          const out: { name: string; text: string }[] = []
+          for (const n of await bash.fs.readdir(dir).catch(() => [] as string[])) {
+            try {
+              const at = `${dir}/${n}`.replace(/\/+/g, '/')
+              if ((await bash.fs.stat(at)).isFile) out.push({ name: n, text: await bash.fs.readFile(at) })
+            } catch {
+              // unreadable: skip
+            }
+          }
+          return out
+        },
+      })
     } catch {
       return false
     }

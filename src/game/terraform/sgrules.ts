@@ -114,6 +114,15 @@ export function groupHasRule(reality: Reality, q: { group_id: string; direction:
   )
 }
 
+// Is every rule on the group (this direction; covering `port` when given, else all) from one of the allowed peers? No rule at all is true: pair with sg_rule to require one.
+export function groupOnly(reality: Reality, q: { group_id: string; direction: Direction; port?: number; protocol?: string; cidrs?: string[]; source_group_ids?: string[] }): boolean {
+  if (!Object.hasOwn(reality, realityKey('aws_security_group', q.group_id))) return false
+  const proto = normProto(q.protocol)
+  return effectiveRules(reality, q.group_id, q.direction)
+    .filter((r) => q.port === undefined || ((r.proto === '-1' || r.proto === proto) && r.from <= q.port && q.port <= r.to))
+    .every((r) => ((r.src.kind === 'cidr4' || r.src.kind === 'cidr6') && !!q.cidrs?.includes(r.src.v)) || (r.src.kind === 'sg' && !!q.source_group_ids?.includes(r.src.v)))
+}
+
 export const MIXED_SUMMARY = 'Security group rules are managed twice'
 
 // A group that writes ingress/egress inline while a separate rule resource manages rules for it: the AWS provider

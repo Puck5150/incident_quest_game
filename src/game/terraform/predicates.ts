@@ -4,7 +4,7 @@ import type { PlanResult } from './plan.ts'
 import { hasChanges } from './render.ts'
 import { realityKey, type Reality } from './refresh.ts'
 import { addressCovers } from './address.ts'
-import { groupHasRule, MIXED_SUMMARY } from './sgrules.ts'
+import { groupHasRule, groupOnly, MIXED_SUMMARY } from './sgrules.ts'
 import { listAddresses, type State } from './state.ts'
 
 import type { Leaf, Predicate } from '../../schema/scenario.ts'
@@ -17,6 +17,33 @@ export interface World {
   history: string[]
   plan(): PlanResult | undefined
   readFile(path: string): Promise<string | undefined>
+  // The files directly in a directory (name and text); needed by config_matches.
+  listFiles?(dir: string): Promise<{ name: string; text: string }[]>
+}
+
+// Remove # // and /* */ comments outside double-quoted strings, keeping newlines. One pass, linear.
+export function stripHclComments(text: string): string {
+  let out = ''
+  for (let i = 0; i < text.length; ) {
+    const c = text[i]
+    if (c === '"') {
+      let j = i + 1
+      while (j < text.length && text[j] !== '"' && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1
+      out += text.slice(i, j + 1)
+      i = j + 1
+    } else if (c === '#' || (c === '/' && text[i + 1] === '/')) {
+      while (i < text.length && text[i] !== '\n') i++
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2)
+      const stop = end < 0 ? text.length : end + 2
+      out += text.slice(i, stop).replace(/[^\n]/g, '')
+      i = stop
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
 }
 
 // The suffix on a history line whose step ran with -lock=false while the lock was held.
@@ -51,6 +78,11 @@ async function leaf(l: Leaf, w: World, plan: () => PlanResult | undefined): Prom
     return typeof obj === 'object' && obj !== null && !Array.isArray(obj) && Object.hasOwn(obj, attr) && (equals === undefined || equal(obj[attr], equals))
   }
   if (has(l, 'sg_rule')) return groupHasRule(w.reality, l.sg_rule)
+  if (has(l, 'sg_only')) return groupOnly(w.reality, l.sg_only)
+  if (has(l, 'config_matches')) {
+    const re = new RegExp(l.config_matches.matches, 'm')
+    return (await w.listFiles?.(l.config_matches.dir) ?? []).some((f) => f.name.endsWith('.tf') && re.test(stripHclComments(f.text)))
+  }
   if (has(l, 'reality_lacks')) return !Object.hasOwn(w.reality, realityKey(l.reality_lacks.type, l.reality_lacks.id))
   if (has(l, 'applied')) {
     const { op, address, lock_bypassed } = l.applied

@@ -1768,6 +1768,86 @@
                       {
                         "type": "object",
                         "properties": {
+                          "sg_only": {
+                            "type": "object",
+                            "properties": {
+                              "group_id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "direction": {
+                                "type": "string",
+                                "enum": [
+                                  "ingress",
+                                  "egress"
+                                ]
+                              },
+                              "port": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 65535
+                              },
+                              "protocol": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "cidrs": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "source_group_ids": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            },
+                            "required": [
+                              "group_id",
+                              "direction"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "sg_only"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "config_matches": {
+                            "type": "object",
+                            "properties": {
+                              "dir": {
+                                "type": "string",
+                                "pattern": "^\\/"
+                              },
+                              "matches": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "dir",
+                              "matches"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "config_matches"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
                           "applied": {
                             "type": "object",
                             "properties": {
@@ -2041,6 +2121,86 @@
                             },
                             "required": [
                               "sg_rule"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "sg_only": {
+                                "type": "object",
+                                "properties": {
+                                  "group_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "direction": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ingress",
+                                      "egress"
+                                    ]
+                                  },
+                                  "port": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535
+                                  },
+                                  "protocol": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "cidrs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "source_group_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "group_id",
+                                  "direction"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "sg_only"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "config_matches": {
+                                "type": "object",
+                                "properties": {
+                                  "dir": {
+                                    "type": "string",
+                                    "pattern": "^\\/"
+                                  },
+                                  "matches": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "dir",
+                                  "matches"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "config_matches"
                             ],
                             "additionalProperties": false
                           },
@@ -2339,6 +2499,86 @@
                             {
                               "type": "object",
                               "properties": {
+                                "sg_only": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidrs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "source_group_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_only"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "config_matches": {
+                                  "type": "object",
+                                  "properties": {
+                                    "dir": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "dir",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "config_matches"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "applied": {
                                   "type": "object",
                                   "properties": {
@@ -2612,6 +2852,86 @@
                                   },
                                   "required": [
                                     "sg_rule"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_only": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidrs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "source_group_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_only"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "config_matches": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dir": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "dir",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "config_matches"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -2917,6 +3237,86 @@
                             {
                               "type": "object",
                               "properties": {
+                                "sg_only": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidrs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "source_group_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_only"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "config_matches": {
+                                  "type": "object",
+                                  "properties": {
+                                    "dir": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "dir",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "config_matches"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "applied": {
                                   "type": "object",
                                   "properties": {
@@ -3190,6 +3590,86 @@
                                   },
                                   "required": [
                                     "sg_rule"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_only": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidrs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "source_group_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_only"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "config_matches": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dir": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "dir",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "config_matches"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -4310,6 +4790,86 @@
                             {
                               "type": "object",
                               "properties": {
+                                "sg_only": {
+                                  "type": "object",
+                                  "properties": {
+                                    "group_id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "direction": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ingress",
+                                        "egress"
+                                      ]
+                                    },
+                                    "port": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 65535
+                                    },
+                                    "protocol": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "cidrs": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "source_group_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "group_id",
+                                    "direction"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "sg_only"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "config_matches": {
+                                  "type": "object",
+                                  "properties": {
+                                    "dir": {
+                                      "type": "string",
+                                      "pattern": "^\\/"
+                                    },
+                                    "matches": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "dir",
+                                    "matches"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "config_matches"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
                                 "applied": {
                                   "type": "object",
                                   "properties": {
@@ -4583,6 +5143,86 @@
                                   },
                                   "required": [
                                     "sg_rule"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "sg_only": {
+                                      "type": "object",
+                                      "properties": {
+                                        "group_id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "direction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ingress",
+                                            "egress"
+                                          ]
+                                        },
+                                        "port": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 65535
+                                        },
+                                        "protocol": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "cidrs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "source_group_ids": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "group_id",
+                                        "direction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "sg_only"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "config_matches": {
+                                      "type": "object",
+                                      "properties": {
+                                        "dir": {
+                                          "type": "string",
+                                          "pattern": "^\\/"
+                                        },
+                                        "matches": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "dir",
+                                        "matches"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "config_matches"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -4881,6 +5521,86 @@
                                   {
                                     "type": "object",
                                     "properties": {
+                                      "sg_only": {
+                                        "type": "object",
+                                        "properties": {
+                                          "group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "direction": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ingress",
+                                              "egress"
+                                            ]
+                                          },
+                                          "port": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 65535
+                                          },
+                                          "protocol": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "cidrs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "source_group_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "group_id",
+                                          "direction"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "sg_only"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "config_matches": {
+                                        "type": "object",
+                                        "properties": {
+                                          "dir": {
+                                            "type": "string",
+                                            "pattern": "^\\/"
+                                          },
+                                          "matches": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "dir",
+                                          "matches"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "config_matches"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
                                       "applied": {
                                         "type": "object",
                                         "properties": {
@@ -5154,6 +5874,86 @@
                                         },
                                         "required": [
                                           "sg_rule"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "sg_only": {
+                                            "type": "object",
+                                            "properties": {
+                                              "group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "direction": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "ingress",
+                                                  "egress"
+                                                ]
+                                              },
+                                              "port": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 65535
+                                              },
+                                              "protocol": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "cidrs": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "source_group_ids": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "group_id",
+                                              "direction"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "sg_only"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "config_matches": {
+                                            "type": "object",
+                                            "properties": {
+                                              "dir": {
+                                                "type": "string",
+                                                "pattern": "^\\/"
+                                              },
+                                              "matches": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "dir",
+                                              "matches"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "config_matches"
                                         ],
                                         "additionalProperties": false
                                       },
@@ -5459,6 +6259,86 @@
                                   {
                                     "type": "object",
                                     "properties": {
+                                      "sg_only": {
+                                        "type": "object",
+                                        "properties": {
+                                          "group_id": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "direction": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ingress",
+                                              "egress"
+                                            ]
+                                          },
+                                          "port": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 65535
+                                          },
+                                          "protocol": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "cidrs": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "source_group_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "group_id",
+                                          "direction"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "sg_only"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "config_matches": {
+                                        "type": "object",
+                                        "properties": {
+                                          "dir": {
+                                            "type": "string",
+                                            "pattern": "^\\/"
+                                          },
+                                          "matches": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "required": [
+                                          "dir",
+                                          "matches"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "config_matches"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
                                       "applied": {
                                         "type": "object",
                                         "properties": {
@@ -5732,6 +6612,86 @@
                                         },
                                         "required": [
                                           "sg_rule"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "sg_only": {
+                                            "type": "object",
+                                            "properties": {
+                                              "group_id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "direction": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "ingress",
+                                                  "egress"
+                                                ]
+                                              },
+                                              "port": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 65535
+                                              },
+                                              "protocol": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "cidrs": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "source_group_ids": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "group_id",
+                                              "direction"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "sg_only"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "config_matches": {
+                                            "type": "object",
+                                            "properties": {
+                                              "dir": {
+                                                "type": "string",
+                                                "pattern": "^\\/"
+                                              },
+                                              "matches": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "required": [
+                                              "dir",
+                                              "matches"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "config_matches"
                                         ],
                                         "additionalProperties": false
                                       },

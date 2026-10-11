@@ -155,7 +155,7 @@ const regex = z
       ctx.addIssue({ code: 'custom', message: `invalid regex: ${(e as Error).message}`, input: r })
     }
   })
-const LeafSchema = z.union([
+export const LeafSchema = z.union([
   z.strictObject({ plan_clean: z.literal(true) }),
   z.strictObject({
     plan_has: z
@@ -180,6 +180,21 @@ const LeafSchema = z.union([
       cidr: z.string().min(1).optional(),
     }).refine((r) => r.cidr === undefined || r.source_group_id === undefined, 'give cidr or source_group_id, not both'),
   }),
+  // Every rule on the group (in this direction, and covering `port` when given) comes from one of the listed peers: no wider or extra source.
+  z.strictObject({
+    sg_only: z
+      .strictObject({
+        group_id: z.string().min(1),
+        direction: z.enum(['ingress', 'egress']),
+        port: z.number().int().min(0).max(65535).optional(),
+        protocol: z.string().min(1).optional(),
+        cidrs: z.array(z.string().min(1)).optional(),
+        source_group_ids: z.array(z.string().min(1)).optional(),
+      })
+      .refine((r) => (r.cidrs?.length ?? 0) + (r.source_group_ids?.length ?? 0) > 0, 'list at least one cidr or source group'),
+  }),
+  // Some .tf file directly in `dir` matches the regex once its comments are removed (# // and /* */, outside strings).
+  z.strictObject({ config_matches: z.strictObject({ dir: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
   z.strictObject({ applied: z.strictObject({ op: z.enum(['create', 'update', 'delete', 'import', 'forget']), address: tfAddrOrModule, lock_bypassed: z.literal(true).optional() }) }),
   z.strictObject({ file_contains: z.strictObject({ path: z.string().regex(/^\//, 'an absolute path'), matches: regex }) }),
 ])
@@ -875,9 +890,11 @@ export const ScenarioSchema = z
           const leaves = 'all' in p ? p.all : 'any' in p ? p.any : [p]
           for (const l of leaves) {
             const x = 'not' in l ? l.not : l
-            if (!('sg_rule' in x)) continue
-            for (const [field, id] of [['group_id', x.sg_rule.group_id], ['source_group_id', x.sg_rule.source_group_id]] as const)
-              if (id !== undefined && !known.has(`aws_security_group:${id}`)) issue(`sg_rule ${field} "${id}" is not a security group in state or cloud.add`, k === 0 ? ['actions', i, 'done_when'] : ['stages', k - 1, 'actions', i, 'done_when'])
+            const r = 'sg_rule' in x ? x.sg_rule : 'sg_only' in x ? x.sg_only : undefined
+            if (!r) continue
+            const peers: [string, string | undefined][] = [['group_id', r.group_id], ['source_group_id', 'source_group_id' in r ? r.source_group_id : undefined], ...(('source_group_ids' in r ? r.source_group_ids : undefined) ?? []).map((v) => ['source_group_ids', v] as [string, string])]
+            for (const [field, id] of peers)
+              if (id !== undefined && !known.has(`aws_security_group:${id}`)) issue(`${'sg_rule' in x ? 'sg_rule' : 'sg_only'} ${field} "${id}" is not a security group in state or cloud.add`, k === 0 ? ['actions', i, 'done_when'] : ['stages', k - 1, 'actions', i, 'done_when'])
           }
         }),
       )
