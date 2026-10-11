@@ -43,7 +43,7 @@ ${extra.replace(/^/gm, '  ')}  }
 }
 EOF`
 const MIGRATE = 'terraform init -migrate-state -force-copy'
-const NONE = { 'import-resources': false, 'apply-anyway': false, 'delete-and-recreate': false }
+const NONE = { 'import-resources': false, 'weak-backend': false, 'apply-anyway': false, 'delete-and-recreate': false }
 const FIXED = { ...NONE, 'import-resources': true }
 
 describe('terraform-state-lost on the simulator', () => {
@@ -123,10 +123,11 @@ describe('terraform-state-lost on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 
-  it('(c1) weak backends are not the fix: unencrypted, no locking, or migrating with a no', async () => {
-    for (const extra of ['  use_lockfile = true\n', '  encrypt = true\n']) {
+  it('(c1) weak backends are not the fix and get their own wrong action: unencrypted, no locking, or comment-spoofed settings', async () => {
+    const WEAK = { ...NONE, 'weak-backend': true }
+    for (const extra of ['  use_lockfile = true\n', '  encrypt = true\n', '  use_lockfile = true\n  encrypt = false # encrypt = true\n', '  # use_lockfile = true\n  encrypt = true\n', '  encrypt = true\n  /* use_lockfile = true */\n']) {
       const { sh } = await play('cd ~/infra', ...IMPORTS, BACKEND(extra), MIGRATE)
-      expect(await detectedAll(sh), extra).toEqual(NONE)
+      expect(await detectedAll(sh), extra).toEqual(WEAK)
     }
     const declined = await play('cd ~/infra', ...IMPORTS, BACKEND(), 'echo no | terraform init -migrate-state')
     expect((await declined.sh.run('terraform plan', atStage(scenario, 0), new Set())).output).toContain('to add')
@@ -134,6 +135,16 @@ describe('terraform-state-lost on the simulator', () => {
     // a backend declared but never initialised: the state is still the local file
     const noInit = await play('cd ~/infra', ...IMPORTS, BACKEND())
     expect(await detectedAll(noInit.sh)).toEqual(NONE)
+  })
+
+  it('(c2) the backend may live in any .tf file: versions.tf, main.tf or backend.tf; a good one in a comment does not count', async () => {
+    const BLOCK = 'terraform {\n  backend "s3" {\n    bucket = "acme-tf-state"\n    key = "api/terraform.tfstate"\n    encrypt = true\n    use_lockfile = true\n  }\n}\n'
+    for (const [name, how] of [['versions.tf', '>'], ['main.tf', '>>'], ['backend.tf', '>']] as const) {
+      const { sh } = await play('cd ~/infra', ...IMPORTS, `printf '${BLOCK.replace(/\n/g, '\\n')}' ${how} ${name}`, MIGRATE)
+      expect(await detectedAll(sh), name).toEqual(FIXED)
+    }
+    const commented = await play('cd ~/infra', ...IMPORTS, `printf '${BLOCK.replace(/^/gm, '# ').replace(/\n/g, '\\n')}' > backend.tf`, MIGRATE)
+    expect(await detectedAll(commented.sh)).toEqual(NONE)
   })
 
   it('(g) after the fix, a further apply is a no-op', async () => {
