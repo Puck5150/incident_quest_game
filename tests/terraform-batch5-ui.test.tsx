@@ -91,7 +91,7 @@ describe('terraform-count-index-shift through the UI', () => {
 
   it('ideal path: read the plan, state and file, switch to for_each with moved blocks, apply; a remount replays the same transcript', async () => {
     const g = await mount('terraform-count-index-shift')
-    await g.run('terraform plan', 'terraform state list', 'cat queues.tf')
+    await g.run('terraform plan', 'terraform state list', 'cat queues.tf', 'aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/returns --attribute-names ApproximateNumberOfMessages')
     await waitFor(() => expect(output()).toMatch(/Plan: 2 to add, 0 to change, 3 to destroy\./))
     g.declare(ROOT)
     await g.run(SED, MOVED, 'terraform plan', 'terraform apply -auto-approve')
