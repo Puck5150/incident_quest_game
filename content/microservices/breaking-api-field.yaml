@@ -70,6 +70,10 @@ actions:
     label: "Release catalog-api again returning both price and price_money; remove price only after app 4.x usage drops off (expand, then contract)"
     kind: fix
     feedback: "Old apps read price and new apps read price_money, so both work. Removing price later is a planned change once nobody depends on it."
+  - id: contract-tests
+    label: "Add consumer-driven contract tests in catalog-api's CI for every supported client version (app 4.x reads price, 5.x reads price_money), plus a written deprecation policy with a sunset date for price"
+    kind: fix
+    feedback: "The release passed because nothing in CI represented app 4.x. A contract test per supported client would have failed this change, and a sunset date turns \"remove it later\" into a plan."
   - id: force-update
     label: "Force every user to update to app 5"
     kind: wrong
@@ -84,7 +88,7 @@ actions:
     feedback: "Customers are shown one price and charged another, which is a trust and consumer-law problem, not a display glitch."
 
 solution_paths:
-  - [restore-field]
+  - [restore-field, contract-tests]
 
 key_evidence: [price-gone, change, old-clients]
 
