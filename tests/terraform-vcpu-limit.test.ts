@@ -222,4 +222,93 @@ describe('terraform-vcpu-limit on the simulator', () => {
     const seen = evidenceSeen(scenario, log)
     for (const t of scenario.key_evidence) expect(seen.has(t), t).toBe(true)
   })
+  describe('finish-apply and right-size persist once earned (history and file based)', () => {
+    const done = async (taken: Set<string>, ...after: string[]) => {
+      const { sh } = await failedApply()
+      expect((await run(sh, 'terraform apply -auto-approve', taken)).exitCode).toBe(0)
+      for (const l of after) await run(sh, l, taken)
+      return sh
+    }
+
+    it('finish-apply survives an unrelated state change before the cause is named', async () => {
+      const { sh } = await failedApply()
+      await run(sh, 'terraform apply -auto-approve', QUOTA)
+      await run(sh, 'terraform state rm aws_instance.agent', QUOTA)
+      expect(await sh.doneWhen({ plan_clean: true })).toBe(false)
+      expect((await detectedAll(sh))['finish-apply']).toBe(true)
+    })
+
+    it('right-size survives an unrelated state change', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform apply -auto-approve')
+      await run(sh, 'terraform state rm aws_instance.agent')
+      expect((await detectedAll(sh))['right-size']).toBe(true)
+    })
+
+    it('state-edit only, nothing applied, credits neither', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform state pull')
+      expect(await detectedAll(sh)).toEqual(NONE)
+    })
+
+    it('the destroy trap never credits finish-apply or right-size, even after a recreate', async () => {
+      for (const taken of [QUOTA, new Set<string>()]) {
+        const { sh } = await play('cd ~/loadtest-infra', 'terraform apply -auto-approve', 'terraform destroy -auto-approve')
+        if (taken.size === 0) await run(sh, SIZE('c5.12xlarge'))
+        await run(sh, 'terraform apply -auto-approve', taken)
+        const d = await detectedAll(sh)
+        expect(d['finish-apply']).toBe(false)
+        expect(d['right-size']).toBe(false)
+      }
+    })
+
+    it('a later destroy of one dependency removes the credit (sticky trade-off is for the database, not the network)', async () => {
+      const sh = await done(QUOTA, 'terraform destroy -auto-approve')
+      expect((await detectedAll(sh))['finish-apply']).toBe(false)
+    })
+
+    it('shrink, apply, raise the quota, resize back and apply again: still not the fix (created small)', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform apply -auto-approve')
+      await run(sh, "sed -i 's/c5\\.12xlarge/c5.24xlarge/' compute.tf", QUOTA)
+      expect((await run(sh, 'terraform apply -auto-approve', QUOTA)).exitCode).toBe(0)
+      const d = await detectedAll(sh)
+      expect(d['finish-apply']).toBe(false)
+    })
+
+    it('stopgap flags on the applying run credit neither', async () => {
+      for (const flags of ['-target=aws_instance.loadgen', '-lock=false', '-refresh=false', '-var=x=1']) {
+        const { sh } = await failedApply()
+        await run(sh, `terraform apply -auto-approve ${flags}`, QUOTA)
+        expect((await detectedAll(sh))['finish-apply'], flags).toBe(false)
+        const { sh: s2 } = await failedApply()
+        await run(s2, SIZE('c5.12xlarge'))
+        await run(s2, `terraform apply -auto-approve ${flags}`)
+        expect((await detectedAll(s2))['right-size'], flags).toBe(false)
+      }
+    })
+
+    it('shrinking, applying, then editing the file back to full size is not the quota fix', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform apply -auto-approve', QUOTA)
+      await run(sh, "sed -i 's/c5\\.12xlarge/c5.24xlarge/' compute.tf", QUOTA)
+      expect((await detectedAll(sh))['finish-apply']).toBe(false)
+    })
+
+    it('resizing back up in place is limited by the quota like a create: without the increase the second apply fails and nothing is credited', async () => {
+      const { sh } = await failedApply()
+      await run(sh, SIZE('c5.12xlarge'))
+      await run(sh, 'terraform apply -auto-approve')
+      await run(sh, "sed -i 's/c5\\.12xlarge/c5.24xlarge/' compute.tf")
+      const up = await run(sh, 'terraform apply -auto-approve')
+      expect(up.exitCode).toBe(1)
+      expect(up.output).toContain(LIMIT)
+      expect((await detectedAll(sh))['finish-apply']).toBe(false)
+    })
+  })
+
 })

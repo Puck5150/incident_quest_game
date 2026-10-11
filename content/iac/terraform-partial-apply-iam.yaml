@@ -472,17 +472,18 @@ actions:
       resource: "arn:aws:rds:us-east-1:123456789012:db:orders-db"
     feedback: "aws iam put-role-policy replaces the whole document of a policy with the same name. Reusing terraform-deploy overwrites the state-bucket and network statements the pipeline depends on with whatever you typed, and the next plan or apply fails somewhere else. Add the new permission as a second inline policy with its own name and leave the working one alone."
   - id: finish-apply
-    label: "Run terraform apply again so it creates only the missing database"
+    label: "Run a plain terraform apply (no -target, -var, -refresh=false or -lock=false) so it creates only the missing database"
     kind: fix
     done_when:
       all:
-        - state_has: aws_db_instance.orders
-        - plan_clean: true
+        - applied: { op: create, address: aws_db_instance.orders }
+        - not: { applied: { op: create, address: aws_db_instance.orders, deviant: true } }
+        - not: { applied: { op: state-rm, address: aws_db_instance.orders } }
         - not: { applied: { op: delete, address: aws_vpc.main } }
         - not: { applied: { op: delete, address: aws_security_group.db } }
         - not: { applied: { op: delete, address: aws_subnet.data_a } }
         - not: { applied: { op: delete, address: aws_subnet.data_b } }
-    feedback: "The apply created orders-db and nothing else; the network from this morning's run was left alone. The plan is clean: what's in AWS, in state and in the code agree."
+    feedback: "The apply created orders-db and nothing else; the network from this morning's run was left alone. The plan is clean: what's in AWS, in state and in the code agree. Targeting the database, overriding values with -var, or skipping the refresh or the lock are ways around the safeguards, not the fix."
   - id: destroy-and-retry
     label: "terraform destroy what the failed run created, then apply everything again from scratch"
     kind: destructive
@@ -511,7 +512,7 @@ evidence_labels:
 hints:
   nudge: "Before deciding anything, find out what this morning's run actually left behind. Ask Terraform."
   direction: "terraform state list and terraform plan show what exists and what's left. Then read the error box: which resource does \"with\" name, and what does AWS say was refused?"
-  answer: "The network was created and is in state; the database create was denied because orders-ci-deploy has no rds:CreateDBInstance. Grant exactly that and no more: a new inline policy (a name other than terraform-deploy, which put-role-policy would overwrite) allowing only rds:CreateDBInstance (rds:AddTagsToResource is also fine) on arn:aws:rds:us-east-1:123456789012:db:orders-db, in every statement, with your platform-admin profile and the document inline: aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"rds:CreateDBInstance\"],\"Resource\":\"arn:aws:rds:us-east-1:123456789012:db:orders-db\"}]}'. Not rds:* and not Resource \"*\". Then terraform apply again: 1 to add."
+  answer: "The network was created and is in state; the database create was denied because orders-ci-deploy has no rds:CreateDBInstance. Grant exactly that and no more: a new inline policy (a name other than terraform-deploy, which put-role-policy would overwrite) allowing only rds:CreateDBInstance (rds:AddTagsToResource is also fine) on arn:aws:rds:us-east-1:123456789012:db:orders-db, in every statement, with your platform-admin profile and the document inline: aws iam put-role-policy --profile platform-admin --role-name orders-ci-deploy --policy-name orders-rds --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"rds:CreateDBInstance\"],\"Resource\":\"arn:aws:rds:us-east-1:123456789012:db:orders-db\"}]}'. Not rds:* and not Resource \"*\". Then a plain terraform apply again (no -target, -var, -refresh=false or -lock=false): 1 to add."
 
 analogy:
   title: "The flat-pack delivery"
@@ -541,7 +542,7 @@ debrief:
     - "aws sts get-caller-identity: you are assumed-role/orders-ci-deploy, the role named in the error. Its policy has rds:Describe* but no rds:CreateDBInstance."
     - "Read the role's existing policy: it has the network and state-bucket statements and rds:Describe*. Leave it alone: put-role-policy replaces a policy that has the same name."
     - "Grant only what the error named, with your admin profile and the document inline, as a new policy: rds:CreateDBInstance on arn:aws:rds:us-east-1:123456789012:db:orders-db. Not rds:* and not Resource \"*\"."
-    - "terraform apply again: Resources: 1 added. The plan is clean."
+    - "A plain terraform apply again, with no -target, -var, -refresh=false or -lock=false: Resources: 1 added. The plan is clean."
   real_world: |
     A failed apply is not a transaction. Whatever succeeded stays, in the
     cloud and in state; the next plan shows exactly what's left. The fix
