@@ -330,6 +330,7 @@ simulated Linux host. What that means for an incident:
   check at the moment the command runs (the terminal reads the file through the shell).
   The engine never credits such an action by itself, and the button is unchanged. Script the
   command's output with a `match_regex` terminal command so it prints the same either way.
+  The typed line must also name that file (a word or `--flag=value` that resolves to `path` from the shell's current directory). The validator checks the gate is solvable (a `file` action's `after` in the same stage passes it) and that a scripted `match_regex` terminal command, with an `example`, also matches the action's typed line.
 - **Hosts.** The prompt's host is where the player starts. Hosts in scripted
   `ssh HOST ...` lines exist: `ssh HOST cmd` runs there, `ssh HOST` logs in
   until `exit`. Local scripts (`./order-sync`) exist and answer from their

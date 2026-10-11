@@ -47,6 +47,11 @@ describe('gcp-scan-ingest-major perimeter stage', () => {
     expect(taken()).not.toContain('ingress-rule')
     fireEvent.click(screen.getByRole('button', { name: /Edit ingress\.yaml into the perimeter/ }))
     await waitFor(() => expect(taken()).toContain('ingress-file'))
+    await type('cd /tmp')
+    await type(APPLY) // right file name, wrong directory: ingress.yaml here is not the file
+    expect(output()).toMatch(/does not count it as the fix/)
+    expect(taken()).not.toContain('ingress-rule')
+    await type('cd ~')
     await type(APPLY)
     await waitFor(() => expect(taken()).toContain('ingress-rule'))
     // Broadening the file again and re-applying cannot un-take it, but a broad apply before narrowing never counted.

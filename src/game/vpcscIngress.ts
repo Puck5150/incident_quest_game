@@ -46,7 +46,8 @@ function policy(p: unknown): string | undefined {
   return canon({ identity: identity!, source: source!, service: service!, method: method!, target: target! })
 }
 
-export function ingressPolicyOk(text: string, spec: IngressSpec): boolean {
+export function ingressPolicyOk(raw: string, spec: IngressSpec): boolean {
+  const text = raw.replace(/^\uFEFF/, '') // a UTF-8 byte-order mark is not part of the document
   if (text.length > MAX_INGRESS_FILE) return false
   try {
     const docs = parseAllDocuments(text)

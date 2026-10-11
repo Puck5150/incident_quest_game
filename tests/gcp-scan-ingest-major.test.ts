@@ -91,3 +91,35 @@ describe('vpcsc ingress helper edge cases', () => {
     expect(ingressPolicyOk(good, spec)).toBe(true)
   })
 })
+
+describe('requires_file gate: generic helpers and validation', () => {
+  it('strips a UTF-8 BOM before parsing', async () => {
+    const { ingressPolicyOk } = await import('../src/game/vpcscIngress.ts')
+    expect(ingressPolicyOk('﻿' + good, fix.ingress_policy!)).toBe(true)
+  })
+  it('the typed path must resolve to the gated file from the shell cwd', async () => {
+    const { commandNamesFile } = await import('../src/game/fileFix.ts')
+    const path = '/home/you/ingress.yaml'
+    const n = (c: string, cwd = '/home/you') => commandNamesFile(c, path, cwd, '/home/you')
+    expect(n('x --set-ingress-policies=ingress.yaml')).toBe(true)
+    expect(n('x --set-ingress-policies ./ingress.yaml')).toBe(true)
+    expect(n('x --set-ingress-policies=~/ingress.yaml', '/tmp')).toBe(true)
+    expect(n('x --set-ingress-policies "/home/you/ingress.yaml"', '/tmp')).toBe(true)
+    expect(n('x --set-ingress-policies=ingress.yaml', '/tmp')).toBe(false)
+    expect(n('x --set-ingress-policies=../ingress.yaml', '/home/you/sub')).toBe(true)
+    expect(n('x --set-ingress-policies=other.yaml')).toBe(false)
+  })
+  it('validation: the gate must be solvable and have a scripted twin', async () => {
+    const { ScenarioSchema } = await import('../src/schema/scenario.ts')
+    const raw = JSON.parse(JSON.stringify(sc))
+    const st = raw.stages[0]
+    const msgs = (r: unknown) => ScenarioSchema.safeParse(r).error?.issues.map((i) => i.message) ?? []
+    expect(msgs(raw).filter((m) => /requires_file/.test(m))).toEqual([])
+    const noAfter = JSON.parse(JSON.stringify(raw))
+    noAfter.stages[0].actions.find((x: { id: string }) => x.id === 'ingress-file').file.after = '- {}\n'
+    expect(msgs(noAfter).join('|')).toMatch(/no file action in this stage has an `after` that passes/)
+    const noTwin = JSON.parse(JSON.stringify(raw))
+    noTwin.stages[0].terminal.commands = st.terminal.commands.filter((c: { match_regex?: string }) => !c.match_regex)
+    expect(msgs(noTwin).join('|')).toMatch(/requires_file needs a scripted terminal command/)
+  })
+})

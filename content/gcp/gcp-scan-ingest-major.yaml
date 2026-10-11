@@ -307,7 +307,7 @@ stages:
               - storage.googleapis.com
               - bigquery.googleapis.com
         - match_regex: "^gcloud access-context-manager perimeters (?:dry-run )?update pr_datalake .*--set-ingress-policies"
-          example: "gcloud access-context-manager perimeters dry-run update pr_datalake --policy=518273645190 --set-ingress-policies=ingress.yaml"
+          example: "gcloud access-context-manager perimeters update pr_datalake --policy=518273645190 --set-ingress-policies=ingress.yaml"
           output: |
             Updated [pr_datalake].
     logs:

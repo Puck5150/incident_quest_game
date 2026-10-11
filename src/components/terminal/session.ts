@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Action, Scenario } from '../../schema/scenario.ts'
-import { fileFixed } from '../../game/fileFix.ts'
-import { ingressPolicyOk } from '../../game/vpcscIngress.ts'
+import { commandNamesFile, fileFixed, gateOk } from '../../game/fileFix.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
 import { actionFor, actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
@@ -224,8 +223,8 @@ export function useTerminalSession(
           const sh = await getShell()
           const text = await sh.read(need.path)
           let note = ''
-          if (text === undefined || !ingressPolicyOk(text, need.ingress_policy))
-            note = `(It ran, but ${need.path.split('/').pop()} is not exactly the merged narrow rule on disk right now, so the game does not count it as the fix.)`
+          if (text === undefined || !commandNamesFile(cmd, need.path, sh.cwd, sh.home) || !gateOk(need, text))
+            note = `(It ran, but ${need.path.split('/').pop()} does not satisfy this fix's file check right now (or the command does not point at it), so the game does not count it as the fix.)`
           else if (!namedRootCause(scenario, latest.current)) note = NOT_YET
           else if (!actionsTaken(latest.current).has(gated.id) && !sent.current.has(gated.id)) {
             sent.current.add(gated.id)

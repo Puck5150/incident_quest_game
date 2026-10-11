@@ -11,8 +11,7 @@ import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { asciiLower, endpointPolicyVerdict, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
 import { filesOnDisk } from '../game/paths.ts'
-import { fileFixed } from '../game/fileFix.ts'
-import { ingressPolicyOk } from '../game/vpcscIngress.ts'
+import { fileFixed, gateOk } from '../game/fileFix.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
 import { isRegistrySource, normalizeRegistry, REGISTRY_SOURCE, registryDir } from '../game/terraform/layout.ts'
@@ -743,7 +742,19 @@ export const ScenarioSchema = z
         if (act.match_regex === undefined) issue('requires_file needs a match_regex', at())
         const initial = filesOnDisk(atStage(s, k)).get(act.requires_file.path)
         if (initial === undefined) issue(`${act.requires_file.path} isn't on disk at this stage`, at('path'))
-        else if (ingressPolicyOk(initial, act.requires_file.ingress_policy)) issue('the file already passes before any fix', at('path'))
+        else if (gateOk(act.requires_file, initial)) issue('the file already passes before any fix', at('path'))
+        const rf = act.requires_file
+        // Solvable: some file action writes a version of that file that passes the gate.
+        if (!part.actions.some((o) => o.file?.path === rf.path && gateOk(rf, o.file.after))) issue('no file action in this stage has an `after` that passes the requires_file check', at())
+        // Consistent: a scripted terminal command prints for the same typed line, so it behaves the same whether or not it counts.
+        let rx: RegExp | undefined
+        try {
+          rx = act.match_regex === undefined ? undefined : new RegExp(act.match_regex)
+        } catch {
+          rx = undefined
+        }
+        if (rx && !(part.terminal?.commands ?? []).some((c) => c.match_regex !== undefined && c.example !== undefined && rx.test(c.example.trim().replace(/\s+/g, ' ')) && new RegExp(c.match_regex).test(c.example.trim().replace(/\s+/g, ' '))))
+          issue('requires_file needs a scripted terminal command (match_regex with an example) that also matches the action\'s typed line', at())
       }),
     )
 

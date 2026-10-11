@@ -116,10 +116,10 @@ hypotheses:
 
 actions:
   - id: cap-instances
-    label: "gcloud run services update signup-api --region us-central1 --max-instances 20 (any cap of 16-40 keeps 10 connections per instance under the limit and leaves room for the launch's peak demand), and set the same cap in the IaC that owns the service"
+    label: "gcloud run services update signup-api --region us-central1 --max-instances 20 (a cap of 16-40 leaves room for the launch's peak; the connection budget only holds together with the right-sized pool, because the shipped pool of 20 per instance already breaks 500 at 26 instances), and set the same cap in the IaC that owns the service"
     kind: fix
-    match_regex: "^gcloud run services update signup-api(?: --region[= ]us-central1)? --max(?:-instances)?[= ](?:1[6-9]|2[0-9]|3[0-9]|40)(?: --region[= ]us-central1)?$"
-    feedback: "Put the same limit in the Terraform or service YAML that owns signup-api, or the next apply reverts it. With the pool at 10 connections per instance, 20 instances × 10 = 200, well under the 500 limit; a cap much lower than 16 would throttle a launch that wanted 64 with room for admin and migrations. Cloud Run's docs list limiting database connections as a reason to set max instances."
+    match_regex: "^gcloud run services update signup-api(?: --region[= ]us-central1)? --max-instances[= ](?:1[6-9]|2[0-9]|3[0-9]|40)(?: --region[= ]us-central1)?$"
+    feedback: "Put the same limit in the Terraform or service YAML that owns signup-api, or the next apply reverts it. Once the pool is right-sized to 5+5 (10 per instance), 20 instances × 10 = 200, well under the 500 limit. The cap alone is not enough: at the shipped 20 per instance, 26 or more instances already exceed 500. A cap much lower than 16 would throttle a launch that wanted 64 with room for admin and migrations. Cloud Run's docs list limiting database connections as a reason to set max instances."
   - id: right-size-pool
     label: "Lower the pool to pool_size=5, max_overflow=5 and document the budget: max instances × per-instance max < max_connections"
     kind: fix
