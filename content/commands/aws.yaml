@@ -374,6 +374,16 @@
     - { command: "aws rds describe-events --source-identifier NAME --source-type db-instance", note: "Recent events such as failovers." }
   docs: { title: "AWS CLI: describe-db-instances", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/rds/describe-db-instances.html" }
 
+- id: aws-rds-describe-snapshots
+  match: "^aws rds describe-db-snapshots"
+  summary: "Shows RDS DB snapshots: status, source instance, and whether each one is encrypted."
+  parts:
+    - { token: "--db-snapshot-identifier NAME", meaning: "Only this snapshot." }
+  why: "A snapshot copy made with a KMS key reports Encrypted = true once it is available; a restore from it gives an encrypted instance."
+  alternatives:
+    - { command: "aws rds describe-db-snapshots --db-instance-identifier NAME", note: "Every snapshot of one instance." }
+  docs: { title: "AWS CLI: describe-db-snapshots", url: "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/rds/describe-db-snapshots.html" }
+
 - id: aws-route53-health-status
   match: "^aws route53 get-health-check-status"
   summary: "Shows what each Route 53 health checker region currently reports for a health check."

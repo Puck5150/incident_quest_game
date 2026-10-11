@@ -130,7 +130,7 @@ hypotheses:
 
 actions:
   - id: revert-and-migrate
-    label: "Revert storage_encrypted in this PR, and plan a migration: snapshot, copy the snapshot with encryption, restore a new encrypted instance, cut applications over in a maintenance window, then bring the new instance into Terraform"
+    label: "Revert storage_encrypted in this PR so CI can go green (an interim step only: the database is still unencrypted and the security requirement is still open)"
     kind: fix
     done_when:
       all:
@@ -158,7 +158,7 @@ actions:
             prevent_destroy = true
           }
         }
-    feedback: "The plan is clean again. The supported route to encryption (an encrypted snapshot copy restored to a new instance) moves the data, and the cutover is planned instead of an accidental delete."
+    feedback: "The plan is clean again and CI can go green, but this only removes the failing change: orders-db is still unencrypted and the requirement security asked for is not met. The supported route to encryption is an encrypted snapshot copy restored to a new instance, with a planned cutover. That is the next job."
   - id: remove-guard
     label: "Remove prevent_destroy for this PR and apply"
     kind: destructive
@@ -189,7 +189,7 @@ evidence_labels:
 hints:
   nudge: "Why would turning on a setting need anything to be destroyed?"
   direction: "Check whether storage_encrypted can change on an existing instance, and what Terraform does when it can't."
-  answer: "storage_encrypted forces replacement, and prevent_destroy rightly refuses. Revert it and migrate through an encrypted snapshot copy and a planned cutover."
+  answer: "storage_encrypted forces replacement, and prevent_destroy rightly refuses. Revert it only to unblock the PR, then do the real migration: snapshot, copy the snapshot with a KMS key to encrypt it, restore a new instance from the encrypted copy, cut over in a window, and bring the new instance into Terraform."
 
 analogy:
   title: "You can't fit a lock to a vault after it's built"
@@ -213,7 +213,8 @@ debrief:
     - "Read the error: prevent_destroy blocked a destroy."
     - "Find why: the failed plan marks storage_encrypted false -> true \"# forces replacement\" on aws_db_instance.orders, and the provider docs excerpt lists storage_encrypted as \"Forces new resource\"."
     - "Confirm the live instance is unencrypted; there's no in-place switch."
-    - "Revert, and plan an encrypted-snapshot migration with a cutover."
+    - "Revert in this PR as an interim step (the plan is clean, the database is still unencrypted)."
+    - "Migrate: snapshot, encrypted copy, restore to a new instance, cutover, import the new instance."
   real_world: |
     Keep prevent_destroy on stateful resources, and read every "forces
     replacement" in a plan as "this deletes it". Provider docs and the plan
@@ -238,4 +239,104 @@ sources:
     url: "https://github.com/hashicorp/terraform-provider-aws/blob/main/internal/service/rds/instance.go"
     retrieved: 2026-10-02
 command_notes:
+  "aws rds describe-db-snapshots --db-snapshot-identifier orders-db-encrypted": "Whether the encrypted copy exists yet, is available and reports Encrypted = true."
   "git diff main -- db.tf": "The only change is storage_encrypted, which an existing RDS instance can't change in place, so Terraform plans a replacement."
+
+stages:
+  - id: encrypt-for-real
+    update: |
+      The PR is merged with the revert and CI is green. Security's review the
+      next morning: orders-db still reports StorageEncrypted = false, and
+      the requirement (encryption at rest on every database) is due by the
+      end of the month. The change window is Saturday 02:00-04:00. Prepare
+      the migration with the names the runbook uses: snapshot
+      orders-db-pre-encrypt, encrypted copy orders-db-encrypted (KMS alias
+      alias/orders-db), new instance orders-db-v2.
+    diagram_status: {}
+    files:
+      - path: "Amazon RDS: encrypting an existing instance (excerpt)"
+        evidence: encrypted-copy-route
+        content: |
+          You can't turn encryption on for an existing unencrypted DB instance.
+          To encrypt one: create a snapshot, copy the snapshot with a KMS key
+          (the copy is encrypted), then restore a new DB instance from the
+          encrypted copy. A snapshot restored without that copy produces an
+          unencrypted instance again.
+    terminal:
+      commands:
+        - match_regex: "^aws rds describe-db-snapshots --db-snapshot-identifier orders-db-encrypted$"
+          example: "aws rds describe-db-snapshots --db-snapshot-identifier orders-db-encrypted"
+          when_actions: [copy-encrypted]
+          output: |
+            {
+                "DBSnapshots": [
+                    {
+                        "DBSnapshotIdentifier": "orders-db-encrypted",
+                        "DBInstanceIdentifier": "orders-db",
+                        "Status": "available",
+                        "Encrypted": true,
+                        "KmsKeyId": "arn:aws:kms:us-east-1:123456789012:key/orders-db"
+                    }
+                ]
+            }
+        - match_regex: "^aws rds describe-db-snapshots --db-snapshot-identifier orders-db-encrypted$"
+          example: "aws rds describe-db-snapshots --db-snapshot-identifier orders-db-encrypted"
+          output: |
+            An error occurred (DBSnapshotNotFound) when calling the DescribeDBSnapshots operation: DBSnapshot not found: orders-db-encrypted
+    hypotheses:
+      - id: needs-encrypted-copy
+        text: "An existing RDS instance can't be encrypted in place. The data has to go through a snapshot, an encrypted copy of it, and a restore to a new instance, then a cutover."
+        correct: true
+      - id: toggle-later
+        text: "Encryption can be switched on for orders-db in the console during the window, with a short restart."
+        feedback: "There is no such setting: RDS only encrypts at creation, which is why the Terraform plan wanted to replace the instance."
+      - id: terraform-only
+        text: "Re-applying the original PR (storage_encrypted = true) with prevent_destroy lifted during the window is the migration."
+        feedback: "That replaces the instance with a new, empty, encrypted one: Terraform destroys the old database and creates another from nothing. The data has to be restored from an encrypted snapshot copy."
+    actions:
+      - id: create-snapshot
+        label: "aws rds create-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-pre-encrypt"
+        kind: fix
+        match_regex: "^aws rds create-db-snapshot (?=.*--db-instance-identifier orders-db(\\s|$))(?=.*--db-snapshot-identifier orders-db-pre-encrypt(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+        feedback: "A manual snapshot of the unencrypted instance exists. It is also your rollback point: nothing has changed on orders-db."
+      - id: copy-encrypted
+        label: "aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id alias/orders-db"
+        kind: fix
+        match_regex: "^aws rds copy-db-snapshot (?=.*--source-db-snapshot-identifier orders-db-pre-encrypt(\\s|$))(?=.*--target-db-snapshot-identifier orders-db-encrypted(\\s|$))(?=.*--kms-key-id [^\\s]+)(?!.*--region[ =](?!us-east-1(\\s|$)))"
+        feedback: "The copy is encrypted with the KMS key. Check it is available before restoring from it."
+      - id: restore-encrypted
+        label: "aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-encrypted"
+        kind: fix
+        match_regex: "^aws rds restore-db-instance-from-db-snapshot (?=.*--db-instance-identifier orders-db-v2(\\s|$))(?=.*--db-snapshot-identifier orders-db-encrypted(\\s|$))(?!.*--region[ =](?!us-east-1(\\s|$)))"
+        feedback: "orders-db-v2 is being created encrypted, from the data in the snapshot. orders-db keeps serving. Next, in the window: stop writes, take a last snapshot and restore from its encrypted copy (or replay changes), cut the applications over, import orders-db-v2 into Terraform with storage_encrypted = true and prevent_destroy, and retire the old instance only after the checks pass."
+      - id: restore-unencrypted
+        label: "aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db-v2 --db-snapshot-identifier orders-db-pre-encrypt"
+        kind: wrong
+        match_regex: "^aws rds restore-db-instance-from-db-snapshot (?=.*--db-instance-identifier orders-db-v2(\\s|$))(?=.*--db-snapshot-identifier orders-db-pre-encrypt(\\s|$))"
+        feedback: "A restore from the unencrypted snapshot gives an unencrypted instance. Copy the snapshot with a KMS key first and restore from the copy."
+      - id: delete-old-first
+        label: "aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot (to clear the way for the encrypted one)"
+        kind: destructive
+        match_regex: "^aws rds delete-db-instance (?=.*--db-instance-identifier orders-db(\\s|$))(?=.*--skip-final-snapshot)"
+        feedback: "That deletes the production database with no final snapshot before anything has been restored, verified or cut over. The new instance comes after the checks, and the old one is retired last."
+    solution_paths:
+      - [create-snapshot, copy-encrypted, restore-encrypted]
+    key_evidence: [encrypted-copy-route]
+    evidence_labels:
+      encrypted-copy-route: "An unencrypted instance is encrypted by copying a snapshot with a KMS key and restoring from the copy"
+    hints:
+      nudge: "The Terraform plan could not turn encryption on in place. What does AWS offer instead?"
+      direction: "Read the RDS excerpt: snapshot, copy with a KMS key, restore from the copy. Verify the copy with describe-db-snapshots."
+      answer: "Create the snapshot orders-db-pre-encrypt, copy it to orders-db-encrypted with --kms-key-id alias/orders-db, and restore orders-db-v2 from the encrypted copy. Cut over in the window and import the new instance into Terraform."
+    debrief:
+      root_cause: |
+        The revert in stage 1 only removed the failing change. An RDS
+        instance can't be encrypted in place, so the real fix is a migration:
+        an encrypted copy of a snapshot restored as a new instance, a planned
+        cutover, and the new instance adopted into Terraform with encryption
+        on and prevent_destroy kept.
+      ideal_path:
+        - "Take a snapshot of orders-db."
+        - "Copy it with a KMS key and check the copy is Encrypted and available."
+        - "Restore a new instance from the encrypted copy."
+        - "In the window: stop writes, catch up, cut over, import the new instance into Terraform, keep the old one until the checks pass, then retire it."
