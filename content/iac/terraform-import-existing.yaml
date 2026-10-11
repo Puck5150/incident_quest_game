@@ -22,32 +22,6 @@ environment: |
 terminal:
   prompt: "you@laptop:~/infra$"
   commands:
-    - match: "terraform state list | grep analytics"
-      when_actions: [import-block]
-      output: |
-        aws_s3_bucket.analytics_raw
-    - match: "terraform state list | grep analytics"
-      evidence: not-in-state
-      output: ""
-    - match: "terraform plan"
-      when_actions: [import-block]
-      output: |2
-          # aws_s3_bucket.analytics_raw will be imported
-            resource "aws_s3_bucket" "analytics_raw" {
-                bucket = "acme-analytics-raw"
-                id     = "acme-analytics-raw"
-            }
-
-        Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.
-    - match: "terraform plan"
-      evidence: plan-create
-      output: |2
-          # aws_s3_bucket.analytics_raw will be created
-          + resource "aws_s3_bucket" "analytics_raw" {
-              + bucket = "acme-analytics-raw"
-            }
-
-        Plan: 1 to add, 0 to change, 0 to destroy.
     - match: "aws s3api head-bucket --bucket acme-analytics-raw"
       evidence: exists
       output: |
@@ -55,12 +29,74 @@ terminal:
             "BucketRegion": "us-east-1"
         }
 
+terraform:
+  dir: "~/infra"
+  state: []
+  files:
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+
+        resource "aws_s3_bucket" "analytics_raw" {
+          bucket = "acme-analytics-raw"
+        }
+  cloud:
+    add:
+      - type: aws_s3_bucket
+        attrs:
+          id: acme-analytics-raw
+          arn: "arn:aws:s3:::acme-analytics-raw"
+          bucket: acme-analytics-raw
+          bucket_domain_name: acme-analytics-raw.s3.amazonaws.com
+          force_destroy: false
+          tags_all: {}
+      - type: aws_s3_object
+        attrs:
+          id: "acme-analytics-raw/events/2024/01/part-0000.parquet"
+          bucket: acme-analytics-raw
+          key: events/2024/01/part-0000.parquet
+      - type: aws_s3_object
+        attrs:
+          id: "acme-analytics-raw/events/2024/02/part-0000.parquet"
+          bucket: acme-analytics-raw
+          key: events/2024/02/part-0000.parquet
+      - type: aws_s3_object
+        attrs:
+          id: "acme-analytics-raw/events/2024/03/part-0000.parquet"
+          bucket: acme-analytics-raw
+          key: events/2024/03/part-0000.parquet
+  evidence:
+    - evidence: not-in-state
+      command: state show
+      contains: "No instance found for the given address"
+    - evidence: plan-create
+      command: plan
+      contains: "will be created"
+
 logs:
   - name: "CI: terraform apply (PR #77)"
     evidence: already-owned
     lines: |
       aws_s3_bucket.analytics_raw: Creating...
-      Error: creating S3 Bucket (acme-analytics-raw): operation error S3: CreateBucket, https response error StatusCode: 409, api error BucketAlreadyOwnedByYou: Your previous request to create the named bucket succeeded and you already own it.
+      ╷
+      │ Error: creating S3 Bucket (acme-analytics-raw): BucketAlreadyExists
+      │ 
+      │   with aws_s3_bucket.analytics_raw,
+      │   on main.tf line 14, in resource "aws_s3_bucket" "analytics_raw":
+      │   14: resource "aws_s3_bucket" "analytics_raw" {
+      │ 
+      ╵
 
 hypotheses:
   - id: not-imported
@@ -68,26 +104,37 @@ hypotheses:
     correct: true
   - id: name-taken
     text: "Another AWS account owns the bucket name."
-    feedback: "BucketAlreadyOwnedByYou means your own account owns it. Another account's bucket gives BucketAlreadyExists."
+    feedback: "The error text alone cannot say whose bucket it is, but head-bucket from your own credentials can: it succeeds and returns the Region, so the bucket is in this account. Another account's bucket would answer head-bucket with 403 Forbidden."
   - id: config-mismatch
     text: "The resource block doesn't exactly match the real bucket."
     feedback: "Even a perfect match would be planned as a create: Terraform only manages objects recorded in its state, and this one isn't."
   - id: permissions
     text: "CI's role isn't allowed to create buckets."
-    feedback: "The request reached S3, which answered that you already own the bucket. A permission problem would be AccessDenied."
+    feedback: "The provider found the bucket already there and refused to create it. A permission problem would be AccessDenied, and head-bucket from this account works."
 
 actions:
   - id: import-block
-    label: "Add an import block (to = aws_s3_bucket.analytics_raw, id = \"acme-analytics-raw\") to the PR, check the plan says \"1 to import\" with no other changes, put lifecycle { prevent_destroy = true } on the block (it holds 9 TB), then apply"
+    label: "Add an import block (to = aws_s3_bucket.analytics_raw, id = \"acme-analytics-raw\") to the PR, or run terraform import with the same address and id; check the plan says \"1 to import\" (or is clean afterwards) with no other changes, add a lifecycle { prevent_destroy = true } block to the aws_s3_bucket.analytics_raw resource (it holds 9 TB; never force_destroy), then apply"
     kind: fix
+    done_when:
+      all:
+        - state_has: aws_s3_bucket.analytics_raw
+        - applied: { op: import, address: aws_s3_bucket.analytics_raw }
+        - reality_has: { type: aws_s3_bucket, id: acme-analytics-raw, attr: bucket, equals: acme-analytics-raw }
+        - config_matches: { dir: /home/you/infra, matches: '^[ \t]*prevent_destroy[ \t]*=[ \t]*true[ \t]*$' }
+        - not: { config_matches: { dir: /home/you/infra, matches: '^[ \t]*force_destroy[ \t]*=[ \t]*true[ \t]*$' } }
+        - plan_clean: true
+        - not: { applied: { op: delete, address: aws_s3_bucket.analytics_raw } }
     feedback: "Terraform adopts the existing bucket into state without touching it, and from now on manages it like any other resource. The import is reviewed in the PR, and prevent_destroy means a later careless change cannot delete 9 TB through Terraform. Before trusting the bucket, audit it: a hand-made bucket often lacks a public access block, default encryption, versioning and a TLS-only policy, and the code does not declare any of them yet. Add those as reviewed changes after the import."
   - id: rename
     label: "Change the bucket name in code to acme-analytics-raw-2"
     kind: wrong
+    done_when: { applied: { op: create, address: aws_s3_bucket.analytics_raw } }
     feedback: "Terraform creates a second, empty bucket. The 9 TB stays in the unmanaged one, and nothing points the pipelines at the new one."
   - id: delete-recreate
     label: "Empty and delete the bucket so Terraform can create it"
     kind: destructive
+    done_when: { applied: { op: delete, address: aws_s3_bucket.analytics_raw } }
     feedback: "That deletes 9 TB of analytics data to satisfy a tool that can simply adopt the bucket."
   - id: ignore-error
     label: "Mark the CI step as allowed to fail"
@@ -100,7 +147,7 @@ solution_paths:
 key_evidence: [already-owned, not-in-state, plan-create, exists]
 
 evidence_labels:
-  already-owned: "CreateBucket fails: BucketAlreadyOwnedByYou"
+  already-owned: "Creating the bucket fails: BucketAlreadyExists"
   not-in-state: "The bucket isn't in Terraform state"
   plan-create: "So the plan tries to create it"
   exists: "The bucket really exists, in this account"
@@ -108,7 +155,7 @@ evidence_labels:
 hints:
   nudge: "Terraform wrote down nothing about this bucket. How would it know it already exists?"
   direction: "Check state for the bucket, then look at how Terraform adopts an existing object."
-  answer: "Existing objects must be imported. Add an import block for acme-analytics-raw, check the plan says \"1 to import\" with no other changes, and add prevent_destroy because it holds 9 TB. Then audit the bucket's public access block, encryption and versioning, which the code does not declare."
+  answer: "Existing objects must be imported. Add an import block for acme-analytics-raw, check the plan says \"1 to import\" with no other changes, and add a lifecycle { prevent_destroy = true } block inside the aws_s3_bucket.analytics_raw resource because it holds 9 TB (and never set force_destroy). Then audit the bucket's public access block, encryption and versioning, which the code does not declare."
 
 analogy:
   title: "Registering a car you already own"
@@ -122,14 +169,16 @@ debrief:
   root_cause: |
     Terraform only manages objects recorded in its state. The bucket was made
     by hand, so writing a matching resource block made Terraform plan to
-    create a new bucket with that name, and S3 refused: BucketAlreadyOwnedByYou.
+    create a new bucket with that name, and S3 refused: BucketAlreadyExists. In us-east-1 the provider checks for
+    the bucket first and reports it that way; other Regions answer a
+    duplicate create differently.
     An import block tells Terraform to adopt the existing bucket into state at
     that address, after which it manages it like anything it created.
   ideal_path:
-    - "Read the apply error: you already own the bucket."
+    - "Read the apply error: the bucket already exists."
     - "Check state: no entry for it."
     - "See why: the plan treats it as new."
-    - "Add an import block, confirm the plan imports with no other changes, add prevent_destroy, then apply."
+    - "Add an import block, confirm the plan imports with no other changes, add lifecycle { prevent_destroy = true } to the resource (not force_destroy), then apply."
     - "Audit the imported bucket (public access block, default encryption, versioning, TLS-only policy) and bring any gaps into code through review."
   real_world: |
     Import blocks (Terraform 1.5+) put imports through code review and can
@@ -154,6 +203,9 @@ sources:
   - title: "Terraform: State"
     url: "https://developer.hashicorp.com/terraform/language/state"
     retrieved: 2026-10-02
-  - title: "Amazon S3: Error responses (BucketAlreadyOwnedByYou)"
+  - title: "Amazon S3: Error responses"
     url: "https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html"
     retrieved: 2026-10-02
+
+command_notes:
+  "aws s3api head-bucket --bucket acme-analytics-raw": "The bucket exists and is reachable with your credentials, so it is in this account."

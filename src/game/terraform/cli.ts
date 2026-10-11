@@ -653,6 +653,7 @@ function parsePlanFlags(args: string[], cmd: Cmd = 'plan'): PlanFlags | Out {
     const eq = raw.indexOf('=')
     const name = (eq < 0 ? raw : raw.slice(0, eq)).replace(/^--/, '-')
     let value = eq < 0 ? undefined : raw.slice(eq + 1)
+    if (cmd === 'plan' && name === '-generate-config-out') return notYet('plan -generate-config-out')
     if (NOT_FOR[cmd].includes(name)) return boxFail('Failed to parse command-line flags', `flag provided but not defined: ${name}`)
     if (PLAN_VALUE_FLAGS.has(name)) {
       if (value === undefined) {

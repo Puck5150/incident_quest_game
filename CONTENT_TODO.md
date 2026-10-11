@@ -674,7 +674,7 @@ terraform-forgotten-taint (unverified):
 - [x] Verified (Terraform v1.9.8 source and docs, 2026-10-08): the tainted/requested replace reasons, `# ADDR: (tainted)` in state show, taint/untaint success and error texts (`taint.go`/`untaint.go`), taint deprecated for `-replace` (v0.15.2+), untaint changes state only.
 
 Legacy content:
-- [ ] content/iac/terraform-import-existing.yaml (scripted, migrates in TF7) still says BucketAlreadyOwnedByYou for a us-east-1 bucket (CI log line, hypothesis feedback, evidence label, debrief, source). Correct it to `creating S3 Bucket (NAME): BucketAlreadyExists` when migrating.
+- [x] Verified (TF4 provider source, 2026-10-08): terraform-import-existing now runs on the simulator; the CI log is the tail of a real simulated `apply`, and all `BucketAlreadyOwnedByYou` wording is gone (debrief keeps one sentence that other Regions answer a duplicate create differently).
 
 ## terraform incidents batch 2 (TF5)
 
@@ -1221,3 +1221,11 @@ the labels and tests use the quoted form.
 - [ ] (round 3) Typed stage-2 `aws rds` commands accept `--flag=value`, quotes, `aws --region us-east-1 rds ...` and the harmless `--no-cli-pager`/`--output`/`--region us-east-1`; other extra flags (e.g. `--copy-tags`) are still not credited, with no specific feedback. `--kms-key-id alias/aws/rds` (the AWS-managed default key) is the wrong action `copy-default-key`; the runbook in the stage text names the customer-managed alias/orders-db, which is what supports this. Any other key value is credited.
 - [ ] (round 3) wrong-workspace-major: `prod-apply` also accepts `-auto-approve`; the label says "after reading the plan" but that is taught only, not enforced.
 - [ ] (round 3) terraform-destroy-nonempty-bucket: list-object-versions output now has ETag and LastModified fields (invented values) and prints nothing once the bucket is emptied; get-bucket-versioning prints `{}` for an unversioned bucket (real CLI output wording from memory).
+
+### terraform-import-existing migration (TF7b task 7)
+
+- [ ] Unverified from memory: `head-bucket` on a bucket in another account answers 403 Forbidden (used in the `name-taken` hypothesis feedback); the scripted `head-bucket` output keeps only `BucketRegion` (real output has more fields).
+- [ ] The fix needs an `applied import` of the address (an import block apply or `terraform import`), the bucket still in the cloud, `plan_clean` and no `applied delete`, so a rename-then-apply (new empty bucket under the same address) is never credited. `rename` and `delete-recreate` are world-detected (`applied create` / `applied delete` of the address). `delete-recreate` has no typed `aws s3 rb --force` route: the player reaches it only through force_destroy + apply + destroy (BucketNotEmpty otherwise). Deliberate limit (sticky detection): with prevent_destroy in place and the import done, the fix is taken at that moment; lifting prevent_destroy, setting force_destroy, apply and destroy afterwards still counts `delete-recreate` as a destructive mistake (UI-tested) but does not un-take the fix.
+- [ ] `aws_s3_object` is cloud-only (not a modelled resource type), so the data being kept is guarded by the `applied delete` check, not a `reality_has` on an object.
+- [ ] (fix round 1) The fix now requires `lifecycle { prevent_destroy = true }` (per-line `config_matches`, comments stripped) and no `force_destroy = true` in the config. Deliberate limit: post-import hardening (public access block, default encryption, versioning, TLS-only policy) stays taught only, not enforced.
+- [ ] `plan -generate-config-out` (real in Terraform 1.9) now answers `Not available in this lab yet` ("not simulated yet in this lab"), tested.

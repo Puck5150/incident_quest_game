@@ -115,3 +115,47 @@ describe('terraform-ignore-changes-autoscaling through the UI', () => {
     expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
   })
 })
+
+describe('terraform-import-existing through the UI', () => {
+  const ROOT = /Terraform doesn't know the bucket exists/
+  const BLOCK = `printf 'import {\\n  to = aws_s3_bucket.analytics_raw\\n  id = "acme-analytics-raw"\\n}\\n' > import.tf`
+  const PD = `sed -i 's/bucket = "acme-analytics-raw"/&\\n  lifecycle {\\n    prevent_destroy = true\\n  }/' main.tf`
+
+  it('ideal path: state show, plan, import block, plan, apply, prevent_destroy, plan', async () => {
+    const g = await mount('terraform-import-existing')
+    await g.run('terraform state show aws_s3_bucket.analytics_raw', 'terraform plan', 'aws s3api head-bucket --bucket acme-analytics-raw')
+    g.declare(ROOT)
+    await g.run(BLOCK, 'terraform plan', 'terraform apply -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Plan: 1 to import, 0 to add, 0 to change, 0 to destroy\./))
+    await g.run(PD, 'terraform plan')
+    await g.settle()
+    expect(g.taken()).toEqual(['import-block'])
+    await g.closeClean('import-block')
+  })
+
+  it('import without prevent_destroy is not the fix: nothing taken, no Close out', async () => {
+    const g = await mount('terraform-import-existing')
+    g.declare(ROOT)
+    await g.run('terraform import aws_s3_bucket.analytics_raw acme-analytics-raw', 'terraform plan')
+    await g.settle()
+    expect(g.taken()).toEqual([])
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
+  })
+
+  it('sticky: fix taken, then lifting prevent_destroy, force_destroy and destroying still counts delete-recreate as a destructive mistake', async () => {
+    const g = await mount('terraform-import-existing')
+    g.declare(ROOT)
+    await g.run(PD, 'terraform import aws_s3_bucket.analytics_raw acme-analytics-raw')
+    await g.settle()
+    expect(g.taken()).toEqual(['import-block'])
+    await g.run("sed -i '/prevent_destroy/d' main.tf", "sed -i 's/bucket = \"acme-analytics-raw\"/&\\n  force_destroy = true/' main.tf", 'terraform apply -auto-approve', 'terraform destroy -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Destroy complete!/))
+    await g.settle()
+    expect(g.taken()).toEqual(['import-block', 'delete-recreate'])
+    const { score } = await import('../src/game/scoring.ts')
+    const { loadItem } = await import('virtual:content')
+    const item = await loadItem('terraform-import-existing')
+    if (item.kind !== 'incident') throw new Error('expected an incident')
+    expect(score(item.scenario, g.box.saved!.log).mistakes.destructive).toBe(1)
+  })
+})
