@@ -92,8 +92,12 @@ actions:
   - id: require-filter
     label: "bq update --require_partition_filter shop-analytics:analytics.events"
     kind: fix
-    match_regex: "^bq update --require_partition_filter (shop-analytics:)?analytics\\.events$"
+    match_regex: "^bq update --require_partition_filter(?:=true)? (?:shop-analytics[:.])?analytics\\.events$"
     feedback: "From now on, any query on events must filter on event_ts, or BigQuery rejects it instead of scanning three years of data. The next dashboard can't make the same mistake."
+  - id: cap-bytes
+    label: "Set a maximum bytes billed (for example 100 GiB) on the dashboard's query job, and a custom daily query-bytes quota on the project, so a future unfiltered query fails instead of billing 18 TiB"
+    kind: fix
+    feedback: "A query that would process more than maximum_bytes_billed fails without charge. The partition filter protects this table; the cap protects against the next table, the next dashboard, or a bad edit."
   - id: smaller-limit
     label: "Change LIMIT 1000 to LIMIT 100"
     kind: wrong
@@ -108,7 +112,7 @@ actions:
     feedback: "That permanently throws away almost three years of order history the analytics team relies on, to fix a query that only needed a WHERE clause."
 
 solution_paths:
-  - [filter-dashboard, require-filter]
+  - [filter-dashboard, require-filter, cap-bytes]
 
 key_evidence: [dashboard-bytes, no-partition-filter, dry-run-full]
 
@@ -144,6 +148,7 @@ debrief:
     - "Dry-run it to confirm the bytes processed, then dry-run a version with a filter on event_ts."
     - "Fix the dashboard query to filter on event_ts."
     - "Require a partition filter on the table, so no query can scan it all by accident."
+    - "Set maximum bytes billed on the dashboard job and a project query quota as a cost guardrail."
   real_world: |
     Unfiltered queries on large partitioned tables are a classic BigQuery
     bill shock, often from dashboards that refresh on a timer. Require
