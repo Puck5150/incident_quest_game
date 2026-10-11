@@ -10,7 +10,7 @@ const { play, detectedAll } = playbook(scenario)
 const QUOTA = new Set(['request-quota-increase'])
 const PARTIAL = ['aws_instance.agent', 'aws_subnet.loadtest', 'aws_vpc.loadtest']
 const LIMIT = 'api error VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 64 allows for the instance bucket that the specified instance type belongs to. Please visit http://aws.amazon.com/contact-us/ec2-request to request an adjustment to this limit.'
-const NONE = { 'right-size': false, 'request-quota-increase': false, 'finish-apply': false, 'destroy-everything': false, 'switch-region': false }
+const NONE = { 'right-size': false, 'request-quota-increase': false, 'request-excessive-quota': false, 'finish-apply': false, 'destroy-everything': false, 'switch-region': false }
 const RIGHT_SIZED = { ...NONE, 'right-size': true }
 const FINISHED = { ...NONE, 'finish-apply': true }
 const TRAPPED = { ...NONE, 'destroy-everything': true }
@@ -53,7 +53,14 @@ describe('terraform-vcpu-limit on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(NONE)
   })
 
-  it('route A: right-size loadgen in compute.tf, apply creates only loadgen, right-size detected', async () => {
+  it('shrinking loadgen is a wrong action, not a route: the soak test is sized to 96 vCPUs; only the quota request path is credited', () => {
+    expect(scenario.actions.find((a) => a.id === 'right-size')!.kind).toBe('wrong')
+    expect(scenario.actions.find((a) => a.id === 'request-excessive-quota')!.kind).toBe('wrong')
+    expect(scenario.solution_paths).toEqual([['request-quota-increase', 'finish-apply']])
+    expect(scenario.ticket.body).toMatch(/96 vCPUs/)
+  })
+
+  it('weak route: right-size loadgen in compute.tf, apply creates only loadgen; detected as the wrong action', async () => {
     const { sh } = await failedApply()
     await run(sh, SIZE('c5.12xlarge'))
     const apply = await run(sh, 'terraform apply -auto-approve')
@@ -134,10 +141,17 @@ describe('terraform-vcpu-limit on the simulator', () => {
     for (const cmd of [
       REQUEST,
       'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 98',
-      'aws service-quotas request-service-quota-increase --quota-code L-1216C47A --service-code ec2 --desired-value 256 --region us-east-1',
+      'aws service-quotas request-service-quota-increase --quota-code L-1216C47A --service-code ec2 --desired-value 192 --region us-east-1',
       'aws service-quotas request-service-quota-increase --service-code=ec2 --quota-code=L-1216C47A --desired-value=128.0',
     ])
       expect(actionFor(scenario, cmd), cmd).toBe(req)
+    const big = scenario.actions.find((a) => a.id === 'request-excessive-quota')!
+    for (const cmd of [
+      'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 256',
+      'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 999999',
+      'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 193',
+    ])
+      expect(actionFor(scenario, cmd), cmd).toBe(big)
     for (const cmd of [
       'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 96',
       'aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A --desired-value 64',

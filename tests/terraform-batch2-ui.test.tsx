@@ -80,7 +80,8 @@ async function mount(id: string) {
     expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
     expect(score(scenario, box.saved!.log).mistakes.destructive).toBe(1)
   }
-  return { run, declare, click, taken, settle, remount, closeClean, trapped, box }
+  const wrongCount = () => score(scenario, box.saved!.log).mistakes.wrongActions
+  return { run, declare, click, taken, settle, remount, closeClean, trapped, wrongCount, box }
 }
 
 const NOT_YET = /Not run: that changes the system\. Declare a root cause first/g
@@ -166,15 +167,17 @@ describe('terraform-vcpu-limit through the UI', () => {
     'aws ec2 describe-instance-types --instance-types c5.24xlarge --query "InstanceTypes[].VCpuInfo.DefaultVCpus"',
   ]
 
-  it('ideal path, right-size: c5.12xlarge fits and the apply only adds loadgen', async () => {
+  it('weak route, right-size: c5.12xlarge fits and the apply only adds loadgen, but it changes the test: one wrong action, no close-out', async () => {
     const g = await mount('terraform-vcpu-limit')
     await g.run(...INVESTIGATE)
     await waitFor(() => expect(output()).toMatch(/VcpuLimitExceeded[\s\S]*Plan: 1 to add, 0 to change, 0 to destroy\./))
     g.declare(ROOT)
     await g.run("sed -i 's/c5\\.24xlarge/c5.12xlarge/' compute.tf", 'terraform apply -auto-approve', 'terraform plan')
     await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 1 added, 0 changed, 0 destroyed\.[\s\S]*No changes\./))
-    const s = await g.closeClean('right-size')
-    expect(s.lines.map((l) => l.label).join('\n')).toMatch(/Methodical/)
+    await g.settle()
+    expect(g.taken()).toEqual(['right-size'])
+    expect(g.wrongCount()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
   })
 
   it('typed quota request: held until the root cause is named, then c5.24xlarge launches; a remount keeps the gating', async () => {
