@@ -105,6 +105,7 @@ terminal:
 
 terraform:
   dir: "~/infra"
+  state_file: true
   files:
     - path: .gitignore
       content: |
@@ -209,7 +210,7 @@ hypotheses:
 
 actions:
   - id: import-resources
-    label: "Import the four existing objects into state (the bucket, the role and both log groups, each by its name), then confirm terraform plan shows no changes"
+    label: "Import the four existing objects into state (the bucket, the role and both log groups, each by its name), then move the state to an encrypted, locked S3 backend declared in backend.tf (terraform init, answer yes to copy the state) and confirm terraform plan shows no changes"
     kind: fix
     done_when:
       all:
@@ -222,7 +223,13 @@ actions:
         - not: { applied: { op: delete, address: aws_cloudwatch_log_group.api } }
         - not: { applied: { op: delete, address: aws_iam_role.task } }
         - not: { applied: { op: delete, address: aws_cloudwatch_log_group.worker } }
-    feedback: "State maps every block to its live object again, and the plan is empty: the code and production agree. Next, move this state into a remote backend so it can't live on one laptop again."
+        - file_contains: { path: /home/you/infra/backend.tf, matches: 'backend\s+"s3"' }
+        - file_contains: { path: /home/you/infra/backend.tf, matches: 'bucket\s*=\s*"[^"]+"' }
+        - file_contains: { path: /home/you/infra/backend.tf, matches: 'key\s*=\s*"[^"]+"' }
+        - file_contains: { path: /home/you/infra/backend.tf, matches: 'encrypt\s*=\s*true' }
+        - file_contains: { path: /home/you/infra/backend.tf, matches: '(use_lockfile\s*=\s*true|dynamodb_table\s*=\s*"[^"]+")' }
+        - not: { file_contains: { path: /home/you/infra/terraform.tfstate, matches: '"resources"' } }
+    feedback: "State maps every block to its live object again, the plan is empty, and the state no longer lives on a laptop: it sits in an encrypted S3 backend with locking, and the local file was emptied by the migration. The cause of the incident (state on one machine) is gone, not just its symptom. Remaining hygiene: turn on versioning and restrict access on the state bucket, and delete terraform.tfstate.backup, which still holds the old state in plain text."
   - id: apply-anyway
     label: "Run terraform apply and let it create the missing resources"
     kind: wrong
@@ -252,7 +259,7 @@ evidence_labels:
 hints:
   nudge: "How does Terraform know that a resource block already has an object in AWS?"
   direction: "Compare what Terraform's state holds with what AWS holds, then look at how Terraform adopts objects that already exist."
-  answer: "The local state was lost with the laptop. Import each object by its name (bucket, role, both log groups) and plan until it says No changes."
+  answer: "The local state was lost with the laptop. Import each object by its name (bucket, role, both log groups) and plan until it says No changes. Then put the state in a remote backend so it cannot be lost again: an S3 backend in backend.tf with bucket, key, encrypt = true and locking (use_lockfile = true), terraform init and answer yes to copy the state."
 
 analogy:
   title: "The warehouse lost its inventory ledger"
@@ -278,7 +285,8 @@ debrief:
     - "Read the plan: it wants to create all four resources."
     - "Confirm in AWS that the resources exist, in the right account."
     - "Import each object with terraform import or import blocks, using each type's import ID."
-    - "Plan until it says No changes, then set up a remote backend."
+    - "Plan until it says No changes."
+    - "Move the state to a remote backend (backend.tf: s3, encrypt = true, use_lockfile = true) with terraform init, answering yes to copy it; delete the leftover local backup. Also audit the imported bucket's public access block, encryption and versioning, since the code declares none of it."
   real_world: |
     Never keep production state only on a laptop. Use a remote backend with
     locking and versioning, such as the s3 backend with use_lockfile and
