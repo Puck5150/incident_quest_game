@@ -65,7 +65,8 @@ describe('aws-nat-gateway-cost', () => {
   it('credits the endpoint creation with one region either side', () => {
     expect(actionFor(sc, `${C} --region us-east-1`)?.id).toBe('s3-endpoint')
     expect(actionFor(sc, C.replace('aws ec2', 'aws --region us-east-1 ec2'))?.id).toBe('s3-endpoint')
-    expect(actionFor(sc, `${C.replace('aws ec2', 'aws --region us-east-1 ec2')} --region us-west-2`)?.id).toBe('s3-endpoint')
+    // the same flag twice is ambiguous (the CLI takes the last), so it is never a fix
+    expect(actionFor(sc, `${C.replace('aws ec2', 'aws --region us-east-1 ec2')} --region us-west-2`)?.id).not.toBe('s3-endpoint')
     expect(actionFor(sc, `${C} --region x;y`)?.id).not.toBe('s3-endpoint')
   })
   it('softened feedback', () => expect(sc.actions.find((a) => a.id === 'endpoint-policy')?.feedback).not.toMatch(/cannot use the endpoint to copy data out/))

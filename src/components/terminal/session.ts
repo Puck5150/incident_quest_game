@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { Action, Scenario } from '../../schema/scenario.ts'
 import { commandNamesFile, fileFixed, gateOk } from '../../game/fileFix.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
-import { actionFor, actionsTaken, commandsRun, complete, engineHandles, namedRootCause, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
+import { actionFor, actionsTaken, commandsRun, complete, engineHandles, missingPrereq, namedRootCause, notYetAfter, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
 import { detectAction } from './detect.ts'
 
@@ -129,6 +129,7 @@ export function useTerminalSession(
     }
     for (const a of cur.actions) {
       if (!(await detectAction(a, { taken, fileMatches, doneWhen: (p) => sh.doneWhen(p) }))) continue
+      if (missingPrereq(cur, a, taken)) continue // not yet: the world shows it, but its after: prerequisites aren't taken
       if (namedRootCause(scenario, now)) {
         if (take && onTakeAction) {
           sent.current.add(a.id)
@@ -223,9 +224,11 @@ export function useTerminalSession(
           const sh = await getShell()
           const text = await sh.read(need.path)
           let note = ''
+          let pre: Action | undefined
           if (text === undefined || !commandNamesFile(cmd, need.path, sh.cwd, sh.home) || !gateOk(need, text))
             note = `(It ran, but ${need.path.split('/').pop()} does not satisfy this fix's file check right now (or the command does not point at it), so the game does not count it as the fix.)`
           else if (!namedRootCause(scenario, latest.current)) note = NOT_YET
+          else if ((pre = missingPrereq(atStage(scenario, stageAt(latest.current)), gated, actionsTaken(latest.current)))) note = notYetAfter(pre)
           else if (!actionsTaken(latest.current).has(gated.id) && !sent.current.has(gated.id)) {
             sent.current.add(gated.id)
             onTakeAction?.(gated.id)

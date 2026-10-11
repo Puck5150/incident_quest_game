@@ -206,6 +206,11 @@ const ActionsSchema = z
       feedback: z.string().min(1),
       // Typing a matching command in the terminal takes this action too.
       match_regex: z.string().min(1).optional(),
+      // Typed lines with shell operators, substitutions or a repeated flag are not credited (AUTHORING.md);
+      // allow_shell opts this action out of the operator check (needs a fully anchored regex).
+      allow_shell: z.boolean().optional(),
+      // Prerequisites (same stage, kind: fix): the action is credited only once these are taken.
+      after: z.array(id).min(1).optional(),
       // Typing an `aws iam put-role-policy` whose parsed --policy-document earns this verdict takes the action
       // (src/game/awsPolicyCheck.ts). Instead of a regex, which cannot judge a JSON document.
       iam_policy: z
@@ -649,6 +654,32 @@ export const ScenarioSchema = z
           if (text !== undefined && endpointPolicyVerdict(text, p) !== null) issue(`also matches the scripted command "${text}"`, at('actions', i, 'endpoint_policy'))
         })
       })
+      // `after`: prerequisites exist in this stage, are fixes, are on every solution path that uses the action, and never loop.
+      const byId = new Map(v.actions.map((a) => [a.id, a]))
+      v.actions.forEach((a, i) => {
+        a.after?.forEach((p, j) => {
+          const where = at('actions', i, 'after', j)
+          const pre = byId.get(p)
+          if (!pre) return issue(`unknown action "${p}" (after: must name an action of this stage)`, where)
+          if (p === a.id) return issue('an action cannot come after itself', where)
+          if (a.kind !== 'fix' || pre.kind !== 'fix') issue('after: is for ordering fix actions', where)
+        })
+        const seen = new Set<string>()
+        for (let todo = [...(a.after ?? [])]; todo.length; ) {
+          const n = todo.pop()!
+          if (n === a.id) {
+            issue(`after: forms a cycle through "${a.id}"`, at('actions', i, 'after'))
+            break
+          }
+          if (seen.has(n)) continue
+          seen.add(n)
+          todo.push(...(byId.get(n)?.after ?? []))
+        }
+        v.solution_paths.forEach((path, k) => {
+          if (path.includes(a.id) && seen.size && ![...seen].every((p) => path.includes(p)))
+            issue(`solution path includes "${a.id}" without its after: prerequisites`, at('solution_paths', k))
+        })
+      })
       v.actions.forEach((a, i) => {
         if (a.match_regex === undefined) return
         if (!v.terminal) issue('match_regex needs a terminal to type into', at('actions', i, 'match_regex'))
@@ -658,6 +689,9 @@ export const ScenarioSchema = z
         } catch (e) {
           return issue(`invalid regex: ${(e as Error).message}`, at('actions', i, 'match_regex'))
         }
+        // Opting out of the shell-operator check is only safe when nothing can ride along: every branch pinned at both ends.
+        if (a.allow_shell && !/^\^.*\$$/.test(a.match_regex))
+          issue('allow_shell needs a regex anchored with ^ at the start and $ at the end', at('actions', i, 'allow_shell'))
         // A typed command either shows scripted output or takes an action, never both.
         v.terminal?.commands.forEach((c) => {
           if (c.match && rx.test(c.match.trim().replace(/\s+/g, ' ')))

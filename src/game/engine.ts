@@ -7,7 +7,7 @@
 // from it by the helpers at the bottom, so there's one source of truth.
 
 import { artifacts } from '../schema/constants.ts'
-import type { ArtifactKind, Scenario } from '../schema/scenario.ts'
+import type { Action, ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
 import { endpointPolicyVerdict, iamPolicyVerdict } from './awsPolicyCheck.ts'
 import { isShellPrompt, readsFileOnDisk } from './paths.ts'
@@ -102,6 +102,9 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
       if (s.phase !== 'acting') return s
       const a = cur.actions.find((x) => x.id === e.id)
       if (!a) return s
+      // `after:` prerequisites: refused (and not recorded) until they are taken, whichever way it was asked for.
+      const first = missingPrereq(cur, a, actionsTaken(s.log))
+      if (first) return { ...s, feedback: { tone: 'bad', text: notYetAfter(first) } }
       const log = [...s.log, e]
       const tone = a.kind === 'fix' ? 'good' : a.kind === 'wrong' ? 'bad' : 'danger'
       const done = fixComplete(cur, log) && !fixComplete(cur, s.log)
@@ -143,12 +146,58 @@ export function hasShellOperators(cmd: string): boolean {
 
 export const NOT_YET = 'Not run: that changes the system. Declare a root cause first, then fix it.'
 
+// The first `after:` prerequisite of `a` that has not been taken, if any.
+export const missingPrereq = (cur: Scenario, a: Action, taken: Set<string>) =>
+  (a.after ?? []).map((id) => cur.actions.find((x) => x.id === id)).find((p) => p && !taken.has(p.id))
+export const notYetAfter = (p: Action) => `Not yet: do this first: ${p.label}`
+
+// A typed line earns an action only if it is ONE plain command. The action's regex is matched against the
+// text, but the shell would run what the text MEANS: a second command after `&&`/`;`/`|`, a substitution
+// (`$(...)`, backticks, `${...}`, `$VAR`; these run even inside double quotes), a redirection, or a newline
+// can change what actually happens, so such a line is not credited (nor counted as a wrong action).
+// Operators inside matching quotes are data (a JSON policy document), except expansions in double quotes.
+// `allow_shell: true` on an action opts out (for a command whose point is a redirection); the validator
+// then requires a fully anchored regex, so nothing can ride along.
+export function hasUnsafeSyntax(line: string): boolean {
+  const raw = line.trim().replace(/;$/, '') // one closing `;` ends a SQL statement and does nothing in a shell
+  if (/[\n\r`]/.test(raw) || hasShellOperators(raw)) return true
+  let single = false
+  let double = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    if (single) single = ch !== "'"
+    else if (ch === '\\') i++
+    else if (ch === "'" && !double) single = true
+    else if (ch === '"') double = !double
+    else if (ch === '$' && /[({A-Za-z_]/.test(raw[i + 1] ?? '')) return true
+  }
+  return false
+}
+
+// A `--flag` (or `-x`) given twice: the real CLI takes the last value, the regex saw the first.
+export function repeatsFlag(cmd: string): boolean {
+  const seen = new Set<string>()
+  for (const tok of cmd.match(/"[^"]*"|'[^']*'|\S+/g) ?? []) {
+    const m = /^(--[A-Za-z][\w-]*|-[A-Za-z])(?:=|$)/.exec(tok)
+    if (!m) continue
+    if (seen.has(m[1])) return true
+    seen.add(m[1])
+  }
+  return false
+}
+
 // The action a typed command takes, if any (first match wins).
 export const actionFor = (scenario: Scenario, input: string) =>
-  scenario.actions.find(
-    (a) => (a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input))) || (a.iam_policy !== undefined && iamPolicyVerdict(input, a.iam_policy) === a.iam_policy.verdict) ||
-      (a.endpoint_policy !== undefined && endpointPolicyVerdict(input, a.endpoint_policy) === a.endpoint_policy.verdict),
-  )
+  scenario.actions.find((a) => {
+    if (!a.allow_shell && hasUnsafeSyntax(input)) return false
+    // Repeats only void a FIX: a repeated flag on a wrong/destructive command still lands the penalty.
+    if (a.kind === 'fix' && repeatsFlag(normalize(input))) return false
+    return (
+      (a.match_regex !== undefined && new RegExp(a.match_regex).test(normalize(input))) ||
+      (a.iam_policy !== undefined && iamPolicyVerdict(input, a.iam_policy) === a.iam_policy.verdict) ||
+      (a.endpoint_policy !== undefined && endpointPolicyVerdict(input, a.endpoint_policy) === a.endpoint_policy.verdict)
+    )
+  })
 
 // What the fake shell prints for `input`, given which actions have been taken.
 // `clear` and `history` are handled by the Terminal component because they
@@ -287,7 +336,9 @@ export function terminalOutput(scenario: Scenario, input: string, before: GameEv
   // it's visible without looking away.
   const action = ran.scripted ? undefined : actionFor(cur, cmd)
   if (!action) return ran.output
-  return namedRootCause(scenario, before) ? action.feedback : NOT_YET
+  if (!namedRootCause(scenario, before)) return NOT_YET
+  const first = missingPrereq(cur, action, actionsTaken(before))
+  return first ? notYetAfter(first) : action.feedback
 }
 
 // Whether the player has named this stage's root cause (so fixes count).

@@ -221,9 +221,10 @@ describe('terraform-partial-apply-iam on the simulator', () => {
       put(doc('"RDS:*"', `"${ARN}"`)),
       put(doc('["rds:CreateDBInstance","rds:Delete*"]', `"${ARN}"`)),
       put(doc('["rds:CreateDBInstance","iam:*"]', `"${ARN}"`)),
-      `${put(doc('"rds:*"', '"*"'))} && echo done`,
     ])
       expect(actionFor(scenario, cmd)?.id, cmd).toBe('grant-wildcard')
+    // a compound line earns nothing, not even the wrong-action penalty
+    expect(actionFor(scenario, `${put(doc('"rds:*"', '"*"'))} && echo done`)).toBeUndefined()
     // reusing the existing policy's name replaces it: flagged wrong, whatever the document
     const over = scenario.actions.find((a) => a.id === 'overwrite-deploy-policy')!
     expect(over.kind).toBe('wrong')

@@ -101,6 +101,28 @@ stage reopens the incident into the next one (see below).
   command (`kubectl rollout undo …`, `sudo reboot`); leave multi-step fixes as
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.
+- **What a typed line may contain (engine guard, all action kinds).** A typed line
+  earns an action only if it is ONE plain command. Lines with unquoted `; & | < >`,
+  a backtick, `$(`, `${`, `$NAME` (substitutions are live even inside double quotes),
+  or a newline are never credited, not even as a `wrong`/`destructive` match; they
+  fall through to the scripted/real-shell answer like any unscripted command. A
+  single closing `;` is fine (SQL). Operators inside matching quotes are data (a
+  JSON policy document). A line that repeats a `--long-flag` or `-x` is not
+  credited as a `fix` (the real CLI takes the last value, a regex sees the first);
+  `wrong`/`destructive` still land. Regexes should still be anchored and should not
+  let a flag's value start with `-` (`[^\\s-]`), since `--kms-key-id --region x`
+  gives the key the next flag. Opt-out, only when the command IS the operator
+  (`: > /var/log/app/app.log`): `allow_shell: true`; the validator then requires a
+  regex that starts with `^` and ends with `$` (anchor every `|` branch
+  yourself). Tests: `tests/typed-command-guard.test.ts`.
+- **Ordering fixes (`after:`).** `after: [action-id, …]` on a fix: it is credited
+  only once those fixes are taken, whether typed, clicked or detected from a file
+  or `done_when`. Earlier, it is refused with "Not yet: do this first: <label>" and
+  nothing is recorded (so replay and scoring follow the log). Prerequisites must be
+  fix actions of the same stage, form no cycle, and be on every `solution_paths`
+  path that has the action. `solution_paths` still means "all of any one path", only
+  the order is now enforced. Use it where order is the lesson (snapshot, then copy,
+  then restore).
 - **Judging a policy document:** a regex cannot tell a least-privilege IAM policy
   from a lookalike. For an `aws iam put-role-policy` fix give the action
   `iam_policy: { verdict: ok|wildcard|overwrite, role, profile, reserved_policy,
