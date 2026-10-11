@@ -102,27 +102,46 @@ stage reopens the incident into the next one (see below).
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.
 - **What a typed line may contain (engine guard, all action kinds).** A typed line
-  earns an action only if it is ONE plain command. Lines with unquoted `; & | < >`,
-  a backtick, `$(`, `${`, `$NAME` (substitutions are live even inside double quotes),
-  or a newline are never credited, not even as a `wrong`/`destructive` match; they
-  fall through to the scripted/real-shell answer like any unscripted command. A
-  single closing `;` is fine (SQL). Operators inside matching quotes are data (a
-  JSON policy document). A line that repeats a `--long-flag` or `-x` is not
-  credited as a `fix` (the real CLI takes the last value, a regex sees the first);
-  `wrong`/`destructive` still land. Regexes should still be anchored and should not
-  let a flag's value start with `-` (`[^\\s-]`), since `--kms-key-id --region x`
-  gives the key the next flag. Opt-out, only when the command IS the operator
-  (`: > /var/log/app/app.log`): `allow_shell: true`; the validator then requires a
-  regex that starts with `^` and ends with `$` (anchor every `|` branch
-  yourself). Tests: `tests/typed-command-guard.test.ts`.
-- **Ordering fixes (`after:`).** `after: [action-id, …]` on a fix: it is credited
-  only once those fixes are taken, whether typed, clicked or detected from a file
-  or `done_when`. Earlier, it is refused with "Not yet: do this first: <label>" and
-  nothing is recorded (so replay and scoring follow the log). Prerequisites must be
-  fix actions of the same stage, form no cycle, and be on every `solution_paths`
-  path that has the action. `solution_paths` still means "all of any one path", only
-  the order is now enforced. Use it where order is the lesson (snapshot, then copy,
-  then restore).
+  earns an action only if it is ONE plain command, read the way bash reads it (one
+  scanner in `src/game/typedLine.ts`: backslash escapes, single quotes literal, double
+  quotes keep their text). Never credited, not even as a `wrong`/`destructive` match
+  (the line falls through to the scripted/real-shell answer like any unscripted
+  command): an unquoted `; & | < >` (at a SQL prompt only `;` counts, since `<>` and
+  `||` are SQL), a backtick, `$` anywhere unquoted, `$(`/`${`/`$NAME` even inside
+  double quotes (the shell expands them there), `$'...'`, a newline, an unterminated
+  quote or a trailing backslash, and in a shell prompt also unquoted `* ? [`, `{`/`}`
+  attached to a word (`{a,b}`; a standalone `{ 6379 }` as in nft is fine), a leading
+  `~` and a leading `#`. One closing `;` is fine. Operators inside matching quotes
+  are data (a JSON policy document, a SQL statement in `psql -c "..."`). So type
+  AWS shorthand like `Rules=[{...}]` or `gs://b/**` quoted, and write the quoted
+  form in the label.
+  A line that repeats a `--long-flag` or `-x` (same scanner, so a flag inside a
+  quoted value is not a flag; nothing after a bare `--` is a flag) is not credited
+  as a `fix` (the real CLI takes the last value, a regex sees the first);
+  `wrong`/`destructive` still land. `allow_shell` does NOT disable this repeat check.
+  Regexes should still be anchored and should not let a flag's value start with `-`
+  (`[^\\s-]`), since `--kms-key-id --region x` gives the key the next flag; anchor a
+  flag on its left too (`(?:^|\\s)--kms-key-id`).
+  Opt-out, only when the command IS the syntax (`: > /var/log/app/app.log`,
+  `rm -rf /srv/media/*`, `az vm stop --ids $(az vm list ...)`): `allow_shell: true`
+  on the action. The validator then requires every top-level `|` branch of the regex
+  to start with `^` and end with an unescaped `$`, with no unescaped `.`, `\\S`,
+  `\\W`, `\\D` or negated class `[^...]` anywhere (they could carry `;id`): spell the
+  text out. It also fails if an action's `example:` (a typed line its regex must
+  accept; add one whenever cheap), or the command written in its label when the
+  regex accepts it, is rejected by the guard and the action lacks `allow_shell`, or
+  repeats a flag on a fix. Actions with neither are listed in CONTENT_TODO.md.
+  Tests: `tests/typed-command-guard.test.ts`.
+- **Ordering fixes (`after:`).** `after: [action-id, …]` on a fix (this is the
+  action's `after`, unrelated to a `file` action's `file.after`, the text the button
+  writes): it is credited only once those fixes are taken, whether typed, clicked or
+  detected from a file or `done_when`. Earlier, it is refused with "Not yet: do this
+  first: <label>" and nothing is recorded. Prerequisites must be fix actions of the
+  same stage, form no cycle, and be on every `solution_paths` path that has the
+  action. `solution_paths` still means "all of any one path"; only the order is
+  enforced, and only through the engine's log: `fixComplete` itself is unordered, so
+  a hand-built log in a test can bypass it. Use it where order is the lesson
+  (snapshot, then copy, then restore).
 - **Judging a policy document:** a regex cannot tell a least-privilege IAM policy
   from a lookalike. For an `aws iam put-role-policy` fix give the action
   `iam_policy: { verdict: ok|wildcard|overwrite, role, profile, reserved_policy,

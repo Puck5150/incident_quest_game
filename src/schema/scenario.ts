@@ -10,7 +10,8 @@ import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { asciiLower, endpointPolicyVerdict, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
-import { filesOnDisk } from '../game/paths.ts'
+import { filesOnDisk, isShellPrompt } from '../game/paths.ts'
+import { hasUnsafeSyntax, looseAllowShellRegex, repeatsFlag } from '../game/typedLine.ts'
 import { fileFixed, gateOk } from '../game/fileFix.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
 import { schemaFor } from '../game/terraform/resources.ts'
@@ -224,6 +225,9 @@ const ActionsSchema = z
       // Typed lines with shell operators, substitutions or a repeated flag are not credited (AUTHORING.md);
       // allow_shell opts this action out of the operator check (needs a fully anchored regex).
       allow_shell: z.boolean().optional(),
+      // One concrete typed line this action's match_regex must accept (and the typed-line guard must credit).
+      // The validator checks it; without one it also checks the command written in the label, if the regex matches it.
+      example: z.string().min(1).optional(),
       // Prerequisites (same stage, kind: fix): the action is credited only once these are taken.
       after: z.array(id).min(1).optional(),
       // Typing an `aws iam put-role-policy` whose parsed --policy-document earns this verdict takes the action
@@ -641,6 +645,7 @@ export const ScenarioSchema = z
         const allowed = new Set(p.allowed_actions.map(asciiLower))
         if (!p.required_actions.every((r) => allowed.has(asciiLower(r)))) issue('required_actions must be inside allowed_actions', at('actions', i, 'iam_policy', 'required_actions'))
         if (iamPolicyVerdict(p.example, p) !== p.verdict) issue(`example doesn't earn the "${p.verdict}" verdict`, at('actions', i, 'iam_policy', 'example'))
+        if (hasUnsafeSyntax(p.example) || (a.kind === 'fix' && repeatsFlag(p.example))) issue('example is rejected by the typed-line guard (shell syntax or a repeated flag)', at('actions', i, 'iam_policy', 'example'))
         const { verdict: _v, example: _e, ...core } = p
         iamSpecs.forEach((o) => {
           const { verdict: _w, example: _x, ...oc } = o.iam_policy!
@@ -659,6 +664,7 @@ export const ScenarioSchema = z
         const allowed = new Set(p.allowed_actions.map(asciiLower))
         if (!p.required_actions.every((r) => allowed.has(asciiLower(r)))) issue('required_actions must be inside allowed_actions', at('actions', i, 'endpoint_policy', 'required_actions'))
         if (endpointPolicyVerdict(p.example, p) !== p.verdict) issue(`example doesn't earn the "${p.verdict}" verdict`, at('actions', i, 'endpoint_policy', 'example'))
+        if (hasUnsafeSyntax(p.example) || (a.kind === 'fix' && repeatsFlag(p.example))) issue('example is rejected by the typed-line guard (shell syntax or a repeated flag)', at('actions', i, 'endpoint_policy', 'example'))
         const { verdict: _v, example: _e, ...core } = p
         epSpecs.forEach((o) => {
           const { verdict: _w, example: _x, ...oc } = o.endpoint_policy!
@@ -705,8 +711,24 @@ export const ScenarioSchema = z
           return issue(`invalid regex: ${(e as Error).message}`, at('actions', i, 'match_regex'))
         }
         // Opting out of the shell-operator check is only safe when nothing can ride along: every branch pinned at both ends.
-        if (a.allow_shell && !/^\^.*\$$/.test(a.match_regex))
-          issue('allow_shell needs a regex anchored with ^ at the start and $ at the end', at('actions', i, 'allow_shell'))
+        if (a.allow_shell) {
+          const loose = looseAllowShellRegex(a.match_regex)
+          if (loose) issue(`allow_shell needs a regex that pins the whole line: ${loose}`, at('actions', i, 'allow_shell'))
+        }
+        // The action's own example, or the command its label shows, must earn credit as typed: a command the guard
+        // rejects (substitution, operator, repeated flag on a fix) needs allow_shell or a different command.
+        const shell = isShellPrompt(v)
+        for (const [src, text] of [['example', a.example], ['label', a.label]] as const) {
+          if (text === undefined || (src === 'label' && a.example !== undefined)) continue
+          const typed = text.trim().replace(/\s+/g, ' ')
+          if (!rx.test(typed)) {
+            if (src === 'example') issue(`example "${text}" does not match the match_regex`, at('actions', i, 'example'))
+            continue
+          }
+          if (!a.allow_shell && hasUnsafeSyntax(text, shell))
+            issue(`the ${src} command "${text}" has shell syntax the typed-line guard rejects, so it would earn nothing: add allow_shell (anchored regex) or use a plain command`, at('actions', i, src))
+          if (a.kind === 'fix' && repeatsFlag(typed)) issue(`the ${src} command "${text}" repeats a flag, which is never credited as a fix`, at('actions', i, src))
+        }
         // A typed command either shows scripted output or takes an action, never both.
         v.terminal?.commands.forEach((c) => {
           if (c.match && rx.test(c.match.trim().replace(/\s+/g, ' ')))

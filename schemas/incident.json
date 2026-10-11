@@ -1241,6 +1241,10 @@
           "allow_shell": {
             "type": "boolean"
           },
+          "example": {
+            "type": "string",
+            "minLength": 1
+          },
           "after": {
             "minItems": 1,
             "type": "array",
@@ -4262,6 +4266,10 @@
                 },
                 "allow_shell": {
                   "type": "boolean"
+                },
+                "example": {
+                  "type": "string",
+                  "minLength": 1
                 },
                 "after": {
                   "minItems": 1,

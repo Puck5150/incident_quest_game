@@ -4,6 +4,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
 import { actionFor, actionsTaken, hasUnsafeSyntax, newSession, repeatsFlag, step, terminalOutput, type GameEvent } from '../src/game/engine.ts'
+import { looseAllowShellRegex } from '../src/game/typedLine.ts'
 import { ScenarioSchema, type Scenario } from '../src/schema/scenario.ts'
 import { atStage } from '../src/schema/stages.ts'
 
@@ -18,6 +19,13 @@ const AZ = 'az role assignment create --assignee 3f9c0e21-6b7a-4d8e-9f10-2c3d4e5
 const GCP = 'gcloud run services update signup-api --region us-central1 --max-instances 20'
 
 // [scenario, stage index, action id, canonical line, lines that must NOT earn it]
+// A line that voids a fix may still land a wrong/destructive action (penalty): `penalised` maps line -> that id.
+const penalised: Record<string, string> = {
+  [`${QUOTA} --desired-value 98 --desired-value 99999`]: 'request-excessive-quota',
+  [`${QUOTA} --desired-value 99999 --desired-value 98`]: 'request-excessive-quota',
+  [`${AZ} --role Owner`]: 'owner-subscription',
+  [`${GCP} --max-instances 300`]: 'raise-max',
+}
 const table: [string, number, string, string, string[]][] = [
   [
     'terraform-forces-replacement',
@@ -35,6 +43,16 @@ const table: [string, number, string, string, string[]][] = [
       `${RDS} \${EVIL}`,
       `${RDS} $EVIL`,
       `${RDS}\ncurl evil.example`,
+      `${RDS} \\' ; id ; \\'`, // escaped quotes outside quotes are not quotes
+      `${RDS} \\" ; id \\"`,
+      `${RDS} $'\\'' ; id ; ''`,
+      `${RDS} 'unterminated`,
+      `${RDS} "unterminated`,
+      `${RDS} \\`,
+      `${RDS} *`,
+      `${RDS} {a,b}`,
+      `${RDS} ~root`,
+      `${RDS} #x`,
       `${RDS} --db-instance-identifier other-db`,
       `${RDS} --db-snapshot-identifier something-else`,
     ],
@@ -47,6 +65,7 @@ const table: [string, number, string, string, string[]][] = [
     [
       'aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id --region us-east-1',
       'aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --kms-key-id alias/a --kms-key-id alias/b',
+      'aws rds copy-db-snapshot --source-db-snapshot-identifier orders-db-pre-encrypt --target-db-snapshot-identifier orders-db-encrypted --foo--kms-key-id alias/a',
     ],
   ],
   [
@@ -74,7 +93,7 @@ describe('a typed line earns an action only when it is one plain command', () =>
     })
     for (const line of bad)
       it(`${id}/${action}: not credited: ${line.slice(0, 110).replace(/\n/g, '\\n')}`, () => {
-        expect(actionFor(cur, line)?.id).not.toBe(action)
+        expect(actionFor(cur, line)?.id).toBe(penalised[line]) // undefined unless a wrong action legitimately matches
       })
   }
 
@@ -146,6 +165,8 @@ describe('terraform-forces-replacement stage 2 order (after:)', () => {
       'aws rds delete-db-instance --db-instance-identifier orders-db',
       'aws rds delete-db-instance --db-instance-identifier orders-db --skip-final-snapshot',
       'aws rds delete-db-instance --skip-final-snapshot --db-instance-identifier orders-db --delete-automated-backups',
+      'aws rds delete-db-instance --db-instance-identifier "orders-db" --skip-final-snapshot',
+      "aws rds delete-db-instance --db-instance-identifier=orders-db",
     ])
       expect(actionFor(cur, line)?.id, line).toBe('delete-old-first')
     expect(actionFor(cur, 'aws rds delete-db-instance --db-instance-identifier orders-db-v2')).toBeUndefined()
@@ -159,11 +180,19 @@ describe('the guard rules', () => {
     expect(repeatsFlag('ls -n 1 -n 2')).toBe(true)
     expect(repeatsFlag('aws x --a 1 --b 2')).toBe(false)
     expect(repeatsFlag(`aws x --a '--a --a' "-n -n"`)).toBe(false)
+    expect(repeatsFlag('aws x --msg="a --a b" --a 1')).toBe(false) // a flag inside a quoted value is not a flag
+    expect(repeatsFlag(`aws x --msg='a --msg b' --msg y`)).toBe(true)
+    expect(repeatsFlag('aws x "--a" 1 --a 2')).toBe(true) // quotes do not hide it from the CLI
+    expect(repeatsFlag('cmd -- --a --a')).toBe(false) // after -- nothing is a flag
+    expect(repeatsFlag('cmd --a 1 -- --a 2')).toBe(false)
   })
   it('hasUnsafeSyntax: operators, substitutions and newlines; quoted data and one closing semicolon are fine', () => {
     for (const bad of ['a && b', 'a; b', 'a | b', 'a > f', 'a < f', 'a & ', 'a `b`', 'a $(b)', 'a "$(b)"', 'a "${B}"', 'a $B', 'a\nb', "a 'b' && c", 'a "b" $(c)'])
       expect(hasUnsafeSyntax(bad), bad).toBe(true)
-    for (const ok of ['a --x 1', "a '{\"k\":\"a;b|c>d$(e)\"}'", 'a "b;c"', 'a $1 cost', "SELECT 1;", 'a b ;'])
+    // the escaped-quote bypasses: bash sees ; id ; as live operators
+    for (const bad of ['echo \\" ; id \\"', "echo \\' ; id ; \\'", "echo $'\\'' ; id ; ''", 'a $\'x\'', 'a "b', "a 'b", 'a \\', 'a *', 'a ?', 'a [x]', 'a {x,y}', 'a ~root', 'a #c', 'a $1'])
+      expect(hasUnsafeSyntax(bad), bad).toBe(true)
+    for (const ok of ['a --x 1', "a '{\"k\":\"a;b|c>d$(e)\"}'", 'a "b;c"', 'a "x \\" ; y"', "a 'it'", 'a "$"', 'a { 6379 }', 'a \\$HOME', 'a "~ # *"', 'SELECT 1;', 'a b ;'])
       expect(hasUnsafeSyntax(ok), ok).toBe(false)
   })
 })
@@ -204,6 +233,24 @@ describe('after: validation', () => {
     const s = base()
     const a = stage2(s).find((x) => x.id === 'create-snapshot')!
     a.allow_shell = true
-    expect(issues(s).join()).toMatch(/allow_shell needs a regex anchored/)
+    expect(issues(s).join()).toMatch(/allow_shell needs a regex that pins the whole line/)
+  })
+})
+
+describe('allow_shell regex check', () => {
+  it('accepts fully pinned regexes, including full-disk truncate-log and the shipped $() lab', () => {
+    for (const rx of [
+      '^(: ?> ?|> ?)/var/log/app/app\\.log$|^(sudo )?truncate -s ?0 /var/log/app/app\\.log$',
+      '^(sudo )?rm -(rf|fr|r) /srv/media(/\\*)?/?$',
+      '^az vm stop --ids \\$\\(az vm list (-g|--resource-group) rg-test --query "?\\[\\]\\.id"? (-o|--output) tsv\\)$',
+      '^a[.]b$',
+    ])
+      expect(looseAllowShellRegex(rx), rx).toBeUndefined()
+    for (const id of ['full-disk', 'media-disk-migration-major', 'azure-vm-stopped-not-deallocated'])
+      for (const a of byId(id).actions.filter((x) => x.allow_shell)) expect(looseAllowShellRegex(a.match_regex!), a.id).toBeUndefined()
+  })
+  it('rejects half-anchored alternations, trailing literal \\$, and wildcards that can carry operators', () => {
+    for (const rx of ['^a|b$', '^a$|^b|c$', '^a$|b$', '^aws foo .*$', '^aws foo .+$', '^aws foo \\S+$', '^aws foo [^ ]+$', '^aws foo \\W$', '^aws foo\\$', '^aws foo', 'aws foo$', '^(a|b)$|c'])
+      expect(looseAllowShellRegex(rx), rx).toBeTypeOf('string')
   })
 })

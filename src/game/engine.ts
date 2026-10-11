@@ -11,6 +11,7 @@ import type { Action, ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
 import { endpointPolicyVerdict, iamPolicyVerdict } from './awsPolicyCheck.ts'
 import { isShellPrompt, readsFileOnDisk } from './paths.ts'
+import { hasShellOperators, hasUnsafeSyntax, repeatsFlag } from './typedLine.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
@@ -132,17 +133,7 @@ export function step(scenario: Scenario, s: Session, e: GameEvent): Session {
 // Collapse runs of spaces so "df  -h " matches "df -h".
 export const normalize = (input: string) => input.trim().replace(/\s+/g, ' ')
 
-// Whether a line uses shell operators (pipes, lists, redirection) outside quotes.
-export function hasShellOperators(cmd: string): boolean {
-  let quote: string | undefined
-  for (const ch of cmd) {
-    if (quote) {
-      if (ch === quote) quote = undefined
-    } else if (ch === '"' || ch === "'") quote = ch
-    else if ('|;&<>'.includes(ch)) return true
-  }
-  return false
-}
+export { hasShellOperators, hasUnsafeSyntax, repeatsFlag }
 
 export const NOT_YET = 'Not run: that changes the system. Declare a root cause first, then fix it.'
 
@@ -151,45 +142,10 @@ export const missingPrereq = (cur: Scenario, a: Action, taken: Set<string>) =>
   (a.after ?? []).map((id) => cur.actions.find((x) => x.id === id)).find((p) => p && !taken.has(p.id))
 export const notYetAfter = (p: Action) => `Not yet: do this first: ${p.label}`
 
-// A typed line earns an action only if it is ONE plain command. The action's regex is matched against the
-// text, but the shell would run what the text MEANS: a second command after `&&`/`;`/`|`, a substitution
-// (`$(...)`, backticks, `${...}`, `$VAR`; these run even inside double quotes), a redirection, or a newline
-// can change what actually happens, so such a line is not credited (nor counted as a wrong action).
-// Operators inside matching quotes are data (a JSON policy document), except expansions in double quotes.
-// `allow_shell: true` on an action opts out (for a command whose point is a redirection); the validator
-// then requires a fully anchored regex, so nothing can ride along.
-export function hasUnsafeSyntax(line: string): boolean {
-  const raw = line.trim().replace(/;$/, '') // one closing `;` ends a SQL statement and does nothing in a shell
-  if (/[\n\r`]/.test(raw) || hasShellOperators(raw)) return true
-  let single = false
-  let double = false
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i]
-    if (single) single = ch !== "'"
-    else if (ch === '\\') i++
-    else if (ch === "'" && !double) single = true
-    else if (ch === '"') double = !double
-    else if (ch === '$' && /[({A-Za-z_]/.test(raw[i + 1] ?? '')) return true
-  }
-  return false
-}
-
-// A `--flag` (or `-x`) given twice: the real CLI takes the last value, the regex saw the first.
-export function repeatsFlag(cmd: string): boolean {
-  const seen = new Set<string>()
-  for (const tok of cmd.match(/"[^"]*"|'[^']*'|\S+/g) ?? []) {
-    const m = /^(--[A-Za-z][\w-]*|-[A-Za-z])(?:=|$)/.exec(tok)
-    if (!m) continue
-    if (seen.has(m[1])) return true
-    seen.add(m[1])
-  }
-  return false
-}
-
 // The action a typed command takes, if any (first match wins).
 export const actionFor = (scenario: Scenario, input: string) =>
   scenario.actions.find((a) => {
-    if (!a.allow_shell && hasUnsafeSyntax(input)) return false
+    if (!a.allow_shell && hasUnsafeSyntax(input, isShellPrompt(scenario))) return false
     // Repeats only void a FIX: a repeated flag on a wrong/destructive command still lands the penalty.
     if (a.kind === 'fix' && repeatsFlag(normalize(input))) return false
     return (
