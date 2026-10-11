@@ -75,10 +75,18 @@ describe('terraform-ignore-changes-autoscaling on the simulator', () => {
   })
 
   it('(e) list spellings: one line, multi-line, with other attributes, spacing', async () => {
-    for (const list of ['[desired_count]', '[ desired_count ]', '[desired_count, tags]', '[tags, desired_count]', '[\n      desired_count,\n    ]', '["desired_count"]']) {
+    for (const list of ['[desired_count]', '[ desired_count ]', '[\n      desired_count,\n    ]', '["desired_count"]', '[desired_count,]']) {
       const { sh, out } = await play('cd ~/infra', ECS(LC(list)), 'terraform plan')
       expect(out[2].output, list).toContain('No changes.')
       expect(await detectedAll(sh), list).toEqual(FIXED)
+    }
+  })
+
+  it('(e1) ignoring more than desired_count (task_definition, tags) is a clean plan but not credited: it hides drift', async () => {
+    for (const list of ['[desired_count, task_definition]', '[task_definition, desired_count]', '[desired_count, tags]', '[tags, desired_count]']) {
+      const { sh, out } = await play('cd ~/infra', ECS(LC(list)), 'terraform plan')
+      expect(out[2].output, list).toContain('No changes.')
+      expect(await detectedAll(sh), list).toEqual(NONE)
     }
   })
 

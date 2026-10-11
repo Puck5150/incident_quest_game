@@ -99,7 +99,7 @@ hypotheses:
 
 actions:
   - id: ignore-desired
-    label: "Add lifecycle { ignore_changes = [desired_count] } to aws_ecs_service.checkout"
+    label: "Add lifecycle { ignore_changes = [desired_count] } (that attribute only) to aws_ecs_service.checkout"
     kind: fix
     done_when:
       all:
@@ -109,7 +109,7 @@ actions:
             id: "arn:aws:ecs:us-east-1:123456789012:service/prod/checkout"
             attr: desired_count
             equals: 12
-        - file_contains: { path: /home/you/infra/ecs.tf, matches: 'ignore_changes\s*=\s*\[[^\]]*desired_count' }
+        - file_contains: { path: /home/you/infra/ecs.tf, matches: 'ignore_changes\s*=\s*\[\s*"?desired_count"?\s*,?\s*\]' }
         - plan_clean: true
         - not: { applied: { op: update, address: aws_ecs_service.checkout } }
     feedback: "Terraform still sets the initial count when it creates the service, then leaves it to the autoscaler. Plans stop showing the reset."
@@ -140,7 +140,7 @@ evidence_labels:
 hints:
   nudge: "Read the plan for a change nobody asked for."
   direction: "Two things set the service's desired count. Which one wins at each apply?"
-  answer: "Terraform keeps resetting the autoscaler's value. Add lifecycle { ignore_changes = [desired_count] }."
+  answer: "Terraform keeps resetting the autoscaler's value. Add lifecycle { ignore_changes = [desired_count] } and nothing else in that list: ignoring task_definition or the whole resource would hide real drift and stop deploys from showing in plans. Then bring the autoscaling target and policy into Terraform too, so the scaling owner is in code."
 
 analogy:
   title: "Two people setting the thermostat"
@@ -161,13 +161,18 @@ debrief:
   ideal_path:
     - "Read the plan: desired_count 12 -> 2."
     - "Find the other owner: an autoscaling target on the same service."
-    - "Add ignore_changes for desired_count."
+    - "Add ignore_changes for desired_count only (not task_definition or all)."
     - "Plan again: no changes."
   real_world: |
     Whenever another system owns an attribute (autoscalers, deployment
     tools, sidecar injectors), ignore it in Terraform so the two don't fight.
-    Use ignore_changes narrowly, for specific attributes, not the whole
-    resource.
+    Use ignore_changes narrowly, for the one attribute the other system
+    owns, not the whole resource and not attributes Terraform should keep
+    controlling (ignoring task_definition would stop Terraform deploying new
+    revisions and hide drift). Better still, manage the Application Auto
+    Scaling target and policy (aws_appautoscaling_target and
+    aws_appautoscaling_policy) in the same code, so the min, max and scaling
+    rules are reviewed and the ignore has a visible owner.
 
 concepts:
   - term: "ignore_changes"
