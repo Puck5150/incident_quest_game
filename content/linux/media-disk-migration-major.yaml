@@ -390,7 +390,7 @@ stages:
       - id: recover-hidden
         label: "With / bind-mounted at /mnt/rootfs, sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/"
         kind: fix
-        match_regex: "^sudo rsync -a /mnt/rootfs/srv/media/ /srv/media/?$"
+        match_regex: "^sudo rsync (-a[vhP]{0,3}|--archive) /mnt/rootfs/srv/media/ /srv/media/?$"
         feedback: "The weekend uploads are on the new disk with their owners and times, and the site never went down: the bind mount reached them without unmounting. The 12 GB is still on the root filesystem though: copy is not move, so check the copy and then remove the originals."
       - id: cleanup-hidden
         label: "Verify the copy (diff -r shows nothing missing from /srv/media), then delete the originals under /mnt/rootfs/srv/media (not /srv/media)"

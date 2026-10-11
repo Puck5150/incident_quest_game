@@ -26,3 +26,11 @@ describe('ssh-strictmodes', () => {
   ])('does not credit %s', (c) => expect(id(c)).not.toBe('app-tempdir'))
   it.each(['sudo chmod 777 /var/lib/deploy-agent/tmp', 'chmod -R a+rwx /var/lib/deploy-agent'])('%s is wrong', (c) => expect(actionFor(sc, c)).toMatchObject({ id: 'tempdir-777', kind: 'wrong' }))
 })
+
+describe('ssh-strictmodes spellings and feedback', () => {
+  it('credits 0755 and compact install flags', () => {
+    expect(id('sudo chmod 0755 /home/deploy')).toBe('fix-home')
+    expect(id('sudo install -d -odeploy -m700 /var/lib/deploy-agent/tmp')).toBe('app-tempdir')
+  })
+  it.each(['sudo chmod 775 /var/lib/deploy-agent/tmp', 'chmod 1777 /var/lib/deploy-agent/tmp', 'chmod 666 /var/lib/deploy-agent/tmp', 'chmod o+rwx /var/lib/deploy-agent/tmp', 'chmod g+w /var/lib/deploy-agent'])('%s gets teaching feedback', (c) => expect(actionFor(sc, c)).toMatchObject({ id: 'tempdir-777', kind: 'wrong' }))
+})

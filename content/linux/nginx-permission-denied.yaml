@@ -123,19 +123,24 @@ actions:
     label: "sudo chgrp -R www-data /srv/www/promo"
     kind: fix
     # chgrp -R www-data, or chown :www-data / alice:www-data (owner stays Alice). Optional sudo, optional trailing slash.
-    match_regex: "^(sudo )?(chgrp (-R )?www-data|chown (-R )?(alice)?:www-data) /srv/www/promo/?$"
+    match_regex: "^(sudo )?(chgrp (-R |--recursive )?www-data|chown (-R |--recursive )?(alice)?:www-data) /srv/www/promo/?$"
     feedback: "The folder's group is now www-data, the group nginx's workers run in, while Alice stays the owner. Group is how you grant the web server access without handing it the content. The group still needs its mode bits set (next step)."
   - id: mode-750
     label: "sudo chmod -R u=rwX,g=rX,o= /srv/www/promo"
     kind: fix
     # directories 750 / files 640: u=rwX,g=rX,o= (or the equivalent g+rX,o-rwx with u unchanged), or chmod 750 on the folder itself.
-    match_regex: "^(sudo )?(chmod -R (u=rwX,g=rX,o=|u=rwX,g=rX,o-rwx|g\\+rX,o-rwx|g=rX,o=)|chmod 750) /srv/www/promo/?$"
+    match_regex: "^(sudo )?(chmod (-R |--recursive )(u=rwX,g=rX,o=|u=rwX,g=rX,o-rwx|g\\+rX,o-rwx|g=rX,o=)|chmod (0?750|u=rwx,g=rx,o=)) /srv/www/promo/?$"
     feedback: "The group gets read and search (r, and x only on directories), the owner keeps write, everyone else is shut out. nginx can serve the site but cannot change it, and other local users still cannot browse it."
   - id: chown-www
     label: "sudo chown -R www-data:www-data /srv/www/promo"
     kind: wrong
     match_regex: "^(sudo )?chown (-R )?www-data(:(www-data)?)? /srv/www/promo/?$"
     feedback: "The site loads, but now the web worker owns its own content and can rewrite it. If nginx (or anything later added to run as www-data, like PHP) is compromised, the attacker can deface or backdoor the pages. Keep the owner as the deploy user and grant www-data read-only access through the group: chgrp www-data, then chmod directories 750 and files 640."
+  - id: chmod-loose
+    label: "sudo chmod -R 750 /srv/www/promo (or 770 / g+w)"
+    kind: wrong
+    match_regex: "^(sudo )?chmod ((-R |--recursive )0?750|(-R |--recursive )?0?77[0-5]|(-R |--recursive )?g\\+(w|rwX?)) /srv/www/promo/?$"
+    feedback: "Close, but not right. A recursive 750 makes every page and image executable, which static files never need (use u=rwX,g=rX,o= so only directories get x). Any group write bit (770, g+w) lets the web worker, which is in group www-data, rewrite the site: the group should only read."
   - id: chmod-open
     label: "sudo chmod 755 /srv/www/promo"
     kind: wrong

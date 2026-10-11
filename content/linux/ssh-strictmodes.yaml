@@ -93,13 +93,13 @@ actions:
   - id: fix-home
     label: "sudo chmod 755 /home/deploy"
     kind: fix
-    match_regex: "^(sudo )?chmod (755|750|700|go-w|g-w,o-w|o-w,g-w) /home/deploy/?$"
+    match_regex: "^(sudo )?chmod (0?755|0?750|0?700|go-w|g-w,o-w|o-w,g-w) /home/deploy/?$"
     feedback: "Only deploy can write to its home directory again, so sshd trusts the keys file and the deploy key works. That alone leaves the reason it was opened unsolved: the app still has no scratch directory, and the next admin will chmod 777 again."
   - id: app-tempdir
     label: "sudo install -d -o deploy -g deploy -m 700 /var/lib/deploy-agent/tmp"
     kind: fix
     # install -d with -o deploy, -m 700|750 (optionally -g deploy), each flag once in any order, exactly this path.
-    match_regex: "^(sudo )?install -d (?=.*-o deploy )(?=.*-m )(?!.*(-o .*-o |-m .*-m |-g .*-g ))((-o deploy|-g deploy|-m 0?7[05]0) ){2,3}/var/lib/deploy-agent/tmp/?$"
+    match_regex: "^(sudo )?install -d (?=.*-o ?deploy )(?=.*-m ?[0-7])(?!.*(-o .*-o |-m.*-m |-g .*-g ))((-o ?deploy|-g ?deploy|-m ?0?7[05]0) ){2,3}/var/lib/deploy-agent/tmp/?$"
     feedback: "A dedicated directory owned by deploy, mode 700, outside the home directory: the app gets the write access it needed, nobody else does, and sshd's home-directory check is never involved."
   - id: point-app
     label: "Point deploy-agent at /var/lib/deploy-agent/tmp (systemd StateDirectory=deploy-agent or TMPDIR in its unit), restart it, and check an upload works"
@@ -108,8 +108,8 @@ actions:
   - id: tempdir-777
     label: "sudo chmod 777 /var/lib/deploy-agent/tmp"
     kind: wrong
-    match_regex: "^(sudo )?chmod (-R )?(777|a\\+rwx|o\\+w|ugo\\+rwx) /var/lib/deploy-agent(/tmp)?/?$"
-    feedback: "The same shortcut moved one directory down. The app runs as deploy, so it never needed world-write: owner deploy with mode 700 is enough."
+    match_regex: "^(sudo )?chmod (-R )?(0?777|1777|0?77[5-6]|0?66[0-6]|a\\+rwx|o\\+(w|rwx?)|g\\+w|ugo\\+rwx) /var/lib/deploy-agent(/tmp)?/?$"
+    feedback: "The same shortcut moved one directory down. The app runs as deploy, so it never needed group or world write (775, 666 and 1777 included, and a sticky bit does not make a shared directory private): owner deploy with mode 700 is enough."
   - id: strictmodes-no
     label: "Set StrictModes no in sshd_config and reload sshd"
     kind: destructive

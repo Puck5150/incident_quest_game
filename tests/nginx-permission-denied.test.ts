@@ -21,6 +21,9 @@ describe('nginx-permission-denied', () => {
     'sudo chmod 750 /srv/www/promo',
   ])('credits %s as the mode step', (c) => expect(id(c)).toBe('mode-750'))
 
+  it.each(['sudo chmod 0750 /srv/www/promo', 'sudo chmod -R --recursive g+rX,o-rwx /srv/www/promo'.replace('-R --recursive', '--recursive'), 'chmod u=rwx,g=rx,o= /srv/www/promo', 'sudo chmod --recursive u=rwX,g=rX,o= /srv/www/promo'])('credits %s as the mode step', (c) => expect(id(c)).toBe('mode-750'))
+  it('credits chgrp --recursive', () => expect(id('sudo chgrp --recursive www-data /srv/www/promo')).toBe('group-www'))
+  it.each(['sudo chmod -R 750 /srv/www/promo', 'sudo chmod 770 /srv/www/promo', 'chmod -R g+w /srv/www/promo', 'sudo chmod -R 0750 /srv/www/promo'])('gives teaching feedback for %s', (c) => expect(actionFor(sc, c)).toMatchObject({ id: 'chmod-loose', kind: 'wrong' }))
   it.each([
     'sudo chown -R www-data:www-data /srv/www/promo',
     'chown -R www-data:www-data /srv/www/promo/',

@@ -23,3 +23,10 @@ describe('media-disk-migration-major', () => {
   it.each(['sudo rm -rf /srv/media/*', 'rm -rf /srv/media'])('%s on the live disk is destructive', (c) => expect(actionFor(st, c)).toMatchObject({ id: 'rm-new-disk', kind: 'destructive' }))
   it('does not auto-credit a typed delete of the hidden copy (click after verifying)', () => expect(id('sudo rm -rf /mnt/rootfs/srv/media/*')).toBeUndefined())
 })
+
+describe('media-disk-migration-major spellings', () => {
+  const s2 = atStage(loadIncident('media-disk-migration-major'), 2)
+  const i = (c: string) => actionFor(s2, c)?.id
+  it.each(['sudo rsync -av /mnt/rootfs/srv/media/ /srv/media/', 'sudo rsync -ah /mnt/rootfs/srv/media/ /srv/media', 'sudo rsync --archive /mnt/rootfs/srv/media/ /srv/media/'])('credits %s', (c) => expect(i(c)).toBe('recover-hidden'))
+  it.each(['sudo rsync -a --remove-source-files /mnt/rootfs/srv/media/ /srv/media/', 'sudo rsync -av --delete /mnt/rootfs/srv/media/ /srv/media/'])('does not credit %s', (c) => expect(i(c)).not.toBe('recover-hidden'))
+})
