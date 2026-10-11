@@ -382,6 +382,8 @@ stages:
       - id: enforce-owner
         label: "Set Object Ownership on acme-dr-orders-docs to Bucket owner enforced (aws s3api put-bucket-ownership-controls ... BucketOwnerEnforced --profile dr)"
         kind: fix
+        allow_shell: true # the AWS-docs shorthand Rules=[{...}] is typed unquoted (glob/brace characters); the regex pins the whole line
+        example: "aws s3api put-bucket-ownership-controls --bucket acme-dr-orders-docs --ownership-controls Rules=[{ObjectOwnership=BucketOwnerEnforced}] --profile dr"
         match_regex: "^aws s3api put-bucket-ownership-controls --bucket acme-dr-orders-docs --ownership-controls (Rules=\\[\\{ObjectOwnership=BucketOwnerEnforced\\}\\]|'Rules=\\[\\{ObjectOwnership=BucketOwnerEnforced\\}\\]'|'\\{\"Rules\":\\[\\{\"ObjectOwnership\":\"BucketOwnerEnforced\"\\}\\]\\}') --profile dr$"
         feedback: "ACLs are off and the DR account now owns every object in the bucket, including replicas already there; access is decided by its own policies. Anything that still uploads with ACLs (the legacy uploader the module comment mentions) will now fail and must be retired."
       - id: fix-module

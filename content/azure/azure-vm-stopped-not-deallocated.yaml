@@ -82,6 +82,7 @@ actions:
   - id: deallocate-now
     label: "az vm deallocate --ids $(az vm list -g rg-test --query \"[].id\" -o tsv)"
     kind: fix
+    allow_shell: true # the $(az vm list …) is the command; the regex pins the whole line, substitution included
     match_regex: "^az vm deallocate --ids \\$\\(az vm list (-g|--resource-group) rg-test --query \"?\\[\\]\\.id\"? (-o|--output) tsv\\)$"
     feedback: "Deallocated VMs release their hardware, and compute charges stop. Disks (and any static public IPs) are still billed, as the docs warn."
   - id: replace-cron
@@ -91,6 +92,7 @@ actions:
   - id: az-vm-stop
     label: "az vm stop --ids $(az vm list -g rg-test --query \"[].id\" -o tsv)"
     kind: wrong
+    allow_shell: true
     match_regex: "^az vm stop --ids \\$\\(az vm list (-g|--resource-group) rg-test --query \"?\\[\\]\\.id\"? (-o|--output) tsv\\)$"
     feedback: "az vm stop powers the VMs off but keeps them allocated: the CLI's own help says the VM will continue to be billed. You've rebuilt the same problem from outside."
   - id: smaller-size

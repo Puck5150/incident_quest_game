@@ -325,6 +325,7 @@ stages:
       - id: unique-index
         label: "CREATE UNIQUE INDEX CONCURRENTLY ON invoices (customer_id, period) WHERE status <> 'void'"
         kind: fix
+        example: "psql -d billing -c \"CREATE UNIQUE INDEX CONCURRENTLY ON invoices (customer_id, period) WHERE status <> 'void'\""  # the label is the bare SQL; at this shell prompt the player types it through psql
         match_regex: "^(?:psql -d billing (?:-c|-Atc) \"[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee] )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] (?:\\(status (?:<>|!=) 'void'\\)|status (?:<>|!=) 'void') ?;?\"|[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee] )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] (?:\\(status (?:<>|!=) 'void'\\)|status (?:<>|!=) 'void') ?;?)$"
         feedback: "The database now refuses a second live invoice for a customer and period, whatever the job does, and CONCURRENTLY let invoicing keep running during the build. If a concurrent build ever fails it leaves an INVALID index: drop it and retry."
       - id: delete-dups

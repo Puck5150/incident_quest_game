@@ -421,6 +421,7 @@ stages:
       - id: rm-new-disk
         label: "sudo rm -rf /srv/media/*"
         kind: destructive
+        allow_shell: true # the glob is the point; the regex pins the whole line
         match_regex: "^(sudo )?rm -(rf|fr|r) /srv/media(/\\*)?/?$"
         feedback: "/srv/media is the new disk now: this deletes the live catalogue. The 12 GB to remove is the old copy under /mnt/rootfs/srv/media, on the root filesystem."
     solution_paths:
