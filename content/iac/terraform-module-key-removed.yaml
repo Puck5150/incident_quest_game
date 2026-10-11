@@ -303,10 +303,10 @@ actions:
         - state_has: module.stack["east"]
         - not: { applied: { op: delete, address: 'module.stack["west"]' } }
         - not: { applied: { op: delete, address: 'module.stack["east"]' } }
-    feedback: "Both regions, the west VPC and the west database are in place and the plan is empty: nothing was destroyed. The PR as written cannot merge safely. Decommissioning a region is a plan of its own: confirm the data is exported or snapshotted, then take the database out of management or remove the guard in a separate reviewed change."
+    feedback: "Both regions, the west VPC and the west database are in place and the plan is empty: nothing was destroyed. This is the safe hold: the PR as written cannot merge. Decommissioning a region is a plan of its own: get the data team's written confirmation of the export, take and verify a final snapshot, then remove the guard and destroy in a separate reviewed change."
   - id: stop-managing-west
-    label: "Forget west in state with terraform state rm 'module.stack[\"west\"]' (deliberately leaving its objects running in AWS to migrate separately), then confirm the plan has no changes"
-    kind: fix
+    label: "Forget west in state with terraform state rm 'module.stack[\"west\"]' (leaving its objects running in AWS to migrate separately), then confirm the plan has no changes"
+    kind: wrong
     done_when:
       all:
         - state_lacks: module.stack["west"]
@@ -316,7 +316,7 @@ actions:
         - reality_has: { type: aws_vpc, id: vpc-04e9b7d1a3c5f2860 }
         - not: { applied: { op: delete, address: 'module.stack["west"]' } }
         - not: { applied: { op: delete, address: 'module.stack["east"]' } }
-    feedback: "Terraform no longer manages the west stack and the plan is empty, and the west VPC and database are still running in AWS, untouched. That is a real decision, not a cleanup: those objects are now orphaned, with nothing in code to create, change, track or eventually delete them. Write down that it was done and who owns the migration, and export or snapshot the database and delete the leftovers on purpose."
+    feedback: "The plan is empty only because Terraform has forgotten west. The data team has not confirmed their export, so you have orphaned a running, unencrypted, Multi-AZ production database with skip_final_snapshot = true and its admin password in state: nothing in code creates, patches, tags, backs up or eventually deletes it, and nobody is accountable for it. Hiding a decommission from the plan is not doing it. Put the key back, get the export confirmed and a final snapshot verified, and retire the stack in a reviewed change."
   - id: remove-guard-and-apply
     label: "Remove prevent_destroy from the nested data module and apply so CI goes green"
     kind: destructive
@@ -331,7 +331,6 @@ actions:
 
 solution_paths:
   - [restore-the-key]
-  - [stop-managing-west]
 
 key_evidence: [prevent-destroy-saved-you, west-not-in-config, west-in-state, pr-removes-west, west-db-alive]
 
@@ -345,7 +344,7 @@ evidence_labels:
 hints:
   nudge: "The reason line under each destroy says why Terraform wants it. Read it, then compare terraform state list with the diff."
   direction: "The module call creates an instance per entry in var.regions. What happens to an instance whose key is no longer in that set? Try the -target the ticket suggests and see whether it changes what the plan would do to west."
-  answer: "Removing west from var.regions removes module.stack[\"west\"], and a removed instance is destroyed with everything in it. Either put west back, or deliberately stop managing it with terraform state rm 'module.stack[\"west\"]' (the objects keep running, now unmanaged) while its data is migrated. Do not remove prevent_destroy to get the PR through."
+  answer: "Removing west from var.regions removes module.stack[\"west\"], and a removed instance is destroyed with everything in it. Put west back (the plan is then empty) and hold the PR until the data team has confirmed their export and a final snapshot is verified; then retire west in its own reviewed change. Do not terraform state rm it to quiet the plan (that orphans a running database), and do not remove prevent_destroy to get the PR through."
 
 analogy:
   title: "Crossing a branch off the roster"
@@ -373,7 +372,8 @@ debrief:
     - "Compare terraform state list (both regions) with git diff main (one entry removed from var.regions)."
     - "Confirm in AWS that the west database exists and is available."
     - "Try -target on east if you like: terraform apply -target='module.stack[\"east\"]' does nothing to west, prints the targeting warning, and the next plain plan is exactly as dangerous."
-    - "Choose deliberately: put west back until the data is exported and the decommission is planned, or terraform state rm 'module.stack[\"west\"]' to stop managing it while migrating, and record that those objects are now unmanaged."
+    - "Put west back and hold the PR: the plan is empty and nothing is destroyed. terraform state rm would also quiet the plan, but only by orphaning an unencrypted production database that nobody manages."
+    - "Decommission west properly in a separate change: written confirmation from the data team that the export is done, a final snapshot taken and verified, then the guard removed and the stack destroyed through review."
   real_world: |
     Removing a key from for_each, or an element from count, is a delete
     request for that instance and everything in it. The change looks like
@@ -385,7 +385,9 @@ debrief:
     nothing depends on it, then either remove the guard in its own reviewed
     change and destroy, or forget the objects with terraform state rm and
     handle them outside Terraform. State rm leaves the objects running and
-    unmanaged, so it moves the work rather than doing it. -target limits
+    unmanaged, so it moves the work rather than doing it; without a
+    confirmed export and an owner it is an incident waiting to happen
+    (a billed, unpatched, unencrypted database nobody can find in code). -target limits
     one plan or apply to chosen objects and their dependencies; it is meant
     for exceptional situations, and the next ordinary plan still contains
     the destroy.

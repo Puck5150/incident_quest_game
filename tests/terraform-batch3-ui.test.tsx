@@ -244,7 +244,7 @@ describe('terraform-module-key-removed through the UI', () => {
     methodical(await g.closeClean('restore-the-key'))
   })
 
-  it('ideal path 2: state rm west leaves it running; the git ways to undo the PR have no simulated output', async () => {
+  it('wrong route: state rm west leaves it running and orphaned: one wrong action, no fix, no close-out; the git ways to undo the PR have no simulated output', async () => {
     const g = await mount('terraform-module-key-removed')
     g.declare(ROOT)
     for (const c of ['git checkout main -- variables.tf', 'git restore --source=main variables.tf', 'git revert HEAD', 'git reset --hard HEAD~1']) {
@@ -254,7 +254,10 @@ describe('terraform-module-key-removed through the UI', () => {
     }
     await g.run(`terraform state rm 'module.stack["west"]'`, 'terraform plan')
     await waitFor(() => expect(output()).toMatch(CLEAN))
-    await g.closeClean('stop-managing-west')
+    await g.settle()
+    expect(g.taken()).toEqual(['stop-managing-west'])
+    expect(g.wrongCount()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
   })
 
   it('trap: remove prevent_destroy and apply: destructive once, restoring the key afterwards earns nothing', async () => {

@@ -27,6 +27,12 @@ describe('terraform-module-key-removed on the simulator', () => {
     expect(scenario.terminal!.commands.some((c) => (c.match ?? c.example ?? '').startsWith('terraform'))).toBe(false)
   })
 
+  it('only restoring the key is credited; state rm of west is a wrong action, not a fix', () => {
+    expect(scenario.solution_paths).toEqual([['restore-the-key']])
+    expect(scenario.actions.find((a) => a.id === 'stop-managing-west')!.kind).toBe('wrong')
+    expect(scenario.hints.answer).toMatch(/hold the PR/i)
+  })
+
   it('(a) the first plan is a partial plan: west is destroyed because its key is not in configuration, then prevent_destroy fails; nothing is credited', async () => {
     const { sh, out } = await play('cd ~/infra', 'terraform plan', 'terraform state list')
     const plan = out[1]
@@ -58,7 +64,7 @@ describe('terraform-module-key-removed on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(RESTORED)
   })
 
-  it('(c) fix B: state rm of the west module instance (single-quoted, double-quoted, escaped), plan clean, AWS untouched', async () => {
+  it('(c) wrong route: state rm of the west module instance (detected as a wrong action, never a fix) (single-quoted, double-quoted, escaped), plan clean, AWS untouched', async () => {
     for (const rm of [RM, `terraform state rm "module.stack[\\"west\\"]"`, 'terraform state rm module.stack\\[\\"west\\"\\]']) {
       const { sh, out } = await play('cd ~/infra', rm, 'terraform state list', 'terraform plan')
       expect(out[1].exitCode, rm).toBe(0)
