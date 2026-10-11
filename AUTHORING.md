@@ -105,18 +105,35 @@ stage reopens the incident into the next one (see below).
   command, and the validator checks that.
 - **What a typed line may contain (engine guard, all action kinds).** A typed line
   earns an action only if it is ONE plain command, read the way bash reads it (one
-  scanner in `src/game/typedLine.ts`: backslash escapes, single quotes literal, double
-  quotes keep their text). Never credited, not even as a `wrong`/`destructive` match
-  (the line falls through to the scripted/real-shell answer like any unscripted
-  command): an unquoted `; & | < >` (at a SQL prompt only `;` counts, since `<>` and
-  `||` are SQL), a backtick, `$` anywhere unquoted, `$(`/`${`/`$NAME` even inside
-  double quotes (the shell expands them there), `$'...'`, a newline, an unterminated
-  quote or a trailing backslash, and in a shell prompt also unquoted `* ? [`, `{`/`}`
-  attached to a word (`{a,b}`; a standalone `{ 6379 }` as in nft is fine), a leading
-  `~` and a leading `#`. One closing `;` is fine. Operators inside matching quotes
-  are data (a JSON policy document, a SQL statement in `psql -c "..."`). So type
-  AWS shorthand like `Rules=[{...}]` or `gs://b/**` quoted, and write the quoted
-  form in the label.
+  scanner in `src/game/typedLine.ts`; `tests/typed-line-scanner.test.ts` checks it
+  against real bash). Never credited, not even as a `wrong`/`destructive` match (the
+  line falls through to the scripted/real-shell answer like any unscripted command):
+  - an unquoted `; & | < >`, `(` or `)`, a backtick, `$` anywhere unquoted, `$'...'`;
+  - inside double quotes: a backtick, and `$` followed by a letter, digit, `_`, `(`,
+    `{` or one of `? * @ # ! $ -` (the shell expands these there);
+  - a newline, any whitespace other than a plain space or tab (NBSP and other
+    Unicode spaces split words in the engine's regex view but not in bash), an
+    unterminated quote, a trailing backslash;
+  - unquoted `* ? [`, `{`/`}` attached to a word (`{a,b}`; a standalone `{ 6379 }`
+    as in nft is fine), a leading `~` or `#`, and `~` in an assignment word
+    (`NAME=~`, `NAME=a:~`).
+  One closing `;` is fine. Operators inside matching quotes are data (a JSON policy
+  document, `psql -c "..."`). So type AWS shorthand like `Rules=[{...}]` or
+  `gs://b/**` quoted, and write the quoted form in the label and the regex. When a
+  line is rejected ONLY for an unquoted glob/brace/`~`/`#` and would earn an action
+  if quoted, the terminal adds a hint ("Quote that argument, e.g. 'gs://bucket/**'").
+  **SQL prompts are explicit.** `typedMode(scenario)` (`src/game/paths.ts`) reads
+  the terminal prompt: `name=#`, `name=>`, `name->`, `name-#` (psql, e.g. `postgres=#`,
+  `shop=>`) and `sqlite>` are SQL; `mysql>` is MySQL; EVERYTHING else is a shell
+  (`user@host:~$`, `[admin@docs-01 ~]$`, `azureuser@vm (vnet):~$`, `PS C:\>`). In SQL
+  modes there is no shell, so the line is read with SQL rules: `'..'` strings and
+  `".."` identifiers with a doubled quote as the escape (no backslash escapes;
+  MySQL allows them inside strings and has `#` comments and backtick identifiers),
+  `--` and `/* */` comments (an apostrophe in a comment is fine), `<>`, `||`, `&`
+  are ordinary SQL, and `;` may only be the last significant token. A second
+  statement however disguised, a stray `$` (dollar quoting), a backslash outside
+  quotes (psql meta-commands such as `\!`), a newline or an unterminated quote or
+  comment is rejected. A new SQL prompt style needs a line in `typedMode`.
   A line that repeats a `--long-flag` or `-x` (same scanner, so a flag inside a
   quoted value is not a flag; nothing after a bare `--` is a flag) is not credited
   as a `fix` (the real CLI takes the last value, a regex sees the first);
@@ -125,15 +142,20 @@ stage reopens the incident into the next one (see below).
   (`[^\\s-]`), since `--kms-key-id --region x` gives the key the next flag; anchor a
   flag on its left too (`(?:^|\\s)--kms-key-id`).
   Opt-out, only when the command IS the syntax (`: > /var/log/app/app.log`,
-  `rm -rf /srv/media/*`, `az vm stop --ids $(az vm list ...)`): `allow_shell: true`
-  on the action. The validator then requires every top-level `|` branch of the regex
-  to start with `^` and end with an unescaped `$`, with no unescaped `.`, `\\S`,
-  `\\W`, `\\D` or negated class `[^...]` anywhere (they could carry `;id`): spell the
-  text out. It also fails if an action's `example:` (a typed line its regex must
-  accept; add one whenever cheap), or the command written in its label when the
-  regex accepts it, is rejected by the guard and the action lacks `allow_shell`, or
-  repeats a flag on a fix. Actions with neither are listed in CONTENT_TODO.md.
-  Tests: `tests/typed-command-guard.test.ts`.
+  `rm -rf /srv/media/*`, `az vm stop --ids $(az vm list ...)`, unquoted AWS
+  shorthand): `allow_shell: true` on the action. The validator then requires
+  (`looseAllowShellRegex`): every top-level `|` branch starts with `^` and ends with
+  an unescaped `$`; no unescaped `.`; no `\S \W \D \P \p` (alone or in a class); no
+  negated class `[^...]`; no class holding `; & | < > $` or a backtick, nor a range
+  spanning one (`[ -~]`); no lookahead/lookbehind. Spell the text out.
+  **`example:`** is an optional field on an action: one typed line its `match_regex`
+  must accept (the validator fails if it does not). The validator fails if the
+  `example`, or, when there is no `example`, the command written in the label (its
+  trailing "(prose)" removed) when the regex accepts it, is rejected by the guard
+  (in the prompt's mode) or repeats a flag on a fix, and the action lacks
+  `allow_shell`. Add an `example` whenever the label is not the typed command (bare
+  SQL at a shell prompt: `psql -d db -c "..."`). Actions with neither are listed in
+  CONTENT_TODO.md. Tests: `tests/typed-command-guard.test.ts`.
 - **Ordering fixes (`after:`).** `after: [action-id, …]` on a fix (this is the
   action's `after`, unrelated to a `file` action's `file.after`, the text the button
   writes): it is credited only once those fixes are taken, whether typed, clicked or
