@@ -84,9 +84,17 @@ hypotheses:
 
 actions:
   - id: read-your-writes
-    label: "Read from the primary for requests that follow the user's own write (for example, for a few seconds after a save, or for the account pages)"
+    label: "After a user's own write, remember the commit's LSN (pg_current_wal_lsn()) and serve their reads from a replica only once pg_last_wal_replay_lsn() has passed it, otherwise from the primary (or pin that session to the primary)"
     kind: fix
-    feedback: "Users always see their own change; other reads can still go to the replica, which keeps most of the load off the primary."
+    feedback: "Users always see their own change however far behind the replica is, because the decision is made from the replica's actual position, not a guess; other reads can still go to the replica, which keeps most of the load off the primary."
+  - id: fixed-window
+    label: "Read from the primary for a fixed 5 seconds after a save"
+    kind: wrong
+    feedback: "It is a guess: replay lag here already reaches 4.4 s and will pass any fixed window during a bigger import, and the window wastes primary capacity when the replica is current. Compare LSNs instead."
+  - id: lag-alert
+    label: "Alert on replica replay lag (pg_stat_replication replay_lag, or now() - pg_last_xact_replay_timestamp()) well before users would notice, e.g. over 2 s for 5 minutes"
+    kind: fix
+    feedback: "You hear about a growing lag before customers see stale pages, and the LSN check keeps correctness even while you investigate."
   - id: sync-apply
     label: "Make replication synchronous with synchronous_commit = remote_apply for all transactions"
     kind: wrong
@@ -101,7 +109,7 @@ actions:
     feedback: "The primary takes all the load during the import, and you lose your standby for failover."
 
 solution_paths:
-  - [read-your-writes]
+  - [read-your-writes, lag-alert]
 
 key_evidence: [replay-lag, lag-evenings, reads-to-replica]
 

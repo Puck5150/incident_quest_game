@@ -93,9 +93,13 @@ actions:
     kind: fix
     feedback: "PostgreSQL now also listens on db-01's network address. listen_addresses can only change at server start, so the restart is needed."
   - id: hba
-    label: "Add 'host shop shop 10.0.2.30/32 scram-sha-256' to pg_hba.conf and reload"
+    label: "Add 'hostssl shop shop 10.0.2.30/32 scram-sha-256' to pg_hba.conf and reload (hostssl: TLS connections only)"
     kind: fix
-    feedback: "PostgreSQL now accepts the shop user, from app-01 only, with a password. Without it, the connection would get through and be rejected with \"no pg_hba.conf entry\"."
+    feedback: "PostgreSQL now accepts the shop user, from app-01 only, over TLS, with a SCRAM password check. A plain 'host' line would also accept unencrypted connections. Without it, the connection would get through and be rejected with \"no pg_hba.conf entry\"."
+  - id: tls
+    label: "Turn TLS on: ssl = on with a server certificate and key (ssl_cert_file, ssl_key_file), and have the app connect with sslmode=verify-full"
+    kind: fix
+    feedback: "Passwords and order data no longer cross the network in clear text, and verify-full means app-01 checks it is really talking to db-01."
   - id: open-firewall
     label: "sudo ufw allow 5432/tcp"
     kind: wrong
@@ -106,7 +110,7 @@ actions:
     feedback: "That lets anyone who can reach db-01 sign in as any user, including postgres, with no password."
 
 solution_paths:
-  - [listen, hba]
+  - [listen, hba, tls]
 
 key_evidence: [refused, listen-loopback, listen-default, hba-local-only]
 
@@ -144,7 +148,9 @@ debrief:
   real_world: |
     "Refused" (nothing listening) and "timed out" (something dropping
     packets) point at different layers. Only listen on the addresses you
-    need, and keep pg_hba.conf entries as narrow as the app needs.
+    need, and keep pg_hba.conf entries as narrow as the app needs: hostssl
+    with scram-sha-256 and ssl = on (certificate, key, sslmode=verify-full
+    in the client), so credentials and data are never sent in clear text.
 
 concepts:
   - term: "listen_addresses"

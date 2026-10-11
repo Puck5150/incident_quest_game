@@ -95,7 +95,11 @@ actions:
   - id: trust-environment
     label: "Change the trust policy's sub condition to repo:example-shop/shop-api:environment:production, and re-run the deploy"
     kind: fix
-    feedback: "Only jobs that use the production environment, which now needs a reviewer's approval, can assume the role: tighter than before."
+    feedback: "Only jobs that reference the production environment can assume the role, and that environment needs a reviewer's approval. The subject carries no branch, though: any branch's workflow that names environment: production presents the same subject, so this is only as tight as the environment's own rules (see the deployment-branch step)."
+  - id: restrict-environment
+    label: "Restrict the production environment's deployment branches to main, keep required reviewers on, and prevent self-review"
+    kind: fix
+    feedback: "The environment subject doesn't pin a branch, so the environment must: only main can deploy to production, a reviewer other than the author approves, and a feature branch that names environment: production is refused before it ever gets a token."
   - id: wildcard
     label: "Change the condition to StringLike repo:example-shop/*"
     kind: destructive
@@ -110,7 +114,7 @@ actions:
     feedback: "Deploys work again, without the required approval the team just added."
 
 solution_paths:
-  - [trust-environment]
+  - [trust-environment, restrict-environment]
 
 key_evidence: [sts-denied, uses-environment, trust-branch]
 
@@ -122,7 +126,7 @@ evidence_labels:
 hints:
   nudge: "Nothing changed in AWS. What changed about the token GitHub sends when the job has an environment?"
   direction: "Compare the role's trust condition with the subject GitHub uses when a job references an environment."
-  answer: "With an environment, the subject is repo:example-shop/shop-api:environment:production. Update the trust policy's sub condition to that."
+  answer: "With an environment, the subject is repo:example-shop/shop-api:environment:production. Update the trust policy's sub condition to that, and restrict the environment's deployment branches to main with a non-self reviewer."
 
 analogy:
   title: "The badge now says the department"
@@ -147,9 +151,13 @@ debrief:
     - "Note what changed: the job now uses the production environment."
     - "Read the trust policy: it only matches the branch subject."
     - "Match the environment subject instead, then re-run the deploy."
+    - "Restrict the environment to main with required reviewers (no self-review), since the subject carries no branch."
   real_world: |
-    Trusting the environment is often better than trusting a branch: the
-    environment can carry required reviewers and branch rules. Check GitHub's
+    Trusting the environment is often better than trusting a branch, but
+    only if the environment is locked down: the subject does not include
+    the branch, so set the environment's deployment-branch policy to main,
+    require reviewers, and prevent self-review. You can also add claims
+    such as job_workflow_ref to the trust condition. Check GitHub's
     OIDC reference for the exact subject format your repository uses; it
     has changed for newly created repositories.
 

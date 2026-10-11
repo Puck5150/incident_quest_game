@@ -163,13 +163,13 @@ hypotheses:
 
 actions:
   - id: commit-lockfile
-    label: "Run npm install locally, commit the updated package-lock.json, and push"
+    label: "Regenerate the lock file for the express bump only (npm install --package-lock-only), review that the diff touches just the intended packages, commit package-lock.json, and push"
     kind: fix
     feedback: "package.json and the lock file agree again. npm ci succeeds, the tests run, and staging deploys."
   - id: protect-main
-    label: "Protect main: require a pull request and the CI status check before merging"
+    label: "Protect main: require a pull request and the CI status check (up to date with main) before merging, with no bypass: include administrators and disallow force-pushes"
     kind: fix
-    feedback: "A broken commit now fails CI on its pull request instead of landing on main and blocking everyone."
+    feedback: "A broken commit now fails CI on its pull request instead of landing on main and blocking everyone. The rule applies to administrators too, so the people who push directly today can't skip it."
   - id: rerun
     label: "Re-run the failed jobs again"
     kind: wrong
@@ -225,6 +225,11 @@ debrief:
     - "Fix: regenerate and commit the lock file. Prevent: require PRs and passing CI on main."
     - "Verify: the next run on main is green and staging deploys."
   real_world: |
+    Regenerate a lock file with the narrowest command (npm install
+    --package-lock-only, or install just the changed package) and read the
+    diff: a plain npm install can quietly bump unrelated dependencies.
+    Branch protection only counts if it has no bypass: include
+    administrators, or the people who push directly keep doing so.
     Lock files pin exact dependency versions so every install is identical.
     That's a reproducibility and supply-chain safeguard. Using npm ci in CI is
     what catches this mistake; switching to npm install would only hide it.

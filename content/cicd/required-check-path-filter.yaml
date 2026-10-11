@@ -67,7 +67,7 @@ hypotheses:
 
 actions:
   - id: always-run-gate
-    label: "Remove the paths filter from the trigger, and skip the expensive steps inside the job when only docs changed (for example with a changed-files step), so the \"build\" check always reports"
+    label: "Remove the paths filter from the trigger, and skip the expensive steps inside the job when only docs changed (for example git diff --name-only against the base branch, or a third-party changed-files action pinned to a full commit SHA, never a floating tag), so the \"build\" check always reports"
     kind: fix
     feedback: "The workflow now runs on every pull request and reports \"build\"; for docs-only changes it finishes in seconds, so the CI minutes are still saved."
   - id: admin-merge
@@ -123,7 +123,11 @@ debrief:
   real_world: |
     GitHub's advice is to avoid requiring workflows that can be skipped.
     Path filters are fine on optional workflows; for required ones, do the
-    filtering inside the job.
+    filtering inside the job. Do the filter with git diff against the base
+    commit, or pin any third-party action by full commit SHA (a popular
+    changed-files action was compromised in 2025 through its floating
+    tags). A bug in the skip condition can green-light code without tests,
+    so open a test PR that touches src/ and check the full steps run.
 
 concepts:
   - term: "Required status checks"

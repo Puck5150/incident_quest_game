@@ -171,6 +171,10 @@ actions:
     label: "Give the test job its own permissions: contents: read and pull-requests: write"
     kind: fix
     feedback: "pull-requests: write is what lets an action label a pull request. Setting it on the one job that needs it, with contents: read kept for checkout, stays least-privilege."
+  - id: org-default-read
+    label: "Set the organization (and repository) default workflow permissions to read-only, so every workflow starts from least privilege"
+    kind: fix
+    feedback: "The org setting still said Read and write, so any workflow without its own permissions block got a write-capable token. With the default on read-only, each workflow must ask for exactly what it needs, as this one now does."
   - id: only-pr-write
     label: "Give the test job permissions: pull-requests: write (nothing else)"
     kind: wrong
@@ -193,7 +197,7 @@ actions:
     feedback: "The re-run gets a token with the same permissions from the same workflow file, and fails the same way."
 
 solution_paths:
-  - [job-permissions]
+  - [job-permissions, org-default-read]
 
 key_evidence: [label-forbidden, token-permissions, workflow-permissions]
 evidence_labels:
@@ -234,7 +238,9 @@ debrief:
     permissions per job so a job that needs write access doesn't widen
     everyone else's. Never "fix" a permission error by switching to
     pull_request_target or a personal token without understanding what
-    that exposes.
+    that exposes. Also set the organization default (Settings > Actions >
+    Workflow permissions) to read-only: it was still Read and write, which
+    is why every workflow needed a hand-written block to be safe.
 
 sources:
   - title: "GitHub Docs: Workflow syntax, permissions (unspecified permissions are set to none; how permissions are calculated)"

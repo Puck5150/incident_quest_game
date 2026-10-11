@@ -80,6 +80,14 @@ actions:
     label: "Copy the customers missing from production from db-restore back into production (for example, export them with \\copy and insert them back)"
     kind: fix
     feedback: "The 48,213 customers are back, with this morning's orders untouched. Check foreign keys and any changes made to those customers in between."
+  - id: lockdown-restore
+    label: "Treat db-restore as a full production PII copy: limit access to the people doing the recovery while it exists, and once the copy-back is verified, wipe it (stop PostgreSQL, destroy the data directory and volume, expire the base-backup copy)"
+    kind: fix
+    feedback: "The recovery copy holds every customer, including the ones that were never deleted. It's restricted while it exists and destroyed after, so the fix doesn't leave a second, unmanaged copy of the data."
+  - id: least-priv-cleanup
+    label: "Remove the unrestricted DELETE on customers from the cleanup script's role (soft-delete or a narrow, reviewed function), and run bulk deletes in a transaction that checks the row count before COMMIT"
+    kind: fix
+    feedback: "The script can no longer wipe the table by losing a WHERE clause: it has no such right, and a count guard stops a bulk delete that touches more rows than expected."
   - id: restore-in-place
     label: "Stop production and restore it to 10:42:06"
     kind: destructive
@@ -90,7 +98,7 @@ actions:
     feedback: "That stops it happening again tomorrow, but doesn't bring back today's 48,213 customers."
 
 solution_paths:
-  - [restore-side, copy-back]
+  - [restore-side, copy-back, lockdown-restore, least-priv-cleanup]
 
 key_evidence: [delete-time, archiving-ok, orders-today]
 
@@ -130,7 +138,11 @@ debrief:
     Practise point-in-time recovery before you need it, and keep base
     backups plus archived WAL long enough to cover mistakes noticed late.
     For risky scripts, run deletes in a transaction and check the row count
-    before committing.
+    before committing, and give the script's role only the rights it needs
+    (no unbounded DELETE). A restored copy is production data: restrict it
+    and destroy it when done. Set recovery_target_action ('promote' or
+    'pause') so the restored server is queryable, and copy back with care
+    for foreign keys and rows recreated since.
 
 concepts:
   - term: "Base backup"
