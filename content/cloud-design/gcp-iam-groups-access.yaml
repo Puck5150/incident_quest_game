@@ -20,7 +20,7 @@ requirements:
   - "New analysts get access without an IT ticket"
   - "Analysts who move teams lose access automatically"
   - "Analysts can run queries but can't delete or change other resources"
-  - "A phished password alone can't be used to sign in"
+  - "A phished password, or a phished one-time code, can't be used to sign in"
   - "Stay within 4 cost units per month"
 budget: 4
 
@@ -91,11 +91,21 @@ tiers:
         facts: ["Users who haven't turned it on sign in with a password alone."]
         capabilities: { survives: [joiner, mover, blast-radius, query] }
       - id: signin-2sv
-        short: "Enforce 2SV"
-        label: "Enforce 2-Step Verification for all users in the Admin console"
+        short: "2SV, any method"
+        label: "Enforce 2-Step Verification for all users, allowing any method (prompts, codes, text messages, keys)"
         cost: 0
         facts:
-          - "After enforcement, users must sign in with a second step, such as a security key or a prompt on their phone."
+          - "After enforcement, users must sign in with a second step, such as a security key, a prompt on their phone or a code."
+          - "A code or prompt is typed or approved by the user, so a fake sign-in page can relay it to the real one while the user is still on the phishing site."
+        capabilities: { survives: [joiner, mover, blast-radius, query] }
+      - id: signin-keys
+        short: "Security keys only"
+        label: "Enforce 2-Step Verification for all users, allowing only security keys"
+        cost: 1
+        facts:
+          - "In the Admin console you can restrict the allowed 2-Step Verification methods, for example to security keys."
+          - "A security key signs a challenge tied to the real site's address, so a look-alike phishing page cannot use it."
+          - "Keep a recovery path (for example a second registered key) so a lost key does not lock someone out."
         capabilities: { survives: [joiner, mover, blast-radius, phish, query] }
 
 stress_tests:
@@ -128,16 +138,18 @@ failure_feedback:
     query: "Viewer is read-only: it can't create the query job, so the query is refused for missing bigquery.jobs.create."
   signin-password:
     phish: "With only a password, the attacker signs straight in."
+  signin-2sv:
+    phish: "The phishing page asked for the password and then for the code or prompt approval, and relayed both to the real sign-in in real time. Codes, texts and prompts can be phished; a security key is bound to the real site and cannot."
 
 reference_designs:
   - name: "Recommended"
-    picks: { who: grant-dynamic, roles: role-bq, signin: signin-2sv }
-    why: "A dynamic group follows the department field the directory already keeps, so joiners and movers need no tickets. BigQuery Data Viewer plus Job User lets analysts run queries and nothing else, and enforced 2-Step Verification makes a phished password useless on its own."
+    picks: { who: grant-dynamic, roles: role-bq, signin: signin-keys }
+    why: "A dynamic group follows the department field the directory already keeps, so joiners and movers need no tickets. BigQuery Data Viewer plus Job User lets analysts run queries and nothing else, and 2-Step Verification limited to security keys means neither a phished password nor a phished code is enough."
 
 hints:
   nudge: "There are three separate questions: who gets access, what they can do, and how they prove it's them."
   direction: "Grant to a group that fills itself from the department field. Choose predefined roles that cover reading data and running queries; basic roles are either too much or not enough."
-  answer: "A dynamic group on the Analytics department, BigQuery Data Viewer on the datasets plus BigQuery Job User on the project, and enforced 2-Step Verification."
+  answer: "A dynamic group on the Analytics department, BigQuery Data Viewer on the datasets plus BigQuery Job User on the project, and 2-Step Verification enforced with security keys only."
 
 analogy:
   title: "A library card, not the building keys"
@@ -157,11 +169,17 @@ debrief:
     everything, while Viewer can't even run a query, because a query is a
     job. Predefined roles are precise: BigQuery Data Viewer to read the
     data, BigQuery Job User to run queries. Enforcing 2-Step Verification
-    means a stolen password alone isn't enough.
+    means a stolen password alone isn't enough, but codes and prompts can
+    still be relayed by a live phishing page; security keys
+    are the phishing-resistant method.
   real_world: |
     Grant BigQuery Data Viewer at the dataset level when only some data is
     shared. Use IAM Recommender to find roles that are broader than what
-    people use, and keep Owner and Editor for a small break-glass group.
+    people use. Don't leave Owner or Editor granted to groups: keep one or
+    two tightly controlled, audited break-glass accounts, with their use
+    alerted on. Dynamic groups follow the attribute they query, so only
+    admins should be able to edit users' department, and membership should
+    be reviewed in the audit logs.
 
 sources:
   - title: "IAM: Roles and permissions (basic, predefined and custom roles)"

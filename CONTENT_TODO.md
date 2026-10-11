@@ -1286,3 +1286,45 @@ the labels and tests use the quoted form.
 - [ ] Engine fix: `apply -replace=ADDR` kept re-planning the address as "requested" after the replacement, so dependents (the database password) were updated with an unknown value and kept the old one until a second apply. Replaced addresses are now spent for the rest of the run (`src/game/terraform/apply.ts`).
 - [ ] Parked nit: `echo | terraform init` (empty answer) is treated as "no" rather than an error; real Terraform's wording is not verified.
 - [ ] (fix round 1) `git ls-files | grep tfstate` keeps listing the tracked files (the lab cannot see `git rm --cached`); feedback says the lab cannot check git. `.gitignore` must now cover `terraform.tfstate` itself (`*.tfstate`, `*.tfstate*`, `terraform.tfstate`) and the backup (`*.tfstate.*`, `*.tfstate*`, `terraform.tfstate.backup`, `*.backup`), end-anchored. `manage_master_user_password` is worded as a real-account option the lab does not model. Known sim quirk (not changed): random_password has the constant id `none`, so a create_before_destroy replacement of it makes the deposed delete remove the new object from the cloud; real ids are random.
+
+## Cloud-design content audit fixes (2026-10): to verify
+- [ ] Origin lock-down (azure-tv-ad-marketing-site, traffic-spike-any-cloud): the
+      AzureFrontDoor.Backend service tag and X-Azure-FDID header, CloudFront's
+      origin-facing managed prefix list, and Cloud Armor on a backend service are
+      from memory of the docs; add source links. Front Door WAF tier differences
+      (custom vs managed rules) were deliberately not stated.
+- [ ] Removed the unverified traffic-spike "differences" claims about how Azure scale
+      sets and Google regional MIGs refill after a zone failure; restore them with
+      sources if wanted.
+- [ ] azure-vnet-network-layout: storage private endpoint / deny-by-default firewall
+      wording; cost values (2 for the private endpoint) are scenario units. Still
+      unverified: "Standard and StandardV2 NAT gateways are the same price".
+- [ ] aws-vpc-network-layout / azure-vnet real_world: AWS may now offer a regional
+      NAT gateway; wording softened to "check the current AWS docs". Verify and
+      update the per-AZ NAT lesson if it is GA.
+- [ ] azure-entra-groups-access: Conditional Access cost (4) is a scenario number for
+      "P1 for every covered user"; check the licensing page. Budget raised to 8.
+- [ ] azure-containers-platform: still unverified that a zone-redundant Container Apps
+      environment needs a custom VNet, and that the registry must be zone-redundant
+      (Premium) for acr-identity to survive a zone outage.
+- [ ] aws-clickstream-ingestion: on-demand "up to double the previous peak" is from
+      memory of the capacity-mode page; confirm the exact wording and the
+      extended-retention pricing statement.
+- [ ] gcp-launch-day-signups: whether Cloud Run's max-instances cap is per revision
+      or per service during a gradual rollout (taught only as "check"). The
+      Cloud SQL Auth Proxy / IAM database auth / PITR lines are general practice.
+- [ ] gcp-iam-groups-access: "restrict allowed 2SV methods to security keys" in the
+      Admin console and the break-glass guidance; dynamic-group query syntax in the
+      label is simplified (real syntax is user.organizations.exists(...)).
+- [ ] gcp-clickstream-ingestion: BigQuery subscription IAM (Data Editor for the
+      Pub/Sub service agent), dead-letter topic and replay-duplicates lines;
+      Cloud Tasks 500/s limit still to confirm.
+- [ ] gcp-catalog-cache: check whether Memorystore for Redis (Basic/Standard) is now
+      flagged legacy in favour of Redis Cluster / Valkey.
+- [ ] Teaching-only security lines added (private subnets, encryption, backups/PITR,
+      endpoint policies, least-privilege roles) are general practice, not sourced to
+      a specific page.
+- [ ] gcp-clickstream-ingestion: BigQuery subscription IAM wording is softened; confirm the exact roles (Data Editor, Metadata Viewer) against the Pub/Sub BigQuery page.
+- [ ] gcp-iam-groups-access: "only security keys" 2SV method restriction is unverified; passkeys wording was dropped.
+- [ ] traffic-spike AWS origin lock: the secret custom header / VPC origin facts are from memory; add sources.
+- [ ] Known limits: acr-identity is credited for az-outage without teaching that the registry itself must be zone-redundant; the origin-locked options bundle the WAF with the lock-down, so the WAF is not tested separately.

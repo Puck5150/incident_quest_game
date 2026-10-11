@@ -66,6 +66,7 @@ tiers:
         facts:
           - "An in-memory key-value store the app checks before querying the database."
           - "Standard tier keeps a replica in a different zone and fails over to it automatically."
+          - "Memorystore instances are reached over private IP from your VPC network; enable AUTH and in-transit encryption on the instance."
         capabilities: { survives: [node-failure, zone-outage], scales: 10 }
 
 stress_tests:
@@ -120,6 +121,10 @@ debrief:
     Basic tier is fine for development and caches you can lose; use
     Standard tier for production. Set TTLs, decide how data is refreshed
     when it changes, and alert on cache hit ratio and evictions.
+    Keep the cache on private IP only, enable AUTH and in-transit
+    encryption on the instance, and turn on automated backups and
+    point-in-time recovery for Cloud SQL: high availability is not a
+    backup.
 
 sources:
   - title: "Memorystore for Redis: Redis tier capabilities (Basic and Standard)"

@@ -22,8 +22,8 @@ requirements:
   - "People who leave Sales lose its access automatically"
   - "A phished helpdesk password can't take over the tenant"
   - "Everyone signs in with multifactor authentication"
-  - "Stay within 4 cost units per month"
-budget: 4
+  - "Stay within 8 cost units per month"
+budget: 8
 
 tiers:
   - id: membership
@@ -72,6 +72,7 @@ tiers:
         facts:
           - "Helpdesk Administrator can reset passwords for non-administrators, and not much else."
           - "Microsoft recommends giving each admin the least privileged role that does the job."
+          - "The two Global Administrators should be separate, cloud-only accounts used only for admin work, protected with phishing-resistant authentication."
         capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
   - id: signin
     label: "Sign-in protection"
@@ -88,15 +89,16 @@ tiers:
         cost: 0
         facts:
           - "Requires all users to register for multifactor authentication, and prompts for it when needed; admins are always prompted."
-          - "Included at no extra cost, but not configurable."
+          - "Included at no extra cost, but not configurable: you can't exclude an emergency access account or add conditions, and it can't be combined with Conditional Access policies."
         capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
       - id: signin-ca
         short: "Conditional Access"
         label: "A Conditional Access policy requiring multifactor authentication for all users"
-        cost: 1
+        cost: 4
         facts:
           - "Policies can target users, apps and conditions such as location or risk, with exceptions where you need them."
-          - "Requires Microsoft Entra ID P1 licenses."
+          - "Requires Microsoft Entra ID P1 licenses for every user the policy applies to, so covering all 400 people costs far more than the group rule alone."
+          - "Exclude two emergency access (break-glass) accounts from the policy and monitor their sign-ins, so a misconfigured policy can't lock everyone out."
         capabilities: { survives: [joiner, mover, phish, mfa], scales: 1 }
 
 stress_tests:
@@ -128,16 +130,16 @@ failure_feedback:
 
 reference_designs:
   - name: "Recommended"
-    picks: { membership: assign-dynamic, admins: admins-least, signin: signin-defaults }
-    why: "A dynamic group driven by the department HR already maintains handles joiners and movers with no tickets. Helpdesk staff get only the role they use, so one phished password can't run the tenant, and security defaults turn on MFA for everyone at no extra cost."
-  - name: "Also passes"
     picks: { membership: assign-dynamic, admins: admins-least, signin: signin-ca }
-    why: "Since you're licensing P1 for the dynamic group, Conditional Access is the more flexible way to require MFA, with exceptions and conditions as the company needs them. (You turn security defaults off to use it.)"
+    why: "A dynamic group driven by the department HR already maintains handles joiners and movers with no tickets. Helpdesk staff get only the role they use, so one phished password can't run the tenant. A Conditional Access policy requires MFA for everyone, with emergency access accounts excluded; it needs P1 for every covered user, so it costs more than security defaults."
+  - name: "Also passes"
+    picks: { membership: assign-dynamic, admins: admins-least, signin: signin-defaults }
+    why: "Security defaults require MFA for everyone at no extra licence cost, and they are a sound baseline. But they cannot be tuned, have no emergency-account exclusion, and cannot sit alongside Conditional Access, so most companies already paying for P1 move to Conditional Access."
 
 hints:
   nudge: "HR already keeps one thing up to date for every user. Can access follow it automatically?"
   direction: "Assign access to a group, and let a membership rule fill the group. Then look at what one stolen helpdesk password could do, and what stops a password alone from working."
-  answer: "A dynamic security group on user.department -eq \"Sales\" holding the role and the app, Helpdesk Administrator for most IT staff (two Global Administrators), and security defaults or a Conditional Access MFA policy."
+  answer: "A dynamic security group on user.department -eq \"Sales\" holding the role and the app, Helpdesk Administrator for most IT staff (two Global Administrators), and a Conditional Access MFA policy (security defaults is the no-licence baseline)."
 
 analogy:
   title: "Keycards that follow the org chart"
@@ -157,12 +159,14 @@ debrief:
     the cost of an Entra ID P1 license for its members. Give admins the
     least privileged role that does the job, keep Global Administrators
     few, and require multifactor authentication: security defaults do it
-    for free, Conditional Access does it with more control.
+    with no extra licence, Conditional Access does it with more control but
+    needs P1 for every covered user.
   real_world: |
     Pair dynamic groups with access reviews for anything sensitive, keep
-    a couple of emergency access accounts excluded from Conditional Access,
-    and consider Privileged Identity Management (P2) so admin roles are
-    activated only when needed.
+    two cloud-only emergency access accounts excluded from Conditional
+    Access, give admins phishing-resistant authentication (such as FIDO2
+    security keys), and consider Privileged Identity Management (P2) so
+    admin roles are activated only when needed rather than held standing.
 
 sources:
   - title: "Microsoft Entra ID: Manage rules for dynamic membership groups"

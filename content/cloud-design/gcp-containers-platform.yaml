@@ -76,6 +76,7 @@ tiers:
         cost: 1
         facts:
           - "Google Cloud's managed registry for container images and packages; access is controlled with IAM."
+          - "Grant the service's service account only the Artifact Registry Reader role on that repository."
         capabilities: { survives: [ops, zone-outage, pulls, audit], scales: 10 }
   - id: secrets
     label: "How the API gets the database password"
@@ -93,6 +94,7 @@ tiers:
         facts:
           - "The service's configuration names the secret; its value is read at runtime."
           - "The service's service account needs the Secret Manager Secret Accessor role on that secret."
+          - "Run the service as its own dedicated service account, not the default Compute Engine one, which is often broadly privileged."
         capabilities: { survives: [ops, zone-outage, pulls, audit], scales: 10 }
 
 stress_tests:
@@ -106,7 +108,7 @@ stress_tests:
     label: "Upgrade month: both developers are heads-down on features"
     requires: { every_tier_survives: ops }
   - id: pulls
-    label: "Twenty new instances all pull the image at once"
+    label: "A security review checks where the image comes from and who can read it"
     requires: { every_tier_survives: pulls }
   - id: audit
     label: "A security review reads every configuration for passwords"
@@ -122,7 +124,7 @@ failure_feedback:
   run-gke-autopilot:
     ops: "Google manages the nodes, but the team still has to learn and run Kubernetes: Deployments, Services, autoscaling, upgrades."
   reg-dockerhub:
-    pulls: "Anonymous pulls hit Docker Hub's rate limit, and some new instances fail to start. And the image was public."
+    pulls: "The image sits in a public repository: anyone can pull the code inside it, and nothing ties it to your project's access controls or audit trail. Pull rate limits on unauthenticated users are a further risk for anything that pulls from Docker Hub."
   secret-env:
     audit: "The password is in the service's configuration in plain text."
 
@@ -133,7 +135,7 @@ reference_designs:
 
 hints:
   nudge: "The app is a container that answers HTTP requests, and the team wants no cluster. Which option isn't Kubernetes at all?"
-  direction: "Cloud Run handles scaling and zones for you. Then check where twenty instances pull the image from at once, and where the password lives."
+  direction: "Cloud Run handles scaling and zones for you. Then check where the image comes from and who can read it, and where the password lives."
   answer: "Cloud Run, a private Artifact Registry repository, and the password in Secret Manager."
 
 analogy:
@@ -150,7 +152,7 @@ debrief:
     Google Cloud runs containers three main ways. Compute Engine VMs are
     yours to manage. GKE is Kubernetes: Standard mode leaves node pools to
     you; Autopilot manages the nodes, but you still operate Kubernetes and
-    pay a cluster fee. Cloud Run runs a container per request load, scales
+    pay a cluster fee. Cloud Run starts container instances as requests arrive, scales
     to zero, and is regional with no cluster at all, which suits HTTP APIs
     and small teams. Artifact Registry keeps images private and in-region,
     and Secret Manager keeps secrets out of configuration.
@@ -158,7 +160,12 @@ debrief:
     Start HTTP services on Cloud Run; move to GKE when you need Kubernetes
     features, long-running background workloads with custom scheduling, or
     an existing Kubernetes platform. Give each service its own service
-    account with only the roles it needs.
+    account with only the roles it needs (Secret Accessor on that secret,
+    Artifact Registry Reader on that repository). If the database is Cloud
+    SQL, connect over private connectivity with the Auth Proxy or connectors,
+    and prefer IAM database authentication, which removes the stored
+    password altogether. Pin a secret version rather than "latest" when you
+    want rotation to be a deliberate step.
 
 sources:
   - title: "Cloud Run: What is Cloud Run"

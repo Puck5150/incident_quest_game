@@ -18,7 +18,7 @@ brief: |
 requirements:
   - "Handle 8x normal event volume during a sale"
   - "Several apps can each read every event"
-  - "Reprocess the last 24 hours of events after a bug"
+  - "Reprocess the last 24 hours of events after a bug found late in the day"
   - "Keep delivering to S3 if a server fails"
   - "Stay within 9 cost units per month"
 budget: 9
@@ -67,9 +67,29 @@ tiers:
         label: "A Kinesis data stream in on-demand mode"
         cost: 5
         facts:
-          - "On-demand mode manages capacity for you and scales with traffic; you pay for the data written and read."
+          - "On-demand mode manages capacity for you; you pay for the data written and read."
+          - "It accommodates up to double the previous peak write throughput; a sudden jump far beyond anything the stream has seen can still be throttled."
           - "Records stay in the stream for its retention period (24 hours by default), and any number of applications can read them, each at its own pace."
         capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
+  - id: retention
+    label: "How long the stream keeps events"
+    options:
+      - id: retention-default
+        short: "24 hours (default)"
+        label: "Leave retention at the 24-hour default"
+        cost: 0
+        facts:
+          - "Records older than the retention period are no longer available to read."
+          - "A bug found 23 hours after the events arrived leaves almost nothing to reprocess, and a bug found at hour 25 leaves nothing."
+        capabilities: { survives: [fan-out, server-failure], scales: 1 }
+      - id: retention-extended
+        short: "Extended retention"
+        label: "Raise retention well above 24 hours (for example several days)"
+        cost: 1
+        facts:
+          - "A stream's retention period can be increased beyond 24 hours; extended retention is charged extra."
+          - "Reprocessing then has time to find the bug, fix it and replay."
+        capabilities: { survives: [fan-out, replay, server-failure], scales: 1 }
   - id: delivery
     label: "Getting events into S3"
     options:
@@ -89,6 +109,7 @@ tiers:
           - "A fully managed service that delivers streaming data to destinations such as S3, with no application to write or servers to manage."
           - "It buffers incoming data and writes it to S3 in batches, by size or time."
           - "A Kinesis data stream can be its source."
+          - "It writes to S3 using an IAM role you give it: scope the role to that one bucket, and keep the bucket private with Block Public Access and default encryption."
         capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
 
 stress_tests:
@@ -113,18 +134,20 @@ failure_feedback:
     replay: "Delivered messages were deleted from the queue. There's nothing left to reprocess."
   ingest-kds-2:
     sale: "Two shards take about 2,000 records a second. At 8x, writes are throttled and events are lost or delayed."
+  retention-default:
+    replay: "The stream only keeps 24 hours, and the bug was found late in the day. The oldest events had already expired before anyone could replay them."
   delivery-ec2:
     server-failure: "The only writer was down until morning, so S3 is missing hours of events."
 
 reference_designs:
   - name: "Recommended"
-    picks: { ingest: ingest-kds-ondemand, delivery: delivery-firehose }
-    why: "A Kinesis data stream keeps every event for 24 hours and lets the S3 delivery, the fraud app and any reprocessing job each read all of it. On-demand mode absorbs the sale without you resizing shards, and Firehose delivers to S3 with no servers to run."
+    picks: { ingest: ingest-kds-ondemand, retention: retention-extended, delivery: delivery-firehose }
+    why: "A Kinesis data stream keeps events for its retention period (raised above 24 hours so a late-found bug can still be replayed) and lets the S3 delivery, the fraud app and any reprocessing job each read all of it. On-demand mode scales with the sale without you resizing shards, and Firehose delivers to S3 with no servers to run."
 
 hints:
   nudge: "Two of the requirements are about reading the same events more than once. Which options delete an event once it's been read?"
   direction: "Compare a queue (each message goes to one consumer, then it's gone) with a stream (records stay for a retention period, and every app reads all of them). Then check how much each option can take at 8x."
-  answer: "A Kinesis data stream in on-demand mode, delivered to S3 with Amazon Data Firehose."
+  answer: "A Kinesis data stream in on-demand mode with retention raised above 24 hours, delivered to S3 with Amazon Data Firehose."
 
 analogy:
   title: "A recording, not a phone call"
@@ -138,7 +161,7 @@ debrief:
   summary: |
     Streaming ingestion is about more than accepting writes. A Kinesis data
     stream keeps records for its retention period (24 hours by default,
-    extendable), so several applications can each read every record and you
+    extendable at extra cost), so several applications can each read every record and you
     can reprocess after a bug. A queue like SQS hands each message to one
     consumer and deletes it, which is right for work items, wrong for a
     shared event log. In provisioned mode each shard takes up to 1 MB or
@@ -148,7 +171,13 @@ debrief:
   real_world: |
     Clickstreams, application logs and IoT telemetry all follow this
     pattern: a stream in the middle, Firehose to the data lake, and
-    separate consumers for real-time uses. If several consumers need high
+    separate consumers for real-time uses. Turn on server-side encryption
+    (KMS) for the stream, deliver to a private encrypted S3 bucket, scope
+    the Firehose role to it, and never ship long-term AWS keys inside the
+    website or app: give producers short-lived credentials (for example
+    through an identity pool) or put an authenticated API in front. Before
+    a known sale, test or pre-scale: on-demand mode follows traffic, but
+    it can throttle a spike far beyond what the stream has seen. If several consumers need high
     read throughput, look at enhanced fan-out, which gives each registered
     consumer its own read throughput per shard.
 

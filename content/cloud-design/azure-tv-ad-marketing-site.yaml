@@ -18,8 +18,9 @@ requirements:
   - "Serve 20× normal traffic, mostly the same static pages"
   - "Keep serving if an app instance fails"
   - "Keep serving if one availability zone fails"
-  - "Stay within 14 cost units per month"
-budget: 14
+  - "Only traffic that came through the edge reaches the app"
+  - "Stay within 15 cost units per month"
+budget: 15
 
 tiers:
   - id: edge
@@ -30,7 +31,7 @@ tiers:
         short: "(no edge)"
         cost: 0
         facts: ["Every request, including repeat views of the same page, reaches your app."]
-        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
       - id: app-gateway
         label: "Azure Application Gateway v2"
         short: "App Gateway v2"
@@ -39,7 +40,7 @@ tiers:
           - "A regional layer-7 load balancer that routes on URL paths and host headers."
           - "Supports autoscaling, zone redundancy and a Web Application Firewall."
           - "Load-balances requests across your backends."
-        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
       - id: front-door
         label: "Azure Front Door with caching on the static-page route"
         short: "Front Door + cache"
@@ -48,7 +49,28 @@ tiers:
           - "A content delivery network with global load balancing."
           - "Edge sites answer from cache when they can, which reduces the traffic sent to your origin."
           - "Static assets are ideal for caching; only GET requests are cached."
-        capabilities: { survives: [instance-failure, zone-outage], scales: 20 }
+          - "A Web Application Firewall policy can be attached to Front Door."
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 20 }
+  - id: origin
+    label: "Who may call the app directly"
+    options:
+      - id: origin-open
+        label: "Leave the app reachable on its own *.azurewebsites.net address"
+        short: "Origin open"
+        cost: 0
+        facts:
+          - "An App Service app has its own public hostname, separate from anything you put in front of it."
+          - "Anything that calls that hostname directly never touches the edge's cache or firewall."
+        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+      - id: origin-locked
+        label: "Accept only Front Door traffic (service tag + X-Azure-FDID check) and put a WAF policy on the edge"
+        short: "Origin locked + WAF"
+        cost: 1
+        facts:
+          - "App Service access restrictions can allow only the AzureFrontDoor.Backend service tag."
+          - "Front Door sends an X-Azure-FDID header carrying your profile's ID; checking it stops other Front Door profiles reaching your app."
+          - "On the Premium tier, Front Door can instead reach the app over Private Link."
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
   - id: web
     label: "App Service plan"
     options:
@@ -57,7 +79,7 @@ tiers:
         short: "App Service ×1"
         cost: 2
         facts: ["Microsoft recommends multiple instances: while an unhealthy instance is replaced, there can be a short period with no instance ready to serve."]
-        capabilities: { survives: [], scales: 1 }
+        capabilities: { survives: [origin-bypass], scales: 1 }
       - id: three-instances
         label: "Standard plan, 3 instances (not zone redundant)"
         short: "App Service ×3"
@@ -65,7 +87,7 @@ tiers:
         facts:
           - "Three instances share the load; instances are spread across fault domains in the region."
           - "A plan that isn't zone redundant can go down during an outage in any zone of the region."
-        capabilities: { survives: [instance-failure], scales: 3 }
+        capabilities: { survives: [origin-bypass, instance-failure], scales: 3 }
       - id: zone-redundant
         label: "Premium v3 plan, zone redundant (at least 2 instances)"
         short: "App Service ZR"
@@ -73,7 +95,7 @@ tiers:
         facts:
           - "Instances are spread across availability zones; a zone-redundant plan needs at least two instances."
           - "Zone redundancy has no separate charge, but the two-instance minimum can raise the bill."
-        capabilities: { survives: [instance-failure, zone-outage], scales: 3 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 3 }
       - id: two-regions
         label: "Two zone-redundant Premium v3 plans in two regions"
         short: "App Service ×2 regions"
@@ -81,13 +103,16 @@ tiers:
         facts:
           - "App Service is a single-region service; surviving a region outage means deploying to more than one region."
           - "You also need load balancing and failover between the regions."
-        capabilities: { survives: [instance-failure, zone-outage, region-outage], scales: 6 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage, region-outage], scales: 6 }
         overkill: "The brief asked to survive an instance or zone failure, not a whole region. One zone-redundant plan meets it for half the cost."
 
 stress_tests:
   - id: tv-spike
     label: "The ad airs: 20× traffic on the landing pages"
     requires: { tier: edge, min_scales: 20 }
+  - id: origin-bypass
+    label: "Attackers find the app's own address and skip the edge"
+    requires: { every_tier_survives: origin-bypass }
   - id: instance-failure
     label: "An App Service instance becomes unhealthy"
     requires: { every_tier_survives: instance-failure }
@@ -100,6 +125,8 @@ failure_feedback:
     tv-spike: "Every one of the 20× page views landed on the app servers."
   app-gateway:
     tv-spike: "Application Gateway spread the load, but every request still reached the app servers."
+  origin-open:
+    origin-bypass: "The app answered anyone who called its own address, so the cache and firewall at the edge were skipped. An edge only protects an origin that refuses everything else."
   single-instance:
     instance-failure: "With one instance, there was nothing to serve traffic while it was replaced."
     zone-outage: "The only instance was in the failed zone."
@@ -108,13 +135,13 @@ failure_feedback:
 
 reference_designs:
   - name: "Recommended"
-    picks: { edge: front-door, web: zone-redundant }
-    why: "Front Door absorbs the repeat page views at the edge; a zone-redundant plan keeps the origin up through an instance or zone failure."
+    picks: { edge: front-door, origin: origin-locked, web: zone-redundant }
+    why: "Front Door absorbs the repeat page views at the edge, and the app accepts only Front Door traffic so the cache and WAF cannot be bypassed; a zone-redundant plan keeps the origin up through an instance or zone failure."
 
 hints:
   nudge: "Twenty times the traffic, but mostly the same pages. Does every request need to reach your app?"
   direction: "One requirement is about traffic (solve it at the edge), two are about failures (solve them in the App Service plan)."
-  answer: "Front Door with caching for the static pages, plus a zone-redundant Premium plan. Two regions is more than the brief asked for."
+  answer: "Front Door with caching for the static pages, the app locked to Front Door traffic with a WAF policy, plus a zone-redundant Premium plan. Two regions is more than the brief asked for."
 
 analogy:
   title: "Handing out flyers instead of taking every question at the desk"
@@ -129,11 +156,14 @@ debrief:
     The spike is a caching problem: the same static pages, requested over and
     over. A CDN like Front Door serves them from edge caches, so only a small
     share reaches the app. Application Gateway is a great regional load
-    balancer, but it forwards every request to your backends. The failure
+    balancer, but it forwards every request to your backends (it also offers
+    a WAF; so does Front Door). The failure
     requirements are about the App Service plan: multiple instances ride out an
     instance failure, and only a zone-redundant plan rides out a zone failure.
   real_world: |
-    Separate static and dynamic routes so you never cache user-specific
+    Putting an edge service in front is only half the job: lock the origin
+    so it accepts only the edge's traffic, and attach a WAF policy, or
+    attackers simply call the app's own address. Separate static and dynamic routes so you never cache user-specific
     responses. Microsoft warns that misconfigured caching can leak one user's
     data to another.
 

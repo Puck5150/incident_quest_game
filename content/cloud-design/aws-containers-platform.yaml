@@ -66,6 +66,7 @@ tiers:
         facts:
           - "Kubernetes, with the control plane run by AWS. Each EKS cluster has an hourly charge, on top of what the pods use."
           - "With Fargate profiles, pods run without nodes for you to manage."
+          - "You still own the cluster's Kubernetes version upgrades."
         capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
   - id: registry
     label: "Where the image is pulled from"
@@ -77,7 +78,7 @@ tiers:
         facts:
           - "Docker Hub limits how many images unauthenticated users can pull in a time window, counted per IP address."
           - "Anyone can pull the image, including your code inside it."
-        capabilities: { survives: [patching, az-outage, audit], scales: 5 }
+        capabilities: { survives: [patching, az-outage], scales: 5 }
       - id: reg-ecr
         short: "ECR private"
         label: "A private Amazon ECR repository in the same region"
@@ -85,6 +86,7 @@ tiers:
         facts:
           - "A managed, private container registry; access is controlled with IAM."
           - "ECS and EKS pull from it within the region, authenticated with the task's or node's role."
+          - "Image scanning and lifecycle policies can be turned on per repository."
         capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
   - id: secrets
     label: "How the app gets the database password"
@@ -102,7 +104,8 @@ tiers:
         cost: 1
         facts:
           - "The task definition holds only the secret's ARN; ECS injects the value into the container when it starts."
-          - "The task execution role needs permission to read that secret."
+          - "The task execution role needs permission to read that secret: grant it on that one secret's ARN, not on every secret."
+          - "Run the tasks in private subnets, with the database's security group allowing only the service's security group."
         capabilities: { survives: [patching, az-outage, pulls, audit], scales: 5 }
 
 stress_tests:
@@ -119,7 +122,7 @@ stress_tests:
     label: "Eight new copies all pull the image at once"
     requires: { every_tier_survives: pulls }
   - id: audit
-    label: "Security reviews every configuration for plain-text passwords"
+    label: "Security reviews every configuration and image for plain-text passwords and publicly readable code"
     requires: { every_tier_survives: audit }
 
 failure_feedback:
@@ -132,6 +135,7 @@ failure_feedback:
   run-eks-nodes:
     patching: "Managed node groups help, but someone still has to start and watch node updates, and know Kubernetes well enough to do it."
   reg-dockerhub:
+    audit: "The image sits in a public repository, so anyone can pull the code inside it. Security flags a public image straight away."
     pulls: "Anonymous pulls from shared NAT IP addresses hit Docker Hub's rate limit, and some new copies fail to start. The image was public, too."
   secret-env:
     audit: "The password is in the task definition in plain text, visible to anyone who can read it."
@@ -169,7 +173,9 @@ debrief:
     For small teams, ECS on Fargate is the usual starting point on AWS; EKS
     makes sense when Kubernetes skills or portability matter. Either way,
     keep images in ECR (with image scanning turned on) and secrets in
-    Secrets Manager or Parameter Store.
+    Secrets Manager (an SSM Parameter Store SecureString is another valid
+    place; this challenge only offers Secrets Manager). Encrypt the secret
+    with a KMS key, rotate it, and scope the execution role to it.
 
 sources:
   - title: "Amazon ECS: AWS Fargate for Amazon ECS"

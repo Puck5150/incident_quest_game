@@ -233,6 +233,11 @@ debrief:
     names, and a few real differences (like Azure's same-zone HA option), but
     the shape of the answer is the same on every major cloud.
 
+    Resilience is not the whole design. Only the load balancer should face
+    the internet; keep the web servers and the database in private subnets
+    and encrypt traffic and data at rest. Resilience also doesn't replace
+    backups: keep automated backups with point-in-time restore.
+
 sources:
   aws:
     - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"

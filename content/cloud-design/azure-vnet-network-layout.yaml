@@ -18,7 +18,7 @@ brief: |
   subnets are private by default.
 
 requirements:
-  - "Only the website is reachable from the internet"
+  - "Only the website is reachable from the internet (including the storage account)"
   - "Web servers can call the payment provider's API"
   - "Keep working if one availability zone fails"
   - "Stay within 13 cost units per month"
@@ -44,6 +44,7 @@ tiers:
           - "Application Gateway reaches backend servers on their private IP addresses."
           - "New Application Gateway v2 gateways are zone-redundant by default."
           - "The VMs have no public IP, so the internet can't start a connection to them."
+          - "Application Gateway v2 can run a Web Application Firewall, and network security groups limit what each subnet accepts."
         capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
   - id: database
     label: "Database networking (PostgreSQL flexible server)"
@@ -100,12 +101,30 @@ tiers:
         facts: ["NAT gateways charge for every GB they process, in both directions, so heavy image traffic adds up."]
         capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
       - id: storage-service-endpoint
-        short: "Service endpoint"
-        label: "A Microsoft.Storage service endpoint on the web subnet"
+        short: "Service endpoint only"
+        label: "A Microsoft.Storage service endpoint on the web subnet, and nothing else changed on the account"
         cost: 0
         facts:
           - "Service endpoints take traffic directly from your virtual network to the service over the Azure backbone."
           - "There's no extra charge for using service endpoints."
+          - "A service endpoint adds a route and lets you name the subnet in the account's network rules; it doesn't change who else may connect."
+        capabilities: { survives: [az-outage, payment-call], scales: 1 }
+      - id: storage-endpoint-firewall
+        short: "Endpoint + deny rule"
+        label: "A service endpoint on the web subnet, with the account firewall set to deny all networks except that subnet"
+        cost: 0
+        facts:
+          - "A storage account's firewall rules apply to its public endpoint; with the default action set to deny, only the selected virtual network subnets and IP ranges are allowed."
+          - "Service endpoints take traffic directly from your virtual network to the service over the Azure backbone, with no extra charge."
+        capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
+      - id: storage-private-endpoint
+        short: "Private endpoint"
+        label: "A private endpoint for the storage account, with public network access disabled"
+        cost: 2
+        facts:
+          - "A private endpoint gives the storage account a private IP address in your virtual network, reached through a private DNS zone."
+          - "With public network access disabled, the account's public endpoint refuses connections from the internet."
+          - "Private endpoints have their own charges (hourly and per GB processed)."
         capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
 
 stress_tests:
@@ -126,18 +145,20 @@ failure_feedback:
     internet-scan: "The database has a public endpoint. Firewall rules help, but it's still on the internet, one rule change from exposure."
   outbound-none:
     payment-call: "The subnets are private and the VMs have no public IPs, so they have no way out to the payment provider."
+  storage-service-endpoint:
+    internet-scan: "The service endpoint only added a route from the subnet. The storage account's public endpoint still accepted connections from anywhere until its firewall default action was set to deny, or public access was disabled behind a private endpoint."
   nat-zonal:
     az-outage: "The zonal NAT gateway was in zone 1. The VMs in zone 2 survived, but lost their way out to the payment provider."
 
 reference_designs:
   - name: "Recommended"
-    picks: { web: web-appgw, database: db-private, outbound: nat-v2, storage: storage-service-endpoint }
-    why: "Only Application Gateway faces the internet; VMs and database are private. A zone-redundant StandardV2 NAT gateway gives a way out that survives a zone failure, and image traffic goes straight to storage over a service endpoint, with no NAT data charges."
+    picks: { web: web-appgw, database: db-private, outbound: nat-v2, storage: storage-private-endpoint }
+    why: "Only Application Gateway faces the internet; VMs and database are private. A zone-redundant StandardV2 NAT gateway gives a way out that survives a zone failure, and the storage account is reached through a private endpoint with public access disabled, so image traffic neither crosses the internet nor passes through the NAT gateway."
 
 hints:
   nudge: "Which parts must the internet reach, which only need to reach out, and which need neither?"
-  direction: "Your subnets are private by default, so outbound needs something explicit. Is that something tied to one zone? And which path to storage avoids paying per GB?"
-  answer: "VMs behind an Application Gateway v2, PostgreSQL with private access, a StandardV2 (zone-redundant) NAT gateway, and a storage service endpoint for the image traffic."
+  direction: "Your subnets are private by default, so outbound needs something explicit. Is that something tied to one zone? And does your storage path close the account's public endpoint, or just add a route?"
+  answer: "VMs behind an Application Gateway v2, PostgreSQL with private access, a StandardV2 (zone-redundant) NAT gateway, and a private endpoint (public access disabled) for the storage account. A service endpoint with the account firewall set to deny also passes; a service endpoint alone does not."
 
 analogy:
   title: "Reception, back offices and the post room"
@@ -145,25 +166,30 @@ analogy:
     Visitors only ever meet reception; the offices behind have no street
     door. Staff send letters out through the post room, which should be
     built so a flood in one wing doesn't close it. And parcels for the
-    warehouse next door use the free internal corridor, not the courier who
-    charges by weight.
+    warehouse next door use an internal corridor, with the warehouse's own
+    street door bolted shut, not the courier who charges by weight.
 
 debrief:
   summary: |
     The same principles as on any cloud: expose only the entry point, keep
     servers and data private, give private resources an explicit way out,
     and keep heavy traffic to platform services off paths that charge per
-    GB. Azure has its own details. New virtual networks are private by
+    GB, and close the public door on platform services, not just add a
+    private route to them. Azure has its own details. New virtual networks are private by
     default, so outbound needs a NAT gateway or similar. A Standard NAT
     gateway pinned to a zone doesn't survive that zone, while the StandardV2
-    SKU is zone-redundant at the same price. Service endpoints send storage
-    traffic straight over the Azure backbone with no extra charge.
+    SKU is zone-redundant at the same price. A service endpoint adds a private
+    route to storage but leaves its public endpoint open until the account
+    firewall denies other networks; a private endpoint with public access
+    disabled closes it.
   real_world: |
-    Compare this with the AWS version of the challenge: AWS NAT gateways
-    are zonal, so you deploy one per zone; Azure's StandardV2 NAT gateway is
-    one zone-redundant resource. Private endpoints are the other common way
-    to reach PaaS services privately: they give the service a private IP in
-    your network, with their own charges.
+    Compare this with the AWS version of the challenge: AWS NAT gateways have
+    traditionally been zonal, so you deploy one per zone (check the current
+    AWS docs, as a regional option may exist); Azure's StandardV2 NAT gateway
+    is one zone-redundant resource. A valid alternative is a zonal Standard
+    NAT gateway per zone, each bound to its own subnet. Private endpoints are
+    the current default for reaching PaaS services privately; a service
+    endpoint plus a deny-by-default account firewall is the lighter option.
 
 sources:
   - title: "Azure: Default outbound access (new virtual networks default to private subnets)"

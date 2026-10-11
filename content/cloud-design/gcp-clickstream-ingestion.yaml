@@ -34,7 +34,7 @@ tiers:
         facts:
           - "Every event becomes a write on the database that serves the site."
           - "Tens of thousands of extra writes a second compete with the site's own queries."
-        capabilities: { survives: [fan-out, replay, server-failure], scales: 1 }
+        capabilities: { survives: [server-failure], scales: 1 }
       - id: ingest-tasks
         short: "Cloud Tasks queue"
         label: "A Cloud Tasks queue, with each event dispatched as a task to the loader"
@@ -78,6 +78,8 @@ tiers:
         cost: 1
         facts:
           - "A BigQuery subscription writes messages to an existing BigQuery table as they're received, with no subscriber app to run."
+          - "Pub/Sub writes as its own service agent, so grant that agent only the BigQuery roles the Pub/Sub docs list (Data Editor on the target table, plus Metadata Viewer), not project-wide access; give publishers only the Pub/Sub Publisher role."
+          - "Seeking the subscription back re-delivers messages whose rows are already in the table, so a replay can insert duplicates."
         capabilities: { survives: [fan-out, replay, server-failure], scales: 10 }
       - id: delivery-dataflow
         short: "Dataflow job"
@@ -105,6 +107,8 @@ stress_tests:
 
 failure_feedback:
   ingest-sql:
+    fan-out: "A table is not a feed: the recommendations app would have to poll the same busy database."
+    replay: "Rows in a table are not an ordered, re-deliverable stream, and replaying them means more load on the site's own database."
     viral: "Thirty thousand inserts a second on the site's own database: pages slow down, and events back up."
   ingest-tasks:
     viral: "The queue dispatches at most 500 tasks a second, far below 30,000 events a second. The backlog grows by the minute."
@@ -145,8 +149,11 @@ debrief:
   real_world: |
     Pub/Sub is the usual front door for event data on Google Cloud. Plan
     replay before you need it: retention costs storage, but it turns a bad
-    deploy into a seek instead of lost data. Use a schema on the topic so a
-    BigQuery subscription can map fields to columns.
+    deploy into a seek instead of lost data. Before replaying into BigQuery,
+    delete the bad day's rows or load into a staging table, otherwise the
+    replay duplicates data. Use a schema on the topic so a BigQuery
+    subscription can map fields to columns, and configure a dead-letter
+    topic for messages that cannot be written.
 
 sources:
   - title: "Pub/Sub: What is Pub/Sub?"
