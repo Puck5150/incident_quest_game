@@ -2,11 +2,12 @@
 import { describe, expect, it } from 'vitest'
 import { evalPredicate, stripHclComments, type Predicate, type World } from '../src/game/terraform/predicates.ts'
 import { realityKey, type Reality } from '../src/game/terraform/refresh.ts'
+import type { Value } from '../src/game/terraform/eval.ts'
 import { emptyState } from '../src/game/terraform/state.ts'
 import { LeafSchema } from '../src/schema/scenario.ts'
 
 const G = 'sg-0a'
-const group = (ingress: object[]): Reality => ({ [realityKey('aws_security_group', G)]: { id: G, ingress } })
+const group = (ingress: object[]): Reality => ({ [realityKey('aws_security_group', G)]: { id: G, ingress: ingress as Value[] } })
 const rule = (cidr: string, port = 8443) => ({ cidr_blocks: [cidr], from_port: port, to_port: port, protocol: 'tcp' })
 const w = (reality: Reality, files: Record<string, string> = {}): World => ({
   state: emptyState(),
