@@ -86,7 +86,8 @@ const methodical = (s: { lines: { label: string }[] }) => expect(s.lines.map((l)
 
 describe('terraform-drift-hotfix through the UI', () => {
   const ROOT = /Last night's console change isn't in the code/
-  const SED = `sed -i 's|vpc_id.*|&\\n  ingress {\\n    description = "partner hotfix"\\n    from_port = 8443\\n    to_port = 8443\\n    protocol = "tcp"\\n    cidr_blocks = ["198.51.100.0/24"]\\n  }|' main.tf`
+  const SED = `sed -i 's|vpc_id.*|&\\n  ingress {\\n    description = "partner hotfix"\\n    from_port = 8443\\n    to_port = 8443\\n    protocol = "tcp"\\n    cidr_blocks = ["198.51.100.16/28"]\\n  }|' main.tf`
+  const SED_WIDE = SED.replace('198.51.100.16/28', '198.51.100.0/24')
 
   it('ideal path: plan, refresh-only plan, codify the rule, plan, apply; a remount replays the same transcript', async () => {
     const g = await mount('terraform-drift-hotfix')
@@ -94,10 +95,12 @@ describe('terraform-drift-hotfix through the UI', () => {
     await waitFor(() => expect(output()).toMatch(/Note: Objects have changed outside of Terraform/))
     fireEvent.click(screen.getByRole('tab', { name: 'Logs' }))
     fireEvent.click(screen.getByRole('button', { name: '#incidents (last night)' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Partner onboarding ticket SEC-4417 (excerpt)' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Terminal' }))
     g.declare(ROOT)
     await g.run(SED, 'terraform plan', 'terraform apply -auto-approve')
-    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 1 changed, 0 destroyed\./))
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 2 changed, 0 destroyed\./))
     await g.settle()
     expect(g.taken()).toEqual(['codify'])
     const before = output()
@@ -106,14 +109,22 @@ describe('terraform-drift-hotfix through the UI', () => {
     methodical(await g.closeClean('codify'))
   })
 
-  it('trap: applying the plan as it is removes the hotfix rule: destructive once, codifying afterwards earns nothing', async () => {
+  it('weak route: copying the console /24 into the code is one wrong action and cannot be closed out', async () => {
+    const g = await mount('terraform-drift-hotfix')
+    g.declare(ROOT)
+    await g.run(SED_WIDE, 'terraform plan', 'terraform apply -auto-approve')
+    await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 1 changed, 0 destroyed\./))
+    await g.settle()
+    expect(g.taken()).toEqual(['codify-wide'])
+    expect(g.wrongCount()).toBe(1)
+    expect(screen.queryByRole('button', { name: 'Close out' })).toBeNull()
+  })
+
+  it('trap: applying the plan as it is removes the hotfix rule: destructive once', async () => {
     const g = await mount('terraform-drift-hotfix')
     g.declare(ROOT)
     await g.run('terraform apply -auto-approve')
     await waitFor(() => expect(output()).toMatch(/Apply complete! Resources: 0 added, 2 changed, 0 destroyed\./))
     await g.trapped('apply-anyway')
-    await g.run(SED, 'terraform apply -auto-approve')
-    await g.settle()
-    expect(g.taken()).toEqual(['apply-anyway'])
   })
 })
