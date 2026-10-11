@@ -13,6 +13,13 @@ export const homeOf = (scenario: Scenario) => (userOf(scenario) === 'root' ? '/r
 // database prompt ("postgres=#", "mysql>") isn't, and stays scripted only.
 export const isShellPrompt = (scenario: Scenario) => /^[\w.-]+@[\w.-]+:/.test(scenario.terminal?.prompt ?? '')
 
+// How a typed line is read for the typed-line guard: a SQL client ("postgres=#", "shop=>", "mysql>", "sqlite>")
+// takes statements; EVERYTHING else (user@host:~$, [admin@docs-01 ~]$, PS C:\>) is a shell. SQL is explicit.
+export const typedMode = (scenario: Scenario): 'shell' | 'sql' | 'mysql' => {
+  const p = scenario.terminal?.prompt ?? ''
+  return /^mysql>/.test(p) ? 'mysql' : /^(?:[\w.-]+[=-][#>]|sqlite>)/.test(p) ? 'sql' : 'shell'
+}
+
 // The directory the prompt starts in: "you@laptop:~/infra$" -> /home/you/infra.
 export function startDir(scenario: Scenario): string {
   const home = homeOf(scenario)

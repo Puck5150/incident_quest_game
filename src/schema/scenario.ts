@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { artifacts } from './constants.ts'
 import { atStage } from './stages.ts'
 import { asciiLower, endpointPolicyVerdict, iamPolicyVerdict } from '../game/awsPolicyCheck.ts'
-import { filesOnDisk, isShellPrompt } from '../game/paths.ts'
+import { filesOnDisk, typedMode } from '../game/paths.ts'
 import { hasUnsafeSyntax, looseAllowShellRegex, repeatsFlag } from '../game/typedLine.ts'
 import { fileFixed, gateOk } from '../game/fileFix.ts'
 import { MODULE_PATH_SOURCE, parseModuleAddr, parseResAddr } from '../game/terraform/address.ts'
@@ -726,16 +726,16 @@ export const ScenarioSchema = z
         }
         // The action's own example, or the command its label shows, must earn credit as typed: a command the guard
         // rejects (substitution, operator, repeated flag on a fix) needs allow_shell or a different command.
-        const shell = isShellPrompt(v)
+        const mode = typedMode(v)
         for (const [src, text] of [['example', a.example], ['label', a.label]] as const) {
           if (text === undefined || (src === 'label' && a.example !== undefined)) continue
-          const typed = text.trim().replace(/\s+/g, ' ')
+          const typed = (src === 'label' ? text.replace(/ \([^()]*\)\s*$/, '') : text).trim().replace(/\s+/g, ' ') // a label's trailing "(prose)" is not part of the command
           if (!rx.test(typed)) {
             if (src === 'example') issue(`example "${text}" does not match the match_regex`, at('actions', i, 'example'))
             continue
           }
-          if (!a.allow_shell && hasUnsafeSyntax(text, shell))
-            issue(`the ${src} command "${text}" has shell syntax the typed-line guard rejects, so it would earn nothing: add allow_shell (anchored regex) or use a plain command`, at('actions', i, src))
+          if (!a.allow_shell && hasUnsafeSyntax(typed, mode))
+            issue(`the ${src} command "${typed}" has shell syntax the typed-line guard rejects, so it would earn nothing: add allow_shell (anchored regex) or use a plain command`, at('actions', i, src))
           if (a.kind === 'fix' && repeatsFlag(typed)) issue(`the ${src} command "${text}" repeats a flag, which is never credited as a fix`, at('actions', i, src))
         }
         // A typed command either shows scripted output or takes an action, never both.

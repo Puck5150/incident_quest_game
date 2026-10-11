@@ -10,8 +10,8 @@ import { artifacts } from '../schema/constants.ts'
 import type { Action, ArtifactKind, Scenario } from '../schema/scenario.ts'
 import { atStage, sinceStageStart, stageAt, stageCount } from '../schema/stages.ts'
 import { endpointPolicyVerdict, iamPolicyVerdict } from './awsPolicyCheck.ts'
-import { isShellPrompt, readsFileOnDisk } from './paths.ts'
-import { hasShellOperators, hasUnsafeSyntax, repeatsFlag } from './typedLine.ts'
+import { isShellPrompt, readsFileOnDisk, typedMode } from './paths.ts'
+import { hasShellOperators, hasUnsafeSyntax, onlyNeedsQuoting, repeatsFlag } from './typedLine.ts'
 
 export type Phase = 'briefing' | 'investigating' | 'acting' | 'resolved'
 
@@ -145,7 +145,7 @@ export const notYetAfter = (p: Action) => `Not yet: do this first: ${p.label}`
 // The action a typed command takes, if any (first match wins).
 export const actionFor = (scenario: Scenario, input: string) =>
   scenario.actions.find((a) => {
-    if (!a.allow_shell && hasUnsafeSyntax(input, isShellPrompt(scenario))) return false
+    if (!a.allow_shell && hasUnsafeSyntax(input, typedMode(scenario))) return false
     // Repeats only void a FIX: a repeated flag on a wrong/destructive command still lands the penalty.
     if (a.kind === 'fix' && repeatsFlag(normalize(input))) return false
     return (
@@ -154,6 +154,16 @@ export const actionFor = (scenario: Scenario, input: string) =>
       (a.endpoint_policy !== undefined && endpointPolicyVerdict(input, a.endpoint_policy) === a.endpoint_policy.verdict)
     )
   })
+
+// A line the guard rejects ONLY for an unquoted glob/brace/~/# (`gs://b/**`, `Rules=[{..}]`) that would earn an
+// action if it were quoted: tell the player, since the shell's own answer says nothing about it.
+export const QUOTE_HINT = '(Not counted: the shell would expand unquoted * ? [ {} ~ # before the command sees them. Quote that argument, e.g. \'gs://bucket/**\'.)'
+export const quoteHint = (scenario: Scenario, input: string): string | undefined => {
+  if (typedMode(scenario) !== 'shell' || !onlyNeedsQuoting(input)) return undefined
+  const line = normalize(input)
+  const quoted = line.split(' ').map((w) => (/[*?[\]{}~#]/.test(w) && !/^['"]/.test(w) ? `'${w}'` : w)).join(' ')
+  return scenario.actions.some((a) => a.match_regex !== undefined && !a.allow_shell && (new RegExp(a.match_regex).test(line) || new RegExp(a.match_regex).test(quoted))) ? QUOTE_HINT : undefined
+}
 
 // What the fake shell prints for `input`, given which actions have been taken.
 // `clear` and `history` are handled by the Terminal component because they

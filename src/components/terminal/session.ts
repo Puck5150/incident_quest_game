@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { Action, Scenario } from '../../schema/scenario.ts'
 import { commandNamesFile, fileFixed, gateOk } from '../../game/fileFix.ts'
 import { atStage, stageAt } from '../../schema/stages.ts'
-import { actionFor, actionsTaken, commandsRun, complete, engineHandles, missingPrereq, namedRootCause, notYetAfter, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
+import { actionFor, actionsTaken, commandsRun, complete, engineHandles, missingPrereq, quoteHint, namedRootCause, notYetAfter, normalize, NOT_YET, terminalOutput, transcript, type GameEvent } from '../../game/engine.ts'
 import type { IncidentShell } from '../../game/shell.ts'
 import { detectAction } from './detect.ts'
 
@@ -191,7 +191,7 @@ export function useTerminalSession(
             replayAnswers.current = undefined
           }
           const note = await checkFixes(sh, snapshot.slice(0, next < 0 ? undefined : next), false)
-          output = [output, note].filter(Boolean).join('\n')
+          output = [output, note, quoteHint(atStage(scenario, stageAt(before)), cmd)].filter(Boolean).join('\n')
         }
         rebuilt.push({ id: id(), prompt, input: cmd, output })
       }
@@ -249,7 +249,7 @@ export function useTerminalSession(
         setHost(sh.currentHost)
         if (r.hits.length) onShellRan?.(r.hits)
         const note = await checkFixes(sh, latest.current)
-        return { ...line, output: [r.output, note].filter(Boolean).join('\n') }
+        return { ...line, output: [r.output, note, quoteHint(atStage(scenario, stageAt(before)), cmd)].filter(Boolean).join('\n') }
       })) as Promise<Line>
       return { line: { ...line, pending: true }, done }
     },

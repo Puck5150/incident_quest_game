@@ -320,6 +320,7 @@ stages:
       - id: unique-now
         label: "CREATE UNIQUE INDEX ... ON invoices (customer_id, period) (plain, or without the WHERE clause)"
         kind: wrong
+        example: "psql -d billing -c \"CREATE UNIQUE INDEX ON invoices (customer_id, period)\""  # the label is bare SQL; at this shell prompt the player types it through psql
         match_regex: "^(?:psql -d billing (?:-c|-Atc) \"[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee]))|[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee])))"
         feedback: "A plain CREATE UNIQUE INDEX blocks writes to invoices for the whole build, on the busiest invoicing day. Without WHERE status <> 'void' it would also forbid keeping voided duplicates as records, and it fails while duplicates exist. Use CONCURRENTLY, partial."
       - id: unique-index
