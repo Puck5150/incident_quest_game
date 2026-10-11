@@ -20,3 +20,11 @@ describe('load-average-nfs', () => {
     expect(['start-nfs', 'start-now', 'enable-boot']).not.toContain(id(c)),
   )
 })
+
+describe('load-average-nfs spellings', () => {
+  it('credits enable nfs-server --now and quoted remote commands', () => {
+    expect(id('ssh files-01 sudo systemctl enable nfs-server --now')).toBe('start-nfs')
+    expect(id("ssh files-01 'sudo systemctl enable --now nfs-server'")).toBe('start-nfs')
+    expect(id("ssh files-01 'sudo systemctl start nfs-server; id'")).toBeUndefined()
+  })
+})

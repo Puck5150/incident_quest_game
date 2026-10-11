@@ -16,3 +16,8 @@ describe('crashloopbackoff', () => {
     expect(actionFor(sc, 'kubectl delete deployment orders-api -n shop')?.kind).toBe('destructive')
   })
 })
+
+describe('crashloopbackoff spellings', () => {
+  it.each(['kubectl -n shop rollout undo deploy/orders-api', 'kubectl rollout undo deployment/orders-api --to-revision=11 -n shop'])('credits %s', (c) => expect(actionFor(sc, c)?.id).toBe('rollback'))
+  it('still rejects extras', () => expect(actionFor(sc, 'kubectl rollout undo deploy/orders-api --to-revision=x')?.id).not.toBe('rollback'))
+})

@@ -178,7 +178,7 @@ actions:
   - id: rollback
     label: "kubectl rollout undo deployment/orders-api (back to v1.9)"
     kind: fix
-    match_regex: "^kubectl rollout undo deployment/orders-api( -n shop)?$"
+    match_regex: "^kubectl (-n shop )?rollout undo (deployment|deploy)/orders-api( -n shop| --to-revision=[0-9]+){0,2}$"
     feedback: "Rolling back restores service fast, and that's a fair first step to stop the bleeding. But it is an imperative change that Git doesn't know about: deployment.yaml still sets DB_URL for v2.0.0, so the next kubectl apply or pipeline run redeploys the broken manifest. The incident is only closed once the manifest in Git is fixed."
   - id: delete-pods
     label: "kubectl delete pod on the crashing pods"

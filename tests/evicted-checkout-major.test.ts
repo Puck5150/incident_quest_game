@@ -23,3 +23,7 @@ describe('evicted-checkout-major', () => {
     for (const n of [6, 100, 21]) expect(actionFor(st, p(n))?.id).not.toBe('raise-max')
   })
 })
+
+describe('evicted-checkout-major --patch', () => {
+  it('credits the long flag', () => expect(actionFor(atStage(sc, 1), `kubectl patch hpa checkout -n shop --patch '{"spec":{"maxReplicas":12}}'`)?.id).toBe('raise-max'))
+})

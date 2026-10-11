@@ -113,7 +113,7 @@ actions:
   - id: isolate-old
     label: "Over the management network, take cache-01's data interface down (ssh cache-01-mgmt sudo ip link set eth0 down), leaving it running"
     kind: fix
-    match_regex: "^ssh cache-01-mgmt sudo ip link set eth0 down$"
+    match_regex: "^ssh cache-01-mgmt (sudo ip link set (dev )?eth0 down|'sudo ip link set (dev )?eth0 down'|\"sudo ip link set (dev )?eth0 down\")$"
     feedback: "Only cache-02 answers for 10.20.5.10 now. cache-01 keeps running, so what's in its memory isn't lost. But this is a runtime change: the next power cycle brings eth0 back up with 10.20.5.10, so it must also be made permanent."
   - id: persist-isolation
     label: "On cache-01, remove 10.20.5.10 from its saved network configuration (netplan/NetworkManager) and keep only the management interface, so a power-on can never bring the address back"
@@ -275,7 +275,7 @@ stages:
       - id: allow-subnet
         label: "Add 'ip saddr 10.20.6.0/24 tcp dport 6379 accept' to cache-02's live input chain"
         kind: fix
-        match_regex: "^ssh cache-02-mgmt sudo nft add rule inet filter input ip saddr 10\\.20\\.6\\.0/24 tcp dport 6379 accept$"
+        match_regex: "^ssh cache-02-mgmt (sudo nft add rule inet filter input ip saddr 10\\.20\\.6\\.0/24 tcp dport (6379|\\{ 6379 \\}) accept|'sudo nft add rule inet filter input ip saddr 10\\.20\\.6\\.0/24 tcp dport (6379|\\{ 6379 \\}) accept'|\"sudo nft add rule inet filter input ip saddr 10\\.20\\.6\\.0/24 tcp dport (6379|\\{ 6379 \\}) accept\")$"
         feedback: "app-03's subnet may reach Redis, and nothing else changes. This is the live ruleset only: a reboot of cache-02 reloads /etc/nftables.conf and app-03 is dropped again until the rule is saved there too."
       - id: persist-nft
         label: "Add the same rule to /etc/nftables.conf on cache-02 (through config management) and check it with nft -c -f /etc/nftables.conf"

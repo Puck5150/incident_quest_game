@@ -274,7 +274,7 @@ stages:
       - id: raise-max
         label: "kubectl patch hpa checkout -n shop -p '{\"spec\":{\"maxReplicas\":12}}'"
         kind: fix
-        match_regex: "^kubectl patch hpa checkout -n shop -p '\\{\"spec\":\\{\"maxReplicas\":(8|9|1[0-9]|20)\\}\\}'$"
+        match_regex: "^kubectl patch hpa checkout -n shop (-p|--patch) '\\{\"spec\":\\{\"maxReplicas\":(8|9|1[0-9]|20)\\}\\}'$"
         feedback: "The HPA scales checkout to 9 pods and utilization settles under 70%. Put the new maximum in the HPA manifest in Git too, or the next apply puts it back to 4."
       - id: manual-scale
         label: "kubectl scale deploy checkout -n shop --replicas=10"

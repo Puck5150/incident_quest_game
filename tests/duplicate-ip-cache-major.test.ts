@@ -27,3 +27,13 @@ describe('duplicate-ip-cache-major', () => {
     expect(atStage(sc, 1).actions.find((a) => a.id === 'policy-accept')?.kind).toBe('destructive')
   })
 })
+
+describe('duplicate-ip-cache-major spellings', () => {
+  it('credits dev eth0, quoted remote commands and the set syntax', () => {
+    expect(actionFor(atStage(sc, 0), 'ssh cache-01-mgmt sudo ip link set dev eth0 down')?.id).toBe('isolate-old')
+    expect(actionFor(atStage(sc, 0), "ssh cache-01-mgmt 'sudo ip link set eth0 down'")?.id).toBe('isolate-old')
+    expect(actionFor(atStage(sc, 1), NFT.replace('dport 6379', 'dport { 6379 }'))?.id).toBe('allow-subnet')
+    expect(actionFor(atStage(sc, 1), NFT.replace('dport 6379', 'dport { 6379, 22 }'))?.id).not.toBe('allow-subnet')
+    expect(actionFor(atStage(sc, 0), "ssh cache-01-mgmt 'sudo ip link set eth0 down; id'")?.id).not.toBe('isolate-old')
+  })
+})

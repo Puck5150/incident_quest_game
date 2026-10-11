@@ -108,17 +108,17 @@ actions:
   - id: start-nfs
     label: "ssh files-01 sudo systemctl enable --now nfs-server"
     kind: fix
-    match_regex: "^ssh files-01 (sudo )?systemctl enable --now nfs-server(\\.service)?$"
+    match_regex: "^ssh files-01 (sudo systemctl (enable --now nfs-server|enable nfs-server --now)(\\.service)?|'sudo systemctl (enable --now nfs-server|enable nfs-server --now)(\\.service)?'|\"sudo systemctl (enable --now nfs-server|enable nfs-server --now)(\\.service)?\")$"
     feedback: "The NFS server starts (and will start on the next boot). The hard mount's retries succeed, the waiting processes finish, and the load average falls."
   - id: start-now
     label: "ssh files-01 sudo systemctl start nfs-server"
     kind: fix
-    match_regex: "^ssh files-01 (sudo )?systemctl start nfs-server(\\.service)?$"
+    match_regex: "^ssh files-01 (sudo systemctl start nfs-server(\\.service)?|'sudo systemctl start nfs-server(\\.service)?'|\"sudo systemctl start nfs-server(\\.service)?\")$"
     feedback: "The server answers again and the load drains, but it is still disabled: the next reboot leaves files-01 without NFS again unless you also enable it."
   - id: enable-boot
     label: "ssh files-01 sudo systemctl enable nfs-server"
     kind: fix
-    match_regex: "^ssh files-01 (sudo )?systemctl enable nfs-server(\\.service)?$"
+    match_regex: "^ssh files-01 (sudo systemctl enable nfs-server(\\.service)?|'sudo systemctl enable nfs-server(\\.service)?'|\"sudo systemctl enable nfs-server(\\.service)?\")$"
     feedback: "nfs-server now starts at boot, so a patch reboot no longer takes the share with it."
   - id: nfs-alert
     label: "Find out why nfs-server was disabled (config drift, a hand change, a package script) and fix that in config management; alert when nfs-server is inactive and add a post-patch service check"
