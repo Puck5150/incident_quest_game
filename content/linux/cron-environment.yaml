@@ -70,13 +70,13 @@ terminal:
     - match: "tail -n 2 /home/ops/backup.log"
       output: |
         2026-10-02T01:30:01 starting backup
-        /home/ops/bin/backup.sh: line 11: aws: command not found
+        2026-10-02T01:30:01 aws: command not found
 logs:
   - name: "/home/ops/backup.log"
     evidence: not-found
     lines: |
       2026-10-02T01:30:01 starting backup
-      /home/ops/bin/backup.sh: line 11: aws: command not found
+      2026-10-02T01:30:01 aws: command not found
   - name: "syslog (CRON)"
     lines: |
       Oct  2 01:30:01 ledger-01 CRON[90211]: (ops) CMD (/home/ops/bin/backup.sh >> /home/ops/backup.log 2>&1)
@@ -95,7 +95,7 @@ hypotheses:
     correct: true
   - id: not-executable
     text: "backup.sh isn't executable."
-    feedback: "cron ran it: the log has \"starting backup\" and an error from line 11. It got as far as calling aws."
+    feedback: "cron ran it: the log has \"starting backup\" and then its own check reports aws: command not found. It ran, and stopped when it looked for aws."
   - id: cron-down
     text: "cron isn't running."
     feedback: "syslog shows CRON running ops's job at 01:30 each night."
@@ -113,9 +113,9 @@ actions:
     kind: fix
     feedback: "The script no longer depends on cron's PATH at all, and keeps working if someone runs it from systemd or another scheduler."
   - id: backup-alert
-    label: "Make a missing backup loud: have backup.sh fail on error (set -euo pipefail) and report to a dead-man's-switch/monitor that alerts if no backup succeeds within 26 hours"
+    label: "Make a missing backup loud: have backup.sh ping a dead-man's-switch/monitor only after a successful upload (and send a failure notification from its error path), alerting if no success arrives within 26 hours"
     kind: fix
-    feedback: "The backups failed silently for three nights because the only output was a log nobody read. Now a failure (or silence) pages someone the same day, and set -euo pipefail stops the script from deleting its temp file and reporting success after a failed upload."
+    feedback: "The backups failed silently for three nights because the only output was a log nobody read. The script already exits non-zero on error, but exiting only writes to that log. A success ping to a dead-man's-switch means silence of any kind (cron stopped, host down, script failing) pages someone the same day."
   - id: chmod-script
     label: "chmod +x /home/ops/bin/backup.sh"
     kind: wrong
@@ -162,7 +162,7 @@ debrief:
     found" every night, though the same script worked in an interactive
     shell.
   ideal_path:
-    - "Read the job's output: line 11, aws: command not found."
+    - "Read the job's output: the script reports aws: command not found."
     - "Find where aws lives: /usr/local/bin."
     - "Check the environment a cron job really gets: PATH=/usr/bin:/bin."
     - "Set PATH in the crontab (or use the full path), then confirm the next run."

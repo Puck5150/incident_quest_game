@@ -6,12 +6,16 @@ const rx = new RegExp(sc.actions.find((a) => a.id === 'update-resolv')!.file!.ma
 
 describe('dns-resolution-failure', () => {
   it('requires the inventory and running the role as well as the hand edit', () => expect(sc.solution_paths).toEqual([['update-resolv', 'add-to-inventory', 'run-role']]))
-  it.each(['search example.com\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n', 'nameserver 10.0.0.3\nnameserver 10.0.0.2'])('accepts a resolv.conf with both new resolvers', (f) => expect(rx.test(f)).toBe(true))
+  it.each(['search example.com\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n', 'nameserver 10.0.0.3\nnameserver 10.0.0.2', 'nameserver  10.0.0.2\nnameserver\t10.0.0.3 # new\n', '  nameserver 10.0.0.2\nnameserver 10.0.0.3\r\n'.replace('\r', '')])('accepts a resolv.conf with both new resolvers', (f) => expect(rx.test(f)).toBe(true))
   it.each([
     'nameserver 10.0.0.53\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n',
     'nameserver 10.0.0.2\nnameserver 10.0.0.53\nnameserver 10.0.0.3\n',
     'nameserver 10.0.0.2\n',
     'nameserver 10.0.0.2\nnameserver 10.0.0.53\n',
     'search example.com\nnameserver 10.0.0.53\n',
+    'nameserver  10.0.0.53\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n',
+    'nameserver\t10.0.0.53\nnameserver 10.0.0.2\nnameserver 10.0.0.3\n',
+    'nameserver 10.0.0.2\nnameserver 10.0.0.3\nnameserver 10.0.0.53 # old\n',
+    'nameserver 10.0.0.2\nnameserver 10.0.0.30\n',
   ])('rejects %j', (f) => expect(rx.test(f)).toBe(false))
 })

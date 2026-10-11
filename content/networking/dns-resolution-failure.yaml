@@ -132,7 +132,7 @@ actions:
     file:
       path: /etc/resolv.conf
       # both new resolvers present, the dead 10.0.0.53 gone (lookbehind pins the check to the whole file, not a later line)
-      matches: '(?<![\s\S])(?![\s\S]*^nameserver 10\.0\.0\.53\s*$)(?=[\s\S]*^nameserver 10\.0\.0\.2\s*$)(?=[\s\S]*^nameserver 10\.0\.0\.3\s*$)'
+      matches: '(?<![\s\S])(?![\s\S]*^[ \t]*nameserver[ \t]+10\.0\.0\.53[ \t]*([#;].*)?$)(?=[\s\S]*^[ \t]*nameserver[ \t]+10\.0\.0\.2[ \t]*([#;].*)?$)(?=[\s\S]*^[ \t]*nameserver[ \t]+10\.0\.0\.3[ \t]*([#;].*)?$)'
       after: |
         search example.com
         nameserver 10.0.0.2
