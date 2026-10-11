@@ -54,7 +54,18 @@ function scenarios(c: CanvasChallenge, d: Design, t: CanvasTest): { removed: Set
   const e = t.event
   const scopeOf = (n: Node) => c.palette.find((p) => p.id === n.type)?.scope
   if ('zone_outage' in e) {
-    return [{ removed: new Set(d.nodes.filter((n) => n.lane === e.zone_outage).map((n) => n.id)), prefix: '' }]
+    const lose = (zone: string) => new Set(d.nodes.filter((n) => n.lane === zone).map((n) => n.id))
+    // A zone no stress test names is still a zone that can fail: a design that
+    // hides everything in one (say, a second Region's lane) must not slip past.
+    // Every zone_outage test therefore also fails each occupied, unnamed zone.
+    const named = new Set(c.stress_tests.flatMap((x) => ('zone_outage' in x.event ? [x.event.zone_outage] : [])))
+    const extra = c.layout.regions
+      .flatMap((r) => r.zones.map((z) => z.id))
+      .filter((z) => !named.has(z) && d.nodes.some((n) => n.lane === z))
+    return [
+      { removed: lose(e.zone_outage), prefix: '' },
+      ...extra.map((z) => ({ removed: lose(z), prefix: `If ${z} fails: ` })),
+    ]
   }
   if ('region_outage' in e) {
     const region = c.layout.regions.find((r) => r.id === e.region_outage)!
@@ -85,7 +96,27 @@ function check(
   has: (n: Node, role: string) => boolean,
 ): string[] {
   const alive = (id: string) => id === USERS || !removed.has(id)
-  const traffic = d.edges.filter((e) => e.kind === 'traffic')
+  const byId = new Map(d.nodes.map((n) => [n.id, n]))
+  const type = (id: string) => c.palette.find((p) => p.id === byId.get(id)?.type)
+  const needsEntry = c.palette.some((p) => p.roles.includes('route'))
+  const reasons: string[] = []
+
+  // Users may only talk to an entry point: never straight to a database, and
+  // (when the palette offers a load balancer) never straight to a web server
+  // unless that service has its own managed front end (`public`).
+  const traffic = d.edges.filter((e) => {
+    if (e.kind !== 'traffic') return false
+    if (e.from !== USERS) return true
+    const n = byId.get(e.to)
+    if (!n) return true
+    const why = has(n, 'write-store')
+      ? `users connect straight to the database (${n.id}); keep it private and reach it only through the web tier.`
+      : needsEntry && !has(n, 'route') && !type(n.id)?.public
+        ? `users connect straight to ${n.id}; put a load balancer or other entry point in front of it.`
+        : ''
+    if (why && !reasons.includes(why)) reasons.push(why)
+    return !why
+  })
 
   // Everything users can reach along traffic links, through surviving components.
   const reachable = new Set<string>([USERS])
@@ -99,7 +130,6 @@ function check(
     }
   }
 
-  const reasons: string[] = []
   const lost = (role: string) => d.nodes.filter((n) => has(n, role) && removed.has(n.id)).map((n) => n.id)
 
   if (t.check.reach.includes('serve')) {
@@ -121,13 +151,24 @@ function check(
     else {
       // Apps connect to the database's endpoint. On failover it points at the
       // standby, so a traffic link to any member of the group reaches the writer.
-      const connected = traffic.some((e) => r.endpoint.has(e.to) && reachable.has(e.from) && e.from !== USERS)
+      // Only a web server counts as the application; a load balancer linked to the database doesn't.
+      const connected = traffic.some(
+        (e) => r.endpoint.has(e.to) && reachable.has(e.from) && byId.has(e.from) && has(byId.get(e.from)!, 'serve'),
+      )
       if (!connected) reasons.push(`nothing that users can reach is connected to the database (${r.writer}).`)
     }
   }
 
   if (t.check.capacity !== undefined) {
-    const serving = d.nodes.filter((n) => has(n, 'serve') && reachable.has(n.id))
+    // A server only adds capacity if it can actually write to the database.
+    const stores = d.nodes.filter((n) => has(n, 'write-store')).map((n) => n.id)
+    const w = writer(d, removed, has)
+    const endpoint = 'problem' in w ? new Set(stores) : w.endpoint
+    const reached = d.nodes.filter((n) => has(n, 'serve') && reachable.has(n.id))
+    const serving = stores.length
+      ? reached.filter((n) => traffic.some((e) => e.from === n.id && endpoint.has(e.to)))
+      : reached
+    const unlinked = reached.filter((n) => !serving.includes(n)).map((n) => n.id)
     const cap = serving.reduce((sum, n) => sum + (c.palette.find((p) => p.id === n.type)?.capacity ?? 0), 0)
     if (cap < t.check.capacity) {
       reasons.push(
@@ -135,6 +176,7 @@ function check(
           ? `no serving capacity survives; ${t.check.capacity}× is needed.`
           : `only ${cap}× of the ${t.check.capacity}× traffic needed can be served (${serving.map((n) => n.id).join(', ')}).`,
       )
+      if (unlinked.length) reasons.push(`${unlinked.join(', ')} can't reach the database, so they don't count as serving capacity.`)
     }
   }
   return reasons

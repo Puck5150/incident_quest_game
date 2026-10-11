@@ -111,7 +111,10 @@ stress_tests:
     label: "A database server fails"
     event: { single_failure: pg }
     check: { reach: [write-store] }
-
+  - id: app-failure
+    label: "Any one app instance fails at month-end"
+    event: { single_failure: app-instance }
+    check: { reach: [serve], capacity: 4 }
 reference_designs:
   - name: "Recommended"
     why: "One instance in each of three zones: losing any zone still leaves 4× capacity, with one fewer instance than a two-zone design needs. The standby sits in a different zone (zone-redundant HA)."
@@ -154,7 +157,7 @@ counter_examples:
         - { from: app-3, to: pg-1, kind: traffic }
         - { from: pg-1, to: pg-2, kind: sync }
   - name: "Only two instances"
-    fails: [zone-1, zone-2]
+    fails: [zone-1, zone-2, app-failure]
     design:
       nodes:
         - { id: fd, type: front-door, lane: global }
@@ -184,6 +187,8 @@ counter_examples:
         - { from: fd, to: app-2, kind: traffic }
         - { from: fd, to: app-3, kind: traffic }
         - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
   - name: "Plus a cross-region replica"
     fails: [budget]
     design:
@@ -205,6 +210,79 @@ counter_examples:
         - { from: app-3, to: pg-1, kind: traffic }
         - { from: pg-1, to: pg-2, kind: sync }
         - { from: pg-1, to: pg-dr, kind: async }
+  - name: "Everything in one zone of the other region"
+    fails: [zone-1, zone-2, zone-3]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: wus2-z1 }
+        - { id: app-2, type: app-instance, lane: wus2-z1 }
+        - { id: app-3, type: app-instance, lane: wus2-z1 }
+        - { id: pg-1, type: pg, lane: wus2-z1 }
+        - { id: pg-2, type: pg, lane: wus2-z1 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+  - name: "App instances open to the internet, no front door"
+    fails: [month-end, zone-1, zone-2, zone-3, db-host, app-failure]
+    design:
+      nodes:
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z2 }
+      edges:
+        - { from: users, to: app-1, kind: traffic }
+        - { from: users, to: app-2, kind: traffic }
+        - { from: users, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+  - name: "Database open to users"
+    fails: [month-end, zone-1, zone-2, zone-3, db-host, app-failure]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z2 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: users, to: pg-1, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: app-1, to: pg-1, kind: traffic }
+        - { from: app-2, to: pg-1, kind: traffic }
+        - { from: app-3, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
+  - name: "Front door linked to the database, app instances not"
+    fails: [month-end, zone-1, zone-2, zone-3, db-host, app-failure]
+    design:
+      nodes:
+        - { id: fd, type: front-door, lane: global }
+        - { id: app-1, type: app-instance, lane: eus2-z1 }
+        - { id: app-2, type: app-instance, lane: eus2-z2 }
+        - { id: app-3, type: app-instance, lane: eus2-z3 }
+        - { id: pg-1, type: pg, lane: eus2-z1 }
+        - { id: pg-2, type: pg, lane: eus2-z2 }
+      edges:
+        - { from: users, to: fd, kind: traffic }
+        - { from: fd, to: app-1, kind: traffic }
+        - { from: fd, to: app-2, kind: traffic }
+        - { from: fd, to: app-3, kind: traffic }
+        - { from: fd, to: pg-1, kind: traffic }
+        - { from: pg-1, to: pg-2, kind: sync }
 
 hints:
   nudge: "\"High availability is on\" doesn't say where the standby lives."

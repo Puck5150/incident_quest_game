@@ -54,6 +54,7 @@ palette:
     short: "Cloud Run"
     scope: regional
     roles: [serve]
+    public: true
     capacity: 6
     cost: 4
     facts:
@@ -113,7 +114,7 @@ reference_designs:
         - { from: run, to: sql-1, kind: traffic }
         - { from: sql-1, to: sql-2, kind: sync }
   - name: "VMs"
-    why: "Two VMs in each zone behind a regional load balancer keep 4× capacity after losing a zone; same Cloud SQL HA pair. Same cost, more to operate."
+    why: "Two VMs in each zone behind a regional load balancer keep 4× capacity after losing a zone; same Cloud SQL HA pair. Costs 9 units against 8 for serverless, and more to operate."
     design:
       nodes:
         - { id: lb, type: lb, lane: usc1 }
@@ -150,6 +151,7 @@ counter_examples:
         - { from: lb, to: vm-1, kind: traffic }
         - { from: lb, to: vm-2, kind: traffic }
         - { from: vm-1, to: sql-1, kind: traffic }
+        - { from: vm-2, to: sql-1, kind: traffic }
         - { from: sql-1, to: sql-2, kind: sync }
   - name: "Serverless, but a single-zone database"
     fails: [zone-a, db-host]
@@ -187,6 +189,80 @@ counter_examples:
         - { from: lb, to: vm-1, kind: traffic }
         - { from: lb, to: vm-2, kind: traffic }
         - { from: run, to: sql-1, kind: traffic }
+        - { from: vm-1, to: sql-1, kind: traffic }
+        - { from: vm-2, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+
+  - name: "VMs open to the internet, no load balancer"
+    fails: [peak, zone-a, zone-b, vm-failure, db-host]
+    design:
+      nodes:
+        - { id: vm-1, type: vm, lane: usc1-a }
+        - { id: vm-2, type: vm, lane: usc1-a }
+        - { id: vm-3, type: vm, lane: usc1-b }
+        - { id: vm-4, type: vm, lane: usc1-b }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: vm-1, kind: traffic }
+        - { from: users, to: vm-2, kind: traffic }
+        - { from: users, to: vm-3, kind: traffic }
+        - { from: users, to: vm-4, kind: traffic }
+        - { from: vm-1, to: sql-1, kind: traffic }
+        - { from: vm-2, to: sql-1, kind: traffic }
+        - { from: vm-3, to: sql-1, kind: traffic }
+        - { from: vm-4, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+  - name: "Database open to users"
+    fails: [peak, zone-a, zone-b, vm-failure, db-host]
+    design:
+      nodes:
+        - { id: run, type: cloud-run, lane: usc1 }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: run, kind: traffic }
+        - { from: users, to: sql-1, kind: traffic }
+        - { from: run, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+  - name: "Load balancer linked to the database, VMs not"
+    fails: [peak, zone-a, zone-b, vm-failure, db-host]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: usc1 }
+        - { id: vm-1, type: vm, lane: usc1-a }
+        - { id: vm-2, type: vm, lane: usc1-a }
+        - { id: vm-3, type: vm, lane: usc1-b }
+        - { id: vm-4, type: vm, lane: usc1-b }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: vm-1, kind: traffic }
+        - { from: lb, to: vm-2, kind: traffic }
+        - { from: lb, to: vm-3, kind: traffic }
+        - { from: lb, to: vm-4, kind: traffic }
+        - { from: lb, to: sql-1, kind: traffic }
+        - { from: sql-1, to: sql-2, kind: sync }
+  - name: "Half the VMs aren't connected to the database"
+    fails: [zone-a, zone-b, vm-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: usc1 }
+        - { id: vm-1, type: vm, lane: usc1-a }
+        - { id: vm-2, type: vm, lane: usc1-a }
+        - { id: vm-3, type: vm, lane: usc1-b }
+        - { id: vm-4, type: vm, lane: usc1-b }
+        - { id: sql-1, type: cloud-sql, lane: usc1-a }
+        - { id: sql-2, type: cloud-sql, lane: usc1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: vm-1, kind: traffic }
+        - { from: lb, to: vm-2, kind: traffic }
+        - { from: lb, to: vm-3, kind: traffic }
+        - { from: lb, to: vm-4, kind: traffic }
+        - { from: vm-2, to: sql-1, kind: traffic }
+        - { from: vm-3, to: sql-1, kind: traffic }
         - { from: sql-1, to: sql-2, kind: sync }
 
 hints:
@@ -206,13 +282,14 @@ debrief:
   summary: |
     Zonal resources (VMs) survive a zone failure only if you spread them and
     over-provision them yourself. Regional managed services like Cloud Run do
-    that spreading for you. Both designs pass here at the same cost; the
-    difference is how much you operate. The database is the same story either
+    that spreading for you. Both designs pass here, serverless for 8 cost units
+    and VMs for 9; the difference is how much you operate. The database is the same story either
     way: a synchronous standby in the other zone.
   real_world: |
     Google's guidance is to distribute resources across multiple zones and
     regions to tolerate outages, and to duplicate important systems in
-    multiple zones.
+    multiple zones. Keep the database private too: only the application tier
+    should connect to it, and users should only ever reach the front door.
 
 sources:
   - title: "Compute Engine: Regions and zones (zonal resources)"

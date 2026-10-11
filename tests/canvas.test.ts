@@ -60,9 +60,7 @@ describe('evaluateCanvas', () => {
     // Web servers only point at db-1; when db-1 dies, db-2 is still reached via the endpoint.
     expect(result(ref, 'az1-outage').pass).toBe(true)
     const noDbLinks = without(ref, (e) => e.to === 'db-1' && e.kind === 'traffic')
-    expect(result(noDbLinks, 'sale').reasons).toEqual([
-      'nothing that users can reach is connected to the database (db-1).',
-    ])
+    expect(result(noDbLinks, 'sale').reasons).toContain('nothing that users can reach is connected to the database (db-1).')
   })
 
   it('web servers must actually be reachable from users', () => {

@@ -485,7 +485,8 @@ zone/region lanes, traffic links, and sync/async replication links. Start from
 
 - **Palette.** Each component has a `scope` (zonal, regional or global, which
   decides the lanes it can go in), `roles` (`route`, `serve`, `write-store`), a
-  `capacity` for `serve`, a cost, and sourced `facts`. Keep it small: 3–5 parts.
+  `capacity` for `serve`, a cost, sourced `facts`, and optionally `public: true`
+  (see Entry points). Keep it small: 3–5 parts.
 - **How the engine judges a design** (`src/game/canvas.ts`):
   - A zone outage removes zonal parts in that zone. A region outage also removes
     that region's regional parts. `single_failure` removes each part of a type,
@@ -494,7 +495,18 @@ zone/region lanes, traffic links, and sync/async replication links. Start from
     takes over automatically; an **async** replica does not.
   - Traffic must reach a `serve` part from `users`, and a part users can reach
     must link to the primary (or its sync standby, since apps connect to the
-    database's endpoint). `capacity` counts only what survives.
+    database's endpoint). `capacity` counts only what survives, and only for
+    servers linked to the database: a server that can't write adds none.
+  - **Zones nobody tests are still zones.** Every `zone_outage` test also fails
+    each occupied zone that no `zone_outage` test names (say, a second Region's
+    lane), so a design can't hide everything there. Name every zone a sensible
+    design uses in a `zone_outage` test; the build checks the references.
+  - **Entry points.** Users may never link straight to a `write-store`. If the
+    palette has a `route` part, users may link only to `route` parts, or to a
+    `serve` part marked `public: true` (a managed service with its own front
+    end, like Cloud Run). Anything else fails every test with a plain reason.
+  - **The application writes, not the load balancer.** Only a `serve` part's
+    link to the database counts as the application's write path.
 - **Counter-examples replace enumeration.** Free-form designs can't all be
   checked, so list the mistakes the challenge is about, each with the exact
   tests it must fail. The validator runs them. If one fails for an *unintended*
