@@ -49,7 +49,8 @@ tiers:
         label: "Azure Kubernetes Service, node pools across three zones, cluster autoscaler"
         cost: 6
         facts:
-          - "Managed Kubernetes: Azure runs the control plane; you run and upgrade the node pools."
+          - "Managed Kubernetes: Azure runs the control plane; you own the node pools, Kubernetes versions and cluster access control."
+          - "Auto-upgrade channels can apply Kubernetes and node image updates, but someone must pick the channel, set maintenance windows, and handle failed or breaking upgrades."
           - "A cluster always keeps at least one node in its system node pool, so it never scales to zero."
         capabilities: { survives: [az-outage, audit], scales: 10 }
   - id: image
@@ -70,6 +71,7 @@ tiers:
         facts:
           - "The platform authenticates as its own identity, with no password to store or rotate."
           - "AcrPull allows pulling images and nothing else."
+          - "With identities in place, leave the registry's admin user disabled."
         capabilities: { survives: [ops, az-outage, audit], scales: 10 }
   - id: secrets
     label: "How the API gets the database connection string"
@@ -86,7 +88,7 @@ tiers:
         cost: 1
         facts:
           - "The app's configuration holds only a reference to the Key Vault secret."
-          - "The identity needs a role that can read secret values, such as Key Vault Secrets User."
+          - "The identity needs a role that can read secret values, such as Key Vault Secrets User, granted on that vault or secret and nothing wider."
         capabilities: { survives: [ops, az-outage, audit], scales: 10 }
 
 stress_tests:
@@ -97,7 +99,7 @@ stress_tests:
     label: "Zone 1 of the region becomes unavailable"
     requires: { every_tier_survives: az-outage }
   - id: ops
-    label: "Upgrade week: the team is on leave"
+    label: "A two-person team owns the platform: who runs upgrades, node sizing and cluster access?"
     requires: { every_tier_survives: ops }
   - id: audit
     label: "Security audits credentials and app configuration"
@@ -108,7 +110,7 @@ failure_feedback:
     sale: "One container group doesn't add copies by itself. At 10x, requests queue and time out."
     az-outage: "The container group ran on one host, in one zone. The API is down."
   run-aks:
-    ops: "Node pools need upgrading and the cluster needs looking after, and nobody's here. That's the job the team said it didn't want."
+    ops: "AKS auto-upgrade can apply updates, but someone still has to own node pool sizing, Kubernetes versions, upgrade failures and cluster access control. That's the cluster operation the team said it didn't want."
   acr-admin:
     audit: "The admin user is a shared password with full rights to the registry. The audit flags it straight away."
   secret-plain:
@@ -137,8 +139,8 @@ debrief:
     Azure has several ways to run a container. Container Instances runs one
     container group on demand, but doesn't scale by itself. Container Apps
     adds scale rules (including to zero), revisions and zone redundancy,
-    with no cluster to run. AKS is full Kubernetes: powerful, but node pools
-    are yours to upgrade and a system node pool always runs. Whatever runs
+    with no cluster to run. AKS is full Kubernetes: powerful, but node pools,
+    versions and cluster access are yours to run, even with auto-upgrade, and a system node pool always runs. Whatever runs
     the container, a managed identity with AcrPull replaces the registry's
     shared admin password, and Key Vault references keep secrets out of
     configuration.

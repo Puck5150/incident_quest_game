@@ -86,6 +86,7 @@ it('slot challenges work on the cloud of your choice too', async () => {
 
   expect(await screen.findByText(/virtual machines on Azure in East US 2/)).toBeTruthy()
   fireEvent.click(within(screen.getByRole('group', { name: 'In front of the servers' })).getByLabelText(/Azure Front Door/))
+  fireEvent.click(within(screen.getByRole('group', { name: 'Who may reach the servers directly' })).getByLabelText(/^Lock the origin to Front Door/))
   fireEvent.click(within(screen.getByRole('group', { name: 'Web servers' })).getByLabelText(/^Zone-spanning virtual machine scale set/))
   fireEvent.click(screen.getByRole('button', { name: 'Run stress tests' }))
   expect(screen.getByRole('region', { name: /Stress tests/ }).textContent).toMatch(/One zone in East US 2 fails/)
@@ -95,5 +96,5 @@ it('slot challenges work on the cloud of your choice too', async () => {
   expect(table.textContent).toMatch(/Amazon CloudFront with caching/)
   expect(table.textContent).toMatch(/Cloud CDN on a global external Application Load Balancer/)
   expect(table.textContent).toMatch(/Regional managed instance group/)
-  expect(table.textContent).toMatch(/isn't guaranteed to add instances into healthy zones/)
+  expect(table.textContent).toMatch(/Check the\s+Azure and Google docs/)
 })

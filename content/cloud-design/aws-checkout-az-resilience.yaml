@@ -62,6 +62,7 @@ tiers:
         facts:
           - "RDS keeps a synchronous standby replica in a different Availability Zone."
           - "Failover is automatic and typically takes 60–120 seconds."
+          - "Multi-AZ is for availability: it copies a bad DELETE to the standby too, so keep automated backups with point-in-time restore on as well."
         capabilities: { survives: [instance-failure, az-outage], rpo: zero }
       - id: rds-cross-region
         short: "RDS + cross-Region"
@@ -121,7 +122,10 @@ debrief:
     AWS's Well-Architected Reliability Pillar lists both mistakes as
     anti-patterns: a production workload in a single Availability Zone, and a
     multi-Region architecture when multi-AZ would satisfy the business
-    requirements.
+    requirements. Availability isn't durability: keep automated backups with
+    point-in-time restore even with Multi-AZ, put the web tier and the
+    database in private subnets with only the load balancer public, and
+    encrypt the database at rest.
 
 sources:
   - title: "Amazon EC2 Auto Scaling: Availability Zone distribution"

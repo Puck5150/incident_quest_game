@@ -76,6 +76,7 @@ tiers:
           - "An in-memory key-value store that the app checks before querying the database (lazy loading)."
           - "If the primary fails, ElastiCache promotes the replica and the endpoint points to it."
           - "Multi-AZ with automatic failover needs at least one replica."
+          - "Place the cache in private subnets, allow only the app tier's security group to reach it, and turn on encryption in transit and at rest."
         capabilities: { survives: [node-failure, az-outage], scales: 10 }
       - id: cache-serverless
         short: "Serverless cache"
@@ -85,6 +86,7 @@ tiers:
           - "An in-memory key-value store that the app checks before querying the database (lazy loading)."
           - "Scales capacity automatically, and replicates data across multiple Availability Zones."
           - "You pay for data stored and requests processed, rather than for nodes."
+          - "Place it in private subnets, allow only the app tier's security group to reach it, and use encryption in transit."
         capabilities: { survives: [node-failure, az-outage], scales: 10 }
 
 stress_tests:
@@ -145,7 +147,12 @@ debrief:
     Decide what to cache (popular, rarely changing reads), how long to keep
     it (a TTL), and how to update it when data changes (lazy loading,
     write-through, or both). Watch the cache hit rate: a sudden drop is
-    often the first sign the database is about to have a bad day.
+    often the first sign the database is about to have a bad day. Even
+    when the cache holds only catalog data, keep it private: private
+    subnets, a security group limited to the app tier, encryption in
+    transit and at rest, and authentication (AUTH or access control lists).
+    The same pattern gets reused for sessions, and the database behind it
+    still needs automated backups with point-in-time restore.
 
 sources:
   - title: "Amazon ElastiCache: Caching strategies (lazy loading, write-through, TTL)"

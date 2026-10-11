@@ -43,6 +43,7 @@ tiers:
           - "The load balancer's nodes are in public subnets; it routes requests to targets using their private IP addresses."
           - "Instances in private subnets have no public IP address, so the internet can't start a connection to them."
           - "Instances are spread across two Availability Zones."
+          - "Chain the security groups: the load balancer's group accepts the internet on 443, the web servers' group accepts only the load balancer's group."
         capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
   - id: database
     label: "Database (RDS for PostgreSQL, Multi-AZ)"
@@ -105,6 +106,7 @@ tiers:
         facts:
           - "A gateway endpoint adds a route for S3 to the selected route tables, so S3 traffic doesn't use the NAT gateway."
           - "There's no additional charge for using gateway endpoints."
+          - "An endpoint policy can restrict which buckets the endpoint reaches, and a bucket policy can require requests to come through the endpoint."
         capabilities: { survives: [internet-scan, az-outage, payment-call], scales: 1 }
 
 stress_tests:
@@ -162,7 +164,10 @@ debrief:
     load balancers and NAT gateways, private subnets for everything else,
     gateway endpoints for S3 and DynamoDB. The two mistakes this challenge
     catches, a single shared NAT gateway and S3 traffic through NAT, show up
-    in real outages and real bills.
+    in real outages and real bills. Terminate HTTPS on the load balancer,
+    consider AWS WAF in front of it, keep S3 buckets private with Block
+    Public Access, and check the current AWS docs for newer NAT gateway
+    options before assuming one per zone is the only resilient layout.
 
 sources:
   - title: "Amazon VPC: Enable internet access using an internet gateway"

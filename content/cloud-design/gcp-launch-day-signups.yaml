@@ -78,6 +78,7 @@ tiers:
         cost: 10
         facts:
           - "Adds a read replica in another region on top of regional HA."
+          - "Cross-region replication is asynchronous, so the replica can lag; the zero-loss failover comes from the HA standby in the same region, not the replica."
         capabilities: { survives: [zone-outage, region-outage, connection-surge], rpo: zero }
         overkill: "A region-level copy wasn't in the brief. Regional HA meets every requirement for less."
 
@@ -133,7 +134,13 @@ debrief:
   real_world: |
     Google's docs spell out the connection math for Cloud Run and Cloud SQL,
     and recommend connection pools and max instances. Cloud SQL Enterprise Plus
-    also offers Managed Connection Pooling for connection surges.
+    also offers Managed Connection Pooling for connection surges. Do the
+    arithmetic for rollouts too: if two revisions run at once during a
+    gradual traffic split, check whether your instance cap covers both, or
+    the connection total can double. Connect with the Cloud SQL Auth Proxy
+    or connectors over private IP, prefer IAM database authentication to a
+    stored password, and keep automated backups with point-in-time recovery
+    on: high availability is not a backup.
 
 sources:
   - title: "Cloud Run: Set maximum instances for services"

@@ -17,8 +17,9 @@ requirements:
   - "Serve 20× normal traffic, mostly the same static pages"
   - "Keep serving if a server fails"
   - "Keep serving if one zone fails"
-  - "Stay within 10 cost units per month"
-budget: 10
+  - "Only traffic that came through the edge reaches the servers"
+  - "Stay within 11 cost units per month"
+budget: 11
 
 labels:
   aws: { region: "us-east-1" }
@@ -31,7 +32,7 @@ tiers:
     options:
       - id: edge-none
         cost: 0
-        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
         as:
           aws: { label: "Nothing: users go straight to the servers", short: "(no edge)", facts: ["Every request, including repeat views of the same page, reaches your servers."] }
           azure: { label: "Nothing: users go straight to the servers", short: "(no edge)", facts: ["Every request, including repeat views of the same page, reaches your servers."] }
@@ -39,7 +40,7 @@ tiers:
         differences: "None: the same choice on every cloud."
       - id: regional-lb
         cost: 2
-        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
         as:
           aws: { label: "Application Load Balancer", short: "ALB", facts: ["A regional load balancer that reroutes traffic to targets in healthy Availability Zones.", "Every request is forwarded to a server."] }
           azure: { label: "Application Gateway v2", short: "App Gateway", facts: ["A regional layer-7 load balancer with autoscaling and zone redundancy.", "Every request is forwarded to a server."] }
@@ -47,7 +48,7 @@ tiers:
         differences: "All three spread load but don't cache pages here; each forwards every request to your servers."
       - id: cdn
         cost: 3
-        capabilities: { survives: [instance-failure, zone-outage], scales: 20 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 20 }
         as:
           aws: { label: "Amazon CloudFront with caching", short: "CloudFront", facts: ["Requests served directly from the CloudFront cache don't go to your origin servers.", "A longer Cache-Control max-age means fewer requests to the origin."] }
           azure: { label: "Azure Front Door with caching", short: "Front Door", facts: ["Edge sites answer from cache when they can, reducing traffic sent to your origin.", "Static assets are ideal for caching; only GET requests are cached."] }
@@ -57,12 +58,31 @@ tiers:
           Cloud CDN is switched on for a global external Application Load
           Balancer (or the classic Application Load Balancer), so on Google Cloud
           the CDN and the load balancer come together.
+  - id: origin
+    label: "Who may reach the servers directly"
+    options:
+      - id: origin-open
+        cost: 0
+        capabilities: { survives: [instance-failure, zone-outage], scales: 1 }
+        as:
+          aws: { label: "Leave the servers reachable on their own public addresses", short: "Origin open", facts: ["Anything that calls the origin's own address directly skips CloudFront's cache and any firewall attached to it."] }
+          azure: { label: "Leave the servers reachable on their own public addresses", short: "Origin open", facts: ["Anything that calls the origin's own address directly skips Front Door's cache and any firewall attached to it."] }
+          gcp: { label: "Leave the servers reachable on their own public addresses", short: "Origin open", facts: ["Anything that calls the VMs' own external addresses directly skips Cloud CDN's cache and any security policy attached to the load balancer."] }
+        differences: "None: an unprotected origin is the same weakness on every cloud."
+      - id: origin-locked
+        cost: 1
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 1 }
+        as:
+          aws: { label: "Lock the origin to CloudFront and attach AWS WAF", short: "Origin locked + WAF", facts: ["CloudFront has a managed prefix list of its origin-facing addresses that a security group can allow.", "AWS WAF web ACLs can be associated with a CloudFront distribution."] }
+          azure: { label: "Lock the origin to Front Door and attach a WAF policy", short: "Origin locked + WAF", facts: ["Access restrictions can allow only the AzureFrontDoor.Backend service tag, and the X-Azure-FDID header identifies your Front Door profile.", "A Web Application Firewall policy can be attached to Front Door."] }
+          gcp: { label: "Give the VMs no external IPs, allow only the load balancer to reach them, and attach Cloud Armor", short: "Origin locked + Armor", facts: ["Cloud Armor security policies attach to the load balancer's backend services.", "VM firewall rules decide which sources may reach the backends."] }
+        differences: "Same goal, different mechanics: each cloud lets you restrict the origin to its edge service and add a WAF at the edge."
   - id: web
     label: "Web servers"
     options:
       - id: single-vm
         cost: 1
-        capabilities: { survives: [], scales: 1 }
+        capabilities: { survives: [origin-bypass], scales: 1 }
         as:
           aws: { label: "One EC2 instance", short: "EC2 ×1", facts: ["A single virtual machine in one Availability Zone."] }
           azure: { label: "One Azure virtual machine (zonal)", short: "VM ×1", facts: ["A zonal VM is pinned to one availability zone and isn't resilient to zone outages by itself."] }
@@ -70,7 +90,7 @@ tiers:
         differences: "None that matter here: one VM in one zone on every cloud."
       - id: one-zone-group
         cost: 3
-        capabilities: { survives: [instance-failure], scales: 3 }
+        capabilities: { survives: [origin-bypass, instance-failure], scales: 3 }
         as:
           aws: { label: "Auto Scaling group in one Availability Zone", short: "ASG (1 AZ)", facts: ["Replaces unhealthy instances and adds capacity, but only in the zone you gave it."] }
           azure: { label: "Zonal virtual machine scale set (one zone)", short: "Scale set (1 zone)", facts: ["Places all instances in one availability zone.", "By itself, a zonal resource doesn't provide resiliency to an availability zone outage."] }
@@ -78,7 +98,7 @@ tiers:
         differences: "Equivalent here: a managed group of VMs, all in one zone."
       - id: multi-zone-group
         cost: 3
-        capabilities: { survives: [instance-failure, zone-outage], scales: 3 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage], scales: 3 }
         as:
           aws:
             label: "Auto Scaling group across two Availability Zones"
@@ -94,13 +114,12 @@ tiers:
             facts: ["Spreads its VMs across multiple zones in a region; VMs in the remaining zones keep serving if a zone fails."]
         differences: |
           All spread VMs across zones, but refill differently after a zone
-          fails: AWS Auto Scaling launches in another healthy zone; an Azure
-          scale set isn't guaranteed to add instances into healthy zones (autoscale
-          rules help); a Google regional MIG doesn't redistribute VMs unless
-          autoscaling is on.
+          fails: AWS Auto Scaling launches in another healthy zone. Check the
+          Azure and Google docs for how and when each rebuilds capacity after a
+          zone failure, rather than assuming it matches AWS.
       - id: two-regions
         cost: 7
-        capabilities: { survives: [instance-failure, zone-outage, region-outage], scales: 6 }
+        capabilities: { survives: [origin-bypass, instance-failure, zone-outage, region-outage], scales: 6 }
         overkill: "A whole-region failure wasn't in the brief. One multi-zone group meets it for less than half the cost."
         as:
           aws: { label: "Auto Scaling groups in two AWS Regions", short: "ASG ×2 Regions", facts: ["Surviving a Region outage means running the workload in more than one Region."] }
@@ -112,6 +131,9 @@ stress_tests:
   - id: spike
     label: "The launch: 20× traffic on the landing pages"
     requires: { tier: edge, min_scales: 20 }
+  - id: origin-bypass
+    label: "Attackers find the servers' own addresses and skip the edge"
+    requires: { every_tier_survives: origin-bypass }
   - id: instance-failure
     label: "A web server fails"
     requires: { every_tier_survives: instance-failure }
@@ -124,6 +146,8 @@ failure_feedback:
     spike: "Every one of the 20× page views landed on the servers."
   regional-lb:
     spike: "The {service:regional-lb} spread the load, but every request still reached a server."
+  origin-open:
+    origin-bypass: "The servers answered anyone who called them directly, so the edge's cache and firewall were skipped. An edge only protects an origin that refuses everything else."
   single-vm:
     instance-failure: "The only server failed."
     zone-outage: "The only server was in the failed zone."
@@ -132,13 +156,13 @@ failure_feedback:
 
 reference_designs:
   - name: "Recommended"
-    picks: { edge: cdn, web: multi-zone-group }
-    why: "{service:cdn} absorbs the repeat page views at the edge; the {service:multi-zone-group} keeps the origin up through a server or zone failure."
+    picks: { edge: cdn, origin: origin-locked, web: multi-zone-group }
+    why: "{service:cdn} absorbs the repeat page views at the edge, the origin accepts only its traffic, and the {service:multi-zone-group} keeps the origin up through a server or zone failure."
 
 hints:
   nudge: "Twenty times the traffic, but mostly the same pages. Does every request need to reach a server?"
   direction: "Solve the spike at the edge and the failures in the web tier: they're separate problems."
-  answer: "{service:cdn} in front, and a {service:multi-zone-group} behind it."
+  answer: "{service:cdn} in front, the origin locked to it, and a {service:multi-zone-group} behind."
 
 analogy:
   title: "Brochure racks at every door"
@@ -152,7 +176,9 @@ debrief:
     A spike of the same static pages is a caching problem, and every major
     cloud's CDN solves it the same way: answer from the edge so the origin
     never sees most requests. Surviving a server or a zone is a separate
-    problem, solved by a group of VMs spread across zones. The service names
+    problem, solved by a group of VMs spread across zones. An edge service
+    only protects an origin that refuses everything else, so lock the origin
+    to the edge and put a WAF there. The service names
     change from cloud to cloud; the design doesn't.
 
 sources:
