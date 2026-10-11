@@ -91,7 +91,7 @@ actions:
   - id: convert-existing
     label: "Restore the invoices already in GLACIER (Batch Operations, Standard tier) and copy each one in place as GLACIER_IR, then handle the old archived versions if the bucket is versioned, and check one old invoice downloads"
     kind: fix
-    feedback: "Archived objects can't be read until they're restored, so the ones already moved need a restore (Standard retrievals typically finish in 3-5 hours) and a copy into the new class. Start now, well before quarter-end. If the bucket is versioned, a copy in place creates a new version and leaves the old GLACIER version billing: expire the noncurrent versions deliberately, after you have checked the new copy."
+    feedback: "Archived objects can't be read until they're restored, so the ones already moved need a restore (Standard retrievals typically finish in 3-5 hours) and a copy into the new class. Start now, well before quarter-end. If the bucket is versioned, a copy in place creates a new version and leaves the old GLACIER version billing: decide what to do with the noncurrent versions only after you have checked the new copy and settled retention (and Object Lock, if invoices must not be deleted early)."
   - id: expedited-each-time
     label: "Have support request an Expedited restore whenever a customer asks"
     kind: wrong

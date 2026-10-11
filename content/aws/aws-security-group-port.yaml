@@ -76,6 +76,12 @@ terminal:
             { "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "UserIdGroupPairs": [ { "GroupId": "sg-0alb", "Description": "from the ALB" } ] }
         ]
     - match: "aws ec2 describe-security-groups --group-ids sg-0reports --query SecurityGroups[0].IpPermissions"
+      when_actions: [remove-443-world]
+      output: |
+        [
+            { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "IpRanges": [ { "CidrIp": "203.0.113.0/24", "Description": "office VPN" } ] }
+        ]
+    - match: "aws ec2 describe-security-groups --group-ids sg-0reports --query SecurityGroups[0].IpPermissions"
       evidence: no-8080-rule
       output: |
         [

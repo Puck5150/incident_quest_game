@@ -106,7 +106,7 @@ actions:
   - id: reencrypt-existing
     label: "Re-encrypt the existing SSE-S3 reports under the alias/reports key (S3 Batch Operations copy in place), then check one old report reads as aws:kms"
     kind: fix
-    feedback: "Changing the default encryption only affects new objects. The compliance requirement was that reports be encrypted with the customer managed key, and every report from before Tuesday is still AES256. Copying them in place with SSE-KMS makes the requirement true for the whole bucket (the viewer's new kms:Decrypt grant already covers them)."
+    feedback: "Changing the default encryption only affects new objects. The compliance requirement was that reports be encrypted with the customer managed key, and every report from before Tuesday is still AES256. Copying them in place with SSE-KMS makes the requirement true for the whole bucket (do this after the viewer's kms:Decrypt grant is in place, so readers keep working through the change)."
   - id: back-to-sse-s3
     label: "Switch the bucket's default encryption back to SSE-S3"
     kind: wrong

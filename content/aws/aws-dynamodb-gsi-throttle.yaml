@@ -87,7 +87,7 @@ hypotheses:
 
 actions:
   - id: raise-gsi
-    label: "Raise customer-index's provisioned write capacity to a sensible floor now (update-table --global-secondary-index-updates, WriteCapacityUnits 2000), and register it for auto scaling so it is not a fixed over-provision"
+    label: "Raise customer-index's provisioned write capacity to match the table now (update-table --global-secondary-index-updates, WriteCapacityUnits 2000)"
     kind: fix
     feedback: "A table write only succeeds if the table and every global secondary index it updates have capacity for it. With the index at 2,000 WCU, the throttles stop and orders go through."
   - id: autoscale-gsi
