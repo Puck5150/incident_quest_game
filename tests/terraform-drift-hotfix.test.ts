@@ -250,6 +250,13 @@ describe('terraform-drift-hotfix on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(TRAPPED)
   })
 
+  it('(i2) a stopgap apply of the codified group (-target, -refresh=false, -lock=false) never credits codify', async () => {
+    for (const flag of ['-target=aws_security_group.payments', '-refresh=false', '-lock=false']) {
+      const { sh } = await play('cd ~/infra', CODIFIED, `terraform apply -auto-approve ${flag}`)
+      expect((await detectedAll(sh)).codify, flag).toBe(false)
+    }
+  })
+
   it('(j) wrong: -target on the instance leaves the group alone, the rule stays in reality and the next plan still removes it', async () => {
     const { sh, out } = await play('cd ~/infra', 'terraform apply -target=aws_instance.payments_worker -auto-approve', 'terraform plan')
     expect(out[1].output).toContain('Apply complete! Resources: 0 added, 1 changed, 0 destroyed.')

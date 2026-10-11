@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evidenceSeen } from '../src/game/engine.ts'
+import { evidenceSeen, missingPrereq } from '../src/game/engine.ts'
 import { loadIncident, playbook } from './helpers/terraform-incident.ts'
 
 const scenario = loadIncident('terraform-state-in-git')
@@ -60,6 +60,12 @@ describe('terraform-state-in-git on the simulator', () => {
     const pw = (t: string) => /"result": "([^"]+)"/.exec(t)![1]
     expect(pw(out[3].output)).not.toBe(pw(out[1].output))
     expect(await detectedAll(sh)).toEqual({ ...NONE, 'remote-backend': true, rotate: true })
+  })
+
+  it('(d2) rotate waits for the migration: it has after: [remote-backend], so taking it first is refused', () => {
+    const rotate = scenario.actions.find((a) => a.id === 'rotate')!
+    expect(missingPrereq(scenario, rotate, new Set())?.id).toBe('remote-backend')
+    expect(missingPrereq(scenario, rotate, new Set(['remote-backend']))).toBeUndefined()
   })
 
   it('(e) rotate alone credits only rotate', async () => {
@@ -147,6 +153,8 @@ describe('terraform-state-in-git on the simulator', () => {
       ['state only', 'terraform.tfstate\\n', false],
       ['*.tfstate*', '*.tfstate*\\n', true],
       ['both globs', '*.tfstate\\n*.tfstate.*\\n', true],
+      ['state glob plus *.tfstate.backup', '*.tfstate\\n*.tfstate.backup\\n', true],
+      ['terraform.tfstate*', 'terraform.tfstate*\\n', true],
       ['commented out', '# *.tfstate*\\n', false],
     ] as const) {
       const { sh } = await play(CD, BACKEND(), INIT, ONLY(lines), RM_BACKUP)

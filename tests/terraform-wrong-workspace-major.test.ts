@@ -133,6 +133,18 @@ describe('wrong-workspace-major on the simulator', () => {
     expect((await detectedAll(sh))['prod-apply']).toBe(false)
   })
 
+  it('(j5) loosening prod.tfvars/main.tf instead of fixing prod is never the fix', async () => {
+    const cases: [string, string[]][] = [
+      ['apply_immediately flipped in prod.tfvars', ["sed -i 's/db_apply_immediately = false/db_apply_immediately = true/' prod.tfvars", PROD]],
+      ['apply_immediately hard-coded in main.tf', ["sed -i 's/apply_immediately   = var.db_apply_immediately/apply_immediately   = true/' main.tf", PROD]],
+      ['instance_class hard-coded in main.tf', ["sed -i 's/instance_class      = var.db_instance_class/instance_class      = \"db.r6g.xlarge\"/' main.tf", PROD]],
+    ]
+    for (const [name, cmds] of cases) {
+      const { sh } = await play('cd ~/infra/data', ...cmds)
+      expect((await detectedAll(sh))['prod-apply'], name).toBe(false)
+    }
+  })
+
   it('(j3) clean spellings still credit: plan -out then apply, ./prod.tfvars, absolute path, -var-file prod.tfvars', async () => {
     for (const cmds of [
       ['terraform plan -var-file=prod.tfvars -out=p', 'terraform apply p'],

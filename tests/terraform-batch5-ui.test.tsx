@@ -150,3 +150,38 @@ describe('wrong-workspace-major through the UI', () => {
     expect(g.wrongCount()).toBe(1)
   })
 })
+
+// Every migrated incident's key_evidence is reachable through the UI before any action is taken
+// (so the Methodical bonus is earnable). Steps are typed commands or [tab, artifact name] clicks.
+describe('TF7b key_evidence is obtainable before the fix', () => {
+  type Step = string | [tab: string, name: string]
+  const CASES: Record<string, Step[]> = {
+    'terraform-count-index-shift': ['terraform plan', 'terraform state list', 'cat queues.tf', 'aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/returns --attribute-names ApproximateNumberOfMessages'],
+    'terraform-drift-hotfix': ['terraform plan', 'terraform plan -refresh-only', ['Logs', '#incidents (last night)'], ['Files', 'Partner onboarding ticket SEC-4417 (excerpt)']],
+    'terraform-import-existing': ['terraform state show aws_s3_bucket.analytics_raw', 'terraform plan', 'aws s3api head-bucket --bucket acme-analytics-raw', ['Logs', 'CI: terraform apply (PR #77)']],
+    'terraform-moved-block': ['terraform state list', 'git diff main', ['Pipeline', 'terraform plan']],
+    'terraform-ignore-changes-autoscaling': ['terraform plan', 'aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids service/prod/checkout --query ScalableTargets[0].[MinCapacity,MaxCapacity]'],
+    'terraform-state-in-git': ['terraform state pull', 'git ls-files | grep tfstate', ['Files', 'main.tf and db.tf (no backend block)']],
+    'wrong-workspace-major': ['terraform workspace show', 'aws rds describe-db-instances --db-instance-identifier orders-prod --query "DBInstances[0].[DBInstanceClass,PendingModifiedValues,PreferredMaintenanceWindow]"', "grep -E 'instance_class|apply_immediately' staging.tfvars prod.tfvars", ['Logs', 'ops-01: shell history (user dana, 10-01)']],
+  }
+  for (const [id, steps] of Object.entries(CASES)) {
+    it(id, async () => {
+      const g = await mount(id)
+      for (const s of steps) {
+        if (typeof s === 'string') await g.run(s)
+        else {
+          fireEvent.click(screen.getByRole('tab', { name: s[0] }))
+          fireEvent.click(screen.getByRole('button', { name: s[0] === 'Pipeline' ? /terraform plan/ : s[1] }))
+          fireEvent.click(screen.getByRole('tab', { name: 'Terminal' }))
+        }
+      }
+      await g.settle()
+      const { evidenceSeen } = await import('../src/game/engine.ts')
+      const item = await (await import('virtual:content')).loadItem(id)
+      if (item.kind !== 'incident') throw new Error('expected an incident')
+      expect(g.taken()).toEqual([])
+      const seen = evidenceSeen(item.scenario, g.box.saved!.log)
+      for (const t of item.scenario.key_evidence) expect(seen.has(t), t).toBe(true)
+    })
+  }
+})

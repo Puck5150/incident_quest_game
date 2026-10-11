@@ -83,9 +83,9 @@ describe('terraform-moved-block on the simulator', () => {
     expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-mv': true })
   })
 
-  it('(d2) state mv followed by the moved block: the fix is credited and the surgery is still flagged wrong', async () => {
+  it('(d2) state mv followed by the moved block: the surgery is sticky, the fix is not credited, state-mv stays flagged', async () => {
     const { sh } = await play('cd ~/infra-prod', `terraform state mv ${OLD} ${NEW}`, MOVED(), 'terraform plan')
-    expect(await detectedAll(sh)).toEqual({ ...NONE, 'moved-block': true, 'state-mv': true })
+    expect(await detectedAll(sh)).toEqual({ ...NONE, 'state-mv': true })
   })
 
   it('(e) state rm of the old address then import at the new one is the same one-off surgery: wrong, not the fix', async () => {

@@ -125,6 +125,7 @@ actions:
         - not: { config_matches: { dir: /home/you/infra, matches: '^[ \t]*force_destroy[ \t]*=[ \t]*true[ \t]*$' } }
         - plan_clean: true
         - not: { applied: { op: delete, address: aws_s3_bucket.analytics_raw } }
+        - not: { applied: { op: import, address: aws_s3_bucket.analytics_raw, deviant: true } }
     feedback: "Terraform adopts the existing bucket into state without touching it, and from now on manages it like any other resource. The import is reviewed in the PR, and prevent_destroy means a later careless change cannot delete 9 TB through Terraform. Before trusting the bucket, audit it: a hand-made bucket often lacks a public access block, default encryption, versioning and a TLS-only policy, and the code does not declare any of them yet. Add those as reviewed changes after the import."
   - id: rename
     label: "Change the bucket name in code to acme-analytics-raw-2"

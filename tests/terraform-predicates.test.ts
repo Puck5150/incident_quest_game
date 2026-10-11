@@ -88,6 +88,13 @@ describe('predicates', () => {
     expect(await ev({ lock_free: true })).toBe(true)
     expect(await ev({ lock_free: true }, world({ lock: { id: 'l' } }))).toBe(false)
   })
+  it('applied: a " (" inside a for_each key is not cut as a marker; markers still parse from the end', async () => {
+    const w = world({ history: ['update aws_x.y["a (b)"] (targeted) (var-file prod.tfvars)'] })
+    expect(await ev({ applied: { op: 'update', address: 'aws_x.y["a (b)"]', deviant: true, var_file: 'prod.tfvars' } }, w)).toBe(true)
+    expect(await ev({ applied: { op: 'update', address: 'aws_x.y["a (b)"]' } }, world({ history: ['update aws_x.y["a (b)"]'] }))).toBe(true)
+    expect(await ev({ applied: { op: 'update', address: 'aws_x.y["a (b)"]', deviant: true } }, world({ history: ['update aws_x.y["a (b)"]'] }))).toBe(false)
+  })
+
   it('lock_bypassed: any history line carrying the marker', async () => {
     expect(await ev({ lock_bypassed: true })).toBe(false)
     expect(await ev({ lock_bypassed: true }, world({ history: ['state-rm aws_x.y', 'create aws_vpc.main'] }))).toBe(false)

@@ -6,8 +6,10 @@ const scenario = loadIncident('terraform-count-index-shift')
 const { play, detectedAll } = playbook(scenario)
 
 const URL = (n: string) => `https://sqs.us-east-1.amazonaws.com/123456789012/${n}`
-const NONE = { 'for-each-moved': false, 'apply-anyway': false, 'keep-placeholder': false, 'state-rm': false }
+const NONE = { 'for-each-moved': false, 'apply-anyway': false, 'keep-placeholder': false, 'state-mv': false, 'state-rm': false }
 const FIXED = { ...NONE, 'for-each-moved': true }
+const MV_WRONG = { ...NONE, 'state-mv': true }
+const RM_WRONG = { ...NONE, 'state-rm': true }
 const TRAPPED = { ...NONE, 'apply-anyway': true }
 
 const FOR_EACH_TF = (extra = '') => `cat > queues.tf <<'EOF'
@@ -52,6 +54,7 @@ describe('terraform-count-index-shift on the simulator', () => {
       ['for-each-moved', 'fix'],
       ['apply-anyway', 'destructive'],
       ['keep-placeholder', 'wrong'],
+      ['state-mv', 'wrong'],
       ['state-rm', 'wrong'],
     ])
     expect(scenario.solution_paths).toEqual([['for-each-moved']])
@@ -134,19 +137,19 @@ describe('terraform-count-index-shift on the simulator', () => {
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
-  it('(d) route b: for_each with terraform state mv of each index to its key', async () => {
+  it('(d) route b: for_each with terraform state mv of each index to its key plans clean but is flagged, not credited', async () => {
     const { sh, out } = await play('cd ~/infra', SED_FOR_EACH, ...MV_KEYED, 'terraform plan', 'terraform apply -auto-approve', 'terraform plan')
     for (const r of out.slice(2, 5)) expect(r.output).toContain('Successfully moved 1 object(s).')
     expect(out[5].output).toContain('Plan: 0 to add, 0 to change, 1 to destroy.')
     expect(out[5].output).toContain('# aws_sqs_queue.queue[1] will be destroyed')
     expect(out[7].output).toContain('No changes.')
-    expect(await detectedAll(sh)).toEqual(FIXED)
+    expect(await detectedAll(sh)).toEqual(MV_WRONG)
   })
 
   it('(d2) route b needs the moves for all three live queues: moving two is not the fix and applying then hurts', async () => {
     const { sh, out } = await play('cd ~/infra', SED_FOR_EACH, MV_KEYED[0], MV_KEYED[1], 'terraform plan')
     expect(out[4].output).toContain('aws_sqs_queue.queue["shipping"] will be created')
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(MV_WRONG)
     await sh.run('terraform apply -auto-approve', atStage(scenario, 0), new Set())
     expect((await detectedAll(sh))['for-each-moved']).toBe(false)
   })
@@ -158,7 +161,7 @@ describe('terraform-count-index-shift on the simulator', () => {
     expect(out[4].output).not.toContain('must be replaced')
     expect(out[5].output).toContain('Apply complete! Resources: 0 added, 0 changed, 1 destroyed.')
     expect(out[6].output).toContain('No changes.')
-    expect(await detectedAll(sh)).toEqual(FIXED)
+    expect(await detectedAll(sh)).toEqual(MV_WRONG)
   })
 
   it('(e2) route c where returns is rotated to index 3 and destroyed there is still the fix, not the trap', async () => {
@@ -173,13 +176,13 @@ describe('terraform-count-index-shift on the simulator', () => {
     )
     expect(out[5].output).toContain('# aws_sqs_queue.queue[3] will be destroyed')
     expect(out[5].output).toContain('Plan: 0 to add, 0 to change, 1 to destroy.')
-    expect(await detectedAll(sh)).toEqual(FIXED)
+    expect(await detectedAll(sh)).toEqual(MV_WRONG)
   })
 
   it('(f) route c half done (shift without parking returns) is not the fix', async () => {
     const { sh, out } = await play('cd ~/infra', mv('aws_sqs_queue.queue[2]', 'aws_sqs_queue.queue[4]'), 'terraform plan')
     expect(out[2].output).toContain('must be replaced')
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(MV_WRONG)
   })
 
   it('(g) trap: applying the shifted plan recreates two live queues and destroys a third; fixing afterwards cannot earn the fix', async () => {
@@ -219,17 +222,17 @@ describe('terraform-count-index-shift on the simulator', () => {
     const { sh, out } = await play('cd ~/infra', ...[0, 1, 2, 3].map((i) => `terraform state rm 'aws_sqs_queue.queue[${i}]'`), 'terraform state list', 'terraform plan')
     expect(out[5].output.trim()).not.toContain('aws_sqs_queue')
     expect(out[6].output).toContain('Plan: 3 to add, 0 to change, 0 to destroy.')
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(RM_WRONG)
   })
 
   it('(k) state-rm then applying fails against the queues that still exist; no damage, nothing credited', async () => {
     const { sh, out } = await play('cd ~/infra', ...[0, 1, 2, 3].map((i) => `terraform state rm 'aws_sqs_queue.queue[${i}]'`), 'terraform apply -auto-approve')
     expect(out[5].exitCode).toBe(1)
     expect(out[5].output).toContain('QueueNameExists')
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(RM_WRONG)
   })
 
-  it('(l) state-rm and import of the three live queues under for_each keys is a fix route too', async () => {
+  it('(l) state-rm and import of the three live queues under for_each keys is flagged, never the fix', async () => {
     const lines = [
       SED_FOR_EACH,
       ...[0, 1, 2, 3].map((i) => `terraform state rm 'aws_sqs_queue.queue[${i}]'`),
@@ -241,6 +244,16 @@ describe('terraform-count-index-shift on the simulator', () => {
     expect(await sh.doneWhen({ reality_lacks: { type: 'aws_sqs_queue', id: URL('returns') } })).toBe(false)
     // returns still exists in the cloud (orphaned), so the fix is not credited until it is deleted: the old scripted
     // incident also called this error-prone surgery rather than the fix.
-    expect(await detectedAll(sh)).toEqual(NONE)
+    expect(await detectedAll(sh)).toEqual(RM_WRONG)
+  })
+
+  it('(m) moved blocks plus a state mv: the surgery is sticky, the fix is not credited; moved blocks alone are', async () => {
+    const { sh } = await play('cd ~/infra', FOR_EACH_TF(MOVED3), mv('aws_sqs_queue.queue[0]', 'aws_sqs_queue.queue["orders"]'), 'terraform apply -auto-approve')
+    expect(await detectedAll(sh)).toEqual({ ...MV_WRONG })
+  })
+
+  it('(n) for_each without moved blocks in config (all moved by hand) never matches the moved-block check', async () => {
+    const { sh } = await play('cd ~/infra', SED_FOR_EACH, MOVED_FILE(MOVE(0, 'orders') + MOVE(2, 'refunds')), 'terraform apply -auto-approve')
+    expect((await detectedAll(sh))['for-each-moved']).toBe(false)
   })
 })
