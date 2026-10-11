@@ -16,6 +16,8 @@ import {
 }
 EOF`
 const IMPORT = 'terraform import aws_s3_bucket.analytics_raw acme-analytics-raw'
+const PD = `sed -i 's/bucket = "acme-analytics-raw"/&\\n  lifecycle {\\n    prevent_destroy = true\\n  }/' main.tf`
+const FD = `sed -i 's/bucket = "acme-analytics-raw"/&\\n  force_destroy = true/' main.tf`
 const A = 'terraform apply -auto-approve'
 
 describe('terraform-import-existing on the simulator', () => {
@@ -59,27 +61,47 @@ describe('terraform-import-existing on the simulator', () => {
     expect(evidenceSeen(scenario, [{ type: 'RUN_COMMAND', input: 'aws s3api head-bucket --bucket acme-analytics-raw', at: 0 }]).has('exists')).toBe(true)
   })
 
-  it('(c) ideal: import block, plan says 1 to import, apply imports, plan clean', async () => {
+  it('(c) ideal: import block, plan says 1 to import, apply imports, prevent_destroy added, plan clean', async () => {
     const { sh, out } = await play('cd ~/infra', BLOCK(), 'terraform plan', A, 'terraform plan', 'terraform state list')
     expect(out[2].output).toContain('Plan: 1 to import, 0 to add, 0 to change, 0 to destroy.')
     expect(out[3].output).toContain('Apply complete!')
     expect(out[3].output).toContain('1 imported')
     expect(out[4].output).toContain('No changes.')
     expect(out[5].output.trim()).toBe('aws_s3_bucket.analytics_raw')
+    // imported and clean, but a 9 TB bucket without prevent_destroy is not done
+    expect(await detectedAll(sh)).toEqual(NONE)
+    const pd = await sh.run(PD, scenario as never, new Set())
+    expect(pd.exitCode).toBe(0)
+    expect((await sh.run('terraform plan', scenario as never, new Set())).output).toContain('No changes.')
     expect(await detectedAll(sh)).toEqual(FIXED)
   })
 
-  it('(d) CLI terraform import is detected without an apply', async () => {
+  it('(d) CLI terraform import plus prevent_destroy is detected without an apply; import alone is not', async () => {
     const { sh, out } = await play('cd ~/infra', IMPORT, 'terraform plan')
     expect(out[1].exitCode).toBe(0)
     expect(out[2].output).toContain('No changes.')
+    expect(await detectedAll(sh)).toEqual(NONE)
+    await sh.run(PD, scenario as never, new Set())
     expect(await detectedAll(sh)).toEqual(FIXED)
+  })
+
+  it('(d2) prevent_destroy before the import also works; a commented line does not count', async () => {
+    const early = await play('cd ~/infra', PD, BLOCK(), A, 'terraform plan')
+    expect(early.out[3].output).toContain('1 imported')
+    expect(await detectedAll(early.sh)).toEqual(FIXED)
+    const spoof = await play('cd ~/infra', "sed -i 's/bucket = \"acme-analytics-raw\"/&\\n  # prevent_destroy = true/' main.tf", IMPORT)
+    expect(await detectedAll(spoof.sh)).toEqual(NONE)
+  })
+
+  it('(d3) force_destroy = true on the imported bucket is not credited, even with prevent_destroy', async () => {
+    const { sh } = await play('cd ~/infra', IMPORT, PD, FD, A)
+    expect(await detectedAll(sh)).toEqual(NONE)
   })
 
   it('(e) a wrong id or a bucket that is not in the cloud gives the real error and credits nothing', async () => {
     const wrong = await play('cd ~/infra', 'terraform import aws_s3_bucket.analytics_raw acme-analytics-raw-2', 'terraform state list')
     expect(wrong.out[1].exitCode).toBe(1)
-    expect(wrong.out[1].output).toContain('Error')
+    expect(wrong.out[1].output).toContain('Cannot import non-existent remote object')
     expect(wrong.out[2].output).not.toContain('aws_s3_bucket')
     expect(await detectedAll(wrong.sh)).toEqual(NONE)
     const block = await play('cd ~/infra', BLOCK('acme-analytics-raw-2'), 'terraform plan')
@@ -101,8 +123,8 @@ describe('terraform-import-existing on the simulator', () => {
     const { sh, out } = await play('cd ~/infra', IMPORT, 'terraform destroy -auto-approve')
     expect(out[2].exitCode).toBe(1)
     expect(out[2].output).toContain('BucketNotEmpty')
-    expect(await detectedAll(sh)).toEqual(FIXED)
-    await sh.run("sed -i 's/bucket = \"acme-analytics-raw\"/&\\n  force_destroy = true/' main.tf", scenario as never, new Set())
+    expect(await detectedAll(sh)).toEqual(NONE)
+    await sh.run(FD, scenario as never, new Set())
     await sh.run(A, scenario as never, new Set())
     await sh.run('terraform destroy -auto-approve', scenario as never, new Set())
     const d = await detectedAll(sh)
@@ -113,6 +135,6 @@ describe('terraform-import-existing on the simulator', () => {
   it('(h) plan -generate-config-out is not simulated', async () => {
     const { out } = await play('cd ~/infra', BLOCK(), 'terraform plan -generate-config-out=generated.tf')
     expect(out[2].exitCode).not.toBe(0)
-    expect(out[2].output).toContain('flag provided but not defined: -generate-config-out')
+    expect(out[2].output).toContain('"terraform plan -generate-config-out" is not simulated yet in this lab')
   })
 })
