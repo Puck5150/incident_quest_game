@@ -83,6 +83,10 @@ function hasDuplicateKeys(raw: string): boolean {
   return false
 }
 
+// Principal exactly "*", or its real spellings {"AWS":"*"} / {"AWS":["*"]}.
+const isStarPrincipal = (p: unknown) =>
+  p === '*' || (typeof p === 'object' && p !== null && !Array.isArray(p) && Object.keys(p).length === 1 && (p as Record<string, unknown>).AWS !== undefined && strings((p as Record<string, unknown>).AWS)?.length === 1 && strings((p as Record<string, unknown>).AWS)![0] === '*')
+
 const strings = (v: unknown): string[] | undefined => (typeof v === 'string' ? [v] : Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : undefined)
 
 export function iamPolicyVerdict(input: string, spec: IamPolicySpec): IamVerdict | null {
@@ -191,7 +195,7 @@ export function endpointPolicyVerdict(input: string, spec: EndpointPolicySpec): 
     loose ||= !f.plain || !(val?.plain ?? true) || (m[1] !== 'policy-document' && !!val?.dqEscape)
   }
   if (pos.join(' ') !== 'ec2 modify-vpc-endpoint' || opts.get('vpc-endpoint-id') !== spec.endpoint_id) return null
-  if ([...opts.keys()].some((k) => !['vpc-endpoint-id', 'policy-document'].includes(k))) return null
+  if ([...opts.keys()].some((k) => !['vpc-endpoint-id', 'policy-document', 'region'].includes(k)) || (opts.has('region') && !/^[a-z]{2}(-[a-z]+)+-\d$/.test(opts.get('region')!))) return null
   const doc = opts.get('policy-document') ?? ''
   if (loose || /[`]|\$\(/.test(doc) || /[;&|`<>]|\$\(/.test(line.replace(doc, '')) || rest.some((x) => x.text === 'aws')) return null
   if (!doc.startsWith('{') || hasDuplicateKeys(doc)) return null
@@ -216,7 +220,7 @@ export function endpointPolicyVerdict(input: string, spec: EndpointPolicySpec): 
     if (Object.keys(st).some((k) => !['Sid', 'Effect', 'Principal', 'Action', 'Resource', 'Condition'].includes(k))) return 'broad' // NotAction, NotResource, NotPrincipal
     const actions = strings(st.Action)
     const res = strings(st.Resource)
-    if (st.Effect !== 'Allow' || st.Principal !== '*' || !actions?.length || !res?.length || !res.every((r) => bucket.test(r))) return 'broad'
+    if (st.Effect !== 'Allow' || !isStarPrincipal(st.Principal) || !actions?.length || !res?.length || !res.every((r) => bucket.test(r))) return 'broad'
     for (const a of actions) {
       if (!allowed.has(asciiLower(a))) return 'broad'
       seen.add(asciiLower(a))

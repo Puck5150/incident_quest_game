@@ -37,6 +37,11 @@ describe('aws-cross-account-replication-dr stage 1', () => {
     `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy '{"Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":"kms:*","Resource":"*"}]}' --profile dr`,
     `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy '{"Statement":[{"Effect":"Allow","Principal":["*"],"Action":"kms:*","Resource":"*"}]}' --profile dr`,
     `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy "{\\"Statement\\":[{\\"Principal\\":\\"*\\"}]}" --profile dr`,
+    `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy '{"Statement":[{"Effect":"Allow","Principal":{"AWS":["arn:aws:iam::111122223333:root","*"]},"Action":"kms:*"}]}' --profile dr`,
+    `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy '{"Statement":[{"Effect":"Allow","Principal":{"Service":"*"},"Action":"kms:*"}]}' --profile dr`,
+    `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy '{"Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::*:root"},"Action":"kms:*"}]}' --profile dr`,
+    `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy '{"Statement":[{"Effect":"Allow","Principal":"arn:aws:iam::*:root","Action":"kms:*"}]}' --profile dr`,
+    `aws kms put-key-policy --key-id ${KEY} --policy-name default --policy "{\\"Statement\\":[{\\"Principal\\":{\\"AWS\\":[\\"*\\"]}}]}" --profile dr`,
   ])('flags a wildcard principal as destructive: %s', (c) => expect(actionFor(s1, c)).toMatchObject({ id: 'open-key', kind: 'destructive' }))
 })
 

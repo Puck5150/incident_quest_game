@@ -192,7 +192,7 @@ actions:
   - id: open-key
     label: "Set the DR key policy's principal to \"*\" for kms:Encrypt"
     kind: destructive
-    match_regex: "^aws kms put-key-policy .*\\\\?\"Principal\\\\?\"\\s*:\\s*(\\\\?\"\\*\\\\?\"|\\[\\s*\\\\?\"\\*\\\\?\"\\s*\\]|\\{\\s*\\\\?\"AWS\\\\?\"\\s*:\\s*(\\\\?\"\\*\\\\?\"|\\[\\s*\\\\?\"\\*\\\\?\"\\s*\\])\\s*\\})"
+    match_regex: "^aws kms put-key-policy .*\\\\?\"Principal\\\\?\"\\s*:\\s*(\\\\?\"(\\*|arn:aws:iam::\\*:[^\"]*)\\\\?\"|[\\[{][^\\]}]*?(\\\\?\"\\*\\\\?\"|arn:aws:iam::\\*:))"
     feedback: "That lets any AWS principal anywhere use the DR key to encrypt data under it. Name the one role that needs it, and keep the account's root statement so the key is never locked out."
   - id: grant-key
     label: "In the DR account, replace the key policy with the baseline plus one statement allowing only arn:aws:iam::111122223333:role/s3-replication-orders kms:Encrypt and kms:GenerateDataKey* (aws kms put-key-policy --key-id <DR key ARN> --policy-name default --policy file://<policy.json> --profile dr)"

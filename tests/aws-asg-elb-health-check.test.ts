@@ -7,7 +7,7 @@ const U = 'aws autoscaling update-auto-scaling-group --auto-scaling-group-name w
 
 describe('aws-asg-elb-health-check', () => {
   it('requires the maintenance policy and alarm', () => expect(sc.solution_paths).toEqual([['elb-health-check', 'maintenance-policy', 'alarm-unhealthy']]))
-  it.each([`${U} --health-check-grace-period 300`, `${U} --health-check-grace-period 100`, `${U} --health-check-grace-period 999`, `${U} --health-check-grace-period 1000`, `${U} --health-check-grace-period 1800`])('credits %s', (c) => expect(actionFor(sc, c)?.id).toBe('elb-health-check'))
+  it.each([`${U} --health-check-grace-period=300`, `${U} --health-check-grace-period 300`, `${U} --health-check-grace-period 100`, `${U} --health-check-grace-period 999`, `${U} --health-check-grace-period 1000`, `${U} --health-check-grace-period 1800`])('credits %s', (c) => expect(actionFor(sc, c)?.id).toBe('elb-health-check'))
   it.each([`${U} --health-check-grace-period 0`, `${U} --health-check-grace-period 30`, `${U} --health-check-grace-period 99`])('flags a boot-less grace period as wrong: %s', (c) =>
     expect(actionFor(sc, c)).toMatchObject({ id: 'grace-zero', kind: 'wrong' }),
   )

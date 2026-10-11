@@ -127,7 +127,7 @@ actions:
   - id: s3-endpoint
     label: "aws ec2 create-vpc-endpoint --vpc-id vpc-0shop --service-name com.amazonaws.us-east-1.s3 --route-table-ids rtb-0private"
     kind: fix
-    match_regex: "^aws ec2 create-vpc-endpoint --vpc-id vpc-0shop (--vpc-endpoint-type Gateway )?--service-name com\\.amazonaws\\.us-east-1\\.s3 --route-table-ids rtb-0private$"
+    match_regex: "^aws (--region [a-z]{2}(-[a-z]+)+-[0-9] )?ec2 create-vpc-endpoint --vpc-id vpc-0shop (--vpc-endpoint-type Gateway )?--service-name com\\.amazonaws\\.us-east-1\\.s3 --route-table-ids rtb-0private( --region [a-z]{2}(-[a-z]+)+-[0-9])?$"
     feedback: "A gateway endpoint adds a route for S3's addresses to the private route table. It's more specific than 0.0.0.0/0, so S3 traffic now goes straight to S3, and gateway endpoints have no additional charge. Nothing changes in image-resizer."
   - id: endpoint-policy-wide
     label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '<a policy that allows everything, a Deny, other buckets or wildcard actions>'"
@@ -139,7 +139,7 @@ actions:
       required_actions: [s3:GetObject, s3:PutObject]
       bucket_prefix: "acme-media-"
       example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}'"
-    feedback: "That policy is wider than the media workload needs (a wildcard action or resource, another bucket, or not a plain Allow). Through this endpoint any principal in the subnets could then reach more than acme-media-*, including a bucket in someone else's account. Allow only the actions image-resizer uses, on acme-media-* buckets and objects only."
+    feedback: "That is not the policy wanted here. It may be wider than the media workload needs (a wildcard action or resource, another bucket), or it may omit an action image-resizer needs (GetObject and PutObject), or use a shape that is not a plain Allow (a Deny, even a harmless extra one, is simply not this fix). Wider ones would let anything in the subnets reach more than acme-media-* through this endpoint. Allow just the actions image-resizer uses, on acme-media-* buckets and objects only."
   - id: endpoint-policy
     label: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{...Allow s3:GetObject/PutObject/ListBucket, Principal \"*\", on arn:aws:s3:::acme-media-* and arn:aws:s3:::acme-media-*/*...}'"
     kind: fix
@@ -150,7 +150,7 @@ actions:
       required_actions: [s3:GetObject, s3:PutObject]
       bucket_prefix: "acme-media-"
       example: "aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::acme-media-*\",\"arn:aws:s3:::acme-media-*/*\"]}]}'"
-    feedback: "A gateway endpoint is created with a policy that allows everything. Replacing it with one limited to the media buckets means a compromised instance cannot use the endpoint to copy data out to a bucket in someone else's account. If other workloads in these subnets need S3 (package repositories, other buckets), add exactly those buckets first. Also consider an aws:SourceVpce condition on the media buckets' own policies."
+    feedback: "A gateway endpoint is created with a policy that allows everything. Replacing it with one limited to the media buckets means this endpoint can no longer be used to reach other buckets, such as one in someone else's account. (acme-media-* is a prefix, so any bucket that matches it is allowed; listing the exact bucket ARNs is stricter.) If other workloads in these subnets need S3 (package repositories, other buckets), add exactly those buckets first. Also consider an aws:SourceVpce condition on the media buckets' own policies."
   - id: budget-alert
     label: "Set up an AWS Budgets alert (or cost anomaly alert) on the account, sent to engineering as well as finance"
     kind: fix

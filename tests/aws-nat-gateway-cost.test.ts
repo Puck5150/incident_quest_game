@@ -18,6 +18,10 @@ describe('aws-nat-gateway-cost', () => {
     q(JSON.stringify({ Statement: stmt() })),
     `${M} "${doc(stmt()).replaceAll('"', '\\"')}"`,
     `aws ec2 modify-vpc-endpoint --policy-document '${doc(stmt())}' --vpc-endpoint-id=vpce-0s3gw`,
+    q(doc(stmt({ Principal: { AWS: '*' } }))),
+    q(doc(stmt({ Principal: { AWS: ['*'] } }))),
+    `${q(doc(stmt()))} --region us-east-1`,
+    `aws --region eu-west-1 ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '${doc(stmt())}'`,
   ])('credits %s', (c) => expect(actionFor(sc, c)).toMatchObject({ id: 'endpoint-policy', kind: 'fix' }))
 
   const bad: Record<string, string> = {
@@ -32,7 +36,8 @@ describe('aws-nat-gateway-cost', () => {
     'other bucket only': q(doc(stmt({ Resource: 'arn:aws:s3:::other-bucket/*' }))),
     'prefix lookalike': q(doc(stmt({ Resource: 'arn:aws:s3:::acme-media-evil*/../*' }))),
     'NotAction': q(doc({ Effect: 'Allow', Principal: '*', NotAction: 's3:Delete*', Resource: 'arn:aws:s3:::acme-media-*' })),
-    'principal object': q(doc(stmt({ Principal: { AWS: '*' } }))),
+    'principal service': q(doc(stmt({ Principal: { Service: '*' } }))),
+    'principal mixed': q(doc(stmt({ Principal: { AWS: ['arn:aws:iam::111122223333:root', '*'] } }))),
     'missing required PutObject': q(doc(stmt({ Action: ['s3:GetObject'] }))),
   }
   it.each(Object.entries(bad))('flags %s as wrong, never credited', (_n, c) => {
@@ -47,6 +52,8 @@ describe('aws-nat-gateway-cost', () => {
     ['substitution', `${M} "$(cat /etc/passwd)"`],
     ['backtick', `${M} '${doc(stmt())}' \`id\``],
     ['other endpoint', q(doc(stmt())).replace('vpce-0s3gw', 'vpce-0other')],
+    ['bad region', `${q(doc(stmt()))} --region x;y`],
+    ['two regions', `aws --region us-east-1 ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0s3gw --policy-document '${doc(stmt())}' --region us-west-2`],
     ['reset policy flag', `${q(doc(stmt()))} --reset-policy`],
     ['repeated policy-document', `${q(doc(stmt()))} --policy-document '${doc(stmt({ Action: '*' }))}'`],
     ['file://', `${M} file://endpoint-policy.json`],
@@ -55,6 +62,13 @@ describe('aws-nat-gateway-cost', () => {
     expect(actionFor(sc, c)?.id).not.toBe('endpoint-policy')
   })
   it('file:// gets a scripted note, not a verdict', () => expect(actionFor(sc, `${M} file://p.json`)).toBeUndefined())
+  it('credits the endpoint creation with one region either side', () => {
+    expect(actionFor(sc, `${C} --region us-east-1`)?.id).toBe('s3-endpoint')
+    expect(actionFor(sc, C.replace('aws ec2', 'aws --region us-east-1 ec2'))?.id).toBe('s3-endpoint')
+    expect(actionFor(sc, `${C.replace('aws ec2', 'aws --region us-east-1 ec2')} --region us-west-2`)?.id).toBe('s3-endpoint')
+    expect(actionFor(sc, `${C} --region x;y`)?.id).not.toBe('s3-endpoint')
+  })
+  it('softened feedback', () => expect(sc.actions.find((a) => a.id === 'endpoint-policy')?.feedback).not.toMatch(/cannot use the endpoint to copy data out/))
   it('still credits the endpoint creation, not a leaky variant', () => {
     expect(actionFor(sc, C)?.id).toBe('s3-endpoint')
     expect(actionFor(sc, `${C}; echo`)?.id).not.toBe('s3-endpoint')
