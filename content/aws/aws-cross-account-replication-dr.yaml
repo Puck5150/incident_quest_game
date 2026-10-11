@@ -192,12 +192,12 @@ actions:
   - id: open-key
     label: "Set the DR key policy's principal to \"*\" for kms:Encrypt"
     kind: destructive
-    match_regex: "^aws kms put-key-policy .*\\\\?\"Principal\\\\?\"\\s*:\\s*(\\\\?\"\\*\\\\?\"|\\{\\s*\\\\?\"AWS\\\\?\"\\s*:\\s*\\\\?\"\\*\\\\?\"\\s*\\})"
+    match_regex: "^aws kms put-key-policy .*\\\\?\"Principal\\\\?\"\\s*:\\s*(\\\\?\"\\*\\\\?\"|\\[\\s*\\\\?\"\\*\\\\?\"\\s*\\]|\\{\\s*\\\\?\"AWS\\\\?\"\\s*:\\s*(\\\\?\"\\*\\\\?\"|\\[\\s*\\\\?\"\\*\\\\?\"\\s*\\])\\s*\\})"
     feedback: "That lets any AWS principal anywhere use the DR key to encrypt data under it. Name the one role that needs it, and keep the account's root statement so the key is never locked out."
   - id: grant-key
     label: "In the DR account, replace the key policy with the baseline plus one statement allowing only arn:aws:iam::111122223333:role/s3-replication-orders kms:Encrypt and kms:GenerateDataKey* (aws kms put-key-policy --key-id <DR key ARN> --policy-name default --policy file://<policy.json> --profile dr)"
     kind: fix
-    match_regex: "^aws kms put-key-policy --key-id arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321 --policy-name default --policy file://[A-Za-z0-9_./-]+ --profile dr$"
+    match_regex: "^aws kms put-key-policy --key-id arn:aws:kms:us-west-2:444455556666:key/9f8e7d6c-5b4a-4321-8fed-cba987654321 --policy-name default --policy file://(?!\\.)(?!.*\\.\\.)[A-Za-z0-9_][A-Za-z0-9_.-]* --profile dr$"
     feedback: "The DR key now trusts exactly one production role, alongside its existing statements (the root EnableIAMPolicies statement must stay, or the key is locked out). The next canary should replicate. The lab cannot read the policy file, so check it yourself: one named principal, no wildcard, and consider a kms:ViaService condition for s3.us-west-2.amazonaws.com."
   - id: codify-key-policy
     label: "Put the same key-policy statement into the DR baseline template (Terraform) and apply it, so a rebuild or the next apply does not revert the hotfix"
@@ -391,7 +391,7 @@ stages:
       - id: owner-override
         label: "Add AccessControlTranslation (owner override) to the replication rule"
         kind: wrong
-        feedback: "A documented way to give new replicas to the DR account, so not wrong in general, but it is not enough here: it needs s3:ObjectOwnerOverrideToBucketOwner on both sides, it leaves the bucket on the ACL model, and it does not fix replicas already delivered. Bucket owner enforced removes the ownership problem at the root for every object."
+        feedback: "Owner override is a documented alternative, but it is insufficient here. It only changes ownership for objects replicated after it is set, so the replicas already delivered (the canary and everything since the key was fixed) stay owned by production and the restore check still gets AccessDenied. It also needs s3:ObjectOwnerOverrideToBucketOwner on both sides and keeps the bucket on the ACL model. Bucket owner enforced removes the ownership problem at the root for every object."
       - id: grant-get-policy
         label: "Add s3:GetObject for dr-restore to the DR bucket policy"
         kind: wrong
@@ -497,12 +497,17 @@ stages:
         label: "Create a Batch Replication job filtered to FAILED only"
         kind: wrong
         match_regex: "^aws s3control create-job (?!.*\\bNONE\\b).*S3ReplicateObject"
-        feedback: "That catches the 18,406 since Monday, but not the ~394,000 objects from before the rule existed (status NONE). The auditor asked for every document."
+        feedback: "A job whose filter leaves out status NONE misses the ~394,000 objects from before the rule existed, which have no replication status at all (a FAILED-only job catches just the 18,406 since Monday). The auditor asked for every document."
       - id: batch-none-failed
         label: "Create an S3 Batch Replication job on acme-orders-docs with an S3-generated manifest, filtered to ObjectReplicationStatuses NONE and FAILED (aws s3control create-job ...)"
         kind: fix
-        match_regex: "^aws s3control create-job(?!.*--account-id.*--account-id)(?!.*--manifest-generator.*--manifest-generator)(?=.* --account-id 111122223333( |$))(?=.* --operation \\S*S3ReplicateObject)(?=.*arn:aws:s3:::acme-orders-docs(\\\\?\"| |\\x27|$|,))(?=.*ObjectReplicationStatuses\\\\?\"?\\s*:\\s*\\[\\s*\\\\?\"?(NONE|FAILED)\\\\?\"?\\s*,\\s*\\\\?\"?(NONE|FAILED)\\\\?\"?\\s*\\])(?=.*\\bNONE\\b)(?=.*\\bFAILED\\b)[^;&|`$<>()\\\\*?~!#]*$"
+        match_regex: "^aws s3control create-job(?!.*--account-id.*--account-id)(?!.*--manifest-generator.*--manifest-generator)(?!.*--operation.*--operation)(?!.*--role-arn.*--role-arn)(?=.* --account-id 111122223333( |$))(?=.* --operation \\S*S3ReplicateObject)(?=.*arn:aws:s3:::acme-orders-docs(\\\\?\"| |\\x27|$|,))(?=.*ExpectedBucketOwner\\\\?\"?\\s*:\\s*\\\\?\"?111122223333\\b)(?!.*ExpectedBucketOwner\\\\?\"?\\s*:\\s*\\\\?\"?(?!111122223333\\b)\\d)(?=.*EligibleForReplication\\\\?\"?\\s*:\\s*true\\b)(?!.*EligibleForReplication\\\\?\"?\\s*:\\s*\\\\?\"?(?!true\\b)[a-z])(?!.*(CreatedAfter|CreatedBefore|KeyNameConstraint|MatchAny))(?=.*ObjectReplicationStatuses\\\\?\"?\\s*:\\s*\\[\\s*\\\\?\"?(NONE|FAILED)\\\\?\"?\\s*,\\s*\\\\?\"?(NONE|FAILED)\\\\?\"?\\s*\\])(?=.*\\bNONE\\b)(?=.*\\bFAILED\\b)(?:[^;&|`$<>()\\\\*?~!#]|\\\\\")*$"
         feedback: "Batch Replication works through every object that was never replicated or failed, using the same rule (and now-working permissions). Check the job's completion report."
+      - id: batch-narrow-job
+        label: "Create a Batch Replication job that is filtered by date, key name or eligibility, or that names another account or bucket owner"
+        kind: wrong
+        match_regex: "^aws s3control create-job .*S3ReplicateObject"
+        feedback: "A job that only covers part of the bucket (CreatedAfter or CreatedBefore, KeyNameConstraint, MatchAny, EligibleForReplication false), that targets another account or owner, or that is not a plain single command leaves objects unreplicated and unreported. The auditor needs every customer document: filter on replication status NONE and FAILED only, for this account and this bucket."
       - id: s3-sync
         label: "aws s3 sync s3://acme-orders-docs s3://acme-dr-orders-docs from a laptop"
         kind: wrong
