@@ -291,7 +291,7 @@ stages:
     terminal:
       commands:
         - match: "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\""
-          when_actions: [unique-index]
+          when_actions: [void-and-refund, unique-index]
           output: |
             0
         - match: "psql -d billing -Atc \"SELECT count(*) FROM (SELECT customer_id FROM invoices WHERE period = '2026-09' AND status <> 'void' GROUP BY customer_id HAVING count(*) > 1) d\""
@@ -320,12 +320,12 @@ stages:
       - id: unique-now
         label: "CREATE UNIQUE INDEX ... ON invoices (customer_id, period) (plain, or without the WHERE clause)"
         kind: wrong
-        match_regex: "^(?:psql -d billing -c \")?[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee]))"
+        match_regex: "^(?:psql -d billing (?:-c|-Atc) \"[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee]))|[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] (?:(?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])|[Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?!.*[Ww][Hh][Ee][Rr][Ee])))"
         feedback: "A plain CREATE UNIQUE INDEX blocks writes to invoices for the whole build, on the busiest invoicing day. Without WHERE status <> 'void' it would also forbid keeping voided duplicates as records, and it fails while duplicates exist. Use CONCURRENTLY, partial."
       - id: unique-index
         label: "CREATE UNIQUE INDEX CONCURRENTLY ON invoices (customer_id, period) WHERE status <> 'void'"
         kind: fix
-        match_regex: "^(?:psql -d billing -c \")?[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] )?(?:[a-z_][a-z0-9_]* )?[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] btree )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] \\(?status (?:<>|!=) 'void'\\)?;?\"?$"
+        match_regex: "^(?:psql -d billing (?:-c|-Atc) \"[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee] )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] (?:\\(status (?:<>|!=) 'void'\\)|status (?:<>|!=) 'void') ?;?\"|[Cc][Rr][Ee][Aa][Tt][Ee] [Uu][Nn][Ii][Qq][Uu][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:public\\.)?invoices (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee] )?\\(customer_id, ?period\\) [Ww][Hh][Ee][Rr][Ee] (?:\\(status (?:<>|!=) 'void'\\)|status (?:<>|!=) 'void') ?;?)$"
         feedback: "The database now refuses a second live invoice for a customer and period, whatever the job does, and CONCURRENTLY let invoicing keep running during the build. If a concurrent build ever fails it leaves an INVALID index: drop it and retry."
       - id: delete-dups
         label: "DELETE the later invoice of each pair"

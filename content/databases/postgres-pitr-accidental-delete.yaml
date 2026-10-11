@@ -110,7 +110,7 @@ evidence_labels:
 hints:
   nudge: "You need the customers as they were one second before 10:42:07, without losing anything else. Where could that version of the data exist?"
   direction: "Check that WAL archiving is healthy, then think about restoring somewhere other than production."
-  answer: "Do a point-in-time recovery of last night's backup onto db-restore, stopping just before 10:42:07, and copy the deleted customers back into production."
+  answer: "Do a point-in-time recovery of last night's backup onto db-restore, stopping just before 10:42:07, copy the deleted customers back into production, then lock down and wipe db-restore (a full PII copy) and take the unrestricted DELETE away from the cleanup role."
 
 analogy:
   title: "A photo and a diary"
@@ -119,7 +119,9 @@ analogy:
     change since. Someone emptied one aisle at 10:42. Build a copy of the
     warehouse next door from the photo and the diary, stopping at 10:41,
     and carry just that aisle's boxes back. Don't rebuild the main
-    warehouse, where the morning's deliveries are.
+    warehouse, where the morning's deliveries are. When the aisle is back,
+    lock the copy warehouse and clear it out, and take the broom away from
+    the cleaner who had the whole building's keys.
 
 debrief:
   root_cause: |
@@ -134,6 +136,8 @@ debrief:
     - "Confirm WAL archiving is healthy, so recovery can reach that time."
     - "Restore last night's base backup on db-restore with recovery_target_time just before it."
     - "Copy the missing customers back into production; check related data."
+    - "Lock down db-restore while it exists, then wipe it: it holds a full copy of production PII."
+    - "Remove the cleanup role's unrestricted DELETE; run bulk deletes in a transaction with a row-count check."
   real_world: |
     Practise point-in-time recovery before you need it, and keep base
     backups plus archived WAL long enough to cover mistakes noticed late.

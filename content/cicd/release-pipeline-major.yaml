@@ -128,7 +128,7 @@ actions:
   - id: dispatch-tag
     label: "Start publish.yml from the tag itself: gh workflow run publish.yml --ref v2.4.0 -f tag=v2.4.0"
     kind: fix
-    match_regex: "^gh workflow run publish\\.yml (?:(?:-r|--ref)[ =][\"']?v2\\.4\\.0[\"']? (?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']?|(?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']? (?:-r|--ref)[ =][\"']?v2\\.4\\.0[\"']?)$"
+    match_regex: "^gh workflow run publish\\.yml (?:(?:-r|--ref)[ =][\"']?(?:refs/tags/)?v2\\.4\\.0[\"']? (?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']?|(?:-f|-F|--field|--raw-field)[ =][\"']?tag=v2\\.4\\.0[\"']? (?:-r|--ref)[ =][\"']?(?:refs/tags/)?v2\\.4\\.0[\"']?)$"
     feedback: "workflow_dispatch always creates a run, and dispatching on the tag ref means the build checks out the tagged commit, the one that was signed off. That publishes v2.4.0; it does not stop v2.5.0 breaking the same way (the durable fix is still to do)."
   - id: app-token
     label: "Change release.yml to push the tag with a short-lived GitHub App installation token (contents: write only, minted per run with actions/create-github-app-token), and pass inputs.version through an env var instead of interpolating it into the script"
@@ -253,6 +253,13 @@ stages:
             acmectl-linux-amd64.tar.gz
             acmectl-windows-amd64.zip
         - match: "gh release view v2.4.0 --json assets --jq '.assets[].name'"
+          when_actions: [upload-darwin, upload-windows, upload-sums]
+          output: |
+            SHA256SUMS
+            acmectl-darwin-arm64.tar.gz
+            acmectl-linux-amd64.tar.gz
+            acmectl-windows-amd64.zip
+        - match: "gh release view v2.4.0 --json assets --jq '.assets[].name'"
           evidence: linux-only
           output: |
             SHA256SUMS
@@ -306,7 +313,7 @@ stages:
         feedback: "Two assets is nowhere near any limit. Only one binary ever reached the publish job: \"Downloaded artifact 'dist': 1 file\"."
     actions:
       - id: unique-names
-        label: "Name each matrix upload dist-${{ matrix.os }} without overwrite, and download with pattern: dist-* and merge-multiple: true"
+        label: "Name each matrix upload dist-${{ matrix.os }} without overwrite, and download with pattern: dist-* and merge-multiple: true; check out ref: ${{ inputs.tag }} so any dispatch builds the tag"
         kind: fix
         feedback: "Each job's binary is its own immutable artifact, and the publish job collects all three into dist/."
       - id: max-parallel
@@ -355,6 +362,10 @@ stages:
           output: |
             200
         - match: "curl -s -o /dev/null -w '%{http_code}\\n' -L https://github.com/acme/acmectl/releases/latest/download/acmectl-darwin-arm64.tar.gz"
+          when_actions: [upload-darwin]
+          output: |
+            200
+        - match: "curl -s -o /dev/null -w '%{http_code}\\n' -L https://github.com/acme/acmectl/releases/latest/download/acmectl-darwin-arm64.tar.gz"
           evidence: latest-404
           output: |
             404
@@ -382,22 +393,32 @@ stages:
       - id: clobber-linux
         label: "gh release upload v2.4.0 ... acmectl-linux-amd64.tar.gz ... --clobber (replace the Linux binary too)"
         kind: destructive
-        match_regex: "^gh release upload v2\\.4\\.0 (?=.*acmectl-linux-amd64)(?=.*--clobber)"
+        match_regex: "^gh release upload (?=.*\\bv2\\.4\\.0\\b)(?=.*acmectl-linux-amd64)(?=.*--clobber)"
         feedback: "Linux users already installed that binary and checked it against the SHA256SUMS you published. A rebuild is not byte-identical, so replacing it breaks their checksums and your provenance. Leave published binaries alone; the new SHA256SUMS must keep the original Linux hash."
       - id: clobber-binaries
         label: "gh release upload v2.4.0 <binaries> SHA256SUMS --clobber (one command for everything)"
         kind: wrong
-        match_regex: "^gh release upload v2\\.4\\.0 (?=.*--clobber)(?=.*acmectl-)"
+        match_regex: "^gh release upload (?=.*\\bv2\\.4\\.0\\b)(?=.*--clobber)(?=.*acmectl-)"
         feedback: "--clobber replaces assets of the same name, so a typo or a stray file silently overwrites something users have verified. The binaries are new names: upload them without --clobber. Only SHA256SUMS, which exists and must change, gets --clobber, in its own command."
       - id: upload-binaries
-        label: "Re-run the fixed publish workflow on the v2.4.0 tag for the three binaries, then attach only the new ones, without --clobber: gh release upload v2.4.0 acmectl-darwin-arm64.tar.gz acmectl-windows-amd64.zip"
+        label: "Build the three binaries from the v2.4.0 tag with the fixed publish.yml (run it from main with tag=v2.4.0; its checkout uses ref: inputs.tag), then attach only the new ones, without --clobber: gh release upload v2.4.0 acmectl-darwin-arm64.tar.gz acmectl-windows-amd64.zip (or one command per file)"
         kind: fix
-        match_regex: "^gh release upload v2\\.4\\.0 (?:(?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz (?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip|(?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip (?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz)$"
+        match_regex: "^gh release upload (?:(?:-R|--repo)[ =]acme/acmectl )?(?:v2\\.4\\.0|refs/tags/v2\\.4\\.0) (?:(?:-R|--repo)[ =]acme/acmectl )?(?:[\\\"']?(?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz[\\\"']? [\\\"']?(?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip[\\\"']?|[\\\"']?(?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip[\\\"']? [\\\"']?(?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz[\\\"']?)(?: (?:-R|--repo)[ =]acme/acmectl)?$"
         feedback: "The two missing binaries, built from the tag, are attached as new assets. Without --clobber, the command would refuse to replace anything that already exists, so the Linux binary and the tag are untouched."
+      - id: upload-darwin
+        label: "Attach the macOS binary on its own, without --clobber: gh release upload v2.4.0 acmectl-darwin-arm64.tar.gz"
+        kind: fix
+        match_regex: "^gh release upload (?:(?:-R|--repo)[ =]acme/acmectl )?(?:v2\\.4\\.0|refs/tags/v2\\.4\\.0) (?:(?:-R|--repo)[ =]acme/acmectl )?[\\\"']?(?:\\./)?(?:dist/)?acmectl-darwin-arm64\\.tar\\.gz[\\\"']?(?: (?:-R|--repo)[ =]acme/acmectl)?$"
+        feedback: "The macOS binary, built from the tag, is attached as a new asset. Nothing existing is replaced. Windows still needs attaching."
+      - id: upload-windows
+        label: "Attach the Windows binary on its own, without --clobber: gh release upload v2.4.0 acmectl-windows-amd64.zip"
+        kind: fix
+        match_regex: "^gh release upload (?:(?:-R|--repo)[ =]acme/acmectl )?(?:v2\\.4\\.0|refs/tags/v2\\.4\\.0) (?:(?:-R|--repo)[ =]acme/acmectl )?[\\\"']?(?:\\./)?(?:dist/)?acmectl-windows-amd64\\.zip[\\\"']?(?: (?:-R|--repo)[ =]acme/acmectl)?$"
+        feedback: "The Windows binary, built from the tag, is attached as a new asset. Nothing existing is replaced. macOS still needs attaching."
       - id: upload-sums
         label: "Write a SHA256SUMS that keeps the existing Linux hash and adds the two new binaries, then replace only that file: gh release upload v2.4.0 SHA256SUMS --clobber"
         kind: fix
-        match_regex: "^gh release upload v2\\.4\\.0 (?:(?:\\./)?(?:dist/)?SHA256SUMS --clobber|--clobber (?:\\./)?(?:dist/)?SHA256SUMS)$"
+        match_regex: "^gh release upload (?:(?:-R|--repo)[ =]acme/acmectl )?(?:v2\\.4\\.0|refs/tags/v2\\.4\\.0) (?:(?:-R|--repo)[ =]acme/acmectl )?(?:[\\\"']?(?:\\./)?(?:dist/)?SHA256SUMS[\\\"']? --clobber|--clobber [\\\"']?(?:\\./)?(?:dist/)?SHA256SUMS[\\\"']?)(?: (?:-R|--repo)[ =]acme/acmectl)?$"
         feedback: "SHA256SUMS is the one asset that has to change, and it is replaced alone. It still lists the Linux hash users verified, plus the two new binaries."
       - id: delete-release
         label: "gh release delete v2.4.0 --cleanup-tag, then re-run release.yml"
@@ -409,6 +430,7 @@ stages:
         feedback: "The install script verifies against SHA256SUMS, which still lists only Linux: macOS and Windows installs would fail the checksum check."
     solution_paths:
       - [upload-binaries, upload-sums]
+      - [upload-darwin, upload-windows, upload-sums]
     key_evidence: [latest-404, sums-one]
     evidence_labels:
       latest-404: "releases/latest/download for macOS returns 404"

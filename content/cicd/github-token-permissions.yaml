@@ -208,7 +208,7 @@ evidence_labels:
 hints:
   nudge: "The tests pass. What is different about the one step that fails?"
   direction: "Compare what the token was allowed to do (Set up job) with what the failing step asks for, then look at the workflow's recent history."
-  answer: "a3c9e21 added permissions: contents: read at the top of the workflow, so everything else, including pull-requests, became none. Give the test job contents: read and pull-requests: write."
+  answer: "a3c9e21 added permissions: contents: read at the top of the workflow, so everything else, including pull-requests, became none. Give the test job contents: read and pull-requests: write, and set the org default workflow permissions to read-only."
 
 analogy:
   title: "The tidied-up key ring"
@@ -231,6 +231,7 @@ debrief:
     - "Check the token's permissions in Set up job: only Contents and Metadata."
     - "Read the workflow and its history: a3c9e21 added permissions: contents: read."
     - "Grant what the job needs at job level: contents: read (for checkout) plus pull-requests: write (for labels)."
+    - "Set the org (and repository) default workflow permissions to read-only so every workflow starts least-privilege."
     - "Verify: the PR's test check passes, the label appears, and the token permissions list shows PullRequests: write for that job only."
   real_world: |
     Least-privilege tokens are the right default, and adopting them always

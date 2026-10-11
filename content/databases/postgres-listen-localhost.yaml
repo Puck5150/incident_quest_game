@@ -54,7 +54,7 @@ terminal:
         local   all             all                                     peer
         host    all             all             127.0.0.1/32            scram-sha-256
         host    all             all             ::1/128                 scram-sha-256
-        host    shop            shop            10.0.2.30/32            scram-sha-256
+        hostssl shop            shop            10.0.2.30/32            scram-sha-256
     - match: "sudo grep -v '^#' /etc/postgresql/16/main/pg_hba.conf | grep -v '^$'"
       evidence: hba-local-only
       output: |
@@ -123,14 +123,15 @@ evidence_labels:
 hints:
   nudge: "\"Refused\" means the connection reached db-01 and nothing was listening. Which addresses is PostgreSQL listening on?"
   direction: "Check listen_addresses, then check whether pg_hba.conf would let app-01 in once it can connect."
-  answer: "listen_addresses is the default, localhost. Add db-01's address, restart, and add a pg_hba.conf line for the shop user from app-01."
+  answer: "listen_addresses is the default, localhost. Add db-01's address, restart, add a hostssl pg_hba.conf line (scram-sha-256) for the shop user from app-01 only, and turn TLS on (ssl = on, certificate and key, sslmode=verify-full in the app)."
 
 analogy:
   title: "A shop that only serves through the back door"
   text: |
     The shop is open, but by default it only serves staff at the back
     door, so customers at the front door find it shut. Open the front door,
-    and give the doorman a list saying which customers may come in.
+    and give the doorman a list saying which customers may come in, through
+    a private entrance where nobody can overhear what they say.
 
 debrief:
   root_cause: |
@@ -144,7 +145,8 @@ debrief:
     - "Read the error: connection refused, so nothing is listening there."
     - "Check what PostgreSQL listens on: only 127.0.0.1."
     - "Set listen_addresses to include 10.0.2.15 and restart."
-    - "Allow the shop user from app-01 in pg_hba.conf, reload, and connect from the app."
+    - "Allow the shop user from app-01 with a hostssl, scram-sha-256 pg_hba.conf line, and reload."
+    - "Turn on TLS (ssl = on with certificate and key) and connect from the app with sslmode=verify-full."
   real_world: |
     "Refused" (nothing listening) and "timed out" (something dropping
     packets) point at different layers. Only listen on the addresses you

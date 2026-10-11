@@ -72,12 +72,12 @@ actions:
   - id: index-concurrently
     label: "CREATE INDEX CONCURRENTLY orders_customer_email_idx ON orders (customer_email);"
     kind: fix
-    match_regex: "^[Cc][Rr][Ee][Aa][Tt][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] )?(?:[a-z_][a-z0-9_]* )?[Oo][Nn] (?:public\\.)?orders(?: (?:[Uu][Ss][Ii][Nn][Gg] btree)?)? ?\\( ?customer_email ?\\);?$"
+    match_regex: "^[Cc][Rr][Ee][Aa][Tt][Ee] [Ii][Nn][Dd][Ee][Xx] [Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy] (?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:[A-Za-z_][A-Za-z0-9_]*\\.)?orders(?: (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee])?)? ?\\( ?customer_email ?\\) ?;?$"
     feedback: "The index builds while orders keep being written, and searches now go straight to the matching rows: under a millisecond."
   - id: index-plain
     label: "CREATE INDEX orders_customer_email_idx ON orders (customer_email);"
     kind: wrong
-    match_regex: "^[Cc][Rr][Ee][Aa][Tt][Ee] [Ii][Nn][Dd][Ee][Xx] (?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])(?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] )?(?:[a-z_][a-z0-9_]* )?[Oo][Nn] (?:public\\.)?orders(?: (?:[Uu][Ss][Ii][Nn][Gg] btree)?)? ?\\( ?customer_email ?\\);?$"
+    match_regex: "^[Cc][Rr][Ee][Aa][Tt][Ee] [Ii][Nn][Dd][Ee][Xx] (?![Cc][Oo][Nn][Cc][Uu][Rr][Rr][Ee][Nn][Tt][Ll][Yy])(?:[Ii][Ff] [Nn][Oo][Tt] [Ee][Xx][Ii][Ss][Tt][Ss] [A-Za-z_][A-Za-z0-9_]* |(?:[A-Za-z_][A-Za-z0-9_]* )?)[Oo][Nn] (?:[A-Za-z_][A-Za-z0-9_]*\\.)?orders(?: (?:[Uu][Ss][Ii][Nn][Gg] [Bb][Tt][Rr][Ee][Ee])?)? ?\\( ?customer_email ?\\) ?;?$"
     feedback: "It would give the same index, but a plain CREATE INDEX blocks writes to orders while it builds, which on 12 million rows means checkout stops for minutes."
   - id: analyze
     label: "ANALYZE orders;"
@@ -126,7 +126,7 @@ debrief:
     release. On busy tables, build indexes CONCURRENTLY: it takes longer and
     can't run inside a transaction, but doesn't stop writes. If a
     concurrent build fails or is cancelled it leaves an INVALID index
-    (see \\d orders): drop it and retry, or it still slows every write.
+    (see \d orders in psql): drop it and retry, or it still slows every write.
     Also ask whether searches are case-insensitive (an index on
     lower(customer_email) would be needed) and who may query PII.
 
