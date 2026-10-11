@@ -57,6 +57,7 @@ logs:
   - name: "maintenance log (last week)"
     lines: |
       wishlist-01: kernel update, reboot. chrony disabled during the update to avoid a time jump; re-enable after.
+      (same procedure used on cart-02, search-01 and notify-01 in the same maintenance window)
 
 hypotheses:
   - id: clock-behind
@@ -76,8 +77,16 @@ actions:
   - id: fix-ntp
     label: "Re-enable and start chrony on wishlist-01 (systemctl enable --now chrony), and confirm the clock is synchronised"
     kind: fix
-    match_regex: "^ssh wishlist-01 (sudo )?systemctl enable --now chrony(\\.service)?$"
+    match_regex: "^ssh wishlist-01 (sudo )?systemctl (?:enable --now|--now enable) chronyd?(?:\\.service)?$"
     feedback: "chrony brings wishlist-01's clock back in line, so new tokens are valid there as soon as they're issued, like everywhere else."
+  - id: check-fleet
+    label: "Check every other host from that maintenance window (cart-02, search-01, notify-01) for chrony and a synchronised clock, and re-enable it where it is off"
+    kind: fix
+    feedback: "The same procedure ran on four hosts and the re-enable step was easy to forget on any of them. Fixing one that happened to fail first leaves the others to break the same way."
+  - id: clock-alert
+    label: "Alert on unsynchronised clocks (for example node_timex_sync_status = 0, or clock offset above a second) and add the re-enable step to the maintenance checklist"
+    kind: fix
+    feedback: "The clock drifted for days with nothing watching it. An alert finds it in minutes, and the checklist stops the cause."
   - id: big-leeway
     label: "Raise wishlist-service's leeway to 10 minutes"
     kind: wrong
@@ -92,7 +101,7 @@ actions:
     feedback: "Right for now, drifting again tomorrow: without time synchronisation the clock wanders. Turn chrony back on."
 
 solution_paths:
-  - [fix-ntp]
+  - [fix-ntp, check-fleet, clock-alert]
 
 key_evidence: [nbf-reject, not-synced, chrony-off]
 
