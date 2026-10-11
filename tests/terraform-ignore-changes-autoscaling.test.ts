@@ -90,6 +90,18 @@ describe('terraform-ignore-changes-autoscaling on the simulator', () => {
     }
   })
 
+  it('(e2) comment spoofing is not credited, and the resource may live in any .tf file', async () => {
+    const spoof = await play('cd ~/infra', ECS(LC('all # ignore_changes = [desired_count]')), 'terraform plan')
+    expect(spoof.out[2].output).toContain('No changes.')
+    expect(await detectedAll(spoof.sh)).toEqual(NONE)
+    const commented = await play('cd ~/infra', ECS('\n  # lifecycle {\n  #   ignore_changes = [desired_count]\n  # }\n'), 'terraform plan')
+    expect(await detectedAll(commented.sh)).toEqual(NONE)
+    // moved into main.tf, ecs.tf emptied
+    const moved = await play('cd ~/infra', ': > ecs.tf', ECS(LC('[desired_count]')).replace('ecs.tf', 'main.tf').replace('cat >', 'cat >>'), 'terraform plan')
+    expect(moved.out[3].output).toContain('No changes.')
+    expect(await detectedAll(moved.sh)).toEqual(FIXED)
+  })
+
   it('(f) ignore_changes = all is a clean plan but not credited (too broad)', async () => {
     const { sh, out } = await play('cd ~/infra', ECS(LC('all')), 'terraform plan')
     expect(out[2].output).toContain('No changes.')

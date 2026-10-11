@@ -109,7 +109,7 @@ actions:
             id: "arn:aws:ecs:us-east-1:123456789012:service/prod/checkout"
             attr: desired_count
             equals: 12
-        - file_contains: { path: /home/you/infra/ecs.tf, matches: 'ignore_changes\s*=\s*\[\s*"?desired_count"?\s*,?\s*\]' }
+        - config_matches: { dir: /home/you/infra, matches: '^[ \t]*ignore_changes[ \t]*=[ \t]*\[\s*"?desired_count"?\s*,?\s*\][ \t]*$' }
         - plan_clean: true
         - not: { applied: { op: update, address: aws_ecs_service.checkout } }
     feedback: "Terraform still sets the initial count when it creates the service, then leaves it to the autoscaler. Plans stop showing the reset."
