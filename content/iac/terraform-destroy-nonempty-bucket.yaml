@@ -57,26 +57,25 @@ terminal:
         2026-08-30 02:11:40      48213 reports-logs/2026-08-29-access.log.gz
         2026-08-31 02:11:38      51877 reports-logs/2026-08-30-access.log.gz
         2026-09-01 02:11:41      50342 reports-logs/2026-08-31-access.log.gz
-    - match_regex: "^aws s3api get-bucket-versioning --bucket acme-reports-logs( --region us-east-1)?$"
+    - match_regex: "^aws s3api get-bucket-versioning(?=.*--bucket[ =]acme-reports-logs(?: |$))(?: --bucket[ =]acme-reports-logs| --region[ =]us-east-1| --no-cli-pager)+$"
       example: "aws s3api get-bucket-versioning --bucket acme-reports-logs"
       evidence: not-versioned
       output: |
         {}
-    - match_regex: "^aws s3api list-object-versions --bucket acme-reports-logs( --region us-east-1)?$"
+    - match_regex: "^aws s3api list-object-versions(?=.*--bucket[ =]acme-reports-logs(?: |$))(?: --bucket[ =]acme-reports-logs| --region[ =]us-east-1| --no-cli-pager)+$"
       example: "aws s3api list-object-versions --bucket acme-reports-logs"
       when_actions: [empty-bucket]
       evidence: not-versioned
-      output: |
-        {}
-    - match_regex: "^aws s3api list-object-versions --bucket acme-reports-logs( --region us-east-1)?$"
+      output: ""
+    - match_regex: "^aws s3api list-object-versions(?=.*--bucket[ =]acme-reports-logs(?: |$))(?: --bucket[ =]acme-reports-logs| --region[ =]us-east-1| --no-cli-pager)+$"
       example: "aws s3api list-object-versions --bucket acme-reports-logs"
       evidence: not-versioned
       output: |
         {
             "Versions": [
-                { "Key": "logs/2026-08-29-access.log.gz", "VersionId": "null", "IsLatest": true, "Size": 48213 },
-                { "Key": "logs/2026-08-30-access.log.gz", "VersionId": "null", "IsLatest": true, "Size": 51877 },
-                { "Key": "logs/2026-08-31-access.log.gz", "VersionId": "null", "IsLatest": true, "Size": 50342 }
+                { "ETag": "\"9b2cf535f27731c974343645a3985328\"", "Size": 48213, "StorageClass": "STANDARD", "Key": "logs/2026-08-29-access.log.gz", "VersionId": "null", "IsLatest": true, "LastModified": "2026-08-30T02:00:14+00:00" },
+                { "ETag": "\"1c9d6a0be7f84a2d5c3e8f1b7a406d92\"", "Size": 51877, "StorageClass": "STANDARD", "Key": "logs/2026-08-30-access.log.gz", "VersionId": "null", "IsLatest": true, "LastModified": "2026-08-31T02:00:09+00:00" },
+                { "ETag": "\"e4a7b8c2d1f0935a6b7c8d9e0f1a2b3c\"", "Size": 50342, "StorageClass": "STANDARD", "Key": "logs/2026-08-31-access.log.gz", "VersionId": "null", "IsLatest": true, "LastModified": "2026-09-01T02:00:11+00:00" }
             ]
         }
     - match: "aws sts get-caller-identity"

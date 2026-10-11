@@ -97,7 +97,9 @@ stage reopens the incident into the next one (see below).
   collapsed. Remember to escape backslashes in YAML strings (`\\*`).
 - **Typed fixes:** give an action a `match_regex` and typing a matching command in
   the terminal takes that action, the same as clicking it (only after the right
-  hypothesis; before that it's refused). Use it for actions that really are one
+  hypothesis; before that it's refused). A typed fix entered during investigation is not retroactive: it is refused
+  and not replayed when the cause is named, so the player must declare a root cause first and then
+  retype it (say so in the stage's hint if a lab relies on it). Use it for actions that really are one
   command (`kubectl rollout undo …`, `sudo reboot`); leave multi-step fixes as
   buttons. Anchor the regex (`^…$`): it must not also match a scripted terminal
   command, and the validator checks that.

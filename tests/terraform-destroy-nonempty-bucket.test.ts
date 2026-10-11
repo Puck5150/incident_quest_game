@@ -131,6 +131,16 @@ describe('terraform-destroy-nonempty-bucket', () => {
     expect(out[2].output).toContain('"VersionId": "null"')
     expect(out[2].output).not.toContain('DeleteMarkers')
     expect(scenario.key_evidence).toContain('not-versioned')
+    expect(out[2].output).toContain('"ETag"')
+    const forms = await play('cd ~/reporting-infra', 'aws s3api list-object-versions --bucket=acme-reports-logs', 'aws s3api get-bucket-versioning --region=us-east-1 --bucket acme-reports-logs --no-cli-pager', 'aws s3api list-object-versions --region us-east-1')
+    expect(forms.out[1].output).toContain('VersionId')
+    expect(forms.out[2].output.trim()).toBe('{}')
+    expect(forms.out[3].output).not.toContain('VersionId')
+    // once emptied, the real CLI prints nothing for an unversioned bucket
+    const emptied = await play('cd ~/reporting-infra')
+    const gone = await emptied.sh.run('aws s3api list-object-versions --bucket acme-reports-logs', atStage(scenario, 0), new Set(['empty-bucket']))
+    expect(gone.output.trim()).toBe('')
+    expect(gone.hits).toContain('aws s3api list-object-versions --bucket acme-reports-logs')
   })
 })
 
