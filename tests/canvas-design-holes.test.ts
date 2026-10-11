@@ -103,3 +103,65 @@ describe('reference-design cost wording (gcp)', () => {
     expect(c.reference_designs[1].why).not.toMatch(/same cost/i)
   })
 })
+
+describe('legitimate designs still pass', () => {
+  const ok = (id: string, d: Design) => expect(failed(id, d)).toEqual([])
+  const sync = (from: string, to: string) => ({ from, to, kind: 'sync' as const })
+  const awsWebs = (az1: string[], az2: string[]) => [...nodes('ec2-web', 'use1-az1', ...az1), ...nodes('ec2-web', 'use1-az2', ...az2)]
+
+  it('AWS: web servers split across primary and standby', () => {
+    const ws = ['w1', 'w2', 'w3', 'w4']
+    ok('aws-checkout-canvas', {
+      nodes: [...nodes('alb', 'use1', 'alb'), ...awsWebs(['w1', 'w2'], ['w3', 'w4']), ...nodes('rds', 'use1-az1', 'd1'), ...nodes('rds', 'use1-az2', 'd2')],
+      edges: [T('users', 'alb'), ...ws.map((w) => T('alb', w)), T('w1', 'd1'), T('w2', 'd1'), T('w3', 'd2'), T('w4', 'd2'), sync('d1', 'd2')],
+    })
+  })
+  it('AWS: primary in az2', () => {
+    const ws = ['w1', 'w2', 'w3', 'w4']
+    ok('aws-checkout-canvas', {
+      nodes: [...nodes('alb', 'use1', 'alb'), ...awsWebs(['w1', 'w2'], ['w3', 'w4']), ...nodes('rds', 'use1-az2', 'd1'), ...nodes('rds', 'use1-az1', 'd2')],
+      edges: [T('users', 'alb'), ...ws.map((w) => T('alb', w)), ...ws.map((w) => T(w, 'd1')), sync('d1', 'd2')],
+    })
+  })
+  it('Azure: Front Door then Application Gateway; Application Gateway alone', () => {
+    const apps = ['a1', 'a2', 'a3']
+    const base = [...nodes('app-instance', 'eus2-z1', 'a1'), ...nodes('app-instance', 'eus2-z2', 'a2'), ...nodes('app-instance', 'eus2-z3', 'a3'), ...nodes('pg', 'eus2-z1', 'p1'), ...nodes('pg', 'eus2-z2', 'p2')]
+    const tail = [...apps.map((a) => T(a, 'p1')), sync('p1', 'p2')]
+    ok('azure-portal-canvas', {
+      nodes: [...nodes('front-door', 'global', 'fd'), ...nodes('app-gateway', 'eus2', 'ag'), ...base],
+      edges: [T('users', 'fd'), T('fd', 'ag'), ...apps.map((a) => T('ag', a)), ...tail],
+    })
+    ok('azure-portal-canvas', {
+      nodes: [...nodes('app-gateway', 'eus2', 'ag'), ...base],
+      edges: [T('users', 'ag'), ...apps.map((a) => T('ag', a)), ...tail],
+    })
+  })
+  it('GCP: Cloud Run behind a load balancer; linked only to the standby; Cloud Run plus VMs', () => {
+    const sql = [...nodes('cloud-sql', 'usc1-a', 's1'), ...nodes('cloud-sql', 'usc1-b', 's2')]
+    ok('gcp-signup-canvas', {
+      nodes: [...nodes('lb', 'usc1', 'lb'), ...nodes('cloud-run', 'usc1', 'run'), ...sql],
+      edges: [T('users', 'lb'), T('lb', 'run'), T('run', 's1'), sync('s1', 's2')],
+    })
+    ok('gcp-signup-canvas', {
+      nodes: [...nodes('cloud-run', 'usc1', 'run'), ...sql],
+      edges: [T('users', 'run'), T('run', 's2'), sync('s1', 's2')],
+    })
+    const e = evaluateCanvas(get('gcp-signup-canvas'), {
+      nodes: [...nodes('lb', 'usc1', 'lb'), ...nodes('cloud-run', 'usc1', 'run'), ...nodes('vm', 'usc1-a', 'v1'), ...sql],
+      edges: [T('users', 'lb'), T('users', 'run'), T('lb', 'v1'), T('run', 's1'), T('v1', 's1'), sync('s1', 's2')],
+    })
+    expect(e.tests.filter((t) => !t.pass)).toEqual([])
+  })
+})
+
+describe('reason wording', () => {
+  it('names the unnamed zone by label and gives one entry-point reason', () => {
+    const c = get('aws-checkout-canvas')
+    const d = c.counter_examples.find((x) => x.name.startsWith('Everything in one zone of another'))!.design
+    expect(evaluateCanvas(c, d).tests[1].reasons[0]).toMatch(/A zone you used but no test names \(us-west-2a\) fails/)
+    const open = c.counter_examples.find((x) => x.name.startsWith('Web servers open'))!.design
+    expect(evaluateCanvas(c, open).tests[0].reasons).toEqual([
+      'users connect straight to web-1, web-2, web-3, web-4; put a load balancer or other entry point in front.',
+    ])
+  })
+})

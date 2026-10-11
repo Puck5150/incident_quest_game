@@ -59,12 +59,11 @@ function scenarios(c: CanvasChallenge, d: Design, t: CanvasTest): { removed: Set
     // hides everything in one (say, a second Region's lane) must not slip past.
     // Every zone_outage test therefore also fails each occupied, unnamed zone.
     const named = new Set(c.stress_tests.flatMap((x) => ('zone_outage' in x.event ? [x.event.zone_outage] : [])))
-    const extra = c.layout.regions
-      .flatMap((r) => r.zones.map((z) => z.id))
-      .filter((z) => !named.has(z) && d.nodes.some((n) => n.lane === z))
+    const zoneList = c.layout.regions.flatMap((r) => r.zones)
+    const extra = zoneList.map((z) => z.id).filter((z) => !named.has(z) && d.nodes.some((n) => n.lane === z))
     return [
       { removed: lose(e.zone_outage), prefix: '' },
-      ...extra.map((z) => ({ removed: lose(z), prefix: `If ${z} fails: ` })),
+      ...extra.map((z) => ({ removed: lose(z), prefix: `A zone you used but no test names (${zoneList.find((x) => x.id === z)!.label}) fails: ` })),
     ]
   }
   if ('region_outage' in e) {
@@ -104,19 +103,23 @@ function check(
   // Users may only talk to an entry point: never straight to a database, and
   // (when the palette offers a load balancer) never straight to a web server
   // unless that service has its own managed front end (`public`).
+  const toDb: string[] = []
+  const direct: string[] = []
   const traffic = d.edges.filter((e) => {
     if (e.kind !== 'traffic') return false
     if (e.from !== USERS) return true
     const n = byId.get(e.to)
     if (!n) return true
-    const why = has(n, 'write-store')
-      ? `users connect straight to the database (${n.id}); keep it private and reach it only through the web tier.`
-      : needsEntry && !has(n, 'route') && !type(n.id)?.public
-        ? `users connect straight to ${n.id}; put a load balancer or other entry point in front of it.`
-        : ''
-    if (why && !reasons.includes(why)) reasons.push(why)
-    return !why
+    if (has(n, 'write-store')) return void toDb.push(n.id), false
+    if (needsEntry && !has(n, 'route') && !type(n.id)?.public) return void direct.push(n.id), false
+    return true
   })
+  if (toDb.length)
+    reasons.push(`users connect straight to the database (${toDb.join(', ')}); keep it private and reach it only through the web tier.`)
+  if (direct.length)
+    reasons.push(`users connect straight to ${direct.join(', ')}; put a load balancer or other entry point in front.`)
+  // The design is wrong before any failure: skip the downstream reachability noise.
+  if (reasons.length) return reasons
 
   // Everything users can reach along traffic links, through surviving components.
   const reachable = new Set<string>([USERS])

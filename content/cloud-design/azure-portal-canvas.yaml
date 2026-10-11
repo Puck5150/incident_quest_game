@@ -308,6 +308,10 @@ debrief:
     Microsoft recommends zone-redundant deployments for production PostgreSQL
     servers. Zonal HA is mainly for regions without zones, and it's also offered
     when a region lacks capacity for a zone-redundant deployment.
+    In this design the portal gets one entry point (Front Door or Application
+    Gateway) in front of the app instances, so users have a single address across
+    zones and the instances aren't each exposed. The database stays private:
+    only the app tier connects to it, and users never do.
 
 sources:
   - title: "Reliability in Azure Database for PostgreSQL"

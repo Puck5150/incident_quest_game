@@ -486,7 +486,7 @@ zone/region lanes, traffic links, and sync/async replication links. Start from
 - **Palette.** Each component has a `scope` (zonal, regional or global, which
   decides the lanes it can go in), `roles` (`route`, `serve`, `write-store`), a
   `capacity` for `serve`, a cost, sourced `facts`, and optionally `public: true`
-  (see Entry points). Keep it small: 3–5 parts.
+  (see Entry points; only valid on a `serve` part, and available in pick-cloud palettes too). Keep it small: 3–5 parts.
 - **How the engine judges a design** (`src/game/canvas.ts`):
   - A zone outage removes zonal parts in that zone. A region outage also removes
     that region's regional parts. `single_failure` removes each part of a type,

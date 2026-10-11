@@ -60,6 +60,7 @@ export const MultiCanvasSchema = z
           capacity: z.number().min(0).default(0),
           cost: z.number().min(0),
           overkill: z.string().optional(),
+          public: z.boolean().optional(), // serve parts with a managed public front end (see AUTHORING.md)
           as: perProvider(Naming),
           // Required: what isn't equivalent across providers. "None that matter here" is fine.
           differences: z.string().min(1),
@@ -135,6 +136,7 @@ export function resolveProvider(m: MultiCanvas, p: Provider): CanvasChallenge {
     cost: ov.palette?.[item.id]?.cost ?? item.cost,
     facts: item.as[p]!.facts,
     overkill: item.overkill,
+    public: item.public,
   }))
   const fill = filler(p, labels, labels[m.layout.regions[0].id] ?? m.layout.regions[0].id, (id) => palette.find((x) => x.id === id)?.label)
 

@@ -182,6 +182,9 @@
           "overkill": {
             "type": "string"
           },
+          "public": {
+            "type": "boolean"
+          },
           "as": {
             "type": "object",
             "properties": {

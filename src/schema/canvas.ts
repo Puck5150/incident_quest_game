@@ -102,6 +102,9 @@ export const CanvasChallengeSchema = z
     const issue = (message: string, path: (string | number)[]) =>
       ctx.addIssue({ code: 'custom', message, path, input: c })
 
+    c.palette.forEach((p, i) => {
+      if (p.public && !p.roles.includes('serve')) issue('`public` only applies to a part with the serve role', ['palette', i, 'public'])
+    })
     const zones = new Set(c.layout.regions.flatMap((r) => r.zones.map((z) => z.id)))
     const regions = new Set(c.layout.regions.map((r) => r.id))
     const laneIds = [...zones, ...regions, ...(c.layout.global ? ['global'] : [])]

@@ -265,6 +265,11 @@ from your own experience and tick them off.
       (check the read-replica docs); Cloud SQL HA is really one instance with
       `availability_type = REGIONAL`, not two separately created instances.
 
+- [ ] Azure canvas: requiring an entry point in front of App Service instances
+      is a design-judgement call (App Service has its own public endpoint, like
+      Cloud Run). The debrief's "single address, not each instance exposed" and
+      "database stays private" lines are general practice, not sourced.
+
 ## cloud-design/zone-resilient-checkout ("pick your cloud")
 - [ ] The GCP load balancer's "spread backends across zones" fact is paraphrased
       from the Compute Engine regions/zones guidance; the load-balancing overview
