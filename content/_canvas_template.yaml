@@ -23,8 +23,8 @@ brief: |
 
 requirements:                 # each should map to a stress test or the budget
   - "Serve 2× traffic with one zone down"
-  - "Stay within 8 cost units per month"
-budget: 8
+  - "Stay within 9 cost units per month"
+budget: 9
 
 layout:
   global: false               # true adds a lane for global services (CDNs, global LBs)
@@ -71,6 +71,10 @@ stress_tests:
     label: "zone a fails"
     event: { zone_outage: r1-a }
     check: { reach: [serve, write-store], capacity: 2 }
+  - id: zone-b
+    label: "zone b fails"
+    event: { zone_outage: r1-b }
+    check: { reach: [serve, write-store], capacity: 2 }
 
 reference_designs:            # must pass everything within budget
   - name: "Recommended"
@@ -79,8 +83,9 @@ reference_designs:            # must pass everything within budget
       nodes:
         - { id: lb, type: lb, lane: r1 }
         - { id: web-1, type: web, lane: r1-a }
-        - { id: web-2, type: web, lane: r1-b }
+        - { id: web-2, type: web, lane: r1-a }
         - { id: web-3, type: web, lane: r1-b }
+        - { id: web-4, type: web, lane: r1-b }
         - { id: db-1, type: db, lane: r1-a }
         - { id: db-2, type: db, lane: r1-b }
       edges:
@@ -88,9 +93,11 @@ reference_designs:            # must pass everything within budget
         - { from: lb, to: web-1, kind: traffic }
         - { from: lb, to: web-2, kind: traffic }
         - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
         - { from: web-1, to: db-1, kind: traffic }
         - { from: web-2, to: db-1, kind: traffic }
         - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
         - { from: db-1, to: db-2, kind: sync }
 
 counter_examples:             # each must fail EXACTLY `fails` ("budget" counts)

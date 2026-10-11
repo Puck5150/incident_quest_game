@@ -254,6 +254,22 @@ from your own experience and tick them off.
       the Compute Engine regions/zones guidance (move traffic to another zone),
       not from a load-balancing product page.
 
+- [ ] Canvas entry-point rules (2026-10 audit fixes): Cloud Run is marked
+      `public: true` (users reach it directly), based on it exposing its own
+      HTTPS endpoint; confirm against the Cloud Run docs and add a source. The
+      added debrief lines (keep web servers and database behind the load
+      balancer; database private) are general practice, not sourced to a
+      specific product page. Audit suggestions NOT added because unverified:
+      Cloud SQL backups/PITR and private IP, Cloud Armor, VM service accounts;
+      the Azure `pg-geo` "lag is typically at least several minutes" fact
+      (check the read-replica docs); Cloud SQL HA is really one instance with
+      `availability_type = REGIONAL`, not two separately created instances.
+
+- [ ] Azure canvas: requiring an entry point in front of App Service instances
+      is a design-judgement call (App Service has its own public endpoint, like
+      Cloud Run). The debrief's "single address, not each instance exposed" and
+      "database stays private" lines are general practice, not sourced.
+
 ## cloud-design/zone-resilient-checkout ("pick your cloud")
 - [ ] The GCP load balancer's "spread backends across zones" fact is paraphrased
       from the Compute Engine regions/zones guidance; the load-balancing overview

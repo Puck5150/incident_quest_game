@@ -53,7 +53,7 @@ it('pick a cloud, build on it, and the queue remembers which cloud', async () =>
   add('Cloud SQL for PostgreSQL instance', 'r1-b')
   link('users', 'regional-alb-1')
   for (const w of ['web-1', 'web-2', 'web-3', 'web-4']) link('regional-alb-1', w)
-  for (const w of ['web-1', 'web-3']) link(w, 'cloud-sql-1')
+  for (const w of ['web-1', 'web-2', 'web-3', 'web-4']) link(w, 'cloud-sql-1')
   select('cloud-sql-1')
   fireEvent.change(within(inspector()).getByLabelText('Replicate to another database'), { target: { value: 'cloud-sql-2' } })
   fireEvent.click(within(inspector()).getAllByRole('button', { name: 'Link' })[1])

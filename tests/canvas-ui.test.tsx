@@ -89,6 +89,8 @@ it('build, fail, fix, pass and submit a canvas design without dragging', async (
   add('EC2 web server', 'use1-az2')
   link('alb-1', 'web-3')
   link('alb-1', 'web-4')
+  link('web-3', 'rds-1')
+  link('web-4', 'rds-1')
 
   fireEvent.click(screen.getByRole('button', { name: 'Run stress tests again' }))
   expect(results().textContent).not.toMatch(/Failed/)

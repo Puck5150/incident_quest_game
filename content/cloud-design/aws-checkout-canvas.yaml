@@ -199,9 +199,92 @@ counter_examples:
         - { from: alb, to: web-5, kind: traffic }
         - { from: alb, to: web-6, kind: traffic }
         - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
         - { from: web-4, to: db-1, kind: traffic }
+        - { from: web-5, to: db-1, kind: traffic }
+        - { from: web-6, to: db-1, kind: traffic }
         - { from: db-1, to: db-2, kind: sync }
         - { from: db-1, to: db-dr, kind: async }
+  - name: "Everything in one zone of another Region"
+    fails: [az1-outage, az2-outage]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: usw2-az1 }
+        - { id: web-2, type: ec2-web, lane: usw2-az1 }
+        - { id: web-3, type: ec2-web, lane: usw2-az1 }
+        - { id: db-1, type: rds, lane: usw2-az1 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: alb, to: web-3, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+  - name: "Web servers open to the internet, no load balancer"
+    fails: [sale, az1-outage, az2-outage, web-failure]
+    design:
+      nodes:
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: web-3, type: ec2-web, lane: use1-az2 }
+        - { id: web-4, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+      edges:
+        - { from: users, to: web-1, kind: traffic }
+        - { from: users, to: web-2, kind: traffic }
+        - { from: users, to: web-3, kind: traffic }
+        - { from: users, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "Database open to users"
+    fails: [sale, az1-outage, az2-outage, web-failure]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: web-3, type: ec2-web, lane: use1-az2 }
+        - { id: web-4, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: users, to: db-1, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: alb, to: web-3, kind: traffic }
+        - { from: alb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "Load balancer linked to the database, web servers not"
+    fails: [sale, az1-outage, az2-outage, web-failure]
+    design:
+      nodes:
+        - { id: alb, type: alb, lane: use1 }
+        - { id: web-1, type: ec2-web, lane: use1-az1 }
+        - { id: web-2, type: ec2-web, lane: use1-az1 }
+        - { id: web-3, type: ec2-web, lane: use1-az2 }
+        - { id: web-4, type: ec2-web, lane: use1-az2 }
+        - { id: db-1, type: rds, lane: use1-az1 }
+        - { id: db-2, type: rds, lane: use1-az2 }
+      edges:
+        - { from: users, to: alb, kind: traffic }
+        - { from: alb, to: web-1, kind: traffic }
+        - { from: alb, to: web-2, kind: traffic }
+        - { from: alb, to: web-3, kind: traffic }
+        - { from: alb, to: web-4, kind: traffic }
+        - { from: alb, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
 
 hints:
   nudge: "Take any one zone away in your head. What's left, and is it enough?"
@@ -227,7 +310,9 @@ debrief:
   real_world: |
     This is the shape AWS's Well-Architected Reliability Pillar recommends:
     deploy to at least two Availability Zones, and enable Multi-AZ replication
-    for services like RDS that don't do it by default.
+    for services like RDS that don't do it by default. Keep the shape safe as
+    well as available: only the load balancer takes traffic from users, and the
+    web servers and database stay behind it.
 
 sources:
   - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"

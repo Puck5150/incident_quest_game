@@ -62,6 +62,8 @@ describe('evaluateCanvas', () => {
     const noDbLinks = without(ref, (e) => e.to === 'db-1' && e.kind === 'traffic')
     expect(result(noDbLinks, 'sale').reasons).toEqual([
       'nothing that users can reach is connected to the database (db-1).',
+      'no serving capacity survives; 3× is needed.',
+      "web-1, web-2, web-3, web-4 can't reach the database, so they don't count as serving capacity.",
     ])
   })
 

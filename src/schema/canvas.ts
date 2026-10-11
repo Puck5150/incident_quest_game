@@ -23,6 +23,9 @@ const PaletteItemSchema = z.strictObject({
   cost: z.number().min(0),
   facts: z.array(z.string().min(1)).min(1),
   overkill: z.string().optional(),
+  // A `serve` component with its own managed public front end (e.g. Cloud Run's
+  // HTTPS endpoint): users may connect to it directly, with no load balancer.
+  public: z.boolean().optional(),
 })
 
 const NodeSchema = z.strictObject({ id, type: id, lane: id })
@@ -99,6 +102,9 @@ export const CanvasChallengeSchema = z
     const issue = (message: string, path: (string | number)[]) =>
       ctx.addIssue({ code: 'custom', message, path, input: c })
 
+    c.palette.forEach((p, i) => {
+      if (p.public && !p.roles.includes('serve')) issue('`public` only applies to a part with the serve role', ['palette', i, 'public'])
+    })
     const zones = new Set(c.layout.regions.flatMap((r) => r.zones.map((z) => z.id)))
     const regions = new Set(c.layout.regions.map((r) => r.id))
     const laneIds = [...zones, ...regions, ...(c.layout.global ? ['global'] : [])]
