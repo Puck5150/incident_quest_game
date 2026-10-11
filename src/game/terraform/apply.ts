@@ -139,6 +139,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   const counts = { imported: 0, added: 0, changed: 0, destroyed: 0 }
   const failed = new Set<string>()
   const done = new Set<string>()
+  const spent = new Set<string>() // -replace addresses already replaced in this run: later plans must see the new object, not a pending replacement
   const skipImports = new Set<string>() // imported or deleted in this run: its import block is spent
   let first: PlanResult | undefined
 
@@ -164,7 +165,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   }
 
   for (let guard = 0; guard < 2000; guard++) {
-    const plan = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: first ? false : input.refresh, skipImports })
+    const plan = planConfig({ ...input, replace: input.replace?.filter((a) => !spent.has(a)), state, reality: Object.fromEntries(reality), refresh: first ? false : input.refresh, skipImports })
     first ??= plan
     if (plan.diagnostics.length) {
       errors.push(...plan.diagnostics)
@@ -237,6 +238,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
         reality.set(realityKey(i.type, id), structuredClone(attrs))
         steps.push({ address: i.address, op: 'create', id, seconds: secs, ok: true })
         done.add(`${i.address}:create`)
+        spent.add(i.address)
         counts.added++
       }
     } else {
@@ -265,7 +267,7 @@ export function executeApply(input: PlanInput, ctx: ApplyContext): ApplyResult {
   }
 
   if (!errors.length) {
-    const final = planConfig({ ...input, state, reality: Object.fromEntries(reality), refresh: false, skipImports })
+    const final = planConfig({ ...input, replace: undefined, state, reality: Object.fromEntries(reality), refresh: false, skipImports })
     const computed = final.outputs.filter((o) => !hasUnknown(o.value)).map((o): [string, State['outputs'][string]] => [o.name, o.sensitive ? { value: o.value, sensitive: true } : { value: o.value }])
     // A targeted run only updates (or, destroying, removes) the outputs inside the targets.
     const scoped = first?.targetOutputs // from the first plan: a destroy has removed the objects the later plans would look at

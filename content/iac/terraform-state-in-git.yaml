@@ -23,33 +23,6 @@ environment: |
 
 terminal:
   prompt: "you@laptop:~/analytics-infra$"
-  files:
-    - path: terraform.tfstate
-      content: |
-        {
-          "version": 4,
-          "terraform_version": "1.9.8",
-          "resources": [
-            {
-              "type": "random_password",
-              "name": "db",
-              "instances": [{ "attributes": { "length": 32, "result": "<redacted in this simulation>" } }]
-            },
-            {
-              "type": "aws_db_instance",
-              "name": "analytics",
-              "instances": [{ "attributes": { "identifier": "analytics-db", "username": "analytics",
-                "password": "<redacted in this simulation>" } }]
-            },
-            {
-              "type": "aws_db_parameter_group",
-              "name": "analytics",
-              "instances": [{ "attributes": { "family": "postgres16", "password_encryption": "scram-sha-256",
-                "parameter": [{ "name": "password_encryption", "value": "scram-sha-256" }],
-                "secrets": { "password": "<redacted in this simulation>" } } }]
-            }
-          ]
-        }
   commands:
     - match: "git ls-files | grep tfstate"
       when_actions: [remote-backend]
@@ -59,40 +32,120 @@ terminal:
       output: |
         terraform.tfstate
         terraform.tfstate.backup
-    - match: "grep -c '\"password\"' terraform.tfstate"
-      evidence: password-in-state
-      output: |
-        2
-    - match: "cat backend.tf"
-      when_actions: [remote-backend]
-      output: |
-        terraform {
-          backend "s3" {
-            bucket       = "acme-tfstate"
-            key          = "analytics-infra/terraform.tfstate"
-            region       = "us-east-1"
-            encrypt      = true
-            use_lockfile = true
-          }
-        }
-    - match: "cat backend.tf"
-      evidence: no-backend
-      output: |
-        cat: backend.tf: No such file or directory
     - match: "git log --oneline -- terraform.tfstate | tail -1"
       output: |
         4e1a0c7 add state so others can run terraform
 
+terraform:
+  dir: "~/analytics-infra"
+  state_file: true
+  files:
+    - path: .gitignore
+      content: |
+        .terraform/
+    - path: main.tf
+      content: |
+        terraform {
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+            random = {
+              source  = "hashicorp/random"
+              version = "~> 3.6"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = "us-east-1"
+        }
+    - path: db.tf
+      content: |
+        resource "random_password" "db" {
+          length = 32
+        }
+
+        resource "aws_db_instance" "analytics" {
+          identifier     = "analytics-db"
+          engine         = "postgres"
+          instance_class = "db.t3.medium"
+          username       = "analytics"
+          password       = random_password.db.result
+        }
+    - path: .terraform.lock.hcl
+      content: |
+        # This file is maintained automatically by "terraform init".
+        # Manual edits may be lost in future updates.
+
+        provider "registry.terraform.io/hashicorp/aws" {
+          version     = "5.67.0"
+          constraints = "~> 5.0"
+          hashes = [
+            "h1:Zq0uB8Zc1nS5eYpR3m7KpTz2W0k6YV3d8J4bN1xQwLs=",
+          ]
+        }
+
+        provider "registry.terraform.io/hashicorp/random" {
+          version     = "3.6.3"
+          constraints = "~> 3.6"
+          hashes = [
+            "h1:PTJACYWeOP2dakMHvuoPf6Ka66czLFi3bxQsNztcFy0=",
+          ]
+        }
+  state:
+    - type: random_password
+      name: db
+      attrs:
+        id: none
+        length: 32
+        special: true
+        upper: true
+        lower: true
+        numeric: true
+        result: "Zk3#fB9mWq2$xT7pLd4&Hn8Vc1^Ys6Ae"
+    - type: aws_db_instance
+      name: analytics
+      attrs:
+        id: db-ANALYTICS7K2M
+        arn: "arn:aws:rds:us-east-1:123456789012:db:analytics-db"
+        identifier: analytics-db
+        engine: postgres
+        engine_version: "16.3"
+        instance_class: db.t3.medium
+        allocated_storage: 100
+        storage_encrypted: true
+        kms_key_id: ""
+        db_name: ""
+        username: analytics
+        password: "Zk3#fB9mWq2$xT7pLd4&Hn8Vc1^Ys6Ae"
+        multi_az: false
+        skip_final_snapshot: false
+        endpoint: "analytics-db.cxyz.us-east-1.rds.amazonaws.com:5432"
+        tags: {}
+        tags_all: {}
+  evidence:
+    - evidence: password-in-state
+      command: state pull
+      contains: '"result"'
+
 files:
-  - path: "db.tf (excerpt)"
+  - path: "main.tf and db.tf (no backend block)"
+    language: hcl
+    evidence: no-backend
     content: |
+      terraform {
+        required_providers { ... }
+        # no backend block: state is the local file terraform.tfstate
+      }
+
       resource "random_password" "db" {
-        length  = 32
-        special = true
+        length = 32
       }
 
       resource "aws_db_instance" "analytics" {
-        identifier = "analytics"
+        identifier = "analytics-db"
         password   = random_password.db.result
         # ...
       }
@@ -113,17 +166,33 @@ hypotheses:
 
 actions:
   - id: remote-backend
-    label: "Move state to the S3 backend (encrypt = true, locking, bucket versioning, a bucket policy and public access block limiting it to the pipeline and the engineers who run Terraform) with terraform init -migrate-state, then git rm --cached terraform.tfstate and terraform.tfstate.backup, add both to .gitignore and delete other local copies"
+    label: "Move state to an S3 backend (encrypt = true, locking, on a bucket with versioning, a bucket policy and public access block limiting it to the pipeline and the engineers who run Terraform): declare it, run terraform init and answer yes to copy the state, delete the leftover terraform.tfstate.backup, add the state files to .gitignore and git rm --cached them"
     kind: fix
-    feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest, versioned and locked. The files are gone from the tip of the repository; the history still has the old password, and so do any laptops that cloned it, including the terraform.tfstate.backup that the migration leaves behind."
+    done_when:
+      all:
+        - backend: { type: s3, require: { bucket: '*', key: '*', encrypt: true }, any_of: [{ use_lockfile: true }, { dynamodb_table: '*' }] }
+        - plan_clean: true
+        - state_has: random_password.db
+        - state_has: aws_db_instance.analytics
+        - not: { applied: { op: delete, address: aws_db_instance.analytics } }
+        - file_contains: { path: /home/you/analytics-infra/.gitignore, matches: '^[ \t]*/?(\*|terraform)\.tfstate' }
+        - not: { file_contains: { path: /home/you/analytics-infra/terraform.tfstate, matches: '"result"' } }
+        - not: { file_contains: { path: /home/you/analytics-infra/terraform.tfstate.backup, matches: '"result"' } }
+    feedback: "State now lives where only the people and pipelines who run Terraform can read it, encrypted at rest and locked; init copied it, so the plan is clean and the same database is still tracked. The local terraform.tfstate was emptied and you removed the terraform.tfstate.backup the migration leaves behind, which still held every secret in plain text. The files are out of the working tree and ignored, and git rm --cached takes them out of the tip of the repository. The history still has the old password, and so do any laptops that cloned it: that is what rotating is for."
   - id: rotate
     label: "Rotate the database password (replace random_password.db, or better switch to manage_master_user_password so it lives in Secrets Manager and out of state), have security purge the file from git history and every clone, and review the database's login logs and the repo's clone history for use of the old password"
     kind: fix
-    feedback: "The leaked password no longer works, the history cleanup limits further copies, and the login and clone review tells you whether it was used. Assume anyone with repo access may have seen it. A new random_password would still be written to state, now encrypted and access-controlled; a managed master password keeps it out of state altogether."
+    done_when:
+      all:
+        - applied: { op: create, address: random_password.db }
+        - not: { applied: { op: delete, address: aws_db_instance.analytics } }
+        - reality_has: { type: aws_db_instance, id: db-ANALYTICS7K2M, attr: identifier, equals: analytics-db }
+        - not: { reality_has: { type: aws_db_instance, id: db-ANALYTICS7K2M, attr: password, equals: "Zk3#fB9mWq2$xT7pLd4&Hn8Vc1^Ys6Ae" } }
+    feedback: "The leaked password no longer works (apply -replace=random_password.db generated a new one and updated the database in place), the history cleanup limits further copies, and the login and clone review tells you whether it was used. Assume anyone with repo access may have seen it: rewriting history alone would not make the old password safe again. A new random_password would still be written to state, now encrypted and access-controlled; a managed master password keeps it out of state altogether."
   - id: gitignore-only
     label: "Add terraform.tfstate to .gitignore"
     kind: wrong
-    feedback: "The file is already tracked, so .gitignore doesn't affect it, and the password stays in every past commit."
+    feedback: "The file is already tracked, so .gitignore doesn't affect it, the password stays in every past commit and the state is still a local file nobody else can lock. Nothing was migrated and nothing rotated."
   - id: make-private
     label: "Restrict the repository to the data team"
     kind: wrong
@@ -141,8 +210,8 @@ evidence_labels:
 
 hints:
   nudge: "Nobody typed the password. Which file holds every resource's attributes?"
-  direction: "Check what git tracks, whether a backend is configured, and what state stores."
-  answer: "State stores the generated password in plain text and was committed. Move to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, stop tracking state (and delete terraform.tfstate.backup), rotate the password (preferably a managed master password), purge the history and check the database logs for use of the old one."
+  direction: "Check what git tracks, whether a backend is configured, and what state stores. Editing a backend block does nothing until terraform init has run, and init leaves a copy behind."
+  answer: "State stores the generated password in plain text and was committed. Move to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, run terraform init and answer yes to copy the state (it leaves terraform.tfstate.backup holding every secret: delete it), stop tracking state with .gitignore and git rm --cached, rotate the password (preferably a managed master password), purge the history and check the database logs for use of the old one."
 
 analogy:
   title: "The inventory list that includes the safe's combination"
@@ -162,7 +231,7 @@ debrief:
   ideal_path:
     - "Confirm the password is in terraform.tfstate."
     - "See that state is a tracked file with no backend configured."
-    - "Move state to the S3 backend with encryption, locking, versioning and a restrictive bucket policy, and stop tracking it (also the .backup file and other local copies)."
+    - "Move state to the S3 backend with encryption, locking, versioning and a restrictive bucket policy (terraform init, answer yes to copy), delete the terraform.tfstate.backup the migration leaves behind, and stop tracking state (.gitignore and git rm --cached)."
     - "Rotate the password (a managed master password keeps it out of state), purge the file from history and clones, and check the database logs and clone history for use of the old password."
   real_world: |
     Never commit state. Use a remote backend with encryption and access
