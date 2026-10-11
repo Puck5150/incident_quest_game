@@ -76,9 +76,13 @@ describe('terraform-count-index-shift on the simulator', () => {
   })
 
   it('(b) every key evidence tag is obtainable before any fix', async () => {
-    const { out } = await play('cd ~/infra', 'terraform plan', 'terraform state list')
+    const drain = 'aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/returns --attribute-names ApproximateNumberOfMessages'
+    const { out } = await play('cd ~/infra', 'terraform plan', 'terraform state list', drain)
+    expect(out[3].output).toContain('"ApproximateNumberOfMessages": "0"')
+    const hits = out.flatMap((r) => r.hits)
     const tags = new Set([
-      ...out.flatMap((r) => r.hits).filter((h) => h.startsWith('evidence:')).map((h) => h.slice('evidence:'.length)),
+      ...hits.filter((h) => h.startsWith('evidence:')).map((h) => h.slice('evidence:'.length)),
+      ...scenario.terminal!.commands.filter((c) => hits.includes(c.match ?? c.example ?? '')).map((c) => c.evidence),
     ])
     for (const t of scenario.key_evidence) expect(tags.has(t), t).toBe(true)
     expect(out[1].hits).toContain('evidence:count-list')
