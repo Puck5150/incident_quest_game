@@ -136,12 +136,20 @@ actions:
   - id: pause-analytics
     label: "gcloud compute instance-groups managed resize analytics-workers --size 0 --region us-central1"
     kind: fix
-    match_regex: "^gcloud compute instance-groups managed resize analytics-workers --size[ =]0 --region[ =]us-central1$"
+    match_regex: "^gcloud compute instance-groups managed resize analytics-workers (?:--size[= ]0 --region[= ]us-central1|--region[= ]us-central1 --size[= ]0)$"
     feedback: "That frees 160 vCPUs of regional quota. The autoscaler's pending creations succeed and the web tier reaches its recommended 26 VMs. The data team said the re-index can be resumed later; tell them it's paused and why."
   - id: request-quota
     label: "Request a CPUS quota increase for us-central1, sized for sale peaks plus the batch work"
     kind: fix
     feedback: "Quota increases aren't instant, so this doesn't rescue today's sale, but it's what lets both workloads run at once next time. Add an alert on regional CPU quota usage while you're there."
+  - id: alert-quota
+    label: "Create a Cloud Monitoring alert on regional CPUS quota usage (for example at 80% of the limit) for us-central1, defined in the IaC"
+    kind: fix
+    feedback: "Quota ran out silently; the autoscaler's status message was the only sign. An alert at 80% gives the team time to ask for more before a peak."
+  - id: isolate-batch
+    label: "Move the analytics batch work to its own project (or a region with spare quota) so it can't consume the web tier's quota, then resume the re-index there"
+    kind: fix
+    feedback: "Batch and serving share a regional quota in one project, so one job could starve the other. Separate quotas remove that coupling instead of relying on people to pause things."
   - id: raise-max
     label: "gcloud compute instance-groups managed set-autoscaling shop-web-mig --region us-central1 --max-num-replicas 80"
     kind: wrong
@@ -157,7 +165,7 @@ actions:
     feedback: "Deleting the group takes the whole web tier down until a new one is built, has its load balancer backend set up and passes health checks: an outage in the middle of the sale, to fix a capacity shortfall."
 
 solution_paths:
-  - [pause-analytics, request-quota]
+  - [pause-analytics, request-quota, alert-quota, isolate-batch]
 
 key_evidence: [size-capped, quota-exceeded, quota-full, batch-started]
 
