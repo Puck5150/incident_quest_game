@@ -17,8 +17,10 @@ const walk = (x: unknown, item: string) => {
   if (Array.isArray(x)) x.forEach((v) => walk(v, item))
   else if (x && typeof x === 'object')
     for (const [k, v] of Object.entries(x)) {
-      if (k === 'url' && typeof v === 'string') urls.set(v, (urls.get(v) ?? new Set()).add(item))
-      else walk(v, item)
+      // Scenario data (e.g. Terraform state for an SQS queue) also has `url` fields; those use the fake account 123456789012.
+      if (k === 'url' && typeof v === 'string') {
+        if (!v.includes('/123456789012/')) urls.set(v, (urls.get(v) ?? new Set()).add(item))
+      } else walk(v, item)
     }
 }
 const c = loadContent(path.resolve(import.meta.dirname, '../content'))
