@@ -1,0 +1,271 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: deleted-file-held-open
+track: linux
+difficulty: 3
+title: "The disk is 97% full and du can only account for a fraction of it"
+par_minutes: 15
+
+ticket:
+  from: "Monitoring (disk-usage alert)"
+  severity: SEV3
+  body: |
+    /var on web-04 is at 97% and the checkout API has started logging write
+    errors. Someone cleared out the old compressed logs to make room, but
+    df didn't move. du says /var holds about 4 GB. Where did the space go?
+
+environment: |
+  web-04 (Debian) runs the shop API (shop-api.service, user shop) and logs
+  to /var/log/shop/access.log. /var is its own 50 GB filesystem. logrotate
+  runs nightly from /etc/logrotate.d/shop.
+
+diagram:
+  nodes:
+    - { id: api, label: "shop-api (pid 2318)", col: 0, row: 0, status: degraded }
+    - { id: log, label: "/var/log/shop/access.log.1 (deleted)", col: 1, row: 0, status: down }
+    - { id: var, label: "/var (50 GB)", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: api, to: log }
+    - { from: log, to: var }
+
+terminal:
+  prompt: "ops@web-04:~$"
+  commands:
+    - match: "df -h /var"
+      when_actions: [restart-service]
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/sdb1        50G  4.1G   43G   9% /var
+    - match: "df -h /var"
+      evidence: df-full
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/sdb1        50G   48G  1.6G  97% /var
+    - match_regex: "^(sudo )?du -sh /var$"
+      example: "sudo du -sh /var"
+      evidence: du-small
+      output: |
+        4.1G	/var
+    - match_regex: "^(sudo )?lsof \\+L1$"
+      example: "sudo lsof +L1"
+      when_actions: [restart-service]
+      output: ""
+    - match_regex: "^(sudo )?lsof \\+L1$"
+      example: "sudo lsof +L1"
+      evidence: deleted-open
+      output: |
+        COMMAND  PID USER   FD   TYPE DEVICE   SIZE/OFF NLINK    NODE NAME
+        shop-api 2318 shop    4w   REG    8,17 47244640256     0 1310731 /var/log/shop/access.log.1 (deleted)
+    - match: "ls -l /proc/2318/fd/4"
+      evidence: fd-link
+      output: |
+        l-wx------ 1 shop shop 64 Oct 26 09:14 /proc/2318/fd/4 -> /var/log/shop/access.log.1 (deleted)
+    - match: "cat /etc/logrotate.d/shop"
+      evidence: no-postrotate
+      output: |
+        /var/log/shop/access.log {
+            daily
+            rotate 7
+            compress
+            missingok
+            notifempty
+        }
+    - match: "ls -l /var/log/shop"
+      evidence: empty-access-log
+      output: |
+        total 8236
+        -rw-r--r-- 1 shop shop       0 Oct 26 06:25 access.log
+        -rw-r----- 1 shop shop 8398912 Oct 26 06:25 access.log.1.gz
+        -rw-r--r-- 1 shop shop  118204 Oct 26 09:20 error.log
+
+hypotheses:
+  - id: held-open
+    text: "shop-api still has the deleted access.log.1 open. The file's blocks aren't freed until the last open handle closes, so df counts them but du (which walks directory entries) cannot see them."
+    correct: true
+  - id: hidden-files
+    text: "There are big hidden or dot files that du -sh /var missed."
+    feedback: "du counts hidden files. Its total (4.1G) is what the directory tree really holds; the missing 44 GB has no directory entry at all."
+  - id: fs-corrupt
+    text: "The /var filesystem is corrupt and needs fsck."
+    feedback: "lsof shows exactly where the space is: a 44 GB deleted file open by one process. Nothing suggests damaged metadata, and fsck on a mounted /var is the wrong move anyway."
+  - id: inodes
+    text: "The filesystem has run out of inodes."
+    feedback: "The error is about blocks and df -h already shows 97% of bytes used. Inode exhaustion would show in df -i with free space still available."
+
+actions:
+  - id: restart-service
+    label: "sudo systemctl restart shop-api (the process closes its handle on the deleted file, and the kernel frees the space)"
+    kind: fix
+    match_regex: "^sudo systemctl restart shop-api(\\.service)?$"
+    feedback: "The old process exits, its handle on the deleted file closes, and 44 GB comes back at once. A restart is a short interruption, so it belongs in a quiet moment (or behind the load balancer). The space was never going to return while the process held the file."
+  - id: truncate-fd
+    label: "sudo truncate -s 0 /proc/2318/fd/4 (empty the deleted file through the process's descriptor)"
+    kind: wrong
+    match_regex: "^sudo truncate -s 0 /proc/2318/fd/4$"
+    feedback: "That does free the space without a restart, and it is a known emergency trick. It is also a surgical edit of a live process's file, easy to get wrong with the pid or fd, and it leaves the cause untouched: the next rotation will do the same thing again. Fix the rotation, then restart when you can."
+  - id: delete-more
+    label: "Delete more files under /var/log to make room"
+    kind: wrong
+    feedback: "du shows /var/log is small. Nothing you delete there frees the 44 GB held by the open handle."
+  - id: reboot
+    label: "sudo reboot"
+    kind: destructive
+    match_regex: "^sudo reboot$"
+    feedback: "A reboot does free the space, at the cost of taking the whole host and checkout down for several minutes, and the logrotate fault is still there. Restarting the one service that holds the file is enough."
+
+solution_paths:
+  - [restart-service]
+
+key_evidence: [df-full, du-small, deleted-open]
+
+evidence_labels:
+  df-full: "df reports /var 97% used"
+  du-small: "du finds only 4.1 GB under /var"
+  deleted-open: "lsof +L1 shows shop-api holding a 44 GB deleted access.log.1"
+
+hints:
+  nudge: "df and du are measuring different things. What does a deleted file still cost while a process has it open?"
+  direction: "List files that are deleted (link count 0) but still open: lsof +L1."
+  answer: "shop-api (pid 2318) holds the deleted access.log.1 open. Restart it to release the 44 GB, then fix rotation so it signals the process."
+
+analogy:
+  title: "The library book still on the reader's desk"
+  text: |
+    A librarian takes a huge atlas off the catalogue and tells everyone it is
+    gone. A reader is still at a table with it open, so the shelf stays
+    reserved until they stand up. The catalogue shows nothing, but the room
+    is still full.
+
+debrief:
+  root_cause: |
+    The rotated log access.log.1 had been deleted while shop-api still had
+    it open for writing. Deleting a name removes the directory entry, but
+    the data blocks are freed only when the last handle closes. df counts
+    blocks in use; du walks directory entries, so it can't see the file.
+    The restart clears the symptom. Why a rotated log was still being
+    written to, and had grown to 44 GB, is the next question.
+  ideal_path:
+    - "Notice df (97%) and du (4 GB) disagree."
+    - "List deleted-but-open files with lsof +L1."
+    - "Restart the process that holds the file."
+    - "Check df again before closing."
+  real_world: |
+    "I deleted it and nothing changed" is one of the classic Linux disk
+    mysteries. lsof +L1 (link count below one) is the first thing to run
+    when df and du disagree.
+
+concepts:
+  - term: "Open file handle"
+    text: "When a process opens a file, the kernel keeps the file's data alive until the process closes it, even if the file's name is removed."
+    url: "https://man7.org/linux/man-pages/man2/unlink.2.html"
+  - term: "df versus du"
+    text: "df asks the filesystem how many blocks are in use; du adds up the sizes of files it can find by walking directories. A deleted but open file counts for df and not for du."
+    url: "https://man7.org/linux/man-pages/man1/df.1.html"
+
+sources:
+  - title: "unlink(2): Linux manual page (a deleted name's file stays until the last open descriptor closes)"
+    url: "https://man7.org/linux/man-pages/man2/unlink.2.html"
+    retrieved: 2026-10-26
+  - title: "lsof(8): list open files (+L1, files with a link count below 1)"
+    url: "https://man7.org/linux/man-pages/man8/lsof.8.html"
+    retrieved: 2026-10-26
+  - title: "df(1): Linux manual page"
+    url: "https://man7.org/linux/man-pages/man1/df.1.html"
+    retrieved: 2026-10-26
+  - title: "logrotate(8): Linux manual page (postrotate, copytruncate)"
+    url: "https://man7.org/linux/man-pages/man8/logrotate.8.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: rotation-never-signals
+    update: |
+      09:40 Reopened: /var is at 9% and the API is healthy. The team lead
+      asks the right question: access.log has been empty since 06:25, and
+      the process wrote 44 GB somewhere else. Tonight's logrotate run will
+      do the same thing again.
+    terminal:
+      commands:
+        - match: "cat /etc/logrotate.d/shop"
+          when_actions: [add-postrotate]
+          output: |
+            /var/log/shop/access.log {
+                daily
+                rotate 7
+                compress
+                missingok
+                notifempty
+                postrotate
+                    systemctl kill -s HUP shop-api.service
+                endscript
+            }
+        - match_regex: "^(sudo )?logrotate -d -f /etc/logrotate.d/shop$"
+          example: "sudo logrotate -d -f /etc/logrotate.d/shop"
+          when_actions: [add-postrotate]
+          output: |
+            reading config file /etc/logrotate.d/shop
+            Handling 1 logs
+            rotating pattern: /var/log/shop/access.log  forced from command line (7 rotations)
+            considering log /var/log/shop/access.log
+              log needs rotating
+            rotating log /var/log/shop/access.log, log->rotateCount is 7
+            renaming /var/log/shop/access.log to /var/log/shop/access.log.1
+            creating new /var/log/shop/access.log mode = 0644 uid = 998 gid = 998
+            running postrotate script
+        - match_regex: "^(sudo )?logrotate -d -f /etc/logrotate.d/shop$"
+          example: "sudo logrotate -d -f /etc/logrotate.d/shop"
+          output: |
+            reading config file /etc/logrotate.d/shop
+            Handling 1 logs
+            rotating pattern: /var/log/shop/access.log  forced from command line (7 rotations)
+            considering log /var/log/shop/access.log
+              log needs rotating
+            rotating log /var/log/shop/access.log, log->rotateCount is 7
+            renaming /var/log/shop/access.log to /var/log/shop/access.log.1
+            creating new /var/log/shop/access.log mode = 0644 uid = 998 gid = 998
+    hypotheses:
+      - id: no-reopen
+        text: "logrotate renames access.log, compresses the renamed file and removes it, but nothing tells shop-api to reopen its log. The process keeps writing to the renamed (then deleted) file, and the new access.log stays empty."
+        correct: true
+      - id: rotate-too-rare
+        text: "Rotating daily is too infrequent. It should be hourly."
+        feedback: "More frequent rotation would only rename the file more often. Without a signal to reopen, the process keeps writing to whatever file it first opened, rotated or not."
+      - id: compress-fails
+        text: "gzip fails on the old file and that stops the rotation."
+        feedback: "access.log.1.gz is there, so the rotation and the compression both ran. The problem is the process, not the archive."
+    actions:
+      - id: add-postrotate
+        label: "Add a postrotate stanza to /etc/logrotate.d/shop that tells shop-api to reopen its log (systemctl kill -s HUP shop-api.service)"
+        kind: fix
+        feedback: "After each rotation the service now reopens access.log, so the renamed file is released and compressed normally."
+      - id: copytruncate
+        label: "Replace it with copytruncate so no signal is needed"
+        kind: wrong
+        feedback: "copytruncate works without a signal but can lose lines written between the copy and the truncate, and it copies a large file on every rotation. It is a fallback for programs that cannot reopen their log, and shop-api can."
+      - id: cron-restart
+        label: "Add a nightly cron job that restarts shop-api after logrotate"
+        kind: wrong
+        feedback: "That does release the file, with a restart every night and a short outage in the middle of the checkout peak. A reload signal does the same job without dropping anything."
+      - id: weekly-delete
+        label: "Add a weekly cron job that deletes access.log"
+        kind: destructive
+        feedback: "That recreates the exact problem from stage 1: a deleted file held open until the process restarts."
+    solution_paths:
+      - [add-postrotate]
+    key_evidence: [no-postrotate, empty-access-log]
+    evidence_labels:
+      no-postrotate: "The logrotate config has no postrotate: nothing tells shop-api to reopen its log"
+      empty-access-log: "access.log has been empty since the 06:25 rotation"
+    hints:
+      nudge: "What does logrotate do to the file, and what does the process do next?"
+      direction: "Read /etc/logrotate.d/shop and look at the log directory."
+      answer: "Add a postrotate that sends HUP to shop-api so it reopens its log after logrotate renames it."
+    debrief:
+      root_cause: |
+        logrotate renames files; it cannot tell a process to start writing a
+        new one. Without a postrotate signal, shop-api kept writing to the
+        renamed file; logrotate then compressed and removed that name, which
+        left 44 GB behind an open handle. Signal the process after rotation.
+      ideal_path:
+        - "Ask why the log grew so large."
+        - "Read the logrotate config and the log directory: access.log is empty."
+        - "Add a postrotate that makes shop-api reopen its log."
+        - "Confirm with logrotate -d -f that the postrotate script now runs."
