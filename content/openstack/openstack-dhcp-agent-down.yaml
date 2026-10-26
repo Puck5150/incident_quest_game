@@ -1,0 +1,190 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-dhcp-agent-down
+track: openstack
+difficulty: 3
+title: "New servers boot but never get an IP address; the old ones are fine"
+par_minutes: 15
+
+ticket:
+  from: "Platform on-call"
+  severity: SEV2
+  body: |
+    Since the config roll-out last night, every new instance on app-net
+    reaches ACTIVE but has no IP address inside: the console shows it
+    waiting for a network and giving up. Instances launched before last
+    night still have their addresses and work. This is blocking the
+    release. Please don't rebuild the network, it has 40 servers on it.
+
+environment: |
+  The cloud runs Neutron with the Open vSwitch ML2 driver. DHCP for tenant
+  networks is served by neutron-dhcp-agent (dnsmasq) on the single network
+  node, network-02. Last night's config-management roll-out rewrote
+  /etc/neutron/dhcp_agent.ini on network-02. Existing instances keep their
+  addresses until their DHCP leases are renewed; new ones must ask.
+
+diagram:
+  nodes:
+    - { id: vm, label: "new instance (app-net)", col: 0, row: 0, status: degraded }
+    - { id: dhcp, label: "neutron-dhcp-agent (network-02)", col: 1, row: 0, status: down }
+    - { id: ns, label: "dnsmasq for app-net", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: vm, to: dhcp }
+    - { from: dhcp, to: ns }
+
+terminal:
+  prompt: "ops@network-02:~$"
+  commands:
+    - match: "openstack network agent list --agent-type dhcp"
+      when_actions: [fix-driver]
+      output: |
+        +--------------------------------------+------------+------------+-------------------+-------+-------+--------------------+
+        | ID                                   | Agent Type | Host       | Availability Zone | Alive | State | Binary             |
+        +--------------------------------------+------------+------------+-------------------+-------+-------+--------------------+
+        | 4d8f1a60-2b73-4c95-8e0a-7f3c5b9d1e24 | DHCP agent | network-02 | nova              | :-)   | UP    | neutron-dhcp-agent |
+        +--------------------------------------+------------+------------+-------------------+-------+-------+--------------------+
+    - match: "openstack network agent list --agent-type dhcp"
+      evidence: agent-dead
+      output: |
+        +--------------------------------------+------------+------------+-------------------+-------+-------+--------------------+
+        | ID                                   | Agent Type | Host       | Availability Zone | Alive | State | Binary             |
+        +--------------------------------------+------------+------------+-------------------+-------+-------+--------------------+
+        | 4d8f1a60-2b73-4c95-8e0a-7f3c5b9d1e24 | DHCP agent | network-02 | nova              | XXX   | UP    | neutron-dhcp-agent |
+        +--------------------------------------+------------+------------+-------------------+-------+-------+--------------------+
+    - match: "systemctl status neutron-dhcp-agent"
+      when_actions: [fix-driver]
+      output: |
+        ● neutron-dhcp-agent.service - OpenStack Neutron DHCP Agent
+             Active: active (running) since Mon 2026-10-26 14:11:40 UTC; 12s ago
+           Main PID: 4419 (neutron-dhcp-ag)
+    - match: "systemctl status neutron-dhcp-agent"
+      evidence: crash-loop
+      output: |
+        ● neutron-dhcp-agent.service - OpenStack Neutron DHCP Agent
+             Active: activating (auto-restart) (Result: exit-code) since Mon 2026-10-26 14:08:03 UTC; 3s ago
+            Process: 4302 ExecStart=/usr/bin/neutron-dhcp-agent (code=exited, status=1/FAILURE)
+           Main PID: 4302 (code=exited, status=1/FAILURE)
+    - match: "openstack console log show web-new-01 --lines 8"
+      output: |
+        cloud-init[512]: Cloud-init v. 24.1 running 'init-local'
+        Starting Raise network interfaces...
+        ci-info: no authorized SSH keys fingerprints found for user ubuntu.
+        dhclient: DHCPDISCOVER on ens3 to 255.255.255.255 port 67 interval 8
+        dhclient: DHCPDISCOVER on ens3 to 255.255.255.255 port 67 interval 14
+        dhclient: No DHCPOFFERS received.
+        dhclient: No working leases in persistent database - sleeping.
+        cloud-init[598]: url_helper.py[WARNING]: Calling 'http://169.254.169.254/...' failed: Network is unreachable
+
+files:
+  - path: "/etc/neutron/dhcp_agent.ini"
+    language: ini
+    evidence: bad-driver
+    content: |
+      [DEFAULT]
+      interface_driver = openvswitch
+      dhcp_driver = neutron.agent.linux.dhcp.Dnsmasqq
+      enable_isolated_metadata = true
+
+logs:
+  - name: "/var/log/neutron/dhcp-agent.log (network-02)"
+    evidence: import-error
+    lines: |
+      2026-10-26 14:07:57 ERROR neutron.agent.dhcp.agent [-] Unable to start DHCP agent
+      2026-10-26 14:07:57 ERROR neutron.agent.dhcp.agent ImportError: Class Dnsmasqq cannot be found
+      2026-10-26 14:07:58 INFO neutron.common.config [-] Logging enabled!
+
+hypotheses:
+  - id: bad-driver
+    text: "The DHCP agent crash-loops at start because last night's roll-out misspelled dhcp_driver (Dnsmasqq). No agent means no dnsmasq answering the new servers' DHCP requests."
+    correct: true
+  - id: pool-exhausted
+    text: "The app-net subnet has no free addresses left."
+    feedback: "An exhausted pool is refused when the port is created (\"no more IP addresses available\"). These ports were created and assigned addresses by Neutron; the servers just never learned them over DHCP."
+  - id: image
+    text: "The image has no working DHCP client."
+    feedback: "The same image launched fine before last night, and the guest console shows its client sending DHCPDISCOVER. Nobody answers."
+  - id: neutron-server
+    text: "neutron-server or the message queue is down."
+    feedback: "The API created networks and ports without errors, and the agent list responds. The agent itself is the dead part."
+
+actions:
+  - id: fix-driver
+    label: "Correct dhcp_driver in /etc/neutron/dhcp_agent.ini to neutron.agent.linux.dhcp.Dnsmasq (the default) and restart neutron-dhcp-agent"
+    kind: fix
+    feedback: "The agent can now import its driver and start, and it brings dnsmasq back for app-net without touching the 40 existing servers. Restarting without correcting the line would just repeat the crash."
+  - id: reboot-stuck
+    label: "openstack server reboot the new servers that never got an address"
+    kind: fix
+    feedback: "They gave up asking when the agent was gone. Now that DHCP answers, a reboot makes them ask again. A normal reboot is enough, and only those new servers need it."
+  - id: restart-only
+    label: "Just restart neutron-dhcp-agent"
+    kind: wrong
+    feedback: "The agent fails because of the misspelled driver line. A restart reads the same file and fails the same way."
+  - id: static-ips
+    label: "Disable DHCP on the app-net subnet and set static IPs inside each server"
+    kind: wrong
+    feedback: "That breaks cloud-init, the metadata path and every server's lease on the 40 existing machines to avoid fixing one config line."
+  - id: recreate-network
+    label: "Delete app-net and create it again"
+    kind: destructive
+    feedback: "That detaches every server on the network. The network was never the problem; one DHCP agent setting was."
+
+solution_paths:
+  - [fix-driver, reboot-stuck]
+
+key_evidence: [agent-dead, import-error, bad-driver, crash-loop]
+
+evidence_labels:
+  agent-dead: "The DHCP agent shows Alive: XXX"
+  import-error: "dhcp-agent.log: ImportError: Class Dnsmasqq cannot be found"
+  bad-driver: "dhcp_agent.ini has dhcp_driver = ...Dnsmasqq"
+  crash-loop: "systemctl: neutron-dhcp-agent is in an auto-restart loop (exit-code)"
+
+hints:
+  nudge: "The guests asked for an address and nobody answered. Who answers?"
+  direction: "Check the DHCP agent's health, then why it isn't staying up."
+  answer: "dhcp_driver is misspelled, so the agent crash-loops. Correct it to the default, restart the agent, then reboot the stuck new servers."
+
+analogy:
+  title: "The receptionist who never came back from lunch"
+  text: |
+    New hires arrive and wait at the desk for a badge, but the person who
+    issues them has been out since last night's reorganisation. Staff who
+    already have badges walk in fine. The queue stays the same until
+    someone fixes why the receptionist isn't there.
+
+debrief:
+  root_cause: |
+    Last night's roll-out rewrote /etc/neutron/dhcp_agent.ini with a
+    misspelled dhcp_driver. neutron-dhcp-agent could not import the class,
+    exited, and systemd kept restarting it, so no dnsmasq served app-net.
+    Servers that already held leases kept working; new ones sent
+    DHCPDISCOVER and got no offer, so they never got an address.
+  ideal_path:
+    - "Read the guest console: DHCPDISCOVER, no offers."
+    - "Check the DHCP agent: Alive XXX."
+    - "systemctl and the agent log: a crash loop with an ImportError."
+    - "Read dhcp_agent.ini: Dnsmasqq."
+    - "Correct it, restart the agent, reboot only the stuck servers."
+  real_world: |
+    Run more than one DHCP agent per network (dhcp_agents_per_network, which
+    defaults to 1) so a single agent failure doesn't stop new servers, and
+    validate rendered config before it is rolled out.
+
+concepts:
+  - term: "DHCP agent"
+    text: "A Neutron agent that runs a DHCP server (dnsmasq) for each tenant network it hosts. Without it, new servers cannot learn their addresses."
+    url: "https://docs.openstack.org/neutron/latest/admin/config-services-agent.html"
+  - term: "dhcp_agents_per_network"
+    text: "How many DHCP agents host each network. The default is 1; a higher value gives DHCP high availability."
+    url: "https://docs.openstack.org/neutron/latest/configuration/neutron.html"
+
+sources:
+  - title: "Neutron: DHCP agent configuration (dhcp_driver defaults to neutron.agent.linux.dhcp.Dnsmasq)"
+    url: "https://docs.openstack.org/neutron/latest/configuration/dhcp-agent.html"
+    retrieved: 2026-10-26
+  - title: "Neutron configuration: dhcp_agents_per_network, allow_automatic_dhcp_failover"
+    url: "https://docs.openstack.org/neutron/latest/configuration/neutron.html"
+    retrieved: 2026-10-26
+  - title: "Neutron: agents and services (the DHCP agent)"
+    url: "https://docs.openstack.org/neutron/latest/admin/config-services-agent.html"
+    retrieved: 2026-10-26

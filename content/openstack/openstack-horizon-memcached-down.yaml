@@ -1,0 +1,190 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-horizon-memcached-down
+track: openstack
+difficulty: 2
+title: "Horizon login ends in \"Something went wrong!\" but the CLI works fine"
+par_minutes: 12
+
+ticket:
+  from: "Service desk"
+  severity: SEV3
+  body: |
+    Since this morning nobody can use the dashboard. The login page loads,
+    users type their credentials, and the next page is "Something went
+    wrong! An unexpected error has occurred." The openstack CLI works for
+    the same users with the same passwords. Last night's maintenance window
+    included a config-management run on the controllers.
+
+environment: |
+  Horizon runs under Apache on controller-01 and controller-02, behind a
+  load balancer. Sessions are stored in memcached (Django's cache session
+  backend), which runs on controller-01 only; both Horizon nodes reach it at
+  the controller's management address 10.0.0.11:11211. This is the layout
+  the install guide uses: memcached listens on the management IP so other
+  nodes can reach it.
+
+diagram:
+  nodes:
+    - { id: lb, label: "load balancer", col: 0, row: 0, status: ok }
+    - { id: hz, label: "Horizon (controller-01, -02)", col: 1, row: 0, status: degraded }
+    - { id: mc, label: "memcached 10.0.0.11:11211", col: 2, row: 0, status: down }
+  edges:
+    - { from: lb, to: hz }
+    - { from: hz, to: mc }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "systemctl status memcached"
+      output: |
+        ● memcached.service - memcached daemon
+             Loaded: loaded (/lib/systemd/system/memcached.service; enabled)
+             Active: active (running) since Mon 2026-10-26 02:14:08 UTC; 8h ago
+           Main PID: 812 (memcached)
+    - match: "ss -ltn sport = :11211"
+      when_actions: [bind-mgmt-ip]
+      output: |
+        State  Recv-Q Send-Q Local Address:Port  Peer Address:Port
+        LISTEN 0      1024        10.0.0.11:11211      0.0.0.0:*
+    - match: "ss -ltn sport = :11211"
+      evidence: loopback-only
+      output: |
+        State  Recv-Q Send-Q Local Address:Port  Peer Address:Port
+        LISTEN 0      1024        127.0.0.1:11211      0.0.0.0:*
+    - match: "nc -vz -w 5 10.0.0.11 11211"
+      when_actions: [bind-mgmt-ip]
+      output: |
+        Connection to 10.0.0.11 11211 port [tcp/memcache] succeeded!
+    - match: "nc -vz -w 5 10.0.0.11 11211"
+      evidence: refused
+      output: |
+        nc: connect to 10.0.0.11 port 11211 (tcp) failed: Connection refused
+
+files:
+  - path: "/etc/memcached.conf"
+    language: ini
+    evidence: conf-loopback
+    content: |
+      # memcached default configuration
+      -d
+      logfile /var/log/memcached.log
+      -m 64
+      -p 11211
+      -u memcache
+      -l 127.0.0.1
+      -c 1024
+  - path: "/etc/openstack-dashboard/local_settings.py"
+    language: python
+    evidence: horizon-uses-mgmt
+    content: |
+      SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+      CACHES = {
+          'default': {
+              'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+              'LOCATION': '10.0.0.11:11211',
+          },
+      }
+
+logs:
+  - name: "/var/log/apache2/horizon_error.log (controller-01)"
+    evidence: conn-refused-log
+    lines: |
+      [Mon Oct 26 08:41:19 2026] [wsgi:error] ConnectionRefusedError: [Errno 111] Connection refused
+      [Mon Oct 26 08:41:19 2026] [wsgi:error]   File ".../django/contrib/sessions/backends/cache.py", line 29, in load
+      [Mon Oct 26 08:41:19 2026] [wsgi:error] pymemcache.exceptions.MemcacheUnexpectedCloseError
+
+hypotheses:
+  - id: wrong-bind
+    text: "memcached is running but listens only on 127.0.0.1. Horizon connects to 10.0.0.11:11211, where nothing is listening, so every session read or write fails."
+    correct: true
+  - id: stopped
+    text: "The memcached service is stopped or crashed."
+    feedback: "systemctl shows it active and running since 02:14. It is running; it is just listening on the wrong address."
+  - id: credentials
+    text: "Users' passwords or Keystone are broken."
+    feedback: "The CLI authenticates with the same credentials and works, and the failure is a Connection refused to port 11211, not an authentication error."
+  - id: apache
+    text: "Apache or the Horizon code is broken."
+    feedback: "Apache serves the login page and records the error with a clear cause. The exception is raised when Horizon loads its session, not by the web server."
+
+actions:
+  - id: bind-mgmt-ip
+    label: "Set -l 10.0.0.11 in /etc/memcached.conf, restart memcached, and correct the config-management template so it stays"
+    kind: fix
+    feedback: "memcached now listens on the management address, the one address both Horizon nodes use. Fixing the template stops the next run reverting it. Everyone logs in again because the old sessions are gone, which is expected."
+  - id: bind-all
+    label: "Set -l 0.0.0.0 in /etc/memcached.conf"
+    kind: wrong
+    feedback: "That works, and it makes memcached listen on every interface of a controller, including any that face outside networks. memcached has no login of its own, and the install guide recommends firewalling, authentication and encryption. Bind it to the one address that is needed."
+  - id: signed-cookies
+    label: "Switch Horizon to SESSION_ENGINE = signed_cookies"
+    kind: wrong
+    feedback: "The Horizon docs list the cost: session data lives in the user's browser, is sent over the network on every request, is size-limited, and is signed but not encrypted, so it can be read. That is a worse design to avoid fixing one setting."
+  - id: loopback-location
+    label: "Point Horizon's LOCATION at 127.0.0.1:11211"
+    kind: wrong
+    feedback: "That would work for the Horizon on controller-01 only. controller-02 cannot reach another host's loopback, and sessions would no longer be shared behind the load balancer."
+  - id: reboot
+    label: "Reboot controller-01"
+    kind: destructive
+    feedback: "A reboot of a controller interrupts every API on it to fix one address in a config file, and memcached would come back listening on the same loopback address."
+
+solution_paths:
+  - [bind-mgmt-ip]
+
+key_evidence: [conn-refused-log, loopback-only, conf-loopback, horizon-uses-mgmt]
+
+evidence_labels:
+  conn-refused-log: "Horizon's error log: Connection refused while loading the session"
+  loopback-only: "memcached listens on 127.0.0.1:11211, not the management IP"
+  conf-loopback: "/etc/memcached.conf has -l 127.0.0.1"
+  horizon-uses-mgmt: "Horizon's CACHES LOCATION is 10.0.0.11:11211"
+
+hints:
+  nudge: "The service is running and the error is Connection refused. Running and reachable are different things."
+  direction: "Compare the address Horizon connects to with the address memcached listens on."
+  answer: "memcached listens on 127.0.0.1 only. Set -l 10.0.0.11 in /etc/memcached.conf and restart it, then fix the template that reset it."
+
+analogy:
+  title: "The shop that moved its door"
+  text: |
+    Customers still walk to the shop's old address, but the owner has moved
+    the doorway to the back lane after a renovation. The lights are on, the
+    staff are inside, and every customer finds a wall.
+
+debrief:
+  root_cause: |
+    Last night's config-management run replaced /etc/memcached.conf with the
+    distribution default, which binds memcached to 127.0.0.1. Horizon (on
+    both controllers) connects to the management address 10.0.0.11, so every
+    session read failed with Connection refused and Django returned a 500.
+    The service was healthy the whole time.
+  ideal_path:
+    - "Read the error: Connection refused to the session cache."
+    - "Check memcached is running (it is), then which address it listens on."
+    - "Compare with Horizon's CACHES LOCATION."
+    - "Bind memcached to 10.0.0.11, restart it, and fix the template."
+    - "Verify with nc from the same host."
+  real_world: |
+    Keep service bind addresses in configuration management, and after a
+    maintenance run check the listening sockets (ss -ltn), not only whether
+    the service is active.
+
+concepts:
+  - term: "Horizon sessions"
+    text: "Horizon keeps each user's login session in a configurable backend. A cache backend such as memcached is shared between Horizon nodes but depends on the cache being reachable."
+    url: "https://docs.openstack.org/horizon/latest/admin/sessions.html"
+  - term: "Listening address"
+    text: "A service bound to 127.0.0.1 only accepts connections made from the same host. Other hosts get Connection refused, even though the service is running."
+    url: "https://docs.openstack.org/install-guide/environment-memcached.html"
+
+sources:
+  - title: "Horizon: configuring sessions (cache and signed-cookie backends)"
+    url: "https://docs.openstack.org/horizon/latest/admin/sessions.html"
+    retrieved: 2026-10-26
+  - title: "Install guide: Memcached for Ubuntu (-l set to the controller's management IP)"
+    url: "https://docs.openstack.org/install-guide/environment-memcached-ubuntu.html"
+    retrieved: 2026-10-26
+  - title: "Install guide: Memcached (firewalling, authentication and encryption recommended)"
+    url: "https://docs.openstack.org/install-guide/environment-memcached.html"
+    retrieved: 2026-10-26
