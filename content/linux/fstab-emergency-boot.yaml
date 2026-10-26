@@ -1,0 +1,288 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: fstab-emergency-boot
+track: linux
+difficulty: 4
+title: "The database host rebooted and came back in emergency mode"
+par_minutes: 20
+
+ticket:
+  from: "Platform on-call (via console)"
+  severity: SEV2
+  body: |
+    db-02 was rebooted after a kernel update and never came back on the
+    network. The hypervisor console shows "You are in emergency mode. Give
+    root password for maintenance". We have the root password and a working
+    console. The change that day was adding a new data disk.
+
+environment: |
+  db-02 (Debian) runs PostgreSQL 16 (postgresql@16-main.service, user
+  postgres) with its data directory on a separate disk mounted at
+  /srv/pgdata. Earlier today an engineer attached a new 500 GB disk,
+  created a filesystem on it, copied the database files across and added a
+  line for it to /etc/fstab (change record below). The network and SSH
+  start only after local-fs.target succeeds.
+
+diagram:
+  nodes:
+    - { id: boot, label: "boot (emergency shell)", col: 0, row: 0, status: down }
+    - { id: fstab, label: "/etc/fstab", col: 1, row: 0, status: degraded }
+    - { id: disk, label: "new data disk", col: 2, row: 0, status: ok }
+    - { id: pg, label: "PostgreSQL", col: 1, row: 1, status: down }
+  edges:
+    - { from: boot, to: fstab }
+    - { from: fstab, to: disk }
+    - { from: pg, to: fstab }
+
+terminal:
+  prompt: "root@db-02:~#"
+  files:
+    - path: /etc/fstab
+      content: |
+        # <file system>  <mount point>  <type>  <options>  <dump>  <pass>
+        UUID=0b2f6e1c-91d4-4a7b-8c3e-5f6a7b8c9d0e  /          ext4  errors=remount-ro  0  1
+        UUID=5c8e41a2-77b0-4d6e-9a13-2f0d6b4c7e91  /srv/pgdata ext4  defaults          0  2
+      changes:
+        - when_actions: [fix-uuid]
+          content: |
+            # <file system>  <mount point>  <type>  <options>  <dump>  <pass>
+            UUID=0b2f6e1c-91d4-4a7b-8c3e-5f6a7b8c9d0e  /          ext4  errors=remount-ro  0  1
+            UUID=5c8e41a2-77b0-4d6e-9a13-2f0d6b4c7e19  /srv/pgdata ext4  defaults          0  2
+  commands:
+    - match: "findmnt /srv/pgdata"
+      when_actions: [fix-uuid]
+      output: |
+        TARGET       SOURCE         FSTYPE OPTIONS
+        /srv/pgdata  /dev/nvme1n1p1 ext4   rw,relatime
+    - match: "findmnt /srv/pgdata"
+      evidence: not-mounted
+      output: ""
+    - match: "systemctl status srv-pgdata.mount"
+      when_actions: [fix-uuid]
+      output: |
+        ● srv-pgdata.mount - /srv/pgdata
+             Loaded: loaded (/etc/fstab; generated)
+             Active: active (mounted) since Mon 2026-10-26 10:08:31 UTC; 3s ago
+    - match: "systemctl status srv-pgdata.mount"
+      evidence: dependency-failed
+      output: |
+        ○ srv-pgdata.mount - /srv/pgdata
+             Loaded: loaded (/etc/fstab; generated)
+             Active: inactive (dead)
+        Oct 26 10:01:12 db-02 systemd[1]: Dependency failed for /srv/pgdata.
+        Oct 26 10:01:12 db-02 systemd[1]: srv-pgdata.mount: Job srv-pgdata.mount/start failed with result 'dependency'.
+    - match: "lsblk -f /dev/nvme1n1"
+      evidence: real-uuid
+      output: |
+        NAME        FSTYPE FSVER LABEL  UUID                                 FSAVAIL FSUSE% MOUNTPOINTS
+        nvme1n1
+        └─nvme1n1p1 ext4   1.0   pgdata 5c8e41a2-77b0-4d6e-9a13-2f0d6b4c7e19  466G     1%
+    - match: "grep pgdata /etc/fstab"
+      when_actions: [fix-uuid]
+      output: |
+        UUID=5c8e41a2-77b0-4d6e-9a13-2f0d6b4c7e19  /srv/pgdata ext4  defaults          0  2
+    - match: "grep pgdata /etc/fstab"
+      evidence: fstab-uuid
+      output: |
+        UUID=5c8e41a2-77b0-4d6e-9a13-2f0d6b4c7e91  /srv/pgdata ext4  defaults          0  2
+
+logs:
+  - name: "Console output at boot"
+    evidence: waited-for-uuid
+    lines: |
+      [ TIME ] Timed out waiting for device /dev/disk/by-uuid/5c8e41a2-77b0-4d6e-9a13-2f0d6b4c7e91.
+      [DEPEND] Dependency failed for /srv/pgdata.
+      [DEPEND] Dependency failed for Local File Systems.
+      You are in emergency mode. After logging in, type "journalctl -xb" to view
+      system logs, "systemctl reboot" to reboot, "systemctl default" or "exit"
+      to boot into default mode.
+  - name: "Change record OPS-5120 (db-02 data disk)"
+    evidence: copied-as-root
+    lines: |
+      09:20 mkfs.ext4 -L pgdata /dev/nvme1n1p1; mount /dev/nvme1n1p1 /mnt/new
+      09:31 systemctl stop postgresql@16-main
+      09:33 cp -r /var/lib/postgresql/16 /mnt/new/          (run as root)
+      09:52 umount /mnt/new; mkdir /srv/pgdata
+      09:55 /etc/fstab: /srv/pgdata, UUID typed from blkid on another screen
+      09:58 /etc/postgresql/16/main/postgresql.conf: data_directory = '/srv/pgdata/16/main'
+      10:00 reboot
+
+hypotheses:
+  - id: wrong-uuid
+    text: "The new /etc/fstab line has a UUID that doesn't match the disk (two characters swapped). Without nofail, local-fs.target depends on that mount, so boot stops in emergency mode."
+    correct: true
+  - id: disk-dead
+    text: "The new data disk has failed."
+    feedback: "lsblk sees the disk and its filesystem, and the UUID on it is a valid one. The disk is fine; fstab names the wrong UUID."
+  - id: kernel
+    text: "The kernel update broke NVMe support."
+    feedback: "The NVMe disk is visible to the kernel in lsblk, so the driver works. systemd is waiting for a device UUID that doesn't exist."
+  - id: fsck
+    text: "The filesystem needs a manual fsck."
+    feedback: "fsck can't help with a device that systemd cannot find. The log says it timed out waiting for the UUID in fstab."
+
+actions:
+  - id: fix-uuid
+    label: "Correct the UUID in /etc/fstab to 5c8e41a2-...-2f0d6b4c7e19 (from lsblk -f), systemctl daemon-reload, check it with findmnt --verify, then mount /srv/pgdata and exit to continue the boot"
+    kind: fix
+    feedback: "fstab now names the disk's real UUID, the mount succeeds, and the boot continues."
+  - id: comment-out
+    label: "Comment out the /srv/pgdata line to get the host booting"
+    kind: wrong
+    feedback: "The host boots, but PostgreSQL has no data directory and fails, and anything written under /srv/pgdata meanwhile lands on the root disk and is hidden when the real disk is mounted later. The fault is one wrong UUID."
+  - id: manual-mount
+    label: "mount /dev/nvme1n1p1 /srv/pgdata and exit"
+    kind: wrong
+    feedback: "That boots this time. The next reboot will do exactly the same thing: the wrong UUID is still in fstab."
+  - id: mkfs
+    label: "mkfs.ext4 /dev/nvme1n1p1 to start the disk fresh"
+    kind: destructive
+    feedback: "The filesystem on the disk was already fine and may hold data. Formatting destroys it and does not touch the real fault."
+  - id: skip-fsck
+    label: "Set pass to 0 for every line to skip fsck"
+    kind: wrong
+    feedback: "The error isn't an fsck failure. Turning checks off for the root filesystem as well removes a protection without fixing anything."
+
+solution_paths:
+  - [fix-uuid]
+
+key_evidence: [not-mounted, waited-for-uuid, fstab-uuid, real-uuid]
+
+evidence_labels:
+  not-mounted: "/srv/pgdata is not mounted"
+  waited-for-uuid: "systemd timed out waiting for a device UUID"
+  fstab-uuid: "fstab uses UUID ...7e91"
+  real-uuid: "The disk's actual UUID is ...7e19"
+
+hints:
+  nudge: "systemd waited for something and gave up. What exactly was it waiting for?"
+  direction: "Compare the UUID in /etc/fstab with the one lsblk -f reports for the new disk."
+  answer: "The UUID in fstab is ...7e91 and the disk's is ...7e19. Correct the fstab line, reload and mount."
+
+analogy:
+  title: "The delivery to the wrong house number"
+  text: |
+    The courier has the right street and the wrong house number: 91 instead
+    of 19. He waits outside until his shift rules say to stop, then reports
+    the parcel as undeliverable. The parcel was fine; the label had two
+    digits swapped.
+
+debrief:
+  root_cause: |
+    The engineer typed the new disk's UUID by hand and swapped two
+    characters. The mount has no nofail, so systemd treats it as required
+    for local-fs.target; when the device never appeared, boot dropped to
+    emergency mode.
+  ideal_path:
+    - "Read the mount unit status for the failed dependency."
+    - "Compare fstab with lsblk -f."
+    - "Fix the UUID."
+    - "Reload and mount, then continue the boot."
+  real_world: |
+    Copy UUIDs, don't type them. After editing fstab, run
+    findmnt --verify before you reboot.
+
+concepts:
+  - term: "/etc/fstab"
+    text: "The table of filesystems the system mounts at boot. systemd turns each line into a mount unit."
+    url: "https://man7.org/linux/man-pages/man5/fstab.5.html"
+  - term: "Emergency mode"
+    text: "A minimal root shell systemd drops to when a required boot step fails. The network and most services are not started."
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html"
+
+sources:
+  - title: "fstab(5): Linux manual page"
+    url: "https://man7.org/linux/man-pages/man5/fstab.5.html"
+    retrieved: 2026-10-26
+  - title: "systemd.mount(5): mount units and fstab"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.mount.html"
+    retrieved: 2026-10-26
+  - title: "systemd.special(7): emergency.target and local-fs.target"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html"
+    retrieved: 2026-10-26
+  - title: "lsblk(8): Linux manual page"
+    url: "https://man7.org/linux/man-pages/man8/lsblk.8.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: pg-ownership
+    update: |
+      10:09 Reopened: /srv/pgdata is mounted and the host is back on the
+      network, but postgresql@16-main is failed and the app team has no
+      database. Nothing was wrong with the disk.
+    terminal:
+      commands:
+        - match: "ls -ld /srv/pgdata/16/main"
+          when_actions: [fix-ownership]
+          output: |
+            drwx------ 19 postgres postgres 4096 Oct 26 09:33 /srv/pgdata/16/main
+        - match: "ls -ld /srv/pgdata/16/main"
+          evidence: root-owned
+          output: |
+            drwxr-xr-x 19 root root 4096 Oct 26 09:33 /srv/pgdata/16/main
+        - match: "systemctl status postgresql@16-main"
+          when_actions: [fix-ownership]
+          output: |
+            ● postgresql@16-main.service - PostgreSQL Cluster 16-main
+                 Active: active (running) since Mon 2026-10-26 10:14:20 UTC; 2s ago
+        - match: "systemctl status postgresql@16-main"
+          output: |
+            × postgresql@16-main.service - PostgreSQL Cluster 16-main
+                 Active: failed (Result: exit-code) since Mon 2026-10-26 10:09:40 UTC; 20s ago
+        - match_regex: "^(sudo )?journalctl -u postgresql@16-main"
+          example: "sudo journalctl -u postgresql@16-main -n 20"
+          evidence: wrong-ownership
+          output: |
+            Oct 26 10:09:40 db-02 postgres[702]: FATAL:  data directory "/srv/pgdata/16/main" has wrong ownership
+            Oct 26 10:09:40 db-02 postgres[702]: HINT:  The server must be started by the user that owns the data directory.
+    hypotheses:
+      - id: copied-as-root
+        text: "The files were copied with cp -r as root, so everything under /srv/pgdata/16/main is owned by root with default permissions, and PostgreSQL refuses to start on a data directory its user doesn't own."
+        correct: true
+      - id: corrupt-data
+        text: "The copy corrupted the database files."
+        feedback: "The message is about ownership, checked before PostgreSQL reads anything. The files are intact; they belong to the wrong user."
+      - id: run-as-root
+        text: "PostgreSQL should be started as root so it can read the files."
+        feedback: "PostgreSQL deliberately refuses to run as root. The data should belong to the postgres user, not the server run as root."
+      - id: selinux
+        text: "A security module is blocking the new path."
+        feedback: "The log gives the reason directly: wrong ownership. Nothing in it mentions a denial."
+    actions:
+      - id: fix-ownership
+        label: "chown -R postgres:postgres /srv/pgdata and chmod 700 /srv/pgdata/16/main, then start postgresql@16-main"
+        kind: fix
+        feedback: "The data belongs to the postgres user and only that user can open the directory (mode 0700), as PostgreSQL requires. It starts and replays any WAL it needs."
+      - id: chmod-777
+        label: "chmod -R 777 /srv/pgdata"
+        kind: destructive
+        feedback: "PostgreSQL still refuses (wrong ownership and permissions that are too open), and you have made every database file readable and writable by every local user."
+      - id: initdb
+        label: "Delete /srv/pgdata/16/main and create a new cluster with pg_createcluster"
+        kind: destructive
+        feedback: "That throws away the copied database. The data was intact; only the owner was wrong."
+      - id: copy-again
+        label: "Wipe the disk and repeat the copy"
+        kind: wrong
+        feedback: "A copy needs the same care or it repeats the fault. The files already there only need their owner and mode corrected (cp -a or rsync -a preserves them)."
+    solution_paths:
+      - [fix-ownership]
+    key_evidence: [wrong-ownership, root-owned, copied-as-root]
+    evidence_labels:
+      wrong-ownership: "PostgreSQL: data directory has wrong ownership"
+      root-owned: "The data directory belongs to root"
+      copied-as-root: "The change record copied the files with cp -r, as root"
+    hints:
+      nudge: "The disk is mounted. What does PostgreSQL say when it refuses to start?"
+      direction: "Read the PostgreSQL journal and the owner of the data directory."
+      answer: "The files were copied as root. chown -R to postgres and chmod 700 the data directory."
+    debrief:
+      root_cause: |
+        The UUID mistake stopped the boot. Underneath it, the data had been
+        copied with cp -r as root, so ownership and modes were wrong, and
+        PostgreSQL won't start on a directory its own user doesn't own.
+        Correct the owner and mode (and use cp -a or rsync -a next time).
+      ideal_path:
+        - "Read the PostgreSQL journal."
+        - "Check the owner of the data directory."
+        - "Find the root-run cp -r in the change record."
+        - "chown -R to postgres and chmod 700."
