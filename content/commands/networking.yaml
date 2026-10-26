@@ -309,6 +309,7 @@
     - { token: "ss", meaning: "Socket statistics (replaces netstat)." }
     - { token: "-l", meaning: "Listening sockets only." }
     - { token: "-t", meaning: "TCP only." }
+    - { token: "-u", meaning: "(If given) UDP only, for services like DNS or heartbeats." }
     - { token: "-n", meaning: "Numeric: show 5432, not \"postgresql\"." }
     - { token: "-p", meaning: "(If given, needs root) the process that owns each socket." }
     - { token: "sport = :5432", meaning: "(If given) a filter: only local port 5432." }

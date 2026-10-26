@@ -1,0 +1,332 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-nova-compute-down
+track: openstack
+difficulty: 4
+title: "compute-05 shows down in Nova with twelve servers on it. Evacuate?"
+par_minutes: 25
+
+ticket:
+  from: "NOC"
+  severity: SEV2
+  body: |
+    nova-compute on compute-05 has been "down" since 09:51 in
+    `openstack compute service list`. Twelve servers are scheduled on that
+    host. Our monitoring still shows several of them as healthy, but the
+    cloud team's runbook says a down compute host means evacuate. Should
+    we start evacuating now? Customers are not complaining yet.
+
+environment: |
+  You are the cloud operator with admin access. compute-05 (10.0.0.25)
+  hosts twelve servers. Flavors named local-* use the host's local disk;
+  every other flavor boots from a Ceph volume (shared storage). Nova's
+  configuration is managed by config management, which ran on compute-05
+  this morning. Your runbook says evacuation is for hosts that have failed.
+
+diagram:
+  nodes:
+    - { id: api, label: "nova-api / scheduler", col: 0, row: 0, status: ok }
+    - { id: svc, label: "nova-compute (compute-05)", col: 1, row: 0, status: down }
+    - { id: guests, label: "12 servers on compute-05", col: 2, row: 0, status: ok }
+  edges:
+    - { from: api, to: svc }
+    - { from: svc, to: guests }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack compute service list --service nova-compute"
+      when_actions: [fix-perms]
+      output: |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | ID | Binary       | Host       | Zone | Status  | State | Updated At                 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | 14 | nova-compute | compute-04 | nova | enabled | up    | 2026-10-26T10:22:04.000000 |
+        | 15 | nova-compute | compute-05 | nova | enabled | up    | 2026-10-26T10:22:07.000000 |
+        | 16 | nova-compute | compute-06 | nova | enabled | up    | 2026-10-26T10:22:02.000000 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+    - match: "openstack compute service list --service nova-compute"
+      evidence: service-down
+      output: |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | ID | Binary       | Host       | Zone | Status  | State | Updated At                 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | 14 | nova-compute | compute-04 | nova | enabled | up    | 2026-10-26T10:22:04.000000 |
+        | 15 | nova-compute | compute-05 | nova | enabled | down  | 2026-10-26T09:51:12.000000 |
+        | 16 | nova-compute | compute-06 | nova | enabled | up    | 2026-10-26T10:22:02.000000 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+    - match: "openstack server list --host compute-05 --all-projects -c Name -c Status"
+      output: |
+        +--------------+--------+
+        | Name         | Status |
+        +--------------+--------+
+        | web-11       | ACTIVE |
+        | web-12       | ACTIVE |
+        | web-13       | ACTIVE |
+        | api-21       | ACTIVE |
+        | api-22       | ACTIVE |
+        | db-replica-3 | ACTIVE |
+        | cache-04     | ACTIVE |
+        | cache-05     | ACTIVE |
+        | queue-02     | ACTIVE |
+        | batch-07     | ACTIVE |
+        | batch-08     | ACTIVE |
+        | scratch-02   | ACTIVE |
+        +--------------+--------+
+    - match: "nc -vz -w 5 10.30.0.52 22"
+      evidence: guest-ssh-up
+      output: |
+        Connection to 10.30.0.52 22 port [tcp/ssh] succeeded!
+    - match: "nc -vz -w 5 10.0.0.25 22"
+      evidence: host-alive
+      output: |
+        Connection to 10.0.0.25 22 port [tcp/ssh] succeeded!
+
+logs:
+  - name: "compute-05: journalctl -u nova-compute (09:51)"
+    evidence: perm-denied
+    lines: |
+      09:51:11 compute-05 systemd[1]: Stopping OpenStack Compute...
+      09:51:12 compute-05 systemd[1]: Started OpenStack Compute.
+      09:51:13 compute-05 nova-compute[3342]: oslo_config.cfg.ConfigFilesPermissionDeniedError: Failed to open some config files: /etc/nova/nova.conf
+      09:51:13 compute-05 systemd[1]: nova-compute.service: Main process exited, code=exited, status=1/FAILURE
+  - name: "config management run on compute-05 (09:50)"
+    evidence: cfgmgmt-perms
+    lines: |
+      09:50:58 File[/etc/nova/nova.conf]/group: group changed 'nova' to 'root'
+      09:50:58 File[/etc/nova/nova.conf]/mode: mode changed '0640' to '0600'
+      09:51:00 Service[nova-compute]: Triggered 'refresh' from 1 event
+
+hypotheses:
+  - id: perms-crash
+    text: "nova-compute crashed on restart because config management left /etc/nova/nova.conf owned by root with mode 0600. The nova user can't read it. The host and its guests are untouched."
+    correct: true
+  - id: host-dead
+    text: "compute-05 has failed and its servers are down."
+    feedback: "The host answers on SSH and the guests' SSH ports are open. Only the nova-compute process is down; the hypervisor and the guests it runs are fine. Evacuating a host that is still running them would start second copies."
+  - id: rabbit
+    text: "The message queue is dropping compute-05."
+    feedback: "compute-04 and compute-06 report through the same queue and are up. The journal shows the service exiting by itself, not losing a connection."
+  - id: guests
+    text: "The guests are crashing."
+    feedback: "Their SSH ports answer and Nova lists them ACTIVE. Nova reports a service as down when it stops sending heartbeats, which says nothing about the guests."
+
+actions:
+  - id: fix-perms
+    label: "chown root:nova /etc/nova/nova.conf, chmod 0640, restart nova-compute, and fix the config-management file resource (group nova, mode 0640)"
+    kind: fix
+    feedback: "The service can read its config again and the nova user is the only non-root reader. Fixing the resource stops the next run reverting it. The guests were never interrupted."
+  - id: evacuate-now
+    label: "nova host-evacuate compute-05 now, as the runbook says"
+    kind: destructive
+    feedback: "The Nova docs say evacuation is for a host that has failed and must not be used if the host still has instances running. They are running, so this starts second copies of twelve servers against the same Ceph volumes and risks corrupting them."
+  - id: chmod-all
+    label: "chmod 0777 /etc/nova/nova.conf and restart nova-compute"
+    kind: wrong
+    feedback: "The file holds the message queue and database credentials. World-readable and writable exposes them to every account on the host. The group was what was wrong."
+  - id: reboot-host
+    label: "Reboot compute-05"
+    kind: destructive
+    feedback: "That stops all twelve running guests to fix a file permission, and the service would still fail to start afterwards."
+
+solution_paths:
+  - [fix-perms]
+
+key_evidence: [service-down, guest-ssh-up, host-alive, perm-denied, cfgmgmt-perms]
+
+evidence_labels:
+  service-down: "nova-compute on compute-05 is down since 09:51"
+  guest-ssh-up: "A guest on compute-05 answers on SSH"
+  host-alive: "compute-05 itself answers on SSH"
+  perm-denied: "nova-compute cannot open /etc/nova/nova.conf (permission denied)"
+  cfgmgmt-perms: "Config management changed the file's group to root and mode to 0600 at 09:50"
+
+hints:
+  nudge: "Nova says the service is down. Is the host down?"
+  direction: "Check whether the host and a guest on it still answer, then read the service's journal."
+  answer: "Only nova-compute is down: it can't read its config after a config-management run. Fix the file's group and mode, restart it, and do not evacuate."
+
+analogy:
+  title: "The shift manager who can't unlock the office"
+  text: |
+    The staff are all at their desks working, but the manager's key no
+    longer opens the door, so the manager can't report in. Head office sees
+    "manager absent" and wants to move the whole team to another building.
+    The staff are fine; the lock is the problem.
+
+debrief:
+  root_cause: |
+    A config-management run changed /etc/nova/nova.conf to group root and
+    mode 0600 and then restarted nova-compute. The service runs as nova,
+    could not read its config, and exited. Nova showed the service as down
+    because heartbeats stopped, while the host and all twelve guests kept
+    running.
+  ideal_path:
+    - "Separate service down from host down: SSH to the host and to a guest."
+    - "Read the service journal: it cannot open nova.conf."
+    - "Find the cause: config management changed group and mode."
+    - "Fix the permissions and the resource, restart, check the service is up."
+    - "Do not evacuate: the guests are still running."
+  real_world: |
+    A runbook that says "down means evacuate" needs a first step that
+    confirms the host is down. Fence or verify before moving workloads, or
+    you can have two copies of one server writing to the same disk.
+
+concepts:
+  - term: "Service down vs host down"
+    text: "Nova reports a compute service as down when its heartbeats stop. The process may have crashed while the hypervisor and its guests keep running."
+    url: "https://docs.openstack.org/nova/latest/admin/evacuate.html"
+  - term: "Evacuate"
+    text: "Rebuilds servers from a failed compute host on another host. The host must be non-operational, and it must not be used while the host still runs instances."
+    url: "https://docs.openstack.org/nova/latest/admin/evacuate.html"
+
+sources:
+  - title: "Nova: evacuate (host must not be operational; not for hosts still running instances; shared storage preserves data)"
+    url: "https://docs.openstack.org/nova/latest/admin/evacuate.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: compute service list"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/compute-service.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: host-failed
+    update: |
+      14:20 Reopened: nova-compute on compute-05 has been fine since the
+      morning. At 14:05 the whole host stopped answering. The NOC has no
+      ping and no BMC. The on-site engineer found a failed power supply and
+      mainboard and has unplugged the host (note below). All twelve servers
+      are down. Eleven boot from Ceph volumes. scratch-02 runs on the
+      host's local disk; its owner says that data is not backed up and
+      cannot be re-created.
+    terminal:
+      commands:
+        - match: "openstack compute service list --service nova-compute --long"
+          evidence: host-service-down
+          output: |
+            +----+--------------+------------+------+---------+-------+----------------------------+-----------------+
+            | ID | Binary       | Host       | Zone | Status  | State | Updated At                 | Disabled Reason |
+            +----+--------------+------------+------+---------+-------+----------------------------+-----------------+
+            | 14 | nova-compute | compute-04 | nova | enabled | up    | 2026-10-26T14:21:04.000000 | None            |
+            | 15 | nova-compute | compute-05 | nova | enabled | down  | 2026-10-26T14:05:31.000000 | None            |
+            | 16 | nova-compute | compute-06 | nova | enabled | up    | 2026-10-26T14:21:02.000000 | None            |
+            +----+--------------+------------+------+---------+-------+----------------------------+-----------------+
+        - match: "openstack server list --all-projects --long -c Name -c Status -c Host"
+          when_actions: [evacuate-ceph-backed]
+          output: |
+            +--------------+--------+------------+
+            | Name         | Status | Host       |
+            +--------------+--------+------------+
+            | web-11       | ACTIVE | compute-04 |
+            | web-12       | ACTIVE | compute-06 |
+            | web-13       | ACTIVE | compute-04 |
+            | api-21       | ACTIVE | compute-06 |
+            | api-22       | ACTIVE | compute-04 |
+            | db-replica-3 | ACTIVE | compute-06 |
+            | cache-04     | ACTIVE | compute-04 |
+            | cache-05     | ACTIVE | compute-06 |
+            | queue-02     | ACTIVE | compute-04 |
+            | batch-07     | ACTIVE | compute-06 |
+            | batch-08     | ACTIVE | compute-04 |
+            | scratch-02   | ACTIVE | compute-05 |
+            +--------------+--------+------------+
+        - match: "openstack server list --all-projects --long -c Name -c Status -c Host"
+          output: |
+            +--------------+--------+------------+
+            | Name         | Status | Host       |
+            +--------------+--------+------------+
+            | web-11       | ACTIVE | compute-05 |
+            | web-12       | ACTIVE | compute-05 |
+            | web-13       | ACTIVE | compute-05 |
+            | api-21       | ACTIVE | compute-05 |
+            | api-22       | ACTIVE | compute-05 |
+            | db-replica-3 | ACTIVE | compute-05 |
+            | cache-04     | ACTIVE | compute-05 |
+            | cache-05     | ACTIVE | compute-05 |
+            | queue-02     | ACTIVE | compute-05 |
+            | batch-07     | ACTIVE | compute-05 |
+            | batch-08     | ACTIVE | compute-05 |
+            | scratch-02   | ACTIVE | compute-05 |
+            +--------------+--------+------------+
+        - match: "nc -vz -w 3 10.0.0.25 22"
+          evidence: host-unreachable
+          output: |
+            nc: connect to 10.0.0.25 port 22 (tcp) timed out: Operation now in progress
+        - match: "openstack server list --host compute-05 --all-projects --long -c Name -c Status -c Flavor"
+          evidence: one-local-disk
+          output: |
+            +--------------+--------+-----------------+
+            | Name         | Status | Flavor          |
+            +--------------+--------+-----------------+
+            | web-11       | ACTIVE | m1.large        |
+            | web-12       | ACTIVE | m1.large        |
+            | web-13       | ACTIVE | m1.large        |
+            | api-21       | ACTIVE | m1.large        |
+            | api-22       | ACTIVE | m1.large        |
+            | db-replica-3 | ACTIVE | m1.xlarge       |
+            | cache-04     | ACTIVE | m1.medium       |
+            | cache-05     | ACTIVE | m1.medium       |
+            | queue-02     | ACTIVE | m1.medium       |
+            | batch-07     | ACTIVE | m1.large        |
+            | batch-08     | ACTIVE | m1.large        |
+            | scratch-02   | ACTIVE | local-xlarge    |
+            +--------------+--------+-----------------+
+    files:
+      - path: "/home/ops/dc-ticket-5521.txt"
+        language: text
+        evidence: onsite-confirmed
+        content: |
+          DC-5521  compute-05  (rack B14, U22)
+          14:12  On site (J. Okafor). Front panel dark, no BMC link.
+          14:15  PSU A and B both failed; mainboard burnt. Cables removed.
+          14:18  Host is unplugged and physically powered off.
+          Replacement mainboard ordered, ETA 2 days.
+    hypotheses:
+      - id: host-gone
+        text: "compute-05 itself has failed and is confirmed powered off. Its Ceph-backed servers can be evacuated safely. scratch-02's data lives on that host's local disk."
+        correct: true
+      - id: service-again
+        text: "It is the nova-compute permissions problem again."
+        feedback: "That was a service fault on a running host. Now SSH, the BMC and the power are all gone, and the on-site engineer has confirmed the hardware failed."
+      - id: switch
+        text: "A network switch problem has cut compute-05 off."
+        feedback: "compute-04 and compute-06 behind the same switch are up, and the engineer found the host dark with no power."
+    actions:
+      - id: evacuate-ceph-backed
+        label: "nova evacuate each of the eleven Ceph-backed servers (let the scheduler choose the target)"
+        kind: fix
+        feedback: "The host is confirmed powered off, as the Nova docs require. Because these servers boot from shared storage, they come back on other hosts with their data. The two-copies risk does not apply: the original cannot run."
+      - id: leave-scratch
+        label: "Leave scratch-02 alone; tell its owner it returns when compute-05 is repaired or its disk is moved"
+        kind: fix
+        feedback: "Evacuation rebuilds a server from its image, so local disk data would not be preserved (the Nova docs say shared storage is needed for that). The data sits on the failed host's disk; the safe move is to keep it there until it can be recovered."
+      - id: host-evacuate-all
+        label: "nova host-evacuate compute-05 (all twelve)"
+        kind: destructive
+        feedback: "That also evacuates scratch-02, which is rebuilt from its image without its local data. The owner said that data is not backed up and cannot be re-created."
+      - id: wait-repair
+        label: "Wait for the mainboard to arrive in two days"
+        kind: wrong
+        feedback: "Eleven servers would stay down for two days when they can run elsewhere in minutes."
+    solution_paths:
+      - [evacuate-ceph-backed, leave-scratch]
+    key_evidence: [host-service-down, host-unreachable, onsite-confirmed, one-local-disk]
+    evidence_labels:
+      host-service-down: "compute-05's service is down since 14:05"
+      host-unreachable: "compute-05 no longer answers on SSH"
+      onsite-confirmed: "On-site engineer: host unplugged and powered off"
+      one-local-disk: "scratch-02 uses a local-* flavor; the rest are Ceph-backed"
+    hints:
+      nudge: "Before moving anything, confirm the host is really down. Then ask what each server's disk depends on."
+      direction: "Check the data-centre ticket, then look at which flavors use local disk."
+      answer: "The host is confirmed off. Evacuate the eleven Ceph-backed servers and leave scratch-02 on its local disk until the host is repaired."
+    debrief:
+      root_cause: |
+        This time the host really failed: power supply and mainboard, with
+        the host confirmed powered off. Evacuation is the right tool now,
+        but only for servers whose disks are on shared storage. scratch-02
+        keeps its data on the dead host's local disk and an evacuation would
+        rebuild it from the image.
+      ideal_path:
+        - "Confirm the host is dead: no SSH, no BMC, engineer on site."
+        - "Sort the twelve servers by whether their disk is shared."
+        - "Evacuate the eleven Ceph-backed servers."
+        - "Hold scratch-02 for the repaired host and tell its owner."

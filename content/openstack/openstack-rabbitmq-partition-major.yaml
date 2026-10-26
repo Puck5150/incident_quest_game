@@ -1,0 +1,405 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-rabbitmq-partition-major
+track: openstack
+difficulty: 5
+title: "SEV1: the whole cloud times out, servers stick in BUILD and compute hosts flap"
+par_minutes: 30
+
+ticket:
+  from: "NOC (escalated by the duty manager)"
+  severity: SEV1
+  body: |
+    Since 13:02 the cloud control plane has been failing: API calls time out
+    intermittently with "MessagingTimeout", new servers sit in BUILD, volume
+    attaches hang, and the compute services keep flipping between up and
+    down in `openstack compute service list`. The guests that were already
+    running are fine. At 13:01 the database monitor logged a short Galera
+    "desynced" event on controller-02, and a network change on the top-of-
+    rack switches was running around the same time. Customers are
+    affected. We need the control plane back first, then the mess cleaned
+    up.
+
+environment: |
+  You are the cloud operator with admin access. The control plane runs on
+  controller-01, -02 and -03. RabbitMQ is clustered across all three
+  (rabbit@controller-01, -02, -03). Every OpenStack service lists all three
+  brokers and connects to one at a time. MariaDB is a three-node Galera
+  cluster on the same hosts. RabbitMQ is configured with its defaults for
+  partition handling. The switch change (CHG-5102) touched the port for
+  controller-03.
+
+diagram:
+  nodes:
+    - { id: svc, label: "nova / neutron / cinder services", col: 0, row: 0, status: degraded }
+    - { id: mq, label: "RabbitMQ cluster (3 nodes)", col: 1, row: 0, status: down }
+    - { id: db, label: "MariaDB Galera (3 nodes)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: svc, to: mq }
+    - { from: svc, to: db }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "rabbitmqctl cluster_status"
+      when_actions: [restart-minority]
+      output: |
+        Cluster status of node rabbit@controller-01 ...
+        Basics
+
+        Cluster name: rabbit@controller-01
+
+        Disk Nodes
+
+        rabbit@controller-01
+        rabbit@controller-02
+        rabbit@controller-03
+
+        Running Nodes
+
+        rabbit@controller-01
+        rabbit@controller-02
+        rabbit@controller-03
+
+        Network Partitions
+
+        (none)
+    - match: "rabbitmqctl cluster_status"
+      evidence: partition-listed
+      output: |
+        Cluster status of node rabbit@controller-01 ...
+        Basics
+
+        Cluster name: rabbit@controller-01
+
+        Disk Nodes
+
+        rabbit@controller-01
+        rabbit@controller-02
+        rabbit@controller-03
+
+        Running Nodes
+
+        rabbit@controller-01
+        rabbit@controller-02
+
+        Network Partitions
+
+        Node rabbit@controller-01 cannot communicate with rabbit@controller-03
+        Node rabbit@controller-02 cannot communicate with rabbit@controller-03
+    - match: "openstack compute service list --service nova-compute"
+      when_actions: [restart-minority]
+      output: |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | ID | Binary       | Host       | Zone | Status  | State | Updated At                 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | 21 | nova-compute | compute-01 | nova | enabled | up    | 2026-10-26T13:52:08.000000 |
+        | 22 | nova-compute | compute-02 | nova | enabled | up    | 2026-10-26T13:52:05.000000 |
+        | 23 | nova-compute | compute-03 | nova | enabled | up    | 2026-10-26T13:52:09.000000 |
+        | 24 | nova-compute | compute-04 | nova | enabled | up    | 2026-10-26T13:52:07.000000 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+    - match: "openstack compute service list --service nova-compute"
+      evidence: computes-flapping
+      output: |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | ID | Binary       | Host       | Zone | Status  | State | Updated At                 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+        | 21 | nova-compute | compute-01 | nova | enabled | down  | 2026-10-26T13:38:41.000000 |
+        | 22 | nova-compute | compute-02 | nova | enabled | up    | 2026-10-26T13:44:12.000000 |
+        | 23 | nova-compute | compute-03 | nova | enabled | down  | 2026-10-26T13:37:55.000000 |
+        | 24 | nova-compute | compute-04 | nova | enabled | down  | 2026-10-26T13:41:20.000000 |
+        +----+--------------+------------+------+---------+-------+----------------------------+
+
+logs:
+  - name: "/var/log/nova/nova-conductor.log (controller-01)"
+    evidence: messaging-timeout
+    lines: |
+      2026-10-26 13:11:19 ERROR oslo_messaging.rpc.server [-] Exception during message handling
+      oslo_messaging.exceptions.MessagingTimeout: Timed out waiting for a reply to message ID 3f2a9c...
+      2026-10-26 13:11:20 WARNING oslo.messaging._drivers.impl_rabbit [-] [c1f2...] AMQP server on controller-03:5672 is unreachable from the other brokers' clients; trying to reconnect
+  - name: "/var/log/rabbitmq/rabbit@controller-03.log"
+    evidence: mnesia-partition
+    lines: |
+      2026-10-26 13:02:09 [error] <0.341.0> Mnesia(rabbit@controller-03): ** ERROR ** mnesia_event got {inconsistent_database, running_partitioned_network, rabbit@controller-01}
+      2026-10-26 13:02:09 [error] <0.341.0> Mnesia(rabbit@controller-03): ** ERROR ** mnesia_event got {inconsistent_database, running_partitioned_network, rabbit@controller-02}
+  - name: "Network change log: CHG-5102 (top-of-rack switch B)"
+    evidence: switch-flap
+    lines: |
+      13:02:07 TOR-B port 14 (controller-03 mgmt) link down
+      13:03:41 TOR-B port 14 (controller-03 mgmt) link up
+  - name: "MariaDB error log (controller-02)"
+    evidence: galera-blip
+    lines: |
+      2026-10-26 13:01:33 [Note] WSREP: Member 1.0 (controller-02) desyncs itself from group
+      2026-10-26 13:02:14 [Note] WSREP: Member 1.0 (controller-02) resyncs itself to group
+      2026-10-26 13:02:14 [Note] WSREP: Synchronized with group, ready for connections
+
+hypotheses:
+  - id: rabbit-partition
+    text: "The switch port flap split RabbitMQ into two partitions: controller-01 and controller-02 on one side, controller-03 alone on the other. Each side thinks the other is down. With the default ignore handling, the cluster stays split, so services that land on controller-03 never get replies from the rest."
+    correct: true
+  - id: galera
+    text: "The database is the problem: Galera desynced."
+    feedback: "The desync lasted 41 seconds and ended 'Synchronized with group' before the partition began. The database has been healthy since, and the errors are about messaging replies, not queries."
+  - id: nova-computes
+    text: "The nova-compute services are crashing, so restart them."
+    feedback: "They flip between up and down because their heartbeats travel over the broken message bus, not because the processes are failing. Restarting them reconnects them to the same split cluster."
+  - id: switch
+    text: "The network is still down."
+    feedback: "The port was back up at 13:03:41. The brokers can reach each other at the network level; RabbitMQ's own view is still split because with the default ignore mode it doesn't reconcile on its own."
+
+actions:
+  - id: restart-minority
+    label: "On controller-03 only: rabbitmqctl stop_app, then rabbitmqctl start_app (trusting the controller-01 and -02 partition)"
+    kind: fix
+    feedback: "The RabbitMQ docs say to choose the partition to trust, stop the nodes on the other side and start them again so they rejoin and take their state from the trusted side. Two of three nodes is the sensible trusted side."
+  - id: restart-computes
+    label: "Restart nova-compute on every compute host"
+    kind: wrong
+    feedback: "They reconnect to the same split cluster and may still land on controller-03. The compute 'down' states are a symptom of the broken bus."
+  - id: restart-all-at-once
+    label: "Restart RabbitMQ on all three controllers at the same time"
+    kind: wrong
+    feedback: "A full outage of the bus for everything, with no trusted side deliberately chosen to start first. The docs' manual recovery restarts only the nodes in the losing partitions."
+  - id: reset-trusted
+    label: "rabbitmqctl reset on controller-01 and controller-02, then rebuild the cluster"
+    kind: destructive
+    feedback: "Reset wipes the node's queues, exchanges and its users and vhost settings, including the accounts every OpenStack service logs in with. It turns a partition into a full rebuild of the control plane's messaging."
+
+solution_paths:
+  - [restart-minority]
+
+key_evidence: [partition-listed, mnesia-partition, switch-flap, messaging-timeout, computes-flapping]
+
+red_herrings:
+  - evidence: galera-blip
+    label: "Galera desynced on controller-02 at 13:01"
+    why: "It resynced by 13:02:14 and the cluster has been Synced since. The cloud's problem began with the switch port flap at 13:02:07 and is entirely in messaging."
+
+evidence_labels:
+  partition-listed: "rabbitmqctl cluster_status lists a network partition: controller-03 vs the others"
+  mnesia-partition: "controller-03's log: inconsistent_database, running_partitioned_network"
+  switch-flap: "TOR-B port 14 (controller-03) was down from 13:02:07 to 13:03:41"
+  messaging-timeout: "nova-conductor: MessagingTimeout waiting for replies"
+  computes-flapping: "Compute services flip between up and down"
+
+hints:
+  nudge: "Everything times out waiting for replies, and compute heartbeats go missing. What do they all share?"
+  direction: "Look at the cluster status of the message broker, and at what happened to the network around 13:02."
+  answer: "A switch flap partitioned RabbitMQ. Trust the controller-01/02 side and restart the RabbitMQ app on controller-03 so it rejoins."
+
+analogy:
+  title: "Two halves of an office with the phone lines cut for a minute"
+  text: |
+    When the lines came back, each half had kept going on its own: its own
+    version of who was in the building and which jobs were handed out. The
+    switchboard doesn't merge them by itself. Someone has to decide which
+    half to believe and tell the other to start again from it.
+
+debrief:
+  root_cause: |
+    A 94-second link outage on controller-03's switch port split the
+    RabbitMQ cluster. Each side marked the other as down and carried on, and
+    with the default partition handling (ignore) they did not reconcile when
+    the link returned. Services connected to the minority node never got
+    replies, nova-compute heartbeats went missing, and messages sent during
+    the split were lost.
+  ideal_path:
+    - "Treat the Galera blip as noise: it recovered before the problem began."
+    - "Check the broker: cluster_status shows a partition."
+    - "Confirm the cause with controller-03's log and the switch change."
+    - "Pick the trusted side (two of three nodes) and restart the app on the other."
+    - "Verify no partitions and stable compute services."
+  real_world: |
+    A partition must be resolved by choosing a side. Restarting the nodes of
+    the losing partition and not the others keeps the majority's state and
+    avoids a full outage.
+
+concepts:
+  - term: "Network partition (RabbitMQ)"
+    text: "A split where cluster nodes lose contact with each other. By default (ignore) each side carries on independently and the split stays until an operator resolves it."
+    url: "https://www.rabbitmq.com/docs/partitions"
+  - term: "Trusted partition"
+    text: "The side of the split whose state you keep. The nodes on the other side are stopped and restarted so they rejoin and take their state from it."
+    url: "https://www.rabbitmq.com/docs/partitions"
+
+sources:
+  - title: "RabbitMQ: clustering and network partitions (handling modes; manual recovery)"
+    url: "https://www.rabbitmq.com/docs/partitions"
+    retrieved: 2026-10-26
+
+stages:
+  - id: stuck-in-flight
+    update: |
+      13:55 Messaging is healthy: no partitions, compute services stable,
+      new launches reach ACTIVE. But 23 servers created between 13:02 and
+      13:20 are still in BUILD, and their owners can't get them out. Our
+      reconcile job compared Nova's database with each hypervisor's
+      libvirt domains. Please clean this up safely.
+    terminal:
+      commands:
+        - match: "openstack server list --all-projects --status BUILD -c Name -c Status"
+          when_actions: [reset-absent, reset-present]
+          output: ""
+        - match: "openstack server list --all-projects --status BUILD -c Name -c Status"
+          evidence: stuck-build
+          output: |
+            +------------+--------+
+            | Name       | Status |
+            +------------+--------+
+            | batch-w01  | BUILD  |
+            | batch-w02  | BUILD  |
+            | batch-w03  | BUILD  |
+            | batch-w04  | BUILD  |
+            | batch-w05  | BUILD  |
+            | batch-w06  | BUILD  |
+            | batch-w07  | BUILD  |
+            | batch-w08  | BUILD  |
+            | batch-w09  | BUILD  |
+            | batch-w10  | BUILD  |
+            | batch-w11  | BUILD  |
+            | batch-w12  | BUILD  |
+            | batch-w13  | BUILD  |
+            | batch-w14  | BUILD  |
+            | batch-w15  | BUILD  |
+            | batch-w16  | BUILD  |
+            | batch-w17  | BUILD  |
+            | batch-w18  | BUILD  |
+            | batch-w19  | BUILD  |
+            | batch-w20  | BUILD  |
+            | etl-a      | BUILD  |
+            | etl-b      | BUILD  |
+            | etl-c      | BUILD  |
+            +------------+--------+
+    logs:
+      - name: "reconcile job: Nova DB vs libvirt (13:50)"
+        evidence: reconcile-report
+        lines: |
+          23 servers in vm_state=building older than 30 minutes
+          batch-w01 .. batch-w20: no libvirt domain on any host (never spawned)
+          etl-a  compute-02  domain running, 14 minutes of guest uptime, NIC up
+          etl-b  compute-04  domain running, 22 minutes of guest uptime, NIC up
+          etl-c  compute-02  domain running, 9 minutes of guest uptime, NIC up
+    hypotheses:
+      - id: lost-in-flight
+        text: "The messages that would have moved these servers on were lost during the partition. 20 never spawned and have no domain. 3 (etl-*) did spawn and run, but the reply that would have marked them ACTIVE was lost. The database state is wrong in different ways, so each group needs a different correction."
+        correct: true
+      - id: still-broken
+        text: "Messaging is still broken."
+        feedback: "Cluster status is clean and new launches reach ACTIVE. These servers are leftovers of messages that will never be delivered again."
+      - id: wait
+        text: "Leave them, they will finish by themselves."
+        feedback: "The messages that would have driven them forward were lost. Nothing is going to complete them."
+    actions:
+      - id: reset-absent
+        label: "For batch-w01 to batch-w20 (no domain): openstack server set --state error on each, then delete them so their owners can relaunch"
+        kind: fix
+        feedback: "The reconcile report shows nothing exists on any hypervisor, so the records are the only thing left. Setting error and deleting them clears Nova, and releases their ports and quota."
+      - id: reset-present
+        label: "For etl-a, etl-b and etl-c (running domains): openstack server set --state active on each"
+        kind: fix
+        feedback: "These servers exist and their NICs are up. Their only problem is a database state that never moved to ACTIVE, so the admin state reset is accurate for them, and only after you verified the domains."
+      - id: delete-all
+        label: "openstack server delete all 23"
+        kind: destructive
+        feedback: "Three of them are running, with 9 to 22 minutes of work on them. Deleting them destroys that work to tidy a status flag."
+      - id: active-all
+        label: "openstack server set --state active on all 23"
+        kind: wrong
+        feedback: "Twenty of them don't exist on any host. Marking them ACTIVE tells their owners they are running when there is nothing behind the record."
+    solution_paths:
+      - [reset-absent, reset-present]
+    key_evidence: [stuck-build, reconcile-report]
+    evidence_labels:
+      stuck-build: "23 servers in BUILD since 13:02-13:20"
+      reconcile-report: "20 have no libvirt domain; etl-a, etl-b and etl-c are running"
+    hints:
+      nudge: "All 23 look the same in Nova. Are they the same on the hypervisors?"
+      direction: "Read the reconcile report and treat the two groups separately."
+      answer: "Reset the 20 with no domain to error and delete them. Set the 3 running etl servers to active."
+    debrief:
+      root_cause: |
+        Servers mid-build when the partition began lost the messages that
+        would have completed them. Nova's records were stuck in BUILD, but
+        the real state differed: 20 never spawned and 3 did. A state reset
+        is an admin override that only changes the database, so it is safe
+        only after checking what actually exists.
+      ideal_path:
+        - "List the stuck servers and compare with the hypervisors."
+        - "Split them by what actually exists."
+        - "Error and delete the 20 that never spawned."
+        - "Mark the 3 running servers active."
+  - id: prevent-recurrence
+    update: |
+      14:30 The incident is closed from the customer side. The duty manager
+      asks why a 94-second switch flap took the control plane down for
+      fifty minutes and wants to be sure the next one does not. The
+      broker config is below.
+    terminal:
+      commands:
+        - match: "rabbitmqctl eval 'application:get_env(rabbit, cluster_partition_handling).'"
+          when_actions: [pause-minority-rolling]
+          output: |
+            {ok,pause_minority}
+        - match: "rabbitmqctl eval 'application:get_env(rabbit, cluster_partition_handling).'"
+          evidence: handling-ignore
+          output: |
+            undefined
+    files:
+      - path: "/etc/rabbitmq/rabbitmq.conf"
+        language: ini
+        evidence: no-partition-setting
+        content: |
+          listeners.tcp.default = 5672
+          cluster_formation.peer_discovery_backend = classic_config
+          cluster_formation.classic_config.nodes.1 = rabbit@controller-01
+          cluster_formation.classic_config.nodes.2 = rabbit@controller-02
+          cluster_formation.classic_config.nodes.3 = rabbit@controller-03
+    hypotheses:
+      - id: ignore-default
+        text: "No partition handling is configured, so RabbitMQ is on its default (ignore): when the network splits, every side keeps accepting work and nothing reconciles automatically. With three nodes, pause_minority would pause the isolated node and let the other two carry on."
+        correct: true
+      - id: network-only
+        text: "The only fix is a more reliable network."
+        feedback: "Switch changes will keep happening. A control plane should degrade cleanly when a link drops, not depend on it never dropping."
+      - id: more-brokers
+        text: "Add more brokers to the cluster."
+        feedback: "More nodes in the same default mode would split into more partitions. The behaviour on a split is the setting that matters."
+    actions:
+      - id: pause-minority-rolling
+        label: "Set cluster_partition_handling = pause_minority on all three nodes and restart them one at a time, waiting for each to rejoin before the next"
+        kind: fix
+        feedback: "With three nodes, a node cut off from the other two knows it is the minority and pauses, and the services use the two that remain. A rolling restart keeps a majority up throughout, and restarting the trusted nodes also clears the lingering partition warning."
+      - id: autoheal
+        label: "Set cluster_partition_handling = autoheal"
+        kind: wrong
+        feedback: "Autoheal restarts the nodes on the losing side automatically, and messages that were not replicated can be lost when they restart. This cloud has just shown what lost messages do (servers stuck in BUILD). A control plane should prefer pausing the minority."
+      - id: restart-all
+        label: "Change the config and restart all three nodes at once"
+        kind: wrong
+        feedback: "That is a second full control plane outage, caused by the fix. A rolling restart keeps a majority serving."
+      - id: runbook-only
+        label: "Leave the config and write a recovery runbook"
+        kind: wrong
+        feedback: "A runbook helps the next recovery, but the first fifty minutes were the cloud failing while someone worked out which side to trust. The setting removes the need."
+    solution_paths:
+      - [pause-minority-rolling]
+    key_evidence: [handling-ignore, no-partition-setting]
+    evidence_labels:
+      handling-ignore: "The running broker has no partition handling set (default ignore)"
+      no-partition-setting: "rabbitmq.conf has no cluster_partition_handling"
+    hints:
+      nudge: "What did the cluster do the moment the link dropped?"
+      direction: "Check the effective partition-handling setting and the config file."
+      answer: "Set cluster_partition_handling = pause_minority and restart the nodes one at a time."
+    debrief:
+      root_cause: |
+        RabbitMQ's default partition handling is ignore: each side of a split
+        keeps running as if the other had disappeared, and the split lasts
+        until an operator steps in. The incident was longer than the network
+        outage because nothing in the configuration told the isolated node to
+        stop accepting work. pause_minority does.
+      ideal_path:
+        - "Check what the broker does on a split: nothing configured."
+        - "Choose pause_minority for a three-node cluster."
+        - "Apply it with a rolling restart, one node at a time."
+        - "Verify the setting on each node and alert on partitions."

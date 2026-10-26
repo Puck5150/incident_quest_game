@@ -34,3 +34,25 @@
   alternatives:
     - { command: "kafka-consumer-groups.sh --bootstrap-server B --describe --group G --members --verbose", note: "The members and their assigned partitions." }
   docs: { title: "Kafka: Managing consumer groups", url: "https://kafka.apache.org/documentation/#basic_ops_consumer_group" }
+
+- id: rabbitmqctl-cluster-status
+  match: "^(sudo )?rabbitmq(ctl|-diagnostics) cluster_status"
+  summary: "Shows which nodes are in the RabbitMQ cluster, which are running, and any network partitions."
+  parts:
+    - { token: "rabbitmqctl cluster_status", meaning: "Print the cluster's members and their state." }
+  why: "A partition is invisible to clients: they just see timeouts. This shows whether the nodes still agree on who is in the cluster, and lists the nodes that cannot reach each other."
+  alternatives:
+    - { command: "rabbitmq-diagnostics cluster_status", note: "The newer tool name, same output." }
+    - { command: "rabbitmqctl list_connections", note: "Which nodes the clients are actually connected to." }
+  docs: { title: "RabbitMQ: clustering and network partitions", url: "https://www.rabbitmq.com/docs/partitions" }
+
+- id: rabbitmqctl-eval-partition-handling
+  match: "^(sudo )?rabbitmqctl eval "
+  summary: "Runs a small Erlang expression on the RabbitMQ node, here reading the partition-handling setting."
+  parts:
+    - { token: "rabbitmqctl eval", meaning: "Evaluate an Erlang expression on the running node." }
+    - { token: "'application:get_env(rabbit, cluster_partition_handling).'", meaning: "Read the rabbit application's cluster_partition_handling setting: ignore, pause_minority, autoheal or pause_if_all_down." }
+  why: "The effective setting, not the config file, is what the node is running with. It is the way to confirm what happens next time the network splits."
+  alternatives:
+    - { command: "grep cluster_partition_handling /etc/rabbitmq/rabbitmq.conf", note: "What the file says, which may not be what is loaded." }
+  docs: { title: "RabbitMQ: clustering and network partitions", url: "https://www.rabbitmq.com/docs/partitions" }

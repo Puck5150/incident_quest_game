@@ -1,0 +1,239 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-db-sync-after-upgrade
+track: openstack
+difficulty: 4
+title: "After last night's Nova upgrade, the API returns 500 for everything"
+par_minutes: 22
+
+ticket:
+  from: "Platform on-call"
+  severity: SEV2
+  body: |
+    Last night's maintenance upgraded the Nova packages on all three
+    controllers. This morning every compute API call, even
+    `openstack server list`, returns HTTP 500. Keystone, Glance and
+    Neutron are fine. The upgrade checklist says "packages installed,
+    services restarted" and ticks nothing else. Please don't restore the
+    database from last night's backup, we have taken orders since.
+
+environment: |
+  You are the cloud operator with admin access. Nova (API, scheduler and
+  conductor) runs on three controllers against a MariaDB cluster. The
+  packages were upgraded to the next release and the services restarted, as
+  the checklist records. The release's database schema changes were not
+  applied; the maintenance window ran out. Nova uses one cell plus cell0.
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack server list"
+      when_actions: [run-db-sync]
+      output: |
+        +--------------------------------------+---------+--------+--------------------+--------------+
+        | ID                                   | Name    | Status | Networks           | Image        |
+        +--------------------------------------+---------+--------+--------------------+--------------+
+        | 0b7e3a52-8c14-4f6d-9d2a-1e5c7b9a3f40 | api-dev | ACTIVE | dev-net=10.20.0.14 | ubuntu-24.04 |
+        +--------------------------------------+---------+--------+--------------------+--------------+
+    - match: "openstack server list"
+      evidence: api-500
+      output: |
+        Internal Server Error (HTTP 500) (Request-ID: req-4e2a9c71-6b03-4d85-a1f7-3c8e0b5d9a26)
+    - match: "nova-manage db version"
+      when_actions: [run-db-sync]
+      output: |
+        414
+    - match: "nova-manage db version"
+      evidence: schema-behind
+      output: |
+        409
+
+logs:
+  - name: "/var/log/nova/nova-api.log (controller-01)"
+    evidence: unknown-column
+    lines: |
+      2026-10-26 07:41:18 ERROR nova.api.openstack.wsgi [req-4e2a...] Unexpected exception in API method
+      oslo_db.exception.DBError: (pymysql.err.OperationalError) (1054, "Unknown column 'instances.new_field' in 'field list'")
+  - name: "Upgrade checklist (from last night's change record)"
+    evidence: checklist-gaps
+    lines: |
+      [x] Install new Nova packages on controller-01, -02, -03
+      [x] Restart nova-api, nova-scheduler, nova-conductor
+      [ ] nova-manage api_db sync
+      [ ] nova-manage db sync
+      [ ] nova-manage db online_data_migrations
+      [ ] nova-status upgrade check
+
+hypotheses:
+  - id: schema-not-synced
+    text: "The new code expects database columns that don't exist yet, because nobody ran the schema syncs. The API fails with Unknown column and returns 500 for everything that reads the instances table."
+    correct: true
+  - id: db-down
+    text: "The database is down or unreachable."
+    feedback: "MariaDB answers. The error is a specific complaint about a column that doesn't exist, which comes from a live database."
+  - id: package-broken
+    text: "The new packages are corrupt."
+    feedback: "They installed and the services started. They are asking for a schema the database doesn't have yet."
+  - id: other-services
+    text: "A dependency such as Keystone or Neutron is failing."
+    feedback: "They respond normally for other services, and the compute log shows the error comes from Nova's own database query."
+
+actions:
+  - id: run-db-sync
+    label: "nova-manage api_db sync, then nova-manage db sync (once, from one controller)"
+    kind: fix
+    feedback: "That is the documented order: the API database first, then the main cell databases including cell0. The schema changes are additive, so existing data is kept and the API starts answering."
+  - id: manual-alter
+    label: "ALTER TABLE instances ADD COLUMN new_field ... directly in MariaDB"
+    kind: destructive
+    feedback: "You would be guessing the column definition and skipping every other change in the release, and the migration tool's version table would still say it hasn't run. Use the tool that owns the schema."
+  - id: restore-backup
+    label: "Restore last night's database backup and downgrade the packages"
+    kind: destructive
+    feedback: "That discards the orders and instances created since the backup, to avoid running two documented commands."
+  - id: restart-again
+    label: "Restart nova-api on all controllers again"
+    kind: wrong
+    feedback: "They are running the new code correctly. It asks for columns the database doesn't have, and restarting doesn't create them."
+
+solution_paths:
+  - [run-db-sync]
+
+key_evidence: [api-500, unknown-column, schema-behind, checklist-gaps]
+
+evidence_labels:
+  api-500: "Every compute API call returns HTTP 500"
+  unknown-column: "nova-api: Unknown column in the instances table"
+  schema-behind: "The main database schema version is behind the new code's"
+  checklist-gaps: "The change record never ran the db syncs"
+
+hints:
+  nudge: "New code, old database. What step in the upgrade creates the new columns?"
+  direction: "Read the API error and the unchecked items on the upgrade checklist."
+  answer: "Run nova-manage api_db sync, then nova-manage db sync."
+
+analogy:
+  title: "The new shelving unit with the old labels"
+  text: |
+    The warehouse put in a new shelving system overnight, and the pickers
+    were told to use it, but nobody moved the stock into the new bays. Every
+    request for an item asks for a bay that isn't there yet.
+
+debrief:
+  root_cause: |
+    Nova's code and its database schema move together. The upgrade
+    installed the new code and restarted the services but skipped the
+    schema sync, so queries asked for columns that did not exist and the
+    API returned 500. The Nova upgrade process runs the API database sync,
+    then the main database sync for every cell including cell0.
+  ideal_path:
+    - "Read the API error: Unknown column."
+    - "Compare the schema version with what the release expects."
+    - "Read the checklist: the sync steps were never run."
+    - "Run api_db sync, then db sync."
+  real_world: |
+    Make the checklist's schema steps part of the same change as the
+    package upgrade, and run nova-status upgrade check before restarting
+    services on the new code.
+
+concepts:
+  - term: "nova-manage db sync"
+    text: "Applies the schema changes for the installed release to the main (cell) databases, including cell0. api_db sync does the same for the API database and runs first."
+    url: "https://docs.openstack.org/nova/latest/cli/nova-manage.html"
+  - term: "Additive schema migrations"
+    text: "Nova's schema changes are designed to be applied to a running system before the new service code is used, which is why syncing is safe while services run."
+    url: "https://docs.openstack.org/nova/latest/admin/upgrades.html"
+
+sources:
+  - title: "Nova: upgrades (api_db sync, then db sync for all cells including cell0; nova-status upgrade check)"
+    url: "https://docs.openstack.org/nova/latest/admin/upgrades.html"
+    retrieved: 2026-10-26
+  - title: "nova-manage: api_db sync, db sync, db version"
+    url: "https://docs.openstack.org/nova/latest/cli/nova-manage.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: online-migrations
+    update: |
+      Thursday: the API has been fine since the sync. The next release
+      upgrade is scheduled for tonight and the pre-flight list requires "all
+      online data migrations complete". The release engineer ran
+      `nova-manage db online_data_migrations --max-count 50` once on Tuesday,
+      saw it finish without an error message, and ticked the box. The CI job that
+      recorded it also recorded the exit status.
+    logs:
+      - name: "CI job: online_data_migrations (Tuesday 09:14)"
+        evidence: exit-one
+        lines: |
+          $ nova-manage db online_data_migrations --max-count 50
+          +---------------------------------+--------------+-----------+
+          | Migration                       | Total Needed | Completed |
+          +---------------------------------+--------------+-----------+
+          | populate_instance_compute_id    |         1900 |        50 |
+          | migrate_instance_keypairs       |          120 |       120 |
+          +---------------------------------+--------------+-----------+
+          exit status: 1
+    terminal:
+      commands:
+        - match: "nova-manage db online_data_migrations --max-count 1000"
+          when_actions: [rerun-migrations]
+          output: |
+            +---------------------------------+--------------+-----------+
+            | Migration                       | Total Needed | Completed |
+            +---------------------------------+--------------+-----------+
+            | populate_instance_compute_id    |            0 |         0 |
+            | migrate_instance_keypairs       |            0 |         0 |
+            +---------------------------------+--------------+-----------+
+        - match: "nova-manage db online_data_migrations --max-count 50"
+          evidence: more-to-migrate
+          output: |
+            +---------------------------------+--------------+-----------+
+            | Migration                       | Total Needed | Completed |
+            +---------------------------------+--------------+-----------+
+            | populate_instance_compute_id    |         1850 |        50 |
+            | migrate_instance_keypairs       |            0 |         0 |
+            +---------------------------------+--------------+-----------+
+    hypotheses:
+      - id: not-finished
+        text: "The online migrations did not finish. The job passes --max-count 50, so a run handles at most 50 objects, and exit status 1 means some updates were done and more remain. Only exit status 0 means complete."
+        correct: true
+      - id: finished
+        text: "The migrations are complete because the command printed no error."
+        feedback: "The Nova docs say to treat the migrations as complete only when the exit status is 0. Here it was 1, and the table shows 1,850 instances still needing migration."
+      - id: sync-missing
+        text: "The schema sync wasn't applied."
+        feedback: "The API has worked since the sync, and the main schema is current. Online migrations move data, not tables."
+    actions:
+      - id: rerun-migrations
+        label: "Run nova-manage db online_data_migrations --max-count 1000 until it exits with status 0, then record that"
+        kind: fix
+        feedback: "That follows the docs: repeat until the exit status is 0, in larger batches to finish sooner. Then the pre-flight condition is actually true."
+      - id: skip-migrations
+        label: "Defer them to after tonight's upgrade"
+        kind: wrong
+        feedback: "The next release expects the data already migrated, and upgrading with migrations pending is the situation the docs' process exists to prevent."
+      - id: tick-box
+        label: "Leave the box ticked, the command ran without errors"
+        kind: wrong
+        feedback: "A box ticked on an exit status of 1 is a false statement on a pre-flight list, and the upgrade would find out at the worst time."
+    solution_paths:
+      - [rerun-migrations]
+    key_evidence: [exit-one, more-to-migrate]
+    evidence_labels:
+      exit-one: "The CI job recorded exit status 1 and 1,900 instances needing migration"
+      more-to-migrate: "A second 50-instance batch still leaves 1,850 to migrate"
+    hints:
+      nudge: "\"No error\" and \"done\" aren't the same. What does the exit status say?"
+      direction: "Read the CI log's exit status and the table, then run the command again."
+      answer: "Exit status 1 means more remain. Repeat the migrations (larger --max-count) until the exit status is 0."
+    debrief:
+      root_cause: |
+        The release engineer ran the online data migrations once, with
+        --max-count 50, so one run handled at most 50 objects. The command
+        exits 1 when some work was done but more remains; only exit 0 means
+        complete. 1,850 instances were still unmigrated and the pre-flight
+        box was ticked wrongly.
+      ideal_path:
+        - "Read the recorded exit status: 1."
+        - "Run the migration again and watch the Total Needed shrink."
+        - "Repeat in larger batches until it exits 0."
+        - "Record exit 0, not just that the command ran."
