@@ -61,10 +61,10 @@ describe('ranks', () => {
 
 describe('unlocks', () => {
   const tracks: Track[] = [
-    { id: 'linux', name: 'Linux', requires: [] },
-    { id: 'containers', name: 'Containers', requires: ['linux'] },
-    { id: 'micro', name: 'Micro', requires: ['containers', 'empty'] },
-    { id: 'empty', name: 'Empty', requires: [] },
+    { id: 'linux', name: 'Linux', requires: [], category: 'foundations' },
+    { id: 'containers', name: 'Containers', requires: ['linux'], category: 'foundations' },
+    { id: 'micro', name: 'Micro', requires: ['containers', 'empty'], category: 'foundations' },
+    { id: 'empty', name: 'Empty', requires: [], category: 'foundations' },
   ]
   const scenarios = [
     { id: 'l1', track: 'linux' },
@@ -80,10 +80,10 @@ describe('unlocks', () => {
 
   it('requires_any unlocks after any one required track has a completion; empty tracks never satisfy it', () => {
     const anyOf: Track[] = [
-      { id: 'aws', name: 'AWS', requires: [] },
-      { id: 'azure', name: 'Azure', requires: [] },
-      { id: 'gcp', name: 'GCP', requires: [] }, // no content
-      { id: 'design', name: 'Design', requires: ['aws', 'azure', 'gcp'], requires_any: true },
+      { id: 'aws', name: 'AWS', requires: [], category: 'foundations' },
+      { id: 'azure', name: 'Azure', requires: [], category: 'foundations' },
+      { id: 'gcp', name: 'GCP', requires: [], category: 'foundations' }, // no content
+      { id: 'design', name: 'Design', requires: ['aws', 'azure', 'gcp'], requires_any: true, category: 'foundations' },
     ]
     const items = [
       { id: 'a1', track: 'aws' },

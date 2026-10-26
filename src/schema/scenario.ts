@@ -62,6 +62,8 @@ export const SourcesSchema = z
 export const TrackSchema = z.strictObject({
   id,
   name: z.string().min(1),
+  // Which Ops-board filter chip the track belongs to (see src/game/categories.ts).
+  category: z.enum(['foundations', 'platform', 'cloud', 'private-cloud']),
   requires: z.array(id),
   // true: unlocks once ANY one required track has a completion (default: all of them).
   requires_any: z.boolean().optional(),
