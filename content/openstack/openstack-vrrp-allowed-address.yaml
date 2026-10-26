@@ -1,0 +1,208 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-vrrp-allowed-address
+track: openstack
+difficulty: 3
+title: "The keepalived virtual IP is unreachable and both load balancers claim to be master"
+par_minutes: 18
+
+ticket:
+  from: "Network team"
+  severity: SEV3
+  body: |
+    We moved the HA load balancer pair lb-01 and lb-02 into the cloud. The
+    keepalived virtual IP 10.50.0.100 doesn't answer, and both nodes log
+    that they are MASTER. Each node answers on its own address, so nginx is
+    running on both. The same keepalived config works on our old hypervisors.
+    Please don't just turn the security off, the security team is watching
+    this project.
+
+environment: |
+  lb-01 (10.50.0.11) and lb-02 (10.50.0.12) are instances on the subnet
+  10.50.0.0/24 in the project edge. Both use the security group lb, which
+  allows HTTP and HTTPS from anywhere and SSH from the jump-host range.
+  keepalived runs VRRP between them and moves 10.50.0.100 to the node that
+  is MASTER. The ports are lb-01-port and lb-02-port, with port security at
+  its default.
+
+diagram:
+  nodes:
+    - { id: client, label: "clients", col: 0, row: 0, status: degraded }
+    - { id: vip, label: "VIP 10.50.0.100", col: 1, row: 0, status: down }
+    - { id: lb, label: "lb-01 + lb-02 (both MASTER)", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: client, to: vip }
+    - { from: vip, to: lb }
+
+terminal:
+  prompt: "ops@bastion:~$"
+  commands:
+    - match: "curl -sSI http://10.50.0.100/"
+      when_actions: [allow-vrrp, allow-vip]
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+    - match: "curl -sSI http://10.50.0.100/"
+      evidence: vip-unreachable
+      output: |
+        curl: (28) Failed to connect to 10.50.0.100 port 80 after 130302 ms: Couldn't connect to server
+    - match: "curl -sSI http://10.50.0.11/"
+      evidence: real-ip-works
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+    - match: "openstack port show lb-01-port -c allowed_address_pairs -c port_security_enabled -c fixed_ips"
+      when_actions: [allow-vip]
+      output: |
+        +-----------------------+-----------------------------------------------------------+
+        | Field                 | Value                                                     |
+        +-----------------------+-----------------------------------------------------------+
+        | allowed_address_pairs | ip_address='10.50.0.100', mac_address='fa:16:3e:5a:11:0b' |
+        | fixed_ips             | ip_address='10.50.0.11', subnet_id='8b2e...'              |
+        | port_security_enabled | True                                                      |
+        +-----------------------+-----------------------------------------------------------+
+    - match: "openstack port show lb-01-port -c allowed_address_pairs -c port_security_enabled -c fixed_ips"
+      evidence: no-allowed-pairs
+      output: |
+        +-----------------------+-----------------------------------------------------------+
+        | Field                 | Value                                                     |
+        +-----------------------+-----------------------------------------------------------+
+        | allowed_address_pairs |                                                           |
+        | fixed_ips             | ip_address='10.50.0.11', subnet_id='8b2e...'              |
+        | port_security_enabled | True                                                      |
+        +-----------------------+-----------------------------------------------------------+
+    - match: "openstack security group rule list lb"
+      when_actions: [allow-vrrp]
+      output: |
+        +--------------------------------------+-------------+-----------+-----------------+------------+-----------+--------------------------------------+
+        | ID                                   | IP Protocol | Ethertype | IP Range        | Port Range | Direction | Remote Security Group                |
+        +--------------------------------------+-------------+-----------+-----------------+------------+-----------+--------------------------------------+
+        | 0a2c4e61-3b5d-4f77-8c19-5d7f9b1c3e20 | tcp         | IPv4      | 0.0.0.0/0       | 80:80      | ingress   | None                                 |
+        | 2c4e6a83-5d7f-4b99-9e3b-7f9b1d3e5a42 | tcp         | IPv4      | 0.0.0.0/0       | 443:443    | ingress   | None                                 |
+        | 4e6a8c05-7f91-4dbb-a05d-9b1d3f5a7c64 | tcp         | IPv4      | 198.51.100.0/28 | 22:22      | ingress   | None                                 |
+        | 6a8c0e27-9b13-4fdd-b27f-1d3f5b7c9e86 | vrrp        | IPv4      | 0.0.0.0/0       |            | ingress   | 5f7b9d12-4e68-4a30-8c52-0e2a4c6e8a10 |
+        | 8c0e2a49-1d35-41ff-c491-3f5b7d9e1ca8 | None        | IPv4      | 0.0.0.0/0       |            | egress    | None                                 |
+        +--------------------------------------+-------------+-----------+-----------------+------------+-----------+--------------------------------------+
+    - match: "openstack security group rule list lb"
+      evidence: no-vrrp-rule
+      output: |
+        +--------------------------------------+-------------+-----------+-----------------+------------+-----------+-----------------------+
+        | ID                                   | IP Protocol | Ethertype | IP Range        | Port Range | Direction | Remote Security Group |
+        +--------------------------------------+-------------+-----------+-----------------+------------+-----------+-----------------------+
+        | 0a2c4e61-3b5d-4f77-8c19-5d7f9b1c3e20 | tcp         | IPv4      | 0.0.0.0/0       | 80:80      | ingress   | None                  |
+        | 2c4e6a83-5d7f-4b99-9e3b-7f9b1d3e5a42 | tcp         | IPv4      | 0.0.0.0/0       | 443:443    | ingress   | None                  |
+        | 4e6a8c05-7f91-4dbb-a05d-9b1d3f5a7c64 | tcp         | IPv4      | 198.51.100.0/28 | 22:22      | ingress   | None                  |
+        | 8c0e2a49-1d35-41ff-c491-3f5b7d9e1ca8 | None        | IPv4      | 0.0.0.0/0       |            | egress    | None                  |
+        +--------------------------------------+-------------+-----------+-----------------+------------+-----------+-----------------------+
+
+logs:
+  - name: "keepalived on lb-01 and lb-02 (journalctl -u keepalived)"
+    evidence: both-master
+    lines: |
+      lb-01 Keepalived_vrrp: (VI_1) Entering BACKUP STATE
+      lb-01 Keepalived_vrrp: (VI_1) Receive advertisement timeout
+      lb-01 Keepalived_vrrp: (VI_1) Entering MASTER STATE
+      lb-02 Keepalived_vrrp: (VI_1) Entering BACKUP STATE
+      lb-02 Keepalived_vrrp: (VI_1) Receive advertisement timeout
+      lb-02 Keepalived_vrrp: (VI_1) Entering MASTER STATE
+
+hypotheses:
+  - id: two-gaps
+    text: "Two things are blocked by Neutron. The security group doesn't allow the VRRP protocol, so each node never hears the other's advertisements and promotes itself. And neither port has 10.50.0.100 as an allowed address pair, so anti-spoofing drops traffic that uses the VIP."
+    correct: true
+  - id: keepalived-config
+    text: "The keepalived configuration is wrong."
+    feedback: "The same config works on the old hypervisors, and the log shows keepalived running and promoting itself after an advertisement timeout. It is doing what it was told: it just can't hear its peer."
+  - id: nginx
+    text: "nginx isn't serving on the load balancers."
+    feedback: "Each node answers HTTP on its own address (10.50.0.11 returns 200). The service is fine; the problem is reaching the shared address."
+  - id: route
+    text: "There's no route to 10.50.0.100."
+    feedback: "The VIP is inside the same 10.50.0.0/24 subnet as the nodes, so no routing is involved. What fails is Neutron letting traffic from that address through the ports."
+
+actions:
+  - id: allow-vrrp
+    label: "openstack security group rule create --ingress --protocol vrrp --remote-group lb lb"
+    kind: fix
+    feedback: "Members of the lb group can now send VRRP to each other and nobody else can. The two nodes hear each other's advertisements, so one is elected MASTER and the other stays BACKUP."
+  - id: allow-vip
+    label: "openstack port set --allowed-address ip-address=10.50.0.100 on lb-01-port and lb-02-port"
+    kind: fix
+    feedback: "Each port may now send traffic with the VIP as its source, so ARP replies and responses for 10.50.0.100 are no longer dropped. The exception is exactly one address, on exactly the two ports that need it."
+  - id: disable-port-security
+    label: "openstack port set --disable-port-security --no-security-group on both ports"
+    kind: wrong
+    feedback: "It works because it turns the filtering off. Both nodes would then accept any traffic and could send traffic from any address. The team asked not to turn the security off, and it takes two small rules to avoid it."
+  - id: allow-subnet
+    label: "openstack port set --allowed-address ip-address=10.50.0.0/24 on both ports"
+    kind: wrong
+    feedback: "That lets each node send traffic that looks like any host in the subnet, so one compromised load balancer could impersonate others. Allow the single VIP."
+  - id: vrrp-anywhere
+    label: "openstack security group rule create --protocol any --remote-ip 0.0.0.0/0 lb"
+    kind: wrong
+    feedback: "That opens every protocol and port from the whole Internet to fix a protocol that only the two peers need to exchange."
+
+solution_paths:
+  - [allow-vrrp, allow-vip]
+
+key_evidence: [both-master, no-vrrp-rule, no-allowed-pairs, vip-unreachable, real-ip-works]
+
+evidence_labels:
+  both-master: "keepalived on both nodes: advertisement timeout, then MASTER"
+  no-vrrp-rule: "The lb security group has no VRRP rule"
+  no-allowed-pairs: "Neither port lists 10.50.0.100 as an allowed address pair"
+  vip-unreachable: "The VIP times out"
+  real-ip-works: "10.50.0.11 answers HTTP"
+
+hints:
+  nudge: "Two nodes that each think they are master can't hear each other. And a new address on a port has to be allowed. Which layer of Neutron would block each?"
+  direction: "Read the security group for the VRRP protocol, and the ports for allowed address pairs."
+  answer: "Add a VRRP rule limited to the lb group, and add 10.50.0.100 as an allowed address on lb-01-port and lb-02-port. Don't disable port security."
+
+analogy:
+  title: "Two night guards who can't hear each other, sharing one badge"
+  text: |
+    The guards share a single radio channel and one master badge. The
+    building blocks their radios, so each assumes the other has gone home and
+    takes the badge. Then the front desk refuses anyone showing that badge
+    because it isn't on either guard's list.
+
+debrief:
+  root_cause: |
+    Neutron blocked the VIP in two ways. The security group allowed no VRRP
+    (IP protocol 112) between the nodes, so keepalived's advertisements
+    never arrived and each promoted itself to MASTER. And by default a port
+    only passes traffic from its own MAC and fixed IP, so with no allowed
+    address pair for 10.50.0.100, traffic using the VIP was dropped
+    whichever node held it.
+  ideal_path:
+    - "Read the keepalived logs: both nodes MASTER after an advertisement timeout."
+    - "Check the real addresses work: nginx is fine."
+    - "List the security group rules: no VRRP."
+    - "Show the ports: no allowed address pairs."
+    - "Allow VRRP from the group itself and allow the one VIP on both ports."
+  real_world: |
+    Any floating or shared address (keepalived, a cluster VIP) needs an
+    allowed address pair on every port that may hold it, and any
+    keepalived pair needs VRRP allowed between its members.
+
+concepts:
+  - term: "Allowed address pair"
+    text: "An extra IP (and optionally MAC) that a Neutron port is allowed to send traffic from, in addition to its own fixed IP."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/port.html"
+  - term: "Port security"
+    text: "Neutron's per-port filtering of spoofed addresses plus its security groups. Disabling it removes both protections."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/port.html"
+  - term: "VRRP"
+    text: "The protocol keepalived uses to elect which node owns a shared IP. It is not TCP or UDP, so a rule for web ports does not cover it."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/security-group-rule.html"
+
+sources:
+  - title: "OpenStack client: port set (--allowed-address, --disable-port-security)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/port.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: security group rule create (--remote-group, --protocol)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/security-group-rule.html"
+    retrieved: 2026-10-26
+  - title: "Neutron: Networking concepts (security groups)"
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+    retrieved: 2026-10-26

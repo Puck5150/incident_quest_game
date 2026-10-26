@@ -181,6 +181,8 @@
     - { token: "-c fault", meaning: "Keep only the stored error, if the server failed." }
     - { token: "-c addresses", meaning: "Keep only the network addresses." }
     - { token: "-c security_groups", meaning: "Keep only the attached security groups." }
+    - { token: "-c volumes_attached", meaning: "Keep only the volumes Nova believes are attached." }
+    - { token: "-c OS-EXT-SRV-ATTR:host", meaning: "Keep only the compute host the server runs on." }
   why: "When a launch is accepted and then fails, the reason is stored as the server's fault. This is where the scheduler's decision is recorded."
   alternatives:
     - { command: "openstack server list --long", note: "Status and host for many servers at once." }
@@ -267,3 +269,178 @@
   alternatives:
     - { command: "openstack network show public-ext", note: "Details of one network, including whether it is external." }
   docs: { title: "OpenStack client: network list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/network.html" }
+
+- id: openstack-port-show
+  match: "^openstack port show "
+  summary: "Prints one Neutron port's addresses and security settings."
+  parts:
+    - { token: "port show lb-01-port", meaning: "Details of one network port, by name or ID." }
+    - { token: "-c allowed_address_pairs", meaning: "Keep only the extra IP/MAC pairs the port may send traffic from." }
+    - { token: "-c port_security_enabled", meaning: "Keep only whether anti-spoofing and security groups apply." }
+    - { token: "-c fixed_ips", meaning: "Keep only the addresses assigned to the port." }
+  why: "By default a port only passes traffic from its own MAC and fixed IP. A virtual IP that moves between servers has to be allowed explicitly, and this shows whether it is."
+  alternatives:
+    - { command: "openstack port list --server <name>", note: "Find the port belonging to a server." }
+  docs: { title: "OpenStack client: port show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/port.html" }
+
+- id: openstack-volume-type-list-long
+  match: "^openstack volume type list --long"
+  summary: "Lists volume types with their properties (extra specs)."
+  parts:
+    - { token: "volume type list", meaning: "List the volume types (service tiers) available." }
+    - { token: "--long", meaning: "Include each type's properties, such as volume_backend_name." }
+  why: "A volume type picks a storage back end through its volume_backend_name property. If that value names nothing that exists, no back end qualifies."
+  alternatives:
+    - { command: "openstack volume type show gold", note: "One type and its properties." }
+  docs: { title: "Cinder: multiple storage back ends", url: "https://docs.openstack.org/cinder/latest/admin/multi-backend.html" }
+
+- id: openstack-volume-backend-pool-list
+  match: "^openstack volume backend pool list"
+  summary: "Lists the storage pools Cinder's scheduler can use, with the capabilities each reports."
+  parts:
+    - { token: "volume backend pool list", meaning: "Show the back end pools known to the scheduler (admin only)." }
+    - { token: "--long", meaning: "Include each pool's reported capabilities, such as volume_backend_name and free space." }
+  why: "It is the scheduler's own view of the back ends. The volume_backend_name it shows is what a volume type has to match."
+  alternatives:
+    - { command: "openstack volume service list", note: "Which cinder-volume services are up." }
+  docs: { title: "OpenStack client: volume backend pool list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume-backend.html" }
+
+- id: openstack-volume-service-list
+  match: "^openstack volume service list"
+  summary: "Lists Cinder's services and whether each is enabled and up."
+  parts:
+    - { token: "volume service list", meaning: "Show cinder-scheduler and cinder-volume services, one per back end." }
+  why: "It separates a back end that is down from one that is up but not matched."
+  alternatives:
+    - { command: "openstack compute service list", note: "The same check for Nova." }
+  docs: { title: "OpenStack client: volume service list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume-service.html" }
+
+- id: openstack-volume-create
+  match: "^openstack volume create "
+  summary: "Asks Cinder for a new volume of a given size and type."
+  parts:
+    - { token: "volume create", meaning: "Create a block storage volume." }
+    - { token: "--size 50", meaning: "Size in GB." }
+    - { token: "--type gold", meaning: "The volume type (service tier) to create it in." }
+    - { token: "db-vol-07", meaning: "The name of the new volume." }
+  why: "The volume goes to the scheduler, which finds a back end that fits the type. A volume that ends in error was refused there."
+  alternatives:
+    - { command: "openstack volume show <name> -c status", note: "Watch whether it reaches available." }
+  docs: { title: "OpenStack client: volume create", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume.html" }
+
+- id: openstack-volume-attachment-list
+  match: "^openstack volume attachment list"
+  summary: "Lists Cinder's attachment records: which volume is attached, or being attached, to which server."
+  parts:
+    - { token: "volume attachment list", meaning: "Show attachment records kept by the volume service." }
+    - { token: "--all-projects", meaning: "Include every project's attachments (admin only)." }
+  why: "A volume stuck in attaching usually has a leftover attachment record. Comparing it with what Nova thinks is attached shows which side is wrong."
+  alternatives:
+    - { command: "openstack server show <name> -c volumes_attached", note: "What Nova thinks is attached." }
+  docs: { title: "OpenStack client: volume attachment list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume-attachment.html" }
+
+- id: openstack-server-add-volume
+  match: "^openstack server add volume "
+  summary: "Attaches an existing volume to a running server."
+  parts:
+    - { token: "server add volume db-05 pg-data-05", meaning: "Attach the volume (second name) to the server (first name)." }
+  why: "It is the operation that was stuck, so re-running it after a cleanup is the test."
+  alternatives:
+    - { command: "openstack server show <name> -c volumes_attached", note: "Confirm Nova now lists the volume." }
+  docs: { title: "OpenStack client: server add volume", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html" }
+
+- id: openstack-stack-show
+  match: "^openstack stack show "
+  summary: "Prints a Heat stack's status and the reason for it."
+  parts:
+    - { token: "stack show shop-stack", meaning: "Details of one stack." }
+    - { token: "-c stack_status", meaning: "Keep only the status (CREATE_COMPLETE, CREATE_FAILED...)." }
+    - { token: "-c stack_status_reason", meaning: "Keep only the short reason Heat gives for that status." }
+  why: "The status reason names the first thing that went wrong, often with the path to the nested resource."
+  alternatives:
+    - { command: "openstack stack event list shop-stack", note: "The history of what Heat tried, in order." }
+  docs: { title: "python-heatclient: stack commands", url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html" }
+
+- id: openstack-stack-failures-list
+  match: "^openstack stack failures list "
+  summary: "Shows only the resources of a stack that failed, with their reasons."
+  parts:
+    - { token: "stack failures list shop-stack", meaning: "Failed resources of the stack, including those in nested stacks." }
+  why: "A big stack can have dozens of resources. This goes straight to the failing one and its error."
+  alternatives:
+    - { command: "openstack stack resource list shop-stack --nested-depth 3", note: "Every resource and its status, down three nesting levels." }
+  docs: { title: "python-heatclient: stack failures list", url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html" }
+
+- id: openstack-stack-resource-list
+  match: "^openstack stack resource list "
+  summary: "Lists the resources of a stack and the status of each."
+  parts:
+    - { token: "stack resource list shop-stack", meaning: "Resources in this stack." }
+    - { token: "--nested-depth 3", meaning: "Also list resources inside nested stacks, to three levels." }
+  why: "A failed create can leave the resources that were built before the failure. This shows what exists."
+  alternatives:
+    - { command: "openstack stack show shop-stack -c stack_status", note: "Only the overall status." }
+  docs: { title: "python-heatclient: stack resource list", url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html" }
+
+- id: openstack-image-list-names
+  match: "^openstack image list -c "
+  summary: "Lists the image names in Glance with their status."
+  parts:
+    - { token: "image list", meaning: "List images." }
+    - { token: "-c Name", meaning: "Keep only the Name column." }
+    - { token: "-c Status", meaning: "Keep only the Status column." }
+  why: "Templates and pipelines refer to images by name or ID. Seeing the current names shows whether the one they use still exists."
+  alternatives:
+    - { command: "openstack image show <name>", note: "Every property of one image." }
+  docs: { title: "OpenStack client: image list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/image-v2.html" }
+
+- id: openstack-application-credential-list
+  match: "^openstack application credential list"
+  summary: "Lists a user's application credentials with their project and expiry."
+  parts:
+    - { token: "application credential list", meaning: "Show application credentials (named, scoped secrets for automation)." }
+    - { token: "--user bob", meaning: "Only credentials owned by this user (admin only for someone else's)." }
+  why: "An application credential stops working at its expiry date. The Expires At column answers whether that is the problem."
+  alternatives:
+    - { command: "openstack application credential show <name>", note: "Roles and restrictions of one credential." }
+  docs: { title: "Keystone: application credentials", url: "https://docs.openstack.org/keystone/latest/user/application_credentials.html" }
+
+- id: openstack-application-credential-show
+  match: "^openstack application credential show "
+  summary: "Prints one application credential's expiry, roles and restrictions (never its secret)."
+  parts:
+    - { token: "application credential show ci-deploy-2", meaning: "Details of one credential, by name or ID." }
+    - { token: "-c roles", meaning: "Keep only the roles the credential carries." }
+    - { token: "-c user_id", meaning: "Keep only the user that owns it." }
+    - { token: "-c expires_at", meaning: "Keep only the expiry." }
+  why: "A credential is only as valid as the user and roles behind it. This shows whose it is and what it carries."
+  alternatives:
+    - { command: "openstack role assignment list --user <name> --project <p> --names", note: "What that user still holds today." }
+  docs: { title: "Keystone: application credentials", url: "https://docs.openstack.org/keystone/latest/user/application_credentials.html" }
+
+- id: openstack-stack-create
+  match: "^openstack stack create "
+  summary: "Creates a Heat stack from a template and parameters."
+  parts:
+    - { token: "stack create", meaning: "Build a set of resources described by a template." }
+    - { token: "--enable-rollback", meaning: "If the create fails, delete the stack and what it built instead of leaving it half done." }
+    - { token: "--wait", meaning: "Wait until the stack reaches CREATE_COMPLETE or CREATE_FAILED." }
+    - { token: "--parameter image=ubuntu-22.04", meaning: "Set the template parameter image to this value." }
+    - { token: "-t shop.yaml", meaning: "The template file." }
+    - { token: "shop-stack", meaning: "The name of the new stack." }
+  why: "Passing the parameter on the command line is how the pipeline chooses what the template builds from, so a stale value shows up here."
+  alternatives:
+    - { command: "openstack stack update --existing -t shop.yaml shop-stack", note: "Change a stack that is already healthy." }
+  docs: { title: "python-heatclient: stack create", url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html" }
+
+- id: openstack-stack-delete
+  match: "^openstack stack delete "
+  summary: "Deletes a Heat stack and every resource it created."
+  parts:
+    - { token: "stack delete", meaning: "Delete the stack and the resources Heat made for it." }
+    - { token: "--yes", meaning: "Skip the confirmation prompt." }
+    - { token: "--wait", meaning: "Wait for the delete to finish." }
+  why: "Heat remembers what it built, so asking it to delete is the clean way to remove a failed create's leftovers."
+  alternatives:
+    - { command: "openstack stack resource list <stack>", note: "Check what it will remove first." }
+  docs: { title: "python-heatclient: stack delete", url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html" }

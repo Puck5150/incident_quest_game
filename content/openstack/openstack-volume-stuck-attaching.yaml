@@ -1,0 +1,267 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-volume-stuck-attaching
+track: openstack
+difficulty: 3
+title: "A database volume is stuck in \"attaching\" and can neither attach nor delete"
+par_minutes: 20
+
+ticket:
+  from: "DBA on call"
+  severity: SEV3
+  body: |
+    pg-data-05 has been in "attaching" since 03:15 this morning. Attaching
+    it to db-05 never finished, a retry says the volume isn't available, and
+    we can't delete it either. It holds data we haven't backed up yet, so
+    please don't delete or recreate it. The server db-05 itself is ACTIVE.
+
+environment: |
+  You are the cloud operator with admin access. db-05 runs on compute-07.
+  Cinder uses the attachment API: an attach first creates an attachment
+  record in the volume service, then Nova completes it on the compute
+  host. compute-07 is a hyperconverged host that also runs Ceph OSDs.
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack server add volume db-05 pg-data-05"
+      when_actions: [delete-stale-attachment]
+      output: ""
+    - match: "openstack volume show pg-data-05 -c status -c attachments"
+      when_actions: [delete-stale-attachment]
+      output: |
+        +-------------+-----------+
+        | Field       | Value     |
+        +-------------+-----------+
+        | attachments | []        |
+        | status      | available |
+        +-------------+-----------+
+    - match: "openstack volume show pg-data-05 -c status -c attachments"
+      evidence: attaching-status
+      output: |
+        +-------------+-----------+
+        | Field       | Value     |
+        +-------------+-----------+
+        | attachments | []        |
+        | status      | attaching |
+        +-------------+-----------+
+    - match: "openstack volume attachment list"
+      evidence: reserved-attachment
+      output: |
+        +--------------------------------------+--------------------------------------+--------------------------------------+----------+
+        | ID                                   | Volume ID                            | Server ID                            | Status   |
+        +--------------------------------------+--------------------------------------+--------------------------------------+----------+
+        | 3d8f2a41-6c05-4e97-b1d2-9a7c5e3f1b60 | 7a1c9e35-2b48-4d06-8f3a-5c7e9b1d3f24 | c4e2a8b6-1d37-4f59-a0c8-6e2b4d8f0a13 | reserved |
+        +--------------------------------------+--------------------------------------+--------------------------------------+----------+
+    - match: "openstack server show db-05 -c status -c volumes_attached -c OS-EXT-SRV-ATTR:host"
+      evidence: nova-no-volume
+      output: |
+        +------------------------+------------+
+        | Field                  | Value      |
+        +------------------------+------------+
+        | OS-EXT-SRV-ATTR:host   | compute-07 |
+        | status                 | ACTIVE     |
+        | volumes_attached       |            |
+        +------------------------+------------+
+
+hypotheses:
+  - id: stale-record
+    text: "The attach was interrupted after Cinder created the attachment record. Nova never completed it and has no attachment, so a stale reserved record is holding the volume in attaching."
+    correct: true
+  - id: data-corrupt
+    text: "The volume is corrupt."
+    feedback: "Nothing in the status or the attachment suggests damage. The status is a state in Cinder's database, not a statement about the data."
+  - id: attached-elsewhere
+    text: "The volume is still attached to another server."
+    feedback: "The only attachment is the one for db-05, in status reserved, and Nova lists no attached volumes on db-05. Nothing is actually using it."
+  - id: quota
+    text: "The project is out of volume quota."
+    feedback: "Quota applies when a volume is created. This volume already exists; its state is what is wrong."
+
+actions:
+  - id: delete-stale-attachment
+    label: "openstack volume attachment delete 3d8f2a41-6c05-4e97-b1d2-9a7c5e3f1b60 (the reserved record), then attach pg-data-05 to db-05 again"
+    kind: fix
+    feedback: "Nova has no attachment, so only the volume service's record is stale. The client docs say this command deletes just that record, which is exactly what is needed here. The data is untouched and the volume returns to available for a fresh attach."
+  - id: reset-state
+    label: "openstack volume set --state available pg-data-05"
+    kind: wrong
+    feedback: "The client docs warn that this only changes the state in the database, with no regard to what is real. The stale attachment record would stay behind, and the next attach could conflict with it."
+  - id: delete-volume
+    label: "openstack volume delete --force pg-data-05 and create a new one"
+    kind: destructive
+    feedback: "The DBA said there is data that isn't backed up. Force-deleting the volume destroys it to clear a state flag."
+
+solution_paths:
+  - [delete-stale-attachment]
+
+key_evidence: [attaching-status, reserved-attachment, nova-no-volume]
+
+evidence_labels:
+  attaching-status: "pg-data-05 is in attaching with no attachments listed"
+  reserved-attachment: "Cinder has an attachment record in status reserved"
+  nova-no-volume: "Nova shows no attached volumes on db-05"
+
+hints:
+  nudge: "The volume service and the compute service each keep their own record of an attach. Do they agree?"
+  direction: "Compare Cinder's attachment list with what Nova says is attached."
+  answer: "Cinder has a reserved record that Nova never completed. Delete that one record, then attach again."
+
+analogy:
+  title: "The hotel room held for a guest who never arrived"
+  text: |
+    The front desk reserved room 5 on the system and the booking was never
+    confirmed. The room is empty, but the system shows it as "arriving", so
+    nobody else can use it. You cancel the booking; you don't demolish the
+    room.
+
+debrief:
+  root_cause: |
+    The attach has two halves: Cinder creates an attachment record, then
+    Nova completes it on the compute host. The second half never happened,
+    so Cinder kept a reserved record and the volume stayed in attaching.
+    Deleting that record, which Nova doesn't know about, frees the volume.
+  ideal_path:
+    - "Show the volume: attaching, no attachments."
+    - "List attachments: one reserved record for db-05."
+    - "Ask Nova: it has nothing attached."
+    - "Delete the stale record and attach again."
+  real_world: |
+    The state reset is a last resort. Find the record that disagrees and
+    remove that, then you aren't guessing about what is real.
+
+concepts:
+  - term: "Attachment record"
+    text: "Cinder's record that a volume is, or is about to be, attached to a server. It is separate from Nova's own record of block devices."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume-attachment.html"
+  - term: "Volume state"
+    text: "A status such as available, attaching or in-use, held in Cinder's database. Setting it by hand changes only the label, not the real situation."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume.html"
+
+sources:
+  - title: "OpenStack client: volume attachment delete (removes only the volume service's record)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume-attachment.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: volume set (--state changes only the database)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: compute-oom
+    update: |
+      16:40 Reopened: pg-data-05 attached and has been fine. At 16:31 two
+      more attach requests, for db-06 and db-08, stuck in attaching with the
+      same symptom, and anything new on compute-07 hangs. All three servers
+      run on compute-07. We cannot keep cleaning these up by hand.
+    terminal:
+      commands:
+        - match: "openstack compute service list --service nova-compute"
+          when_actions: [reserve-memory]
+          output: |
+            +----+--------------+------------+------+---------+-------+----------------------------+
+            | ID | Binary       | Host       | Zone | Status  | State | Updated At                 |
+            +----+--------------+------------+------+---------+-------+----------------------------+
+            | 11 | nova-compute | compute-06 | nova | enabled | up    | 2026-10-26T16:44:10.000000 |
+            | 12 | nova-compute | compute-07 | nova | enabled | up    | 2026-10-26T16:44:08.000000 |
+            +----+--------------+------------+------+---------+-------+----------------------------+
+        - match: "openstack compute service list --service nova-compute"
+          evidence: compute-07-down
+          output: |
+            +----+--------------+------------+------+---------+-------+----------------------------+
+            | ID | Binary       | Host       | Zone | Status  | State | Updated At                 |
+            +----+--------------+------------+------+---------+-------+----------------------------+
+            | 11 | nova-compute | compute-06 | nova | enabled | up    | 2026-10-26T16:44:10.000000 |
+            | 12 | nova-compute | compute-07 | nova | enabled | down  | 2026-10-26T16:31:42.000000 |
+            +----+--------------+------------+------+---------+-------+----------------------------+
+        - match: "openstack volume attachment list --all-projects"
+          when_actions: [delete-stale-attachments]
+          output: |
+            +--------------------------------------+-----------+-----------+--------+
+            | ID                                   | Volume ID | Server ID | Status |
+            +--------------------------------------+-----------+-----------+--------+
+            +--------------------------------------+-----------+-----------+--------+
+        - match: "openstack volume attachment list --all-projects"
+          evidence: two-more-reserved
+          output: |
+            +--------------------------------------+--------------------------------------+--------------------------------------+----------+
+            | ID                                   | Volume ID                            | Server ID                            | Status   |
+            +--------------------------------------+--------------------------------------+--------------------------------------+----------+
+            | 5f1a7c93-0e24-4b68-9d3f-2a6c8e0b4d71 | 9b3d5f71-4c06-4a82-b1e9-7d2f4a6c8e03 | 2e6a0c48-8b15-4d37-a9f1-0c4e6a8d2b59 | reserved |
+            | 8c2e4a06-1f37-4d59-b8a0-3e5f7c9a1d42 | 1d5f7b93-6a28-4c04-8e7b-9f1d3a5c7e60 | 6a8c0e24-2d46-4f71-b3c9-5e7a9c1b3d85 | reserved |
+            +--------------------------------------+--------------------------------------+--------------------------------------+----------+
+    files:
+      - path: "/etc/nova/nova.conf"
+        language: ini
+        evidence: reserve-default
+        content: |
+          [DEFAULT]
+          reserved_host_memory_mb = 512
+          ram_allocation_ratio = 1.0
+    logs:
+      - name: "compute-07: journal, kernel and systemd (today)"
+        evidence: oom-twice
+        lines: |
+          03:14:09 compute-07 kernel: Out of memory: Killed process 1411 (nova-compute)
+          03:14:10 compute-07 systemd[1]: nova-compute.service: A process of this unit has been killed by the OOM killer.
+          03:14:12 compute-07 systemd[1]: nova-compute.service: Scheduled restart job, restart counter is at 1.
+          16:31:41 compute-07 kernel: Out of memory: Killed process 1388 (nova-compute)
+          16:31:42 compute-07 systemd[1]: nova-compute.service: Failed with result 'oom-kill'.
+          16:31:42 compute-07 ceph-osd: 14 OSD processes resident, 26 GB
+    hypotheses:
+      - id: reserve-too-low
+        text: "compute-07 runs out of memory. Nova only reserves the 512 MB default for the host, but the Ceph OSDs on this host use about 26 GB, so the scheduler fills the rest with guests. The kernel's OOM killer then kills nova-compute, and attaches in flight are left half done."
+        correct: true
+      - id: bug
+        text: "Cinder or Nova has a bug that strands attachments."
+        feedback: "Three stuck attaches in one day on one host, each with an OOM kill of nova-compute around the same time, is a host problem, not random bugs."
+      - id: network
+        text: "The message queue between Nova and the host dropped."
+        feedback: "Other compute hosts keep working over the same queue. Only compute-07 went down, and its logs say why: it was killed."
+      - id: guests
+        text: "A guest on compute-07 is leaking memory and should be killed."
+        feedback: "The kernel killed nova-compute, a small process, because the whole host was out of memory. The cause is how much was promised to guests on a host that also runs storage."
+    actions:
+      - id: reserve-memory
+        label: "Set reserved_host_memory_mb to cover the OSDs (for example 28672) in nova.conf on compute-07 and restart nova-compute"
+        kind: fix
+        feedback: "Nova now subtracts the memory the OSDs need before it schedules guests, so the host stops being filled to the brim. nova-compute comes back and the next attach completes."
+      - id: delete-stale-attachments
+        label: "openstack volume attachment delete for the two new reserved records (db-06 and db-08), then attach again"
+        kind: fix
+        feedback: "Nova has no attachment for either, as with the first volume. Delete the stale records once the host is stable again; the data is untouched."
+      - id: restart-only
+        label: "Just start nova-compute again"
+        kind: wrong
+        feedback: "It comes back, and the host is still filled with guests past what it can hold with the OSDs running. It will be killed again, and again strand attaches."
+      - id: lower-ratio
+        label: "Lower ram_allocation_ratio below 1.0 on every host"
+        kind: wrong
+        feedback: "That penalises all hosts and still doesn't reserve memory for the OSDs on this one. The missing number is host reserve, on the hosts that run other daemons."
+      - id: reboot-compute
+        label: "Reboot compute-07"
+        kind: destructive
+        feedback: "That interrupts every guest on the host, and the host would come back to the same low reserve."
+    solution_paths:
+      - [reserve-memory, delete-stale-attachments]
+    key_evidence: [compute-07-down, oom-twice, reserve-default, two-more-reserved]
+    evidence_labels:
+      compute-07-down: "nova-compute on compute-07 is down since 16:31"
+      oom-twice: "nova-compute was OOM-killed at 03:14 and again at 16:31; OSDs hold 26 GB"
+      reserve-default: "reserved_host_memory_mb is the 512 default"
+      two-more-reserved: "Two more reserved attachment records, for db-06 and db-08"
+    hints:
+      nudge: "Three stuck attaches on one host in a day. What does that host have in common?"
+      direction: "Look at the state of the compute service and the host's logs for the morning and the afternoon."
+      answer: "compute-07 keeps running out of memory because Nova reserves only 512 MB for the host. Raise reserved_host_memory_mb to cover the OSDs, restart nova-compute, then delete the two stale records."
+    debrief:
+      root_cause: |
+        The first stuck volume was a symptom. compute-07 also runs Ceph OSDs
+        that use about 26 GB, but Nova reserved only its 512 MB default, so
+        the scheduler filled the host with guests. The host ran out of
+        memory twice in a day and the kernel killed nova-compute, each time
+        stranding attaches half done. A realistic host reserve fixes the cause.
+      ideal_path:
+        - "Ask why it happened again, and find what the volumes share: compute-07."
+        - "Compute service down since 16:31; logs show two OOM kills."
+        - "nova.conf reserves the default 512 MB while the OSDs use 26 GB."
+        - "Raise the reserve, restart nova-compute."
+        - "Delete the two stale records, as for the first volume."
