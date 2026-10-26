@@ -1,0 +1,255 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-floating-ip-no-gateway
+track: openstack
+difficulty: 3
+title: "The floating IP won't attach to the new web server"
+par_minutes: 18
+
+ticket:
+  from: "Marco (shop team)"
+  severity: SEV3
+  body: |
+    We launched web-02 in shop-prod and allocated the floating IP
+    203.0.113.60 for it, but attaching it fails with a 400 that talks about
+    an external network not being reachable from the subnet. The router
+    shop-router was set up by hand last week, and web-01 on the same
+    subnet works without a floating IP. We need web-02 reachable on that
+    address for a launch this afternoon.
+
+environment: |
+  The project shop-prod has the private network shop-net (subnet
+  10.40.0.0/24) with the router shop-router. The cloud's external network
+  is public-ext, which provides the floating IP range 203.0.113.0/24.
+  web-02 uses the security group shop-web. The office jump hosts use
+  198.51.100.0/28 and the NOC monitoring system uses 198.51.100.64/28.
+
+diagram:
+  nodes:
+    - { id: net, label: "public-ext (203.0.113.0/24)", col: 0, row: 0, status: ok }
+    - { id: rtr, label: "shop-router", col: 1, row: 0, status: degraded }
+    - { id: vm, label: "web-02 (shop-net)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: net, to: rtr }
+    - { from: rtr, to: vm }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack router show shop-router -c external_gateway_info -c interfaces_info"
+      when_actions: [set-gateway]
+      output: |
+        +-----------------------+------------------------------------------------------------------------+
+        | Field                 | Value                                                                  |
+        +-----------------------+------------------------------------------------------------------------+
+        | external_gateway_info | {"network_id": "6b8d2f4e-...", "enable_snat": true,                    |
+        |                       |  "external_fixed_ips": [{"ip_address": "203.0.113.2"}]}                |
+        | interfaces_info       | [{"subnet_id": "3a9c71d0-...", "ip_address": "10.40.0.1"}]             |
+        +-----------------------+------------------------------------------------------------------------+
+    - match: "openstack router show shop-router -c external_gateway_info -c interfaces_info"
+      evidence: no-gateway
+      output: |
+        +-----------------------+------------------------------------------------------------------------+
+        | Field                 | Value                                                                  |
+        +-----------------------+------------------------------------------------------------------------+
+        | external_gateway_info | None                                                                   |
+        | interfaces_info       | [{"subnet_id": "3a9c71d0-...", "ip_address": "10.40.0.1"}]             |
+        +-----------------------+------------------------------------------------------------------------+
+    - match: "openstack network list --external -c Name -c ID"
+      output: |
+        +--------------------------------------+------------+
+        | ID                                   | Name       |
+        +--------------------------------------+------------+
+        | 6b8d2f4e-0c13-4a77-9d58-2f1e8b7a4c90 | public-ext |
+        +--------------------------------------+------------+
+    - match: "openstack server show web-02 -c addresses"
+      when_actions: [set-gateway]
+      output: |
+        +-----------+----------------------------------+
+        | Field     | Value                            |
+        +-----------+----------------------------------+
+        | addresses | shop-net=10.40.0.9, 203.0.113.60 |
+        +-----------+----------------------------------+
+    - match: "openstack server add floating ip web-02 203.0.113.60"
+      when_actions: [set-gateway]
+      output: ""
+    - match: "openstack server add floating ip web-02 203.0.113.60"
+      evidence: not-reachable
+      output: |
+        External network 6b8d2f4e-0c13-4a77-9d58-2f1e8b7a4c90 is not reachable from subnet 3a9c71d0-5e12-4f08-b6a4-7d2c9e1b3f58. Therefore, cannot associate Port 0e5b94c2-8a31-4d6f-a7c0-1b9d3e5f7a24 with a Floating IP. (HTTP 400) (Request-ID: req-2b7d94e1-6f03-4c8a-9e15-3a0c5d7b9f26)
+
+hypotheses:
+  - id: no-gateway
+    text: "shop-router has a connected subnet but no external gateway, so Neutron has no path from shop-net to public-ext and refuses to associate a floating IP."
+    correct: true
+  - id: no-interface
+    text: "shop-router isn't connected to the shop-net subnet."
+    feedback: "interfaces_info lists shop-net's subnet with the router's address 10.40.0.1. The inward side is fine; the outward side is the one that is empty."
+  - id: sg
+    text: "A security group is blocking the association."
+    feedback: "Security groups filter traffic. They don't take part in associating an address, and the error is returned by the API call itself, before any packet is sent."
+  - id: address
+    text: "The floating IP address is wrong or already used."
+    feedback: "The error names networks, a subnet and a port; it doesn't mention the address. An address that was taken would be reported as taken."
+
+actions:
+  - id: set-gateway
+    label: "openstack router set --external-gateway public-ext shop-router, then attach 203.0.113.60 to web-02"
+    kind: fix
+    feedback: "The router now has a leg on the external network, so Neutron has a path from shop-net to public-ext, and web-02 can take the address. web-01 and the existing instances are untouched."
+  - id: attach-external
+    label: "Attach web-02 directly to the public-ext network"
+    kind: wrong
+    feedback: "That uses up a public address per server and places the server directly on the provider network instead of behind the router. The router was only missing its gateway."
+  - id: recreate-router
+    label: "Delete shop-router and create a new one with a gateway"
+    kind: destructive
+    feedback: "Deleting the router drops the 10.40.0.1 interface, so web-01 and the other instances on shop-net lose their path out until it is rebuilt. One setting was missing; nothing needed replacing."
+
+solution_paths:
+  - [set-gateway]
+
+key_evidence: [not-reachable, no-gateway]
+
+evidence_labels:
+  not-reachable: "Association refused: External network is not reachable from subnet"
+  no-gateway: "shop-router's external_gateway_info is None"
+
+hints:
+  nudge: "A floating IP is delivered by a router. What does the router need on each side?"
+  direction: "Look at shop-router's gateway and its connected subnets."
+  answer: "The router has the internal subnet but no external gateway. Set public-ext as its gateway, then attach the address."
+
+analogy:
+  title: "The post room with no outside door"
+  text: |
+    The building has a post room wired to every office, but it was never
+    given a door to the street. Parcels addressed to the building can't be
+    delivered inwards, because there's no way into the post room.
+
+debrief:
+  root_cause: |
+    shop-router was created by hand without an external gateway. A floating
+    IP is a mapping on a router that connects an external network to a
+    private subnet; with no gateway, Neutron can't find an external network
+    reachable from the server's subnet and returns an HTTP 400 on
+    association.
+  ideal_path:
+    - "Read the error: external network not reachable from the subnet."
+    - "Check the router: subnet connected, external_gateway_info None."
+    - "Find the external network name."
+    - "Set it as the router's gateway and attach the address."
+  real_world: |
+    Create routers with a gateway in the same step (in Terraform, set the
+    external network on the router resource) so a router never exists half
+    built.
+
+concepts:
+  - term: "Router external gateway"
+    text: "The leg of a Neutron router on an external network. It gives the router a path to the outside and is what makes floating IPs and outbound source NAT work."
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+  - term: "Floating IP"
+    text: "A public address mapped to a server's private address by the router, so traffic can enter from outside."
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+
+sources:
+  - title: "Neutron: Networking concepts (routers, external networks, floating IPs)"
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: router set (--external-gateway)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/router.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: security group rule create (--remote-ip defaults to 0.0.0.0/0)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/security-group-rule.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: icmp-blocked
+    update: |
+      11:20 Reopened: 203.0.113.60 now answers on HTTPS and the launch went
+      ahead. The NOC's uptime monitor, which checks the site with both ICMP
+      ping and HTTPS from 198.51.100.64/28, reports web-02 as down. The
+      HTTPS check passes; the ping check shows 100% packet loss. The NOC
+      says ping is part of their standard check and can't be removed.
+    terminal:
+      commands:
+        - match: "nc -vz -w 5 203.0.113.60 443"
+          output: |
+            Connection to 203.0.113.60 443 port [tcp/https] succeeded!
+        - match: "openstack security group rule list shop-web"
+          when_actions: [allow-icmp-noc]
+          output: |
+            +--------------------------------------+-------------+-----------+------------------+------------+-----------+-----------------------+
+            | ID                                   | IP Protocol | Ethertype | IP Range         | Port Range | Direction | Remote Security Group |
+            +--------------------------------------+-------------+-----------+------------------+------------+-----------+-----------------------+
+            | 1b3d5f70-2a4c-4e68-8a0b-9c1d3e5f7a92 | tcp         | IPv4      | 0.0.0.0/0        | 80:80      | ingress   | None                  |
+            | 3c5e7a91-4b6d-4f80-9c2e-1d3f5a7b9c04 | tcp         | IPv4      | 0.0.0.0/0        | 443:443    | ingress   | None                  |
+            | 5d7f9b13-6c8e-4a02-8e4a-3f5b7d9c1e26 | tcp         | IPv4      | 198.51.100.0/28  | 22:22      | ingress   | None                  |
+            | 7e9a1c35-8d0f-4c24-a06c-5b7d9f1e3a48 | icmp        | IPv4      | 198.51.100.64/28 |            | ingress   | None                  |
+            | 9f1b3d57-0e2a-4e46-b28e-7d9f1b3c5a60 | None        | IPv4      | 0.0.0.0/0        |            | egress    | None                  |
+            +--------------------------------------+-------------+-----------+------------------+------------+-----------+-----------------------+
+        - match: "openstack security group rule list shop-web"
+          evidence: no-icmp-rule
+          output: |
+            +--------------------------------------+-------------+-----------+------------------+------------+-----------+-----------------------+
+            | ID                                   | IP Protocol | Ethertype | IP Range         | Port Range | Direction | Remote Security Group |
+            +--------------------------------------+-------------+-----------+------------------+------------+-----------+-----------------------+
+            | 1b3d5f70-2a4c-4e68-8a0b-9c1d3e5f7a92 | tcp         | IPv4      | 0.0.0.0/0        | 80:80      | ingress   | None                  |
+            | 3c5e7a91-4b6d-4f80-9c2e-1d3f5a7b9c04 | tcp         | IPv4      | 0.0.0.0/0        | 443:443    | ingress   | None                  |
+            | 5d7f9b13-6c8e-4a02-8e4a-3f5b7d9c1e26 | tcp         | IPv4      | 198.51.100.0/28  | 22:22      | ingress   | None                  |
+            | 9f1b3d57-0e2a-4e46-b28e-7d9f1b3c5a60 | None        | IPv4      | 0.0.0.0/0        |            | egress    | None                  |
+            +--------------------------------------+-------------+-----------+------------------+------------+-----------+-----------------------+
+    logs:
+      - name: "NOC uptime monitor, web-02 (203.0.113.60)"
+        evidence: icmp-loss
+        lines: |
+          11:15:02 check_https 203.0.113.60:443 OK
+          11:15:02 check_icmp  203.0.113.60 CRITICAL - 100% packet loss
+          11:16:02 check_https 203.0.113.60:443 OK
+          11:16:02 check_icmp  203.0.113.60 CRITICAL - 100% packet loss
+    hypotheses:
+      - id: no-icmp
+        text: "The security group shop-web has no rule for ICMP, so pings to web-02 are dropped. HTTPS works because there is a rule for port 443."
+        correct: true
+      - id: router-again
+        text: "The router or floating IP broke again."
+        feedback: "HTTPS to the same address works from the same networks, so the router, the gateway and the association are all doing their job. Only ping is affected."
+      - id: monitor
+        text: "The NOC monitor is misconfigured."
+        feedback: "It points at the right address and its HTTPS check passes. It is correctly reporting that ping gets no answer."
+    actions:
+      - id: allow-icmp-noc
+        label: "openstack security group rule create --ingress --protocol icmp --remote-ip 198.51.100.64/28 shop-web"
+        kind: fix
+        feedback: "ICMP is allowed from the NOC monitor's range and nowhere else. The group stays default-deny for everything else."
+      - id: icmp-anywhere
+        label: "openstack security group rule create --protocol icmp shop-web (no --remote-ip)"
+        kind: wrong
+        feedback: "It fixes the monitor, and with --remote-ip omitted the source defaults to 0.0.0.0/0, so every host on the Internet can ping the server."
+      - id: all-from-noc
+        label: "openstack security group rule create --protocol any --remote-ip 198.51.100.64/28 shop-web"
+        kind: wrong
+        feedback: "That opens every protocol and port to the monitoring range. The monitor only needs ping."
+      - id: drop-ping-check
+        label: "Ask the NOC to remove the ping check"
+        kind: wrong
+        feedback: "The NOC said ping is part of their standard check. Changing monitoring so it matches a missing rule hides what ping tells them."
+    solution_paths:
+      - [allow-icmp-noc]
+    key_evidence: [icmp-loss, no-icmp-rule]
+    evidence_labels:
+      icmp-loss: "NOC monitor: HTTPS OK, ICMP 100% packet loss"
+      no-icmp-rule: "shop-web has rules for 80, 443 and 22, none for ICMP"
+    hints:
+      nudge: "One protocol works and another doesn't on the same address."
+      direction: "Read shop-web's rules."
+      answer: "Add an ICMP ingress rule from 198.51.100.64/28 only. Leaving out --remote-ip would open it to the world."
+    debrief:
+      root_cause: |
+        Security groups are allow-lists per protocol. shop-web allowed HTTP,
+        HTTPS and SSH, but no ICMP, so the monitor's pings were dropped
+        while its HTTPS check passed. Once the router was fixed the address
+        worked; this was a separate gap in the group.
+      ideal_path:
+        - "Notice HTTPS passes and ICMP doesn't."
+        - "List the security group rules: no ICMP."
+        - "Add ICMP scoped to the NOC range."

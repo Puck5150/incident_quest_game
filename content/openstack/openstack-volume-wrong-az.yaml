@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-volume-wrong-az
+track: openstack
+difficulty: 2
+title: "Booting from the prepared volume fails: instance and volume zones don't match"
+par_minutes: 10
+
+ticket:
+  from: "Priya (reporting team)"
+  severity: SEV4
+  body: |
+    We prepared a boot volume, reporting-boot-01, with our tooling already
+    installed. Launching a server from it fails straight away with an
+    availability-zone error. Our team wiki says to use az2 because "az2 has
+    more room", so I passed --availability-zone az2. Please don't make us
+    rebuild the volume, it took half a day to set up.
+
+environment: |
+  The cloud has two availability zones, az1 and az2. Each has its own
+  compute hosts and its own Cinder storage back end. The operators set
+  [cinder] cross_az_attach = False in nova.conf on purpose, so a server and
+  its volumes must be in the same zone. reporting-boot-01 was created last
+  week and is bootable.
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack volume show reporting-boot-01 -c availability_zone -c bootable -c status"
+      evidence: volume-in-az1
+      output: |
+        +-------------------+-----------+
+        | Field             | Value     |
+        +-------------------+-----------+
+        | availability_zone | az1       |
+        | bootable          | true      |
+        | status            | available |
+        +-------------------+-----------+
+    - match: "openstack availability zone list"
+      output: |
+        +-----------+-------------+---------------+
+        | Zone Name | Zone Status | Zone Resource |
+        +-----------+-------------+---------------+
+        | az1       | available   | nova          |
+        | az2       | available   | nova          |
+        | az1       | available   | cinder        |
+        | az2       | available   | cinder        |
+        +-----------+-------------+---------------+
+    - match: "openstack server create --flavor m1.large --volume reporting-boot-01 --network app-net --availability-zone az1 reporting-01"
+      when_actions: [launch-in-az1]
+      output: |
+        +-------------------+-----------------------------------+
+        | Field             | Value                             |
+        +-------------------+-----------------------------------+
+        | name              | reporting-01                      |
+        | status            | BUILD                             |
+        | availability_zone | az1                               |
+        +-------------------+-----------------------------------+
+    - match: "openstack server create --flavor m1.large --volume reporting-boot-01 --network app-net --availability-zone az2 reporting-01"
+      output: |
+        Invalid input received: Instance 6c1e8a52-... and volume 9d7f3b10-... are not in the same availability_zone. Instance is in az2. Volume is in az1. (HTTP 400)
+
+logs:
+  - name: "Priya's failed launch (pasted into the ticket)"
+    evidence: az-mismatch
+    lines: |
+      $ openstack server create --flavor m1.large --volume reporting-boot-01 --network app-net --availability-zone az2 reporting-01
+      Invalid input received: Instance 6c1e8a52-... and volume 9d7f3b10-... are not in the same availability_zone. Instance is in az2. Volume is in az1. (HTTP 400)
+
+hypotheses:
+  - id: zone-mismatch
+    text: "The server was requested in az2 but reporting-boot-01 lives in az1. The cloud requires a server and its volumes to be in the same zone."
+    correct: true
+  - id: quota
+    text: "The project is out of quota."
+    feedback: "A quota failure names the exhausted resource. This error names two zones and says they differ."
+  - id: volume-broken
+    text: "The volume is damaged or not bootable."
+    feedback: "volume show says bootable: true and status available. The request was refused for where the volume is, not what is on it."
+  - id: az2-down
+    text: "az2 is down."
+    feedback: "az2 is listed as available for both compute and storage. The refusal comes from the mismatch between az2 and the volume's zone."
+
+actions:
+  - id: launch-in-az1
+    label: "Launch the server in az1, the volume's zone (--availability-zone az1)"
+    kind: fix
+    feedback: "The server and the volume now share a zone, which is what the cloud requires, and nothing is rebuilt. Placing a server follows the data it uses; the wiki's \"az2 has more room\" rule does not apply when the volume is fixed in az1."
+  - id: cross-az-true
+    label: "Set cross_az_attach = True in nova.conf and restart nova-api"
+    kind: wrong
+    feedback: "The operators set it to False deliberately, so servers and volumes stay in the same zone. Flipping a cloud-wide setting to get past one request changes the design for every project and ties az2 servers to az1 storage."
+  - id: recreate-volume
+    label: "Delete reporting-boot-01 and create a new volume in az2"
+    kind: destructive
+    feedback: "That throws away the half day of work installed on the volume, which the team asked to keep. A server can simply be launched in the volume's own zone."
+
+solution_paths:
+  - [launch-in-az1]
+
+key_evidence: [az-mismatch, volume-in-az1]
+
+evidence_labels:
+  az-mismatch: "Launch refused: instance in az2, volume in az1, not in the same availability_zone"
+  volume-in-az1: "reporting-boot-01 is in availability zone az1"
+
+hints:
+  nudge: "The error names two zones. Where did each come from?"
+  direction: "Check which zone the volume is in, then which zone the launch asked for."
+  answer: "The volume is in az1 and cross-zone attach is off. Launch the server with --availability-zone az1."
+
+analogy:
+  title: "The suitcase in the other airport"
+  text: |
+    Your luggage was checked in at one airport and you booked a flight from
+    another. The airline doesn't fly bags between airports for free. You
+    fly from where the bag is, not from where the seats are cheaper.
+
+debrief:
+  root_cause: |
+    A volume lives in one availability zone. The cloud has cross_az_attach
+    set to False, which requires a server and its volumes to be in the same
+    zone, so a launch into az2 using an az1 volume is refused with an HTTP
+    400. A team wiki rule ("use az2, it has more room") sent the request to
+    the wrong zone.
+  ideal_path:
+    - "Read the error: instance in az2, volume in az1."
+    - "Confirm the volume's zone with volume show."
+    - "Launch in the volume's zone."
+    - "Fix the wiki rule: put the server where the data is."
+  real_world: |
+    When storage is zoned, pick the zone from where the data already lives.
+    Pass an explicit zone only when you mean it.
+
+concepts:
+  - term: "cross_az_attach"
+    text: "A Nova option. When it is False, a server and the volumes attached to it must be in the same availability zone, and a launch that violates it fails."
+    url: "https://docs.openstack.org/nova/latest/admin/availability-zones.html"
+  - term: "Availability zone"
+    text: "A named failure domain inside a cloud. Compute and storage each have zones, and a volume stays in the zone it was created in."
+    url: "https://docs.openstack.org/nova/latest/admin/availability-zones.html"
+
+sources:
+  - title: "Nova: availability zones (cross_az_attach)"
+    url: "https://docs.openstack.org/nova/latest/admin/availability-zones.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: server create (--volume, --availability-zone)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: availability zone list"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/availability-zone.html"
+    retrieved: 2026-10-26

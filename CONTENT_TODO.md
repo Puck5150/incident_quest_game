@@ -1343,3 +1343,10 @@ the labels and tests use the quoted form.
 - [ ] openstack-member-role-missing: `role assignment list --effective` expanding implied roles (member -> reader) and its column layout; the "Policy doesn't allow ... (HTTP 403)" line is from the oslo.policy default message, not printed in the Nova docs.
 - [ ] openstack-quota-exceeded: "Quota exceeded for cores: Requested 8, but already used 20 of 20 cores (HTTP 403)" is from community reports; `quota show --usage` row set is trimmed to three resources.
 - [ ] openstack-glance-store-full: the CLI's rendering of Glance's 413 and the exact "Image storage media is full" text are from Glance's source strings and bug reports, not a printed example.
+
+## openstack (2026-10-26 batch 2)
+- [ ] openstack-horizon-memcached-down: that Django's cache session backend raises (and Horizon returns its "Something went wrong!" 500) when memcached refuses the connection is inferred from the Django docs (pymemcache `ignore_exc` is opt-in); the traceback lines are illustrative. Whether the `-l` line is reverted by a config-management run is scenario setup, not a doc claim.
+- [ ] openstack-volume-wrong-az: the exact Nova text ("Instance ... and volume ... are not in the same availability_zone ...") and the HTTP 400 are from memory of nova/volume/cinder.py; `server create --volume` as boot disk is from the client docs.
+- [ ] openstack-no-valid-host: `compute service list --long` "Disabled Reason" column and the `hypervisor list --long` column set; the fault text/table wrapping in `server show`.
+- [ ] openstack-floating-ip-no-gateway: Neutron's "External network ... is not reachable from subnet ..." text is from the source/bug reports, not the docs; the same error also covers a router with no subnet interface (the incident teaches telling the two apart with `router show`).
+- [ ] openstack-dhcp-agent-down: "ImportError: Class Dnsmasqq cannot be found" is oslo's import message, not printed in the docs; `network agent list` Alive column (:-) / XXX); the dhclient/cloud-init console lines are typical Ubuntu output, not verified for a 24.04 image.

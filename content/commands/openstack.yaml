@@ -132,3 +132,138 @@
     - { command: "curl -sI http://HOST/", note: "Tests a web service end to end instead of one port." }
     - { command: "ssh -v user@HOST", note: "Shows where an SSH handshake stops." }
   docs: { title: "nc(1)", url: "https://man.openbsd.org/nc.1" }
+
+- id: openstack-availability-zone-list
+  match: "^openstack availability zone list"
+  summary: "Lists the availability zones the cloud offers, and whether each is available."
+  parts:
+    - { token: "availability zone list", meaning: "Show zones for compute, volume and network services." }
+  why: "A zone mismatch is invisible until you compare. This shows which zones exist before you pick one for a server or a volume."
+  alternatives:
+    - { command: "openstack availability zone list --volume", note: "Only the zones Cinder offers." }
+    - { command: "openstack availability zone list --compute", note: "Only the zones Nova offers." }
+  docs: { title: "OpenStack client: availability zone list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/availability-zone.html" }
+
+- id: openstack-volume-show
+  match: "^openstack volume show "
+  summary: "Prints the details of one block storage volume, keeping only the fields you pick."
+  parts:
+    - { token: "volume show reporting-boot-01", meaning: "Details of one volume, by name or ID." }
+    - { token: "-c availability_zone", meaning: "Keep only the availability zone the volume lives in." }
+    - { token: "-c bootable", meaning: "Keep only whether the volume can be used as a boot disk." }
+    - { token: "-c status", meaning: "Keep only the status (available, in-use, error...)." }
+  why: "The volume's zone is fixed when it is created. Reading it tells you where a server that uses it must go."
+  alternatives:
+    - { command: "openstack volume list --long", note: "Zone and status for every volume." }
+  docs: { title: "OpenStack client: volume show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/volume.html" }
+
+- id: openstack-server-create
+  match: "^openstack server create "
+  summary: "Asks Nova to launch a new server from an image or a volume."
+  parts:
+    - { token: "server create", meaning: "Launch an instance." }
+    - { token: "--flavor", meaning: "The size of the server (vCPUs, RAM, disk)." }
+    - { token: "--image", meaning: "Boot from this image." }
+    - { token: "--volume", meaning: "Boot from this existing volume instead of an image." }
+    - { token: "--network", meaning: "Which network to attach the server to." }
+    - { token: "--availability-zone", meaning: "Place the server in this availability zone." }
+  why: "It is the call that runs the checks (quota, policy, zone rules) before anything is built, so its error is the first thing to read when a launch fails."
+  alternatives:
+    - { command: "openstack server show <name> -c fault", note: "For launches that were accepted and then failed, the reason is stored on the server." }
+  docs: { title: "OpenStack client: server create", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html" }
+
+- id: openstack-server-show
+  match: "^openstack server show "
+  summary: "Prints the details of one server, keeping only the fields you pick."
+  parts:
+    - { token: "server show etl-worker-01", meaning: "Details of one server, by name or ID." }
+    - { token: "-c status", meaning: "Keep only the status." }
+    - { token: "-c fault", meaning: "Keep only the stored error, if the server failed." }
+    - { token: "-c addresses", meaning: "Keep only the network addresses." }
+    - { token: "-c security_groups", meaning: "Keep only the attached security groups." }
+  why: "When a launch is accepted and then fails, the reason is stored as the server's fault. This is where the scheduler's decision is recorded."
+  alternatives:
+    - { command: "openstack server list --long", note: "Status and host for many servers at once." }
+  docs: { title: "OpenStack client: server show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html" }
+
+- id: openstack-compute-service-list
+  match: "^openstack compute service list"
+  summary: "Lists Nova's services and hosts, with whether each is enabled and up."
+  parts:
+    - { token: "compute service list", meaning: "Show the Nova services and the hosts they run on." }
+    - { token: "--service nova-compute", meaning: "Only the nova-compute service (one per hypervisor host)." }
+    - { token: "--long", meaning: "Add more columns, such as the reason a service was disabled." }
+  why: "Status (enabled or disabled) is an administrative decision and State (up or down) is health. A host can be perfectly healthy and still excluded from scheduling."
+  alternatives:
+    - { command: "openstack hypervisor list --long", note: "Capacity and usage per host, but not whether the host is enabled." }
+  docs: { title: "OpenStack client: compute service list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/compute-service.html" }
+
+- id: openstack-hypervisor-list
+  match: "^openstack hypervisor list"
+  summary: "Lists the hypervisors with how much CPU and RAM each has and uses."
+  parts:
+    - { token: "hypervisor list", meaning: "Show the compute hosts Nova knows about." }
+    - { token: "--long", meaning: "Add the vCPU and memory totals and usage columns." }
+  why: "A scheduling failure is a capacity question. This shows the room on every host, enabled or not."
+  alternatives:
+    - { command: "openstack hypervisor show <host>", note: "Every detail about one hypervisor." }
+  docs: { title: "OpenStack client: hypervisor list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/hypervisor.html" }
+
+- id: openstack-server-add-floating-ip
+  match: "^openstack server add floating ip "
+  summary: "Associates a floating IP address with a server's port."
+  parts:
+    - { token: "server add floating ip", meaning: "Attach a public address to a server." }
+    - { token: "web-02", meaning: "The server (name or ID)." }
+    - { token: "203.0.113.60", meaning: "The floating IP address to attach." }
+  why: "Neutron checks that the server's subnet can actually reach the external network before it will map the address. The refusal names that check."
+  alternatives:
+    - { command: "openstack floating ip set --port <port> <ip>", note: "The same association, starting from the address." }
+  docs: { title: "OpenStack client: server add floating ip", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html" }
+
+- id: openstack-router-show
+  match: "^openstack router show "
+  summary: "Prints a router's gateway and connected subnets."
+  parts:
+    - { token: "router show shop-router", meaning: "Details of one router, by name or ID." }
+    - { token: "-c external_gateway_info", meaning: "Keep only the external network the router uses as its gateway (null means none)." }
+    - { token: "-c interfaces_info", meaning: "Keep only the internal subnets connected to the router." }
+  why: "A floating IP is carried by a router: inward it needs a connected subnet, outward it needs an external gateway. Both show here."
+  alternatives:
+    - { command: "openstack router list", note: "All routers in the project." }
+  docs: { title: "OpenStack client: router show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/router.html" }
+
+- id: openstack-network-agent-list
+  match: "^openstack network agent list"
+  summary: "Lists Neutron's agents with whether each is alive."
+  parts:
+    - { token: "network agent list", meaning: "Show Neutron agents (DHCP, L3, metadata, Open vSwitch...)." }
+    - { token: "--agent-type dhcp", meaning: "Only DHCP agents." }
+  why: "Alive is Neutron's own view of an agent's heartbeat. XXX means the server has stopped hearing from it."
+  alternatives:
+    - { command: "openstack network agent show <id>", note: "Details and configuration of one agent." }
+  docs: { title: "OpenStack client: network agent list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/network-agent.html" }
+
+- id: openstack-console-log-show
+  match: "^openstack console log show "
+  summary: "Prints the end of a server's console output, as seen during boot."
+  parts:
+    - { token: "console log show web-new-01", meaning: "The boot console of one server." }
+    - { token: "--lines 8", meaning: "Only the last 8 lines." }
+  why: "When a server is ACTIVE but unreachable, its own boot messages show whether it got a network address."
+  alternatives:
+    - { command: "openstack console url show <name>", note: "A browser console to log in on the instance." }
+  docs: { title: "OpenStack client: console log show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/console-log.html" }
+
+- id: openstack-network-list-external
+  match: "^openstack network list --external"
+  summary: "Lists the external (provider) networks that routers can use as a gateway."
+  parts:
+    - { token: "network list", meaning: "List networks visible to you." }
+    - { token: "--external", meaning: "Only networks marked external, the ones that connect to the outside." }
+    - { token: "-c Name", meaning: "Keep only the Name column." }
+    - { token: "-c ID", meaning: "Keep only the ID column." }
+  why: "A router can only reach the outside through an external network. Knowing its name is the first step to giving a router a gateway."
+  alternatives:
+    - { command: "openstack network show public-ext", note: "Details of one network, including whether it is external." }
+  docs: { title: "OpenStack client: network list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/network.html" }

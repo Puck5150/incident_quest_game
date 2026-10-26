@@ -1,0 +1,200 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-no-valid-host
+track: openstack
+difficulty: 3
+title: "\"No valid host was found\" while the dashboard says the cloud is 41% used"
+par_minutes: 14
+
+ticket:
+  from: "Data engineering lead"
+  severity: SEV3
+  body: |
+    Our ETL workers won't launch. Every m1.xlarge server (etl-worker-01 is the
+    first) goes to ERROR with
+    "No valid host was found. There are not enough hosts available." The
+    admin overview in the dashboard says the whole cloud is about 41% used,
+    so this makes no sense. The same flavor launched fine two weeks ago.
+
+environment: |
+  You are the cloud operator with admin access. The cloud has six compute
+  hosts, compute-01 to compute-06. m1.xlarge is 16 vCPU and 64 GB RAM. RAM
+  is not overcommitted (ratio 1.0). A kernel patching change, CHG-4411, ran
+  over the weekend. The scheduler and Placement services are running.
+
+diagram:
+  nodes:
+    - { id: api, label: "openstack server create", col: 0, row: 0, status: ok }
+    - { id: sched, label: "nova-scheduler + Placement", col: 1, row: 0, status: degraded }
+    - { id: hosts, label: "compute-01 .. compute-06", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: api, to: sched }
+    - { from: sched, to: hosts }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack compute service list --service nova-compute --long"
+      when_actions: [enable-hosts]
+      output: |
+        +----+--------------+------------+------+---------+-------+----------------------------+-----------------+
+        | ID | Binary       | Host       | Zone | Status  | State | Updated At                 | Disabled Reason |
+        +----+--------------+------------+------+---------+-------+----------------------------+-----------------+
+        | 11 | nova-compute | compute-01 | nova | enabled | up    | 2026-10-26T14:02:11.000000 | None            |
+        | 12 | nova-compute | compute-02 | nova | enabled | up    | 2026-10-26T14:02:09.000000 | None            |
+        | 13 | nova-compute | compute-03 | nova | enabled | up    | 2026-10-26T14:02:12.000000 | None            |
+        | 14 | nova-compute | compute-04 | nova | enabled | up    | 2026-10-26T14:02:10.000000 | None            |
+        | 15 | nova-compute | compute-05 | nova | enabled | up    | 2026-10-26T14:02:08.000000 | None            |
+        | 16 | nova-compute | compute-06 | nova | enabled | up    | 2026-10-26T14:02:13.000000 | None            |
+        +----+--------------+------------+------+---------+-------+----------------------------+-----------------+
+    - match: "openstack compute service list --service nova-compute --long"
+      evidence: hosts-disabled
+      output: |
+        +----+--------------+------------+------+----------+-------+----------------------------+--------------------------+
+        | ID | Binary       | Host       | Zone | Status   | State | Updated At                 | Disabled Reason          |
+        +----+--------------+------------+------+----------+-------+----------------------------+--------------------------+
+        | 11 | nova-compute | compute-01 | nova | enabled  | up    | 2026-10-26T14:02:11.000000 | None                     |
+        | 12 | nova-compute | compute-02 | nova | enabled  | up    | 2026-10-26T14:02:09.000000 | None                     |
+        | 13 | nova-compute | compute-03 | nova | disabled | up    | 2026-10-26T14:02:12.000000 | kernel patching CHG-4411 |
+        | 14 | nova-compute | compute-04 | nova | disabled | up    | 2026-10-26T14:02:10.000000 | kernel patching CHG-4411 |
+        | 15 | nova-compute | compute-05 | nova | disabled | up    | 2026-10-26T14:02:08.000000 | kernel patching CHG-4411 |
+        | 16 | nova-compute | compute-06 | nova | disabled | up    | 2026-10-26T14:02:13.000000 | kernel patching CHG-4411 |
+        +----+--------------+------------+------+----------+-------+----------------------------+--------------------------+
+    - match: "openstack hypervisor list --long"
+      evidence: enabled-hosts-full
+      output: |
+        +----+---------------------+-----------------+------------+-------+------------+-------+----------------+-----------+
+        | ID | Hypervisor Hostname | Hypervisor Type | Host IP    | State | vCPUs Used | vCPUs | Memory MB Used | Memory MB |
+        +----+---------------------+-----------------+------------+-------+------------+-------+----------------+-----------+
+        |  1 | compute-01          | QEMU            | 10.0.0.21  | up    |         52 |    64 |         204800 |    262144 |
+        |  2 | compute-02          | QEMU            | 10.0.0.22  | up    |         50 |    64 |         204800 |    262144 |
+        |  3 | compute-03          | QEMU            | 10.0.0.23  | up    |         20 |    64 |          81920 |    262144 |
+        |  4 | compute-04          | QEMU            | 10.0.0.24  | up    |         18 |    64 |          71680 |    262144 |
+        |  5 | compute-05          | QEMU            | 10.0.0.25  | up    |         10 |    64 |          40960 |    262144 |
+        |  6 | compute-06          | QEMU            | 10.0.0.26  | up    |         10 |    64 |          40960 |    262144 |
+        +----+---------------------+-----------------+------------+-------+------------+-------+----------------+-----------+
+    - match: "openstack server show etl-worker-01 -c status -c fault"
+      evidence: no-valid-host
+      output: |
+        +--------+--------------------------------------------------------------------------+
+        | Field  | Value                                                                    |
+        +--------+--------------------------------------------------------------------------+
+        | fault  | {'code': 500, 'message': 'No valid host was found. There are not enough  |
+        |        | hosts available.'}                                                       |
+        | status | ERROR                                                                    |
+        +--------+--------------------------------------------------------------------------+
+    - match: "openstack server create --flavor m1.xlarge --image ubuntu-24.04 --network app-net etl-worker-02"
+      when_actions: [enable-hosts]
+      output: |
+        +--------+---------------+
+        | Field  | Value         |
+        +--------+---------------+
+        | name   | etl-worker-02 |
+        | status | BUILD         |
+        +--------+---------------+
+
+files:
+  - path: "/home/ops/CHG-4411.txt"
+    language: text
+    evidence: change-closed
+    content: |
+      CHG-4411  Kernel patching, compute-01 .. compute-06
+      Status: CLOSED (2026-10-25)
+      Rolling order: disable service, drain, patch, reboot, verify.
+      [x] compute-01 patched, rebooted, verified, service enabled
+      [x] compute-02 patched, rebooted, verified, service enabled
+      [x] compute-03 patched, rebooted, verified
+      [x] compute-04 patched, rebooted, verified
+      [x] compute-05 patched, rebooted, verified
+      [x] compute-06 patched, rebooted, verified
+
+hypotheses:
+  - id: hosts-disabled
+    text: "Four of the six compute services are still disabled from the patching change. Only compute-01 and compute-02 can take instances, and neither has 64 GB free, so Placement finds no candidate host."
+    correct: true
+  - id: really-full
+    text: "The cloud is out of capacity."
+    feedback: "The 41% figure includes the four disabled hosts, which are mostly empty (compute-03 to -06 have 175 to 215 GB free each) but excluded from scheduling. The cloud has the room; it is not available to the scheduler."
+  - id: scheduler-down
+    text: "nova-scheduler is down or stuck."
+    feedback: "The message is the scheduler's verdict: it examined the hosts and none qualified. A scheduler that was not running could not have reached a verdict about hosts."
+  - id: bad-flavor
+    text: "The m1.xlarge flavor is broken."
+    feedback: "The flavor is unchanged and launched fine two weeks ago. What changed is which hosts are available."
+
+actions:
+  - id: enable-hosts
+    label: "openstack compute service set --enable compute-03 nova-compute (and the same for compute-04, compute-05 and compute-06)"
+    kind: fix
+    feedback: "The change is closed and all six hosts are patched, rebooted and verified; the checklist shows the enable step was only done for the first two. Enabling the remaining four returns about 790 GB of free RAM to the scheduler with no change to any ratio or flavor."
+  - id: overcommit
+    label: "Raise ram_allocation_ratio on compute-01 and compute-02 and restart nova-compute"
+    kind: wrong
+    feedback: "That promises more memory than the hosts have. When guests actually use it, the kernel's OOM killer ends some of them. It also needs a config change and a restart on live hosts for a problem that is an unchecked box."
+  - id: smaller-flavor
+    label: "Tell the team to use m1.large instead"
+    kind: wrong
+    feedback: "The workload is sized for 64 GB. A smaller flavor fits their jobs worse and fills the two enabled hosts, which then have nothing left for anyone else."
+  - id: delete-servers
+    label: "openstack server delete the largest running servers on compute-01 and compute-02 to make room"
+    kind: destructive
+    feedback: "Those are other teams' running workloads. Deleting them destroys their state to clear space that is available on four idle hosts."
+
+solution_paths:
+  - [enable-hosts]
+
+key_evidence: [no-valid-host, hosts-disabled, enabled-hosts-full, change-closed]
+
+evidence_labels:
+  no-valid-host: "Servers go to ERROR: No valid host was found"
+  hosts-disabled: "compute-03 to compute-06 are disabled (reason: kernel patching CHG-4411)"
+  enabled-hosts-full: "compute-01 and compute-02 are each about 80% used, and 64 GB does not fit"
+  change-closed: "CHG-4411 is closed with all six hosts patched, but enable was only ticked for two"
+
+hints:
+  nudge: "The overview adds up every host. The scheduler only uses the hosts it is allowed to use."
+  direction: "Compare which compute services are enabled with how much room each host has."
+  answer: "compute-03 to -06 were disabled for patching and never re-enabled. Verify the change is done, then enable them."
+
+analogy:
+  title: "The car park with four closed floors"
+  text: |
+    The sign at the entrance says the car park is 41% full. The attendant
+    waves every large vehicle away because the empty floors were closed for
+    resurfacing last week and nobody took the cones off.
+
+debrief:
+  root_cause: |
+    During the weekend patching change, each host's nova-compute service was
+    disabled, patched and rebooted. Only the first two were re-enabled
+    afterwards. Disabled hosts are excluded from scheduling, so only
+    compute-01 and compute-02 were candidates, and neither had 64 GB free.
+    The cloud-wide usage figure still counted the four idle hosts, which is
+    why the capacity numbers looked fine.
+  ideal_path:
+    - "Read the fault on a failed server: the scheduler found no host."
+    - "List the compute services: four are disabled, with a reason."
+    - "Check the hypervisors: the enabled two are full; the disabled four are mostly empty."
+    - "Confirm the change record says patching is complete and verified."
+    - "Enable the four services and launch again."
+  real_world: |
+    Make re-enabling a checked step in the change template and alert on
+    any compute service that has been disabled for more than a day.
+
+concepts:
+  - term: "Disabled compute service"
+    text: "An administrative setting. A disabled nova-compute keeps running its existing guests but is excluded from scheduling new ones, so a host can be healthy and still not usable."
+    url: "https://docs.openstack.org/nova/latest/admin/scheduling.html"
+  - term: "Allocation ratio"
+    text: "How much virtual CPU or RAM Placement lets the scheduler promise for each unit of physical capacity. Raising it adds paper capacity, not real memory."
+    url: "https://docs.openstack.org/nova/latest/configuration/config.html"
+
+sources:
+  - title: "Nova: scheduling (disabled hosts are excluded; the COMPUTE_STATUS_DISABLED trait and ComputeFilter)"
+    url: "https://docs.openstack.org/nova/latest/admin/scheduling.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: compute service set (--enable, --disable-reason)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/compute-service.html"
+    retrieved: 2026-10-26
+  - title: "Nova configuration: ram_allocation_ratio, cpu_allocation_ratio"
+    url: "https://docs.openstack.org/nova/latest/configuration/config.html"
+    retrieved: 2026-10-26
