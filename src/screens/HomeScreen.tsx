@@ -1,8 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { Track } from '../schema/scenario.ts'
 import type { Progress } from '../game/progress.ts'
 import Icon from '../components/Icon.tsx'
 import WorldMap from '../components/WorldMap.tsx'
+import CategoryChips from '../components/CategoryChips.tsx'
+import { CATEGORIES, type Category } from '../game/categories.ts'
+import { loadCategories, revealCategory, saveCategories, toggleCategory } from '../game/categoryFilter.ts'
 import { missionId } from '../game/mission.ts'
 
 // Incidents and design challenges share the queue.
@@ -22,7 +25,7 @@ const CLOUD: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' }
 // The incident queue: tracks that have content, in tracks.yaml order,
 // incidents easiest first. Locked tracks say what unlocks them.
 export default function HomeScreen({
-  tracks,
+  tracks: allTracks,
   items: allItems,
   progress,
   unlocked,
@@ -40,7 +43,33 @@ export default function HomeScreen({
   shiftNeeds: number // resolved incidents still needed before shifts open
   onShift: () => void
 }) {
-  const name = (id: string) => tracks.find((t) => t.id === id)?.name ?? id
+  // Told to focus a track whose category is switched off (arriving from the
+  // skill tree, back/forward, a deep link): show that category. Not saved by
+  // itself; the next chip click saves the whole selection, reveal included.
+  const revealFor = (saved: Set<Category>) => {
+    const category = allTracks.find((t) => t.id === focusTrack)?.category
+    return category ? revealCategory(saved, category) : saved
+  }
+  const [selected, setSelected] = useState(() => revealFor(loadCategories()))
+  const [seenFocus, setSeenFocus] = useState(focusTrack)
+  if (focusTrack !== seenFocus) {
+    setSeenFocus(focusTrack)
+    setSelected(revealFor(selected))
+  }
+  const choose = (next: Set<Category>) => {
+    setSelected(next)
+    saveCategories(next)
+  }
+  const tracks = allTracks.filter((t) => selected.has(t.category))
+  const name = (id: string) => allTracks.find((t) => t.id === id)?.name ?? id
+
+  // Open incidents per category, for the chips (locked tracks included).
+  const categoryOf = new Map(allTracks.map((t) => [t.id, t.category]))
+  const open = Object.fromEntries(CATEGORIES.map((c) => [c.id, 0])) as Record<Category, number>
+  for (const s of allItems) {
+    const c = categoryOf.get(s.track)
+    if (c && !progress.completed[s.id]) open[c]++
+  }
 
   // Arriving from the skill tree: jump to (and focus) that track's section.
   useEffect(() => {
@@ -54,6 +83,7 @@ export default function HomeScreen({
       <h1 id="screen-title" tabIndex={-1} className="text-2xl font-semibold focus:outline-none">
         Ops board
       </h1>
+      <CategoryChips selected={selected} open={open} onToggle={(id) => choose(toggleCategory(selected, id))} />
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={onShift}
