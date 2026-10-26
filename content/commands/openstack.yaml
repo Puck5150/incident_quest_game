@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schemas/commands.json
+# Command library: OpenStack CLI (python-openstackclient). First matching entry wins.
+
+- id: openstack-token-issue
+  match: "^openstack token issue$"
+  summary: "Asks Keystone for a token with your current credentials and prints it."
+  parts:
+    - { token: "openstack", meaning: "The unified OpenStack command-line client." }
+    - { token: "token issue", meaning: "Request a new token, using the OS_* environment variables for who you are and which project you want." }
+  why: "It is the smallest call that exercises authentication on its own. If this fails, nothing else the client does can work, and the error comes straight from Keystone."
+  alternatives:
+    - { command: "openstack catalog list", note: "Also needs a valid token, and shows which service endpoints you were given." }
+    - { command: "env | grep ^OS_", note: "What the client will send, before it sends it." }
+  docs: { title: "OpenStack client: token issue", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/token-v3.html" }
+
+- id: openstack-server-list-project
+  match: "^openstack server list --project \\S+ --long"
+  summary: "Lists the servers in one project with extra columns, showing only the columns you pick."
+  parts:
+    - { token: "server list", meaning: "List compute instances." }
+    - { token: "--project ci", meaning: "Only servers in this project (needs admin to look at someone else's)." }
+    - { token: "--long", meaning: "Include more columns, such as flavor, host and properties." }
+    - { token: "-c Name", meaning: "Keep only the Name column." }
+    - { token: "-c Status", meaning: "Keep only the Status column." }
+    - { token: "-c Flavor", meaning: "Keep only the Flavor column." }
+  why: "When a quota is full, the question is what is using it. This shows each server and its size side by side."
+  alternatives:
+    - { command: "openstack server list --all-projects", note: "Every project at once, as an admin." }
+    - { command: "openstack quota show --usage ci", note: "The totals, without the per-server breakdown." }
+  docs: { title: "OpenStack client: server list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html" }
+
+- id: openstack-server-list
+  match: "^openstack server list"
+  summary: "Lists the compute instances in the current project."
+  parts:
+    - { token: "server list", meaning: "List servers: ID, name, status, networks and image." }
+  why: "It is the simplest authenticated read, so it doubles as a check that your login, project and permissions all work."
+  alternatives:
+    - { command: "openstack server show <name>", note: "Every detail about one server." }
+  docs: { title: "OpenStack client: server list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/server.html" }
+
+- id: openstack-quota-show-usage
+  match: "^openstack quota show --usage"
+  summary: "Shows a project's quota limits next to how much of each is in use and reserved."
+  parts:
+    - { token: "quota show", meaning: "Display the quotas for a project." }
+    - { token: "--usage", meaning: "Add details about quota usage: In Use and Reserved beside each Limit." }
+    - { token: "ci", meaning: "The project (name or ID); without it, your current project." }
+  why: "A quota error gives you one number. This shows every resource against its limit, so you can see which one is the real constraint."
+  alternatives:
+    - { command: "openstack limits show --absolute", note: "The same limits as the project's own user sees them." }
+    - { command: "openstack quota show --default", note: "The cloud-wide defaults a project starts with." }
+  docs: { title: "OpenStack client: quota show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/quota.html" }
+
+- id: openstack-flavor-show
+  match: "^openstack flavor show "
+  summary: "Prints the size of a flavor: virtual CPUs, RAM and disk."
+  parts:
+    - { token: "flavor show m1.large", meaning: "Details of one flavor, by name or ID." }
+    - { token: "-c vcpus", meaning: "Keep only the vcpus field." }
+    - { token: "-c ram", meaning: "Keep only the ram field (in MB)." }
+  why: "Quota is counted in cores and megabytes, but servers are launched by flavor name. This converts between the two."
+  alternatives:
+    - { command: "openstack flavor list", note: "All the flavors, side by side." }
+  docs: { title: "OpenStack client: flavor show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/flavor.html" }
+
+- id: openstack-role-assignment-list
+  match: "^openstack role assignment list"
+  summary: "Lists which roles are granted to whom, on which projects or domains."
+  parts:
+    - { token: "role assignment list", meaning: "Show role assignments." }
+    - { token: "--effective", meaning: "Return only effective assignments: implied roles are expanded and group membership applied." }
+    - { token: "--user bob", meaning: "Only assignments for this user (name or ID)." }
+    - { token: "--project analytics", meaning: "Only assignments on this project (name or ID)." }
+    - { token: "--names", meaning: "Show names instead of IDs." }
+  why: "Roles decide what a user may do. Reading the assignments for one user on one project answers \"what are they actually allowed?\" without guessing."
+  alternatives:
+    - { command: "openstack role show member", note: "What a single role is." }
+    - { command: "openstack role assignment list --project analytics --names", note: "Everyone with access to the project." }
+  docs: { title: "OpenStack client: role assignment list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/role-assignment.html" }
+
+- id: openstack-security-group-rule-list
+  match: "^openstack security group rule list "
+  summary: "Lists the rules of a security group: protocol, source range, ports and direction."
+  parts:
+    - { token: "security group rule list web", meaning: "Show the rules in the security group named web." }
+  why: "A security group is an allow-list. If a connection times out while others work, the rules show which port or source is missing."
+  alternatives:
+    - { command: "openstack server show <name> -c security_groups", note: "Which groups are attached to the instance." }
+  docs: { title: "OpenStack client: security group rule list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/security-group-rule.html" }
+
+- id: openstack-image-list-long
+  match: "^openstack image list --long"
+  summary: "Lists images in Glance with their status, size and owner."
+  parts:
+    - { token: "image list", meaning: "List images." }
+    - { token: "--long", meaning: "Add columns such as size, checksum and project." }
+    - { token: "-c Name", meaning: "Keep only the Name column." }
+    - { token: "-c Status", meaning: "Keep only the Status column." }
+    - { token: "-c Size", meaning: "Keep only the Size column (bytes)." }
+    - { token: "-c Project", meaning: "Keep only the owning project." }
+  why: "Status shows a failed upload (killed) and size shows what is taking the space, in one view."
+  alternatives:
+    - { command: "openstack image show <name>", note: "Every property of one image." }
+  docs: { title: "OpenStack client: image list", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/image-v2.html" }
+
+- id: openstack-image-create
+  match: "^openstack image create "
+  summary: "Uploads a disk image file to Glance and registers it under a name."
+  parts:
+    - { token: "image create", meaning: "Create an image record and, with --file, upload its data." }
+    - { token: "--file hardened-ubuntu-24.04.qcow2", meaning: "The local disk image file to upload." }
+    - { token: "--disk-format qcow2", meaning: "How the disk is encoded (qcow2, raw, vmdk...)." }
+    - { token: "--container-format bare", meaning: "Whether the file is wrapped with metadata; bare means it isn't." }
+    - { token: "hardened-ubuntu-24.04", meaning: "The name of the new image." }
+  why: "It is the call that exercises Glance's storage end to end, so its failure message is the first place to look when uploads fail."
+  alternatives:
+    - { command: "openstack image set <name> --property ...", note: "Change metadata on an image that already exists." }
+  docs: { title: "OpenStack client: image create", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/image-v2.html" }
+
+- id: nc-timeout-port-check
+  match: "^nc -vz -w \\d+ \\S+ \\d+$"
+  summary: "Tests whether a TCP port accepts a connection, without sending any data."
+  parts:
+    - { token: "nc", meaning: "netcat, a tool for raw network connections." }
+    - { token: "-v", meaning: "Verbose: print the result." }
+    - { token: "-z", meaning: "Scan only: connect and close without sending anything." }
+    - { token: "-w 5", meaning: "Give up after 5 seconds." }
+    - { token: "203.0.113.45 22", meaning: "The address and port to test." }
+  why: "It separates the network path from the application. A timeout means packets were dropped on the way (a firewall or security group); a refusal means the host answered and nothing is listening."
+  alternatives:
+    - { command: "curl -sI http://HOST/", note: "Tests a web service end to end instead of one port." }
+    - { command: "ssh -v user@HOST", note: "Shows where an SSH handshake stops." }
+  docs: { title: "nc(1)", url: "https://man.openbsd.org/nc.1" }

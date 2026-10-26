@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-secgroup-ssh-missing
+track: openstack
+difficulty: 1
+title: "The new web server is ACTIVE, serves pages, and nobody can SSH to it"
+par_minutes: 8
+
+ticket:
+  from: "Platform on-call"
+  severity: SEV4
+  body: |
+    web-01 was launched this morning and the site loads, but SSH from the
+    office jump hosts times out. The instance shows ACTIVE and the console
+    log looks normal. Please get us in, and keep it to the jump hosts.
+
+environment: |
+  web-01 runs in the project web-prod on the network app-net, with the
+  floating IP 203.0.113.45. It uses the security group web, which was
+  created for it. The office jump hosts connect from 198.51.100.0/28 and
+  are the only place SSH is allowed from by policy.
+
+diagram:
+  nodes:
+    - { id: jump, label: "office jump hosts (198.51.100.0/28)", col: 0, row: 0, status: ok }
+    - { id: sg, label: "security group web", col: 1, row: 0, status: degraded }
+    - { id: vm, label: "web-01 (ACTIVE)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: jump, to: sg }
+    - { from: sg, to: vm }
+
+terminal:
+  prompt: "ops@jump-01:~$"
+  commands:
+    - match: "nc -vz -w 5 203.0.113.45 22"
+      when_actions: [allow-ssh-from-jumps]
+      output: |
+        Connection to 203.0.113.45 22 port [tcp/ssh] succeeded!
+    - match: "nc -vz -w 5 203.0.113.45 22"
+      evidence: ssh-timeout
+      output: |
+        nc: connect to 203.0.113.45 port 22 (tcp) timed out: Operation now in progress
+    - match: "nc -vz -w 5 203.0.113.45 80"
+      evidence: http-works
+      output: |
+        Connection to 203.0.113.45 80 port [tcp/http] succeeded!
+    - match: "curl -sI http://203.0.113.45/"
+      output: |
+        HTTP/1.1 200 OK
+        Server: nginx
+        Content-Type: text/html
+    - match: "openstack server show web-01 -c status -c addresses -c security_groups"
+      output: |
+        +-----------------+------------------------------------------+
+        | Field           | Value                                    |
+        +-----------------+------------------------------------------+
+        | addresses       | app-net=10.30.0.12, 203.0.113.45         |
+        | security_groups | name='web'                               |
+        | status          | ACTIVE                                   |
+        +-----------------+------------------------------------------+
+    - match: "openstack security group rule list web"
+      when_actions: [allow-ssh-from-jumps]
+      output: |
+        +--------------------------------------+-------------+-----------+------------------+------------+-----------+--------------------------------------+
+        | ID                                   | IP Protocol | Ethertype | IP Range         | Port Range | Direction | Remote Security Group                |
+        +--------------------------------------+-------------+-----------+------------------+------------+-----------+--------------------------------------+
+        | 2a6f0c18-5d3e-4b7a-9c41-8e0d1f2a3b64 | tcp         | IPv4      | 0.0.0.0/0        | 80:80      | ingress   | None                                 |
+        | 4c8e1a29-7b0d-4f35-a6d2-9b3c5e7f0a18 | tcp         | IPv4      | 0.0.0.0/0        | 443:443    | ingress   | None                                 |
+        | 6e1a3c5b-9d2f-4a70-8b64-0c2e4a6f8d13 | tcp         | IPv4      | 198.51.100.0/28  | 22:22      | ingress   | None                                 |
+        | 8f0b2d4c-1a3e-4c59-b7d8-2e4a6c8f0b35 | None        | IPv4      | 0.0.0.0/0        |            | egress    | None                                 |
+        +--------------------------------------+-------------+-----------+------------------+------------+-----------+--------------------------------------+
+    - match: "openstack security group rule list web"
+      evidence: no-ssh-rule
+      output: |
+        +--------------------------------------+-------------+-----------+------------------+------------+-----------+--------------------------------------+
+        | ID                                   | IP Protocol | Ethertype | IP Range         | Port Range | Direction | Remote Security Group                |
+        +--------------------------------------+-------------+-----------+------------------+------------+-----------+--------------------------------------+
+        | 2a6f0c18-5d3e-4b7a-9c41-8e0d1f2a3b64 | tcp         | IPv4      | 0.0.0.0/0        | 80:80      | ingress   | None                                 |
+        | 4c8e1a29-7b0d-4f35-a6d2-9b3c5e7f0a18 | tcp         | IPv4      | 0.0.0.0/0        | 443:443    | ingress   | None                                 |
+        | 8f0b2d4c-1a3e-4c59-b7d8-2e4a6c8f0b35 | None        | IPv4      | 0.0.0.0/0        |            | egress    | None                                 |
+        +--------------------------------------+-------------+-----------+------------------+------------+-----------+--------------------------------------+
+    - match: "openstack console log show web-01 --lines 5"
+      output: |
+        [  OK  ] Started OpenBSD Secure Shell server.
+        [  OK  ] Reached target Multi-User System.
+        web-01 login:
+
+hypotheses:
+  - id: no-ssh-rule
+    text: "The security group web has no ingress rule for TCP port 22, so the instance's port drops the jump hosts' packets. HTTP works because ports 80 and 443 have rules."
+    correct: true
+  - id: sshd-down
+    text: "sshd isn't running on the instance."
+    feedback: "The console log shows the SSH server started, and the failure is a timeout, not a refusal. A stopped sshd answers with \"Connection refused\"; a security group silently drops packets."
+  - id: no-route
+    text: "There is no route or floating IP to the instance."
+    feedback: "The same floating IP serves the website over HTTP from the same jump host, so the path works. Only port 22 is affected."
+  - id: instance-error
+    text: "The instance is unhealthy."
+    feedback: "It is ACTIVE, the console log is clean and nginx answers 200. Nothing is wrong with the instance itself."
+
+actions:
+  - id: allow-ssh-from-jumps
+    label: "openstack security group rule create --ingress --protocol tcp --dst-port 22 --remote-ip 198.51.100.0/28 web"
+    kind: fix
+    feedback: "Port 22 is allowed from the jump-host range only, matching the policy. The group stays default-deny for everything else."
+  - id: allow-ssh-anywhere
+    label: "openstack security group rule create --protocol tcp --dst-port 22 web (no --remote-ip)"
+    kind: wrong
+    feedback: "That works, and it opens SSH to the whole Internet: when --remote-ip is left out, the rule's source defaults to 0.0.0.0/0. The ticket said to keep it to the jump hosts."
+  - id: add-default-group
+    label: "Attach the project's default security group to web-01"
+    kind: wrong
+    feedback: "The default group is itself default-deny for ingress, so it does not open SSH to the jump hosts, and it adds rules nobody reviewed for this host."
+  - id: rebuild
+    label: "Delete web-01 and launch it again"
+    kind: destructive
+    feedback: "The instance is fine; a rebuild loses its state and would hit the same security group. The group is missing a rule, nothing else."
+
+solution_paths:
+  - [allow-ssh-from-jumps]
+
+key_evidence: [ssh-timeout, http-works, no-ssh-rule]
+
+evidence_labels:
+  ssh-timeout: "Port 22 times out"
+  http-works: "Port 80 on the same floating IP connects"
+  no-ssh-rule: "The security group has rules for 80, 443 and egress, none for 22"
+
+hints:
+  nudge: "A timeout and a refusal mean different things. And one port works while another doesn't."
+  direction: "List the rules of the security group on web-01."
+  answer: "Add an ingress rule for TCP 22 from 198.51.100.0/28 only. Leaving out --remote-ip would open it to 0.0.0.0/0."
+
+analogy:
+  title: "The reception desk with a guest list"
+  text: |
+    The building lets visitors in for the public lobby, but the desk only
+    admits people to the server room if their name is on a list. Nobody put
+    the office team on the list, so they wait at the desk until they give up.
+
+debrief:
+  root_cause: |
+    Security groups are allow-lists: nothing is admitted unless a rule says
+    so. web had rules for HTTP and HTTPS and none for SSH, so packets for
+    port 22 were silently dropped, which looks like a timeout. The fix is a
+    rule for port 22 whose source is the jump-host range, not the default
+    of anywhere.
+  ideal_path:
+    - "Note the timeout (not a refusal) and that port 80 connects on the same IP."
+    - "Check the instance: ACTIVE, console log healthy."
+    - "List the security group rules: no rule for 22."
+    - "Add the rule scoped to 198.51.100.0/28 and retry the port 22 check."
+  real_world: |
+    Always pass --remote-ip (or --remote-group) when you create a rule.
+    Reviewing the default source is the cheapest security audit there is.
+
+concepts:
+  - term: "Security group"
+    text: "A set of allow rules that Neutron applies to an instance's network port. Traffic that matches no rule is dropped."
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+  - term: "Floating IP"
+    text: "A public address mapped to an instance's private address by the project's router."
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+
+sources:
+  - title: "Neutron: Networking concepts (security groups: default deny, allow rules)"
+    url: "https://docs.openstack.org/neutron/latest/admin/intro-os-networking.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: security group rule create (--remote-ip defaults to 0.0.0.0/0, --ingress is the default direction)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/security-group-rule.html"
+    retrieved: 2026-10-26

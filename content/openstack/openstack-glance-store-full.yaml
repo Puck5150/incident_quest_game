@@ -1,0 +1,207 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-glance-store-full
+track: openstack
+difficulty: 2
+title: "Uploading the new hardened Ubuntu image fails, and the image is stuck"
+par_minutes: 12
+
+ticket:
+  from: "Security engineering"
+  severity: SEV3
+  body: |
+    We need the hardened Ubuntu 24.04 image in the cloud today for the audit.
+    openstack image create fails with an HTTP 413 partway through, and the
+    new image sits in the list as "killed". Retrying just does the same
+    thing. Somebody suggested deleting files by hand to make room. The CI
+    team says any ci-snap-* image older than 30 days is disposable.
+
+environment: |
+  Glance uses the file store on image-01: the images live under
+  /var/lib/glance/images/ on a dedicated 100 GB volume, which is also the
+  filesystem's only content. The CI project saves a snapshot image every
+  night, named ci-snap-YYYYMMDD. The hardened image is a 6 GB qcow2.
+
+diagram:
+  nodes:
+    - { id: client, label: "openstack image create", col: 0, row: 0, status: ok }
+    - { id: glance, label: "glance-api", col: 1, row: 0, status: degraded }
+    - { id: store, label: "/var/lib/glance/images (100 GB)", col: 2, row: 0, status: down }
+  edges:
+    - { from: client, to: glance }
+    - { from: glance, to: store }
+
+terminal:
+  prompt: "ops@image-01:~$"
+  commands:
+    - match: "df -h /var/lib/glance/images"
+      when_actions: [delete-stale-snaps]
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/vdb         99G   39G   55G  42% /var/lib/glance/images
+    - match: "df -h /var/lib/glance/images"
+      evidence: store-full
+      output: |
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/vdb         99G   99G     0 100% /var/lib/glance/images
+    - match: "openstack image list --long -c Name -c Status -c Size -c Project"
+      when_actions: [delete-stale-snaps, delete-killed-image]
+      output: |
+        +-------------------------+--------+-------------+----------------------------------+
+        | Name                    | Status | Size        | Project                          |
+        +-------------------------+--------+-------------+----------------------------------+
+        | ubuntu-24.04            | active |  3221225472 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | ubuntu-22.04            | active |  4294967296 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | debian-12               | active |  2147483648 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | ci-snap-20261025        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20261024        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20261023        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        +-------------------------+--------+-------------+----------------------------------+
+    - match: "openstack image list --long -c Name -c Status -c Size -c Project"
+      when_actions: [delete-stale-snaps]
+      output: |
+        +-------------------------+--------+-------------+----------------------------------+
+        | Name                    | Status | Size        | Project                          |
+        +-------------------------+--------+-------------+----------------------------------+
+        | ubuntu-24.04            | active |  3221225472 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | ubuntu-22.04            | active |  4294967296 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | debian-12               | active |  2147483648 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | hardened-ubuntu-24.04   | killed |           0 | 8e7d6c5b4a39281706f5e4d3c2b1a098 |
+        | ci-snap-20261025        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20261024        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20261023        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        +-------------------------+--------+-------------+----------------------------------+
+    - match: "openstack image list --long -c Name -c Status -c Size -c Project"
+      evidence: many-snaps
+      output: |
+        +-------------------------+--------+-------------+----------------------------------+
+        | Name                    | Status | Size        | Project                          |
+        +-------------------------+--------+-------------+----------------------------------+
+        | ubuntu-24.04            | active |  3221225472 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | ubuntu-22.04            | active |  4294967296 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | debian-12               | active |  2147483648 | a1b2c3d4e5f60718293a4b5c6d7e8f90 |
+        | hardened-ubuntu-24.04   | killed |           0 | 8e7d6c5b4a39281706f5e4d3c2b1a098 |
+        | ci-snap-20261025        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20261024        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20261023        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20260918        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20260917        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20260916        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20260915        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20260914        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        | ci-snap-20260913        | active | 10737418240 | 5d4c3b2a190807f6e5d4c3b2a1908f7e |
+        +-------------------------+--------+-------------+----------------------------------+
+    - match: "openstack image create --file hardened-ubuntu-24.04.qcow2 --disk-format qcow2 --container-format bare hardened-ubuntu-24.04"
+      when_actions: [delete-stale-snaps, delete-killed-image]
+      output: |
+        +------------------+------------------------------------------------------+
+        | Field            | Value                                                |
+        +------------------+------------------------------------------------------+
+        | name             | hardened-ubuntu-24.04                                |
+        | status           | active                                               |
+        | size             | 6442450944                                           |
+        +------------------+------------------------------------------------------+
+    - match: "openstack image create --file hardened-ubuntu-24.04.qcow2 --disk-format qcow2 --container-format bare hardened-ubuntu-24.04"
+      evidence: http-413
+      output: |
+        HTTP 413 Request Entity Too Large: Image storage media is full: There is not enough disk space on the image storage media. (HTTP 413)
+
+logs:
+  - name: "/var/log/glance/api.log (image-01)"
+    evidence: storage-full-log
+    lines: |
+      2026-10-26 13:41:07 ERROR glance.api.v2.image_data [req-4f1a... ] Image storage media is full: There is not enough disk space on the image storage media.
+      2026-10-26 13:41:07 INFO glance.api.v2.image_data [req-4f1a... ] Setting image 8c2e... to status killed
+
+hypotheses:
+  - id: store-full
+    text: "The Glance file store is out of space (the volume is at 100%). The nightly CI snapshots fill it, and the hardened image can't be written, which killed that upload."
+    correct: true
+  - id: image-too-big
+    text: "The image is bigger than Glance's maximum image size."
+    feedback: "The maximum (image_size_cap) defaults to 1 TB and the image is 6 GB. The error also says the storage media is full, not that the image is too large."
+  - id: quota
+    text: "The security team's user storage quota is exhausted."
+    feedback: "A per-user storage quota would be reported as an exceeded quota. This error names the storage media itself."
+  - id: network
+    text: "The upload connection dropped partway."
+    feedback: "Glance answered with a deliberate 413 and logged \"Image storage media is full\". It reached the server and was refused for lack of space."
+
+actions:
+  - id: delete-stale-snaps
+    label: "openstack image delete the six ci-snap-* images older than 30 days (20260913 to 20260918)"
+    kind: fix
+    feedback: "Glance removes the records and their data from the store, so 60 GB is really freed and the database stays consistent. Only the snapshots the CI team said were disposable are removed; the three recent ones stay."
+  - id: delete-killed-image
+    label: "openstack image delete hardened-ubuntu-24.04 (the killed placeholder), then upload again"
+    kind: fix
+    feedback: "The failed upload left a record with no data. Removing it and uploading again gives a clean image; leaving it would leave a confusing duplicate name."
+  - id: rm-files
+    label: "rm the oldest files from /var/lib/glance/images by hand"
+    kind: destructive
+    feedback: "Glance's database still lists those images as active, so instances and builds that use them will fail at boot with a missing image. Images are removed through the API, which removes the data and the record together."
+  - id: raise-cap
+    label: "Raise image_size_cap in glance-api.conf"
+    kind: wrong
+    feedback: "The cap is 1 TB and nothing here is anywhere near it. The disk is full; a larger limit adds no space."
+  - id: symlink
+    label: "Point filesystem_store_datadir at /tmp"
+    kind: wrong
+    feedback: "Glance would write new images to storage that is cleared at reboot, and the existing images would no longer be found where Glance now looks."
+
+solution_paths:
+  - [delete-stale-snaps, delete-killed-image]
+
+key_evidence: [http-413, store-full, many-snaps, storage-full-log]
+
+evidence_labels:
+  http-413: "The upload fails with HTTP 413: Image storage media is full"
+  store-full: "The Glance volume is at 100%"
+  many-snaps: "Nine 10 GB nightly CI snapshots are in the store, the oldest from mid-September"
+  storage-full-log: "glance-api logged the storage-full error and set the image to killed"
+
+hints:
+  nudge: "413 sounds like \"too big\", but read the whole message. What does it say is full?"
+  direction: "Check the filesystem under the Glance store, then list what is stored there."
+  answer: "The store is full of old nightly snapshots. Delete the disposable ones through openstack image delete (not rm), delete the killed placeholder, and upload again."
+
+analogy:
+  title: "The warehouse that refused a pallet"
+  text: |
+    The delivery driver reaches the dock with a pallet and is turned away:
+    the warehouse is full of last season's stock. Burning boxes off the
+    shelves by hand leaves the stock list saying they exist. The clerk has
+    to check items off properly to clear the space.
+
+debrief:
+  root_cause: |
+    The nightly CI snapshots (10 GB each, none ever cleaned up) filled the
+    100 GB file store. glance-api refused the new image with HTTP 413
+    "Image storage media is full" and set the half-created image to
+    killed, which is the status for an upload that failed. The fix is to
+    free space through the API so the images and their data are removed
+    together, remove the dead placeholder and upload again.
+  ideal_path:
+    - "Read the whole error: the storage media is full."
+    - "Check df on the Glance store: 100%."
+    - "List the images: the killed placeholder and weeks of CI snapshots."
+    - "Delete the disposable snapshots with openstack image delete."
+    - "Delete the killed placeholder and upload again."
+  real_world: |
+    Put a retention job on anything that produces images every night, and
+    alert on the store at 80%, long before an upload fails.
+
+concepts:
+  - term: "Glance image status"
+    text: "queued means the ID is reserved with no data yet, saving means data is arriving, active means it is ready to use, and killed means the upload failed so the image can't be read."
+    url: "https://docs.openstack.org/glance/latest/user/statuses.html"
+  - term: "File store"
+    text: "A Glance backend that keeps image data as files in one directory (filesystem_store_datadir, /var/lib/glance/images/ by default). Its capacity is the capacity of that filesystem."
+    url: "https://docs.openstack.org/glance/latest/configuration/configuring.html"
+
+sources:
+  - title: "Glance: image statuses (queued, saving, active, killed)"
+    url: "https://docs.openstack.org/glance/latest/user/statuses.html"
+    retrieved: 2026-10-26
+  - title: "Glance: configuring (filesystem_store_datadir, image_size_cap, user_storage_quota)"
+    url: "https://docs.openstack.org/glance/latest/configuration/configuring.html"
+    retrieved: 2026-10-26

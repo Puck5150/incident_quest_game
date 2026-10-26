@@ -1328,3 +1328,10 @@ the labels and tests use the quoted form.
 - [ ] gcp-iam-groups-access: "only security keys" 2SV method restriction is unverified; passkeys wording was dropped.
 - [ ] traffic-spike AWS origin lock: the secret custom header / VPC origin facts are from memory; add sources.
 - [ ] Known limits: acr-identity is credited for az-outage without teaching that the registry itself must be zone-redundant; the origin-locked options bundle the WAF with the lock-down, so the WAF is not tested separately.
+
+## openstack (2026-10-26 batch 1)
+- [ ] openstack-auth-missing-domain: the exact Keystone 400 text ("Expecting to find domain in user ...") is from community reports, not the docs; confirm the wording and that the user error comes before the project one.
+- [ ] openstack-secgroup-ssh-missing: security group rule list column layout (newer releases add Remote Address Group); `nc` timeout wording is OpenBSD netcat's.
+- [ ] openstack-member-role-missing: `role assignment list --effective` expanding implied roles (member -> reader) and its column layout; the "Policy doesn't allow ... (HTTP 403)" line is from the oslo.policy default message, not printed in the Nova docs.
+- [ ] openstack-quota-exceeded: "Quota exceeded for cores: Requested 8, but already used 20 of 20 cores (HTTP 403)" is from community reports; `quota show --usage` row set is trimmed to three resources.
+- [ ] openstack-glance-store-full: the CLI's rendering of Glance's 413 and the exact "Image storage media is full" text are from Glance's source strings and bug reports, not a printed example.

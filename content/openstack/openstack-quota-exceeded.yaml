@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-quota-exceeded
+track: openstack
+difficulty: 2
+title: "The CI project can't start its new build worker: quota exceeded"
+par_minutes: 10
+
+ticket:
+  from: "CI team lead"
+  severity: SEV4
+  body: |
+    Our new 8-vCPU build worker won't launch: "Quota exceeded for cores".
+    We only run a handful of small runners, so I don't see how we're out of
+    cores. The old pipeline's runners are retired and we've confirmed they
+    can all go. Please get the worker launched. Do not just give us
+    unlimited, finance reviews our quota every quarter.
+
+environment: |
+  You are the cloud operator with admin access. The project ci has the
+  default compute quota of 20 cores. Its servers are four ci-runner-legacy-*
+  instances (4 vCPU each) from a pipeline that was retired in August, and
+  one ci-runner-01 (4 vCPU) that is in use. The new worker needs 8 vCPU.
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack quota show --usage ci"
+      when_actions: [delete-legacy]
+      output: |
+        +--------------------+-------+--------+----------+
+        | Resource           | Limit | In Use | Reserved |
+        +--------------------+-------+--------+----------+
+        | cores              |    20 |      4 |        0 |
+        | instances          |    10 |      1 |        0 |
+        | ram                | 51200 |   8192 |        0 |
+        +--------------------+-------+--------+----------+
+    - match: "openstack quota show --usage ci"
+      evidence: cores-at-limit
+      output: |
+        +--------------------+-------+--------+----------+
+        | Resource           | Limit | In Use | Reserved |
+        +--------------------+-------+--------+----------+
+        | cores              |    20 |     20 |        0 |
+        | instances          |    10 |      5 |        0 |
+        | ram                | 51200 |  40960 |        0 |
+        +--------------------+-------+--------+----------+
+    - match: "openstack server list --project ci --long -c Name -c Status -c Flavor"
+      when_actions: [delete-legacy]
+      output: |
+        +----------------+--------+----------+
+        | Name           | Status | Flavor   |
+        +----------------+--------+----------+
+        | ci-runner-01   | ACTIVE | m1.large |
+        +----------------+--------+----------+
+    - match: "openstack server list --project ci --long -c Name -c Status -c Flavor"
+      evidence: legacy-runners
+      output: |
+        +--------------------+--------+----------+
+        | Name               | Status | Flavor   |
+        +--------------------+--------+----------+
+        | ci-runner-01       | ACTIVE | m1.large |
+        | ci-runner-legacy-1 | ACTIVE | m1.large |
+        | ci-runner-legacy-2 | ACTIVE | m1.large |
+        | ci-runner-legacy-3 | ACTIVE | m1.large |
+        | ci-runner-legacy-4 | ACTIVE | m1.large |
+        +--------------------+--------+----------+
+    - match: "openstack flavor show m1.large -c vcpus -c ram"
+      output: |
+        +-------+-------+
+        | Field | Value |
+        +-------+-------+
+        | ram   | 8192  |
+        | vcpus | 4     |
+        +-------+-------+
+
+logs:
+  - name: "Failed launch of ci-worker-big (from the CI team's pipeline log)"
+    evidence: quota-message
+    lines: |
+      Error creating server: Quota exceeded for cores: Requested 8, but already used 20 of 20 cores (HTTP 403)
+
+hypotheses:
+  - id: stale-usage
+    text: "The project's 20-core quota is fully used. Five m1.large servers use 4 vCPU each, and four of them are the retired legacy runners, so the new worker has nowhere to fit. The right move is to remove the instances nobody needs."
+    correct: true
+  - id: quota-too-low
+    text: "20 cores is simply too small for the CI project and the quota must be raised."
+    feedback: "It may be someday, but the evidence says otherwise now: 16 of the 20 cores are held by instances the team has retired. Raising the quota would pay for idle servers. Reclaim first, and only ask for more if real demand doesn't fit."
+  - id: scheduler
+    text: "No compute host has enough capacity for 8 vCPU."
+    feedback: "A capacity failure is a scheduling error (\"No valid host was found\") raised after quota passes. This one is rejected earlier, at the project's quota."
+  - id: bug
+    text: "Nova's quota accounting is wrong."
+    feedback: "The numbers add up: five m1.large servers are 5 x 4 = 20 cores, exactly what the quota shows in use."
+
+actions:
+  - id: delete-legacy
+    label: "openstack server delete ci-runner-legacy-1 ci-runner-legacy-2 ci-runner-legacy-3 ci-runner-legacy-4 (the four retired runners)"
+    kind: fix
+    feedback: "That frees 16 cores, leaving 16 available for the 8-vCPU worker, with no change to the limit finance reviews. The in-use runner is untouched."
+  - id: unlimited
+    label: "openstack quota set --cores -1 ci (unlimited)"
+    kind: wrong
+    feedback: "The team asked specifically not to do this. An unlimited quota removes the project's ceiling: a runaway pipeline can then consume the cloud's compute. Quotas are the control, not an obstacle."
+  - id: raise-default
+    label: "Raise the default cores quota in nova.conf for every project"
+    kind: wrong
+    feedback: "That changes the ceiling for every project in the cloud to unblock one, and needs a configuration change and service restarts. A single project's limit is set per project, and only when real demand justifies it."
+  - id: delete-all
+    label: "openstack server delete every server in the ci project"
+    kind: destructive
+    feedback: "ci-runner-01 is in use. Deleting it stops the live pipeline, and its state is lost."
+
+solution_paths:
+  - [delete-legacy]
+
+key_evidence: [quota-message, cores-at-limit, legacy-runners]
+
+evidence_labels:
+  quota-message: "The launch failed: Requested 8, already used 20 of 20 cores"
+  cores-at-limit: "ci is using 20 of its 20 cores"
+  legacy-runners: "Four ci-runner-legacy-* servers are still running"
+
+hints:
+  nudge: "The ticket says \"a handful of small runners\". What is actually using the 20 cores?"
+  direction: "Look at the project's usage against its limits, then at the servers behind it."
+  answer: "Four retired legacy runners hold 16 of the 20 cores. Delete them (not the live runner) and launch the new worker. Don't set the quota to unlimited."
+
+analogy:
+  title: "The parking permit for twenty spaces"
+  text: |
+    A company has a permit for twenty parking spaces. Five of them hold
+    cars. Four belong to a department that closed months ago and nobody
+    drove away. The new delivery van can't park, but the answer isn't to
+    ask the council for unlimited permits; it is to move the abandoned cars.
+
+debrief:
+  root_cause: |
+    A project quota limits what the project may consume, whether or not the
+    resources are doing anything. Four retired runners were still running
+    and held 16 of the 20 cores, so the 8-vCPU worker was refused with
+    "Quota exceeded for cores". Reclaiming what is unused solves it without
+    weakening the control.
+  ideal_path:
+    - "Read the error: Requested 8, already used 20 of 20."
+    - "Check the project's quota and usage."
+    - "List what is using the cores: four retired runners."
+    - "Delete the retired runners, not the live one."
+    - "Re-check usage."
+  real_world: |
+    Quota errors are a prompt to audit what is running. Tag servers with an
+    owner and a purpose so cleanup doesn't need a conversation.
+
+concepts:
+  - term: "Quota"
+    text: "A per-project ceiling on resources such as instances, cores and RAM. Requests that would exceed it are refused."
+    url: "https://docs.openstack.org/nova/latest/user/quotas.html"
+  - term: "Flavor"
+    text: "A named instance size: how many virtual CPUs, how much RAM and how much disk a server gets."
+    url: "https://docs.openstack.org/nova/latest/user/flavors.html"
+
+sources:
+  - title: "Nova: quotas (instances, cores and ram per project; default quotas)"
+    url: "https://docs.openstack.org/nova/latest/user/quotas.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: quota show (--usage) and quota set"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/quota.html"
+    retrieved: 2026-10-26
+  - title: "Nova: flavors"
+    url: "https://docs.openstack.org/nova/latest/user/flavors.html"
+    retrieved: 2026-10-26

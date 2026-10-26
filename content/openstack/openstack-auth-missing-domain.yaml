@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-auth-missing-domain
+track: openstack
+difficulty: 1
+title: "Every openstack command fails with a 400 on the new engineer's laptop"
+par_minutes: 8
+
+ticket:
+  from: "Alice (new platform engineer)"
+  severity: SEV5
+  body: |
+    I sourced the openrc file my teammate sent me and typed my password, but
+    every openstack command fails. I get an HTTP 400, not a "wrong password"
+    error, and I'm sure the password is right because I can log in to the
+    dashboard with it. My teammate's laptop works with the same file.
+
+environment: |
+  The cloud runs OpenStack with Keystone (identity API version 3) at
+  https://keystone.cloud.example.com:5000/v3. Alice's user is alice, in the
+  identity domain named Default, and she belongs to the project dev-platform
+  (also in the Default domain). Her teammate's openrc was written years ago
+  for an older setup and edited by hand.
+
+terminal:
+  prompt: "alice@laptop:~$"
+  commands:
+    - match: "openstack token issue"
+      when_actions: [add-domains]
+      output: |
+        +------------+-----------------------------------------------------------------+
+        | Field      | Value                                                           |
+        +------------+-----------------------------------------------------------------+
+        | expires    | 2026-10-26T15:30:12+0000                                        |
+        | id         | gAAAAABn...                                                     |
+        | project_id | 7d1b3a0c9e5f4c2a8b6d4e2f1a0c9b8d                                |
+        | user_id    | 3f9a1c7e5b2d4a6c8e0f1b3d5a7c9e2f                                |
+        +------------+-----------------------------------------------------------------+
+    - match: "openstack token issue"
+      evidence: http-400
+      output: |
+        Expecting to find domain in user. The server could not comply with the request since it is either malformed or otherwise incorrect. The client is assumed to be in error. (HTTP 400) (Request-ID: req-5c1f0b7a-2d1e-4a39-9a53-0e6b8f2d7c41)
+    - match: "openstack server list"
+      when_actions: [add-domains]
+      output: |
+        +--------------------------------------+---------+--------+------------------------+--------------+
+        | ID                                   | Name    | Status | Networks               | Image        |
+        +--------------------------------------+---------+--------+------------------------+--------------+
+        | 0b7e3a52-8c14-4f6d-9d2a-1e5c7b9a3f40 | api-dev | ACTIVE | dev-net=10.20.0.14     | ubuntu-24.04 |
+        +--------------------------------------+---------+--------+------------------------+--------------+
+    - match: "openstack server list"
+      output: |
+        Expecting to find domain in user. The server could not comply with the request since it is either malformed or otherwise incorrect. The client is assumed to be in error. (HTTP 400) (Request-ID: req-8a2d6e91-4b07-4c58-b1d3-7f0e5a9c2b64)
+
+files:
+  - path: "/home/alice/openrc"
+    language: bash
+    evidence: openrc-no-domain
+    content: |
+      #!/usr/bin/env bash
+      export OS_AUTH_URL=https://keystone.cloud.example.com:5000/v3
+      export OS_PROJECT_NAME="dev-platform"
+      export OS_USERNAME="alice"
+      echo "Please enter your OpenStack password for project $OS_PROJECT_NAME as user $OS_USERNAME: "
+      read -sr OS_PASSWORD_INPUT
+      export OS_PASSWORD=$OS_PASSWORD_INPUT
+      export OS_REGION_NAME="RegionOne"
+      export OS_INTERFACE=public
+      export OS_IDENTITY_API_VERSION=3
+
+hypotheses:
+  - id: missing-domain
+    text: "Keystone v3 users and projects belong to domains, so a login by name must say which domain. The openrc sets neither OS_USER_DOMAIN_NAME nor OS_PROJECT_DOMAIN_NAME."
+    correct: true
+  - id: wrong-password
+    text: "Alice typed the wrong password."
+    feedback: "A wrong password gets a 401 \"The request you have made requires authentication\". This is a 400 (malformed request), and the message names the missing piece: the domain."
+  - id: keystone-down
+    text: "Keystone is down or unreachable."
+    feedback: "Keystone answered with a structured error and a request ID, so the endpoint is up and reachable. It rejected the request as incomplete."
+  - id: wrong-url
+    text: "OS_AUTH_URL points at the wrong place."
+    feedback: "The URL is the Keystone v3 endpoint the error came from. A wrong URL would time out or return a different error, not a Keystone message about domains."
+
+actions:
+  - id: add-domains
+    label: "Add OS_USER_DOMAIN_NAME=Default and OS_PROJECT_DOMAIN_NAME=Default to openrc and source it again"
+    kind: fix
+    feedback: "The token request now says which domain alice and dev-platform live in, so Keystone can find them. The password was never the problem."
+  - id: use-admin-rc
+    label: "Source the admin openrc from the controller instead"
+    kind: wrong
+    feedback: "It would work, because that file sets the domains. It also hands a new engineer the cloud admin's credentials, so everything she types runs as admin. Give her own account the right environment."
+  - id: reset-password
+    label: "Ask an admin to reset Alice's password"
+    kind: wrong
+    feedback: "The password is fine: the same one works in the dashboard. A reset changes nothing about the missing domain."
+  - id: restart-keystone
+    label: "Restart Keystone on the controllers"
+    kind: destructive
+    feedback: "That interrupts authentication for everyone in the cloud to fix a client file. Keystone was healthy."
+
+solution_paths:
+  - [add-domains]
+
+key_evidence: [http-400, openrc-no-domain]
+
+evidence_labels:
+  http-400: "The error is an HTTP 400: Expecting to find domain in user"
+  openrc-no-domain: "openrc sets the user and project but no domain variables"
+
+hints:
+  nudge: "A wrong password and a missing piece of information produce different HTTP codes. Which one is this?"
+  direction: "Read the error text, then compare openrc with what Keystone v3 needs to identify a user and a project."
+  answer: "openrc has no OS_USER_DOMAIN_NAME or OS_PROJECT_DOMAIN_NAME. Add both (Default) and source it again."
+
+analogy:
+  title: "The mail addressed to \"Alice\" in a city of buildings"
+  text: |
+    A letter addressed only to "Alice, dev-platform" is returned by the post
+    office. The clerk needs to know which building to deliver to, and the
+    envelope doesn't say. Add the building and the same letter arrives.
+
+debrief:
+  root_cause: |
+    In Keystone v3 users and projects belong to domains, so a name-based
+    login has to say which domain they are in. The hand-edited openrc set
+    the identity API version to 3 but never named the user's or the
+    project's domain, and Keystone answered 400 because the request was
+    incomplete, not because the credentials were wrong.
+  ideal_path:
+    - "Read the error: HTTP 400 and \"Expecting to find domain\", not 401."
+    - "Read openrc: user and project set, no domain variables."
+    - "Add OS_USER_DOMAIN_NAME and OS_PROJECT_DOMAIN_NAME and source it again."
+    - "Verify with openstack token issue."
+  real_world: |
+    Download the openrc file from the dashboard instead of editing one by
+    hand; it carries the domain variables for your user and project.
+
+concepts:
+  - term: "Keystone domain"
+    text: "A collection of users and projects that defines an administrative boundary. In v3 a login by name must say which domain the user and the project are in."
+    url: "https://docs.openstack.org/keystone/latest/admin/identity-concepts.html"
+  - term: "openrc file"
+    text: "A shell script that exports the OS_* environment variables the openstack client reads: where to log in, as whom, and into which project."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/man/openstack.html"
+
+sources:
+  - title: "OpenStack client: authentication options and environment variables (OS_AUTH_URL, OS_USER_DOMAIN_NAME, OS_PROJECT_DOMAIN_NAME, OS_IDENTITY_API_VERSION)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/man/openstack.html"
+    retrieved: 2026-10-26
+  - title: "Keystone: identity concepts (domains)"
+    url: "https://docs.openstack.org/keystone/latest/admin/identity-concepts.html"
+    retrieved: 2026-10-26
