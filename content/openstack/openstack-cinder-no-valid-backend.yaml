@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-cinder-no-valid-backend
+track: openstack
+difficulty: 3
+title: "Every volume of the gold type ends in error: \"No valid backend was found\""
+par_minutes: 14
+
+ticket:
+  from: "Database team"
+  severity: SEV3
+  body: |
+    New volumes of type gold go to error immediately. Type silver works,
+    and so does standard. We need 50 GB gold volumes for the new database
+    nodes today. Last week's storage migration renamed some things, but
+    the Ceph cluster itself is healthy and not near full.
+
+environment: |
+  You are the cloud operator with admin access. Cinder has two back ends,
+  both Ceph: ceph-ssd (the fast tier) and ceph-hdd. The volume types are
+  gold and silver (both meant for the SSD tier) and standard (the HDD tier).
+  During last week's storage migration, the volume_backend_name label of
+  the SSD back end was changed in cinder.conf to ceph-ssd; the silver and
+  standard types were updated afterwards.
+
+diagram:
+  nodes:
+    - { id: api, label: "openstack volume create --type gold", col: 0, row: 0, status: ok }
+    - { id: sched, label: "cinder-scheduler", col: 1, row: 0, status: degraded }
+    - { id: be, label: "ceph-ssd / ceph-hdd", col: 2, row: 0, status: ok }
+  edges:
+    - { from: api, to: sched }
+    - { from: sched, to: be }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack volume type list --long"
+      when_actions: [fix-gold-type]
+      output: |
+        +----+----------+-----------+----------------------------------------+
+        | ID | Name     | Is Public | Properties                             |
+        +----+----------+-----------+----------------------------------------+
+        | a1 | gold     | True      | volume_backend_name='ceph-ssd'         |
+        | b2 | silver   | True      | volume_backend_name='ceph-ssd'         |
+        | c3 | standard | True      | volume_backend_name='ceph-hdd'         |
+        +----+----------+-----------+----------------------------------------+
+    - match: "openstack volume type list --long"
+      evidence: gold-points-wrong
+      output: |
+        +----+----------+-----------+----------------------------------------+
+        | ID | Name     | Is Public | Properties                             |
+        +----+----------+-----------+----------------------------------------+
+        | a1 | gold     | True      | volume_backend_name='ceph-gold'        |
+        | b2 | silver   | True      | volume_backend_name='ceph-ssd'         |
+        | c3 | standard | True      | volume_backend_name='ceph-hdd'         |
+        +----+----------+-----------+----------------------------------------+
+    - match: "openstack volume backend pool list --long"
+      evidence: backend-name-ssd
+      output: |
+        +------------------------+---------------------------------------------------------------+
+        | Name                   | Capabilities                                                  |
+        +------------------------+---------------------------------------------------------------+
+        | cinder@ceph-ssd#ceph   | {'volume_backend_name': 'ceph-ssd', 'free_capacity_gb': 4120} |
+        | cinder@ceph-hdd#ceph   | {'volume_backend_name': 'ceph-hdd', 'free_capacity_gb': 61800}|
+        +------------------------+---------------------------------------------------------------+
+    - match: "openstack volume service list"
+      evidence: backends-up
+      output: |
+        +------------------+----------------------+------+---------+-------+
+        | Binary           | Host                 | Zone | Status  | State |
+        +------------------+----------------------+------+---------+-------+
+        | cinder-scheduler | controller-01        | nova | enabled | up    |
+        | cinder-volume    | cinder@ceph-ssd      | nova | enabled | up    |
+        | cinder-volume    | cinder@ceph-hdd      | nova | enabled | up    |
+        +------------------+----------------------+------+---------+-------+
+    - match: "openstack volume create --size 50 --type gold db-vol-07"
+      when_actions: [fix-gold-type]
+      output: |
+        +--------+-----------+
+        | Field  | Value     |
+        +--------+-----------+
+        | name   | db-vol-07 |
+        | status | creating  |
+        | type   | gold      |
+        +--------+-----------+
+
+logs:
+  - name: "/var/log/cinder/cinder-scheduler.log (controller-01)"
+    evidence: filtered-out
+    lines: |
+      2026-10-26 13:22:41 WARNING cinder.scheduler.filter_scheduler [req-7c2e...] Filtering removed all hosts for the request with volume ID '5e3a...'. Filter results: AvailabilityZoneFilter: (start: 2, end: 2), CapacityFilter: (start: 2, end: 2), CapabilitiesFilter: (start: 2, end: 0)
+      2026-10-26 13:22:41 ERROR cinder.scheduler.flows.create_volume [req-7c2e...] Failed to run task: No valid backend was found. No weighed backends available
+
+hypotheses:
+  - id: label-mismatch
+    text: "The gold type's volume_backend_name is ceph-gold, but the SSD back end now reports ceph-ssd. No back end matches the type, so CapabilitiesFilter removes both of them."
+    correct: true
+  - id: backend-down
+    text: "A back end is down."
+    feedback: "Both cinder-volume services are up and both pools report capacity. Silver volumes on the same back end work."
+  - id: capacity
+    text: "The SSD pool is out of space."
+    feedback: "CapacityFilter passed both back ends (start 2, end 2) and the pool reports 4120 GB free. The filter that removed them was CapabilitiesFilter."
+  - id: zone
+    text: "The availability zone doesn't match."
+    feedback: "AvailabilityZoneFilter also passed both back ends. Only CapabilitiesFilter removed anything."
+
+actions:
+  - id: fix-gold-type
+    label: "openstack volume type set --property volume_backend_name=ceph-ssd gold"
+    kind: fix
+    feedback: "The gold type now names the label the SSD back end reports, the same one silver uses. The change is one property on one type. Existing volumes are not touched."
+  - id: unset-backend
+    label: "openstack volume type unset --property volume_backend_name gold"
+    kind: wrong
+    feedback: "With no back end named, gold volumes can land on any back end, including the HDD tier. The volume would be created, and the fast-tier promise to the database team silently lost."
+  - id: revert-conf
+    label: "Change the SSD back end's volume_backend_name in cinder.conf back to ceph-gold and restart cinder-volume"
+    kind: wrong
+    feedback: "That fixes gold and breaks silver, which was updated to ceph-ssd after the migration. It also restarts a storage service for a naming mismatch on one type."
+
+solution_paths:
+  - [fix-gold-type]
+
+key_evidence: [filtered-out, gold-points-wrong, backend-name-ssd, backends-up]
+
+evidence_labels:
+  filtered-out: "Scheduler log: CapabilitiesFilter removed both back ends (2 to 0)"
+  gold-points-wrong: "gold has volume_backend_name='ceph-gold'; silver has ceph-ssd"
+  backend-name-ssd: "The SSD pool reports volume_backend_name 'ceph-ssd'"
+  backends-up: "Both cinder-volume services are up"
+
+hints:
+  nudge: "Read which filter removed the back ends. The others passed."
+  direction: "Compare the gold type's properties with the name the SSD pool reports."
+  answer: "gold still points to ceph-gold. Set volume_backend_name=ceph-ssd on the gold type."
+
+analogy:
+  title: "The delivery to a depot that changed its name"
+  text: |
+    Orders marked for the Gold Depot keep coming back. The depot was
+    renamed Fast Depot during a move, and the orders for two other tiers
+    were relabelled. Nobody updated the one for Gold, so the driver can't
+    find a building with that name.
+
+debrief:
+  root_cause: |
+    A volume type picks a back end by matching its volume_backend_name
+    property against the label each back end reports. The migration changed
+    the SSD back end's label to ceph-ssd and updated silver and standard,
+    but gold still named ceph-gold. CapabilitiesFilter found no match and
+    the scheduler logged "No valid backend was found".
+  ideal_path:
+    - "Read the scheduler log: which filter emptied the list (CapabilitiesFilter)."
+    - "Check the back ends are up and have capacity: they are."
+    - "List the volume types with their properties: gold names ceph-gold."
+    - "Check what the back end reports: ceph-ssd."
+    - "Set gold's property to ceph-ssd and create the volume again."
+  real_world: |
+    When you rename a back end label, list every volume type that refers to
+    it in the same change. A grep for the old label is the cheapest test.
+
+concepts:
+  - term: "volume_backend_name"
+    text: "A label set on each Cinder back end in cinder.conf. A volume type's property of the same name tells the scheduler which back end may serve it. The configuration group name is a separate thing."
+    url: "https://docs.openstack.org/cinder/latest/admin/multi-backend.html"
+  - term: "CapabilitiesFilter"
+    text: "A scheduler filter that removes back ends whose reported capabilities don't match the volume type's properties."
+    url: "https://docs.openstack.org/cinder/latest/configuration/block-storage/scheduler-filters.html"
+
+sources:
+  - title: "Cinder: multiple storage back ends (volume_backend_name and volume types)"
+    url: "https://docs.openstack.org/cinder/latest/admin/multi-backend.html"
+    retrieved: 2026-10-26
+  - title: "Cinder: scheduler filters (CapabilitiesFilter, CapacityFilter)"
+    url: "https://docs.openstack.org/cinder/latest/configuration/block-storage/scheduler-filters.html"
+    retrieved: 2026-10-26

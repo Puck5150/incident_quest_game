@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-heat-stack-create-failed
+track: openstack
+difficulty: 3
+title: "The shop stack worked last month and now ends in CREATE_FAILED"
+par_minutes: 14
+
+ticket:
+  from: "Release engineer"
+  severity: SEV3
+  body: |
+    Our staging environment is a Heat stack, shop-stack, created from a
+    template nobody has touched since last month. Today's create ends in
+    CREATE_FAILED, and the stack show message is long and talks about a
+    nested resource I don't recognise. The template is unchanged and the
+    parameter file hasn't been edited. The project listing now shows a
+    network, a subnet and a router that we didn't create by hand.
+
+environment: |
+  shop-stack builds a network, subnet and router, then a ResourceGroup
+  (web_group) of two web servers as a nested stack. The servers boot from
+  the image named in the parameter image, which the pipeline sets to
+  ubuntu-22.04-lts. Two weeks ago the image team cleaned up the catalog
+  and renamed that image to ubuntu-22.04. The create was not run with
+  rollback enabled.
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack stack show shop-stack -c stack_status -c stack_status_reason"
+      output: |
+        +---------------------+----------------------------------------------------------------+
+        | Field               | Value                                                          |
+        +---------------------+----------------------------------------------------------------+
+        | stack_status        | CREATE_FAILED                                                  |
+        | stack_status_reason | Resource CREATE failed: resources.web_group.resources[0]: ...  |
+        +---------------------+----------------------------------------------------------------+
+    - match: "openstack stack failures list shop-stack"
+      evidence: image-not-found
+      output: |
+        shop-stack.web_group.resources[0].server:
+          resource_type: OS::Nova::Server
+          physical_resource_id:
+          status: CREATE_FAILED
+          status_reason: |
+            ResourceFailure: resources.server: Property error: resources.server.properties.image: Error validating value 'ubuntu-22.04-lts': The Image (ubuntu-22.04-lts) could not be found.
+    - match: "openstack image list -c Name -c Status"
+      evidence: image-renamed
+      output: |
+        +---------------+--------+
+        | Name          | Status |
+        +---------------+--------+
+        | ubuntu-24.04  | active |
+        | ubuntu-22.04  | active |
+        | debian-12     | active |
+        +---------------+--------+
+    - match: "openstack stack resource list shop-stack"
+      when_actions: [delete-failed-stack]
+      output: |
+        Stack not found: shop-stack
+    - match: "openstack stack resource list shop-stack"
+      evidence: leftovers
+      output: |
+        +---------------+--------------------------------------+-------------------------+-----------------+
+        | resource_name | physical_resource_id                 | resource_type           | resource_status |
+        +---------------+--------------------------------------+-------------------------+-----------------+
+        | net           | 4a7c1e93-5b02-4d68-9f3a-1c8e6b0d2a57 | OS::Neutron::Net        | CREATE_COMPLETE |
+        | subnet        | 9e2b6d40-7a13-4c85-b0f2-3d5a7c9e1b68 | OS::Neutron::Subnet     | CREATE_COMPLETE |
+        | router        | 2c6e0a84-1d37-4f59-8b3c-5e7a9c1d3f40 | OS::Neutron::Router     | CREATE_COMPLETE |
+        | web_group     | 7b1d3f59-0c26-4e84-a1d7-9f3b5d7a1c32 | OS::Heat::ResourceGroup | CREATE_FAILED   |
+        +---------------+--------------------------------------+-------------------------+-----------------+
+    - match: "openstack stack create --enable-rollback --wait --parameter image=ubuntu-22.04 -t shop.yaml shop-stack"
+      when_actions: [delete-failed-stack, recreate-with-image]
+      output: |
+        +------------------+--------------------------+
+        | Field            | Value                    |
+        +------------------+--------------------------+
+        | stack_name       | shop-stack               |
+        | stack_status     | CREATE_COMPLETE          |
+        +------------------+--------------------------+
+
+hypotheses:
+  - id: image-renamed
+    text: "The template's image parameter still says ubuntu-22.04-lts, but the image was renamed to ubuntu-22.04. Heat can't find an image by that name, so the servers in the nested group fail validation."
+    correct: true
+  - id: quota
+    text: "The project is out of quota for servers or networks."
+    feedback: "The failure text is a property error about the image. A quota failure would name the resource that was exhausted."
+  - id: heat-bug
+    text: "Heat itself is broken."
+    feedback: "Heat created the network, subnet and router and then reported precisely which property failed. It is working; the input is stale."
+  - id: nested-ghost
+    text: "The nested stack is damaged and has to be repaired."
+    feedback: "The nested group is only where the failure shows up. The stack failures list shows one failing resource and the error names its cause."
+
+actions:
+  - id: delete-failed-stack
+    label: "openstack stack delete --yes --wait shop-stack (removes the half-built network, subnet and router)"
+    kind: fix
+    feedback: "Heat tracks the resources it made, so deleting the stack removes them all cleanly and nothing is left behind or orphaned."
+  - id: recreate-with-image
+    label: "openstack stack create --enable-rollback --parameter image=ubuntu-22.04 -t shop.yaml shop-stack"
+    kind: fix
+    feedback: "The parameter now names the image that exists, so the nested servers validate. Rollback means a failed create removes what it built instead of leaving it behind."
+  - id: duplicate-image
+    label: "Upload a copy of the image named ubuntu-22.04-lts"
+    kind: wrong
+    feedback: "It would make this template work and leave a second copy of the data under an old name that the catalog clean-up deliberately retired. Fix the reference, not the catalog."
+  - id: retry-same
+    label: "Run the same create again"
+    kind: wrong
+    feedback: "The input is the same, so the failure is the same. The stack also exists in CREATE_FAILED and would need cleaning up first."
+  - id: manual-cleanup
+    label: "Delete the leftover network, subnet and router with the neutron commands"
+    kind: wrong
+    feedback: "Heat still lists them in the stack. Deleting them behind its back leaves the stack's record wrong. Let Heat delete what it created."
+
+solution_paths:
+  - [delete-failed-stack, recreate-with-image]
+
+key_evidence: [image-not-found, image-renamed, leftovers]
+
+evidence_labels:
+  image-not-found: "stack failures list: The Image (ubuntu-22.04-lts) could not be found"
+  image-renamed: "The catalog has ubuntu-22.04; there is no ubuntu-22.04-lts"
+  leftovers: "The failed create left a network, subnet and router in the stack"
+
+hints:
+  nudge: "The summary on stack show is cut off. A command exists that jumps to the failed resource."
+  direction: "List the stack's failures, then look at the image name in the error against the catalog."
+  answer: "The image was renamed. Delete the failed stack so Heat cleans up, then create it again with image=ubuntu-22.04."
+
+analogy:
+  title: "The shopping list with a product that was renamed"
+  text: |
+    Your list says "Premium Blend". The supermarket renamed it "Blend" last
+    month. The shop assistant fetches everything else on the list and then
+    returns without the coffee, and the trolley is half full of things you
+    don't need yet.
+
+debrief:
+  root_cause: |
+    The pipeline passed image=ubuntu-22.04-lts, which no longer exists
+    because the image team renamed it. Heat built the network, subnet and
+    router first, then the nested server group failed validation on the
+    image, ending in CREATE_FAILED. Without rollback the partial stack
+    stayed behind.
+  ideal_path:
+    - "Read the stack status, then use stack failures list to jump to the failing resource."
+    - "The error: image ubuntu-22.04-lts not found."
+    - "Check the image catalog: it was renamed to ubuntu-22.04."
+    - "Delete the failed stack so Heat cleans up its resources."
+    - "Create again with the correct image, with rollback on."
+  real_world: |
+    Pass images by ID or through a parameter with a glance.image constraint,
+    so a rename can't surprise a template. Enable rollback so a failed
+    create doesn't leave resources running.
+
+concepts:
+  - term: "Nested stack"
+    text: "A stack created inside another one, such as the members of a ResourceGroup. The error appears on the parent as a long path, but the cause is in the child."
+    url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html"
+  - term: "Rollback on create failure"
+    text: "With --enable-rollback, a stack whose create fails is deleted automatically along with the resources it built. Without it, the partial stack stays in CREATE_FAILED."
+    url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html"
+
+sources:
+  - title: "python-heatclient: stack failures list, stack resource list, stack create (--enable-rollback, --parameter, --wait), stack delete"
+    url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: image list"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/image-v2.html"
+    retrieved: 2026-10-26
