@@ -2,6 +2,17 @@
 # Command library: Linux. First matching entry wins, so specific forms come
 # before general ones. Matched against commands with spaces collapsed.
 
+- id: ls-count-entries
+  match: "^ls \\S+ \\| wc -l$"
+  summary: "Counts the entries in a directory. For /proc/<pid>/fd that is the number of file descriptors the process has open."
+  parts:
+    - { token: "ls <dir>", meaning: "List the directory, one name per line when piped." }
+    - { token: "| wc -l", meaning: "Count the lines." }
+  why: "Each entry in /proc/<pid>/fd is one open file or socket, so the count is how close a process is to its descriptor limit."
+  alternatives:
+    - { command: "lsof -p <pid> | wc -l", note: "The same count from lsof, with the file names available." }
+  docs: { title: "proc_pid_fd(5)", url: "https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html" }
+
 - id: df-inodes
   match: "^(sudo )?df -i"
   summary: "Shows how many inodes each filesystem has and how many are used, instead of bytes."
@@ -547,3 +558,102 @@
     - { command: "grep taint ~/.bash_history", note: "The history file on disk; timestamps are the #-lines above each command." }
     - { command: "HISTTIMEFORMAT='%F %T ' history", note: "Show times for a session that doesn't set it." }
   docs: { title: "Bash manual: Bash History Builtins", url: "https://www.gnu.org/software/bash/manual/html_node/Bash-History-Builtins.html" }
+
+- id: lsof-deleted-open
+  match: "^(sudo )?lsof \\+L1$"
+  summary: "Lists open files that have been deleted (their link count is below one) and who still holds them."
+  parts:
+    - { token: "lsof", meaning: "List open files, one row per process and file descriptor." }
+    - { token: "+L1", meaning: "Show only files with a link count of less than 1: deleted from every directory but still open." }
+  why: "When df says a filesystem is full and du can't find the files, the missing space is almost always a deleted file that a process still has open."
+  alternatives:
+    - { command: "ls -l /proc/<pid>/fd", note: "The same information from one process's side: deleted targets are marked (deleted)." }
+    - { command: "df -h /var && du -sh /var", note: "The disagreement between the two is the symptom lsof +L1 explains." }
+  docs: { title: "lsof(8)", url: "https://man7.org/linux/man-pages/man8/lsof.8.html" }
+
+- id: logrotate-debug
+  match: "^(sudo )?logrotate -d "
+  summary: "Dry-runs a logrotate config and prints what it would do, without touching any log."
+  parts:
+    - { token: "logrotate", meaning: "Rotate, compress and expire log files according to a config." }
+    - { token: "-d", meaning: "Debug mode: print the actions and make no changes." }
+    - { token: "-f", meaning: "Force a rotation even if one isn't due; with -d it only prints what it would do." }
+    - { token: "/etc/logrotate.d/shop", meaning: "The config file to evaluate." }
+  why: "It shows whether a rotation would run and what scripts it would call, so a missing postrotate is visible before tonight's run."
+  alternatives:
+    - { command: "logrotate -f <config>", note: "Forces a real rotation now. Use only when you mean it." }
+  docs: { title: "logrotate(8)", url: "https://man7.org/linux/man-pages/man8/logrotate.8.html" }
+
+- id: ss-closewait-count
+  match: "^(sudo )?ss -tn state close-wait \\| wc -l$"
+  summary: "Counts TCP sockets in CLOSE_WAIT: the other side has hung up and this process never closed its end."
+  parts:
+    - { token: "ss", meaning: "Show socket statistics (the modern netstat)." }
+    - { token: "-t", meaning: "TCP sockets only." }
+    - { token: "-n", meaning: "Numeric addresses and ports; no name lookups." }
+    - { token: "state close-wait", meaning: "Filter to sockets in the CLOSE_WAIT state." }
+    - { token: "| wc -l", meaning: "Count the lines (one per socket, plus a header)." }
+  why: "CLOSE_WAIT is never the network's fault: the kernel is waiting for the application to call close(). A growing pile of them is an application leak."
+  alternatives:
+    - { command: "ss -s", note: "A summary of socket counts by state." }
+    - { command: "ss -tnp state close-wait", note: "Lists the sockets with the owning process." }
+  docs: { title: "ss(8)", url: "https://man7.org/linux/man-pages/man8/ss.8.html" }
+
+- id: systemd-analyze-critical-chain
+  match: "^systemd-analyze critical-chain "
+  summary: "Shows the chain of units that a service had to wait for during boot, with the time each one became active."
+  parts:
+    - { token: "systemd-analyze", meaning: "Inspect how the system booted and why it took as long as it did." }
+    - { token: "critical-chain", meaning: "Print the time-critical chain of ordering dependencies leading to the unit." }
+    - { token: "reports-api.service", meaning: "The unit to trace." }
+  why: "It answers \"what did this service wait for, and when did it start?\" Comparing the service's start time with network-online.target shows whether it was ordered after the network."
+  alternatives:
+    - { command: "systemctl list-dependencies reports-api.service", note: "The declared dependencies, without timing." }
+    - { command: "systemd-analyze blame", note: "Units ranked by how long each took to start." }
+  docs: { title: "systemd-analyze(1)", url: "https://www.freedesktop.org/software/systemd/man/latest/systemd-analyze.html" }
+
+- id: timedatectl-status
+  match: "^timedatectl( status)?$"
+  summary: "Shows the system's local and UTC time, time zone, and whether the clock is being synchronised."
+  parts:
+    - { token: "timedatectl", meaning: "Query and change the system clock and time zone settings." }
+  why: "One command that answers both \"what time does this host think it is?\" and \"is anything keeping it correct?\""
+  alternatives:
+    - { command: "chronyc tracking", note: "How far chrony says the clock is from NTP time." }
+    - { command: "date -u", note: "Just the current UTC time." }
+  docs: { title: "timedatectl(1)", url: "https://man7.org/linux/man-pages/man1/timedatectl.1.html" }
+
+- id: chronyc-sources
+  match: "^chronyc sources"
+  summary: "Lists the time servers chrony is using and whether any of them are answering."
+  parts:
+    - { token: "chronyc", meaning: "The command-line client for the chrony time daemon." }
+    - { token: "sources", meaning: "Show each configured source with its state, stratum, and reachability." }
+  why: "The Reach column is an octal history of the last eight polls: 0 means no reply has ever come back, so the path to the server is the problem, not the clock."
+  alternatives:
+    - { command: "chronyc sourcestats", note: "Statistics on each source's offset and drift." }
+  docs: { title: "chronyc(1)", url: "https://chrony-project.org/doc/4.5/chronyc.html" }
+
+- id: chronyc-tracking
+  match: "^chronyc tracking"
+  summary: "Shows whether chrony is synchronised, which server it follows, and how far off the system clock is."
+  parts:
+    - { token: "chronyc", meaning: "The command-line client for the chrony time daemon." }
+    - { token: "tracking", meaning: "Report the system clock's performance against its reference." }
+  why: "A reference ID of zeros and \"Not synchronised\" says chrony has never locked on to a server."
+  alternatives:
+    - { command: "timedatectl", note: "The systemd view of the same synchronisation state." }
+  docs: { title: "chronyc(1)", url: "https://chrony-project.org/doc/4.5/chronyc.html" }
+
+- id: ps-pid-etime
+  match: "^ps -o pid,ppid,etime,cmd -p "
+  summary: "Shows one process's id, its parent's id, how long it has been running, and its command line."
+  parts:
+    - { token: "ps", meaning: "Report a snapshot of processes." }
+    - { token: "-o pid,ppid,etime,cmd", meaning: "Choose the columns: process id, parent id, elapsed time, and command." }
+    - { token: "-p 2087", meaning: "Only the process with this id." }
+  why: "A parent id of 1 and an age of days tells you a process outlived whatever started it. That is what an orphan looks like."
+  alternatives:
+    - { command: "ps -ef --forest", note: "The whole process tree, to see parents and children." }
+    - { command: "pstree -p", note: "A compact tree with pids." }
+  docs: { title: "ps(1)", url: "https://man7.org/linux/man-pages/man1/ps.1.html" }

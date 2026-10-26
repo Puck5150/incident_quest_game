@@ -1,0 +1,281 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: clock-drift-auth-fails
+track: linux
+difficulty: 4
+title: "Logins with codes and API calls fail on one server, and the others are fine"
+par_minutes: 20
+
+ticket:
+  from: "Security operations"
+  severity: SEV3
+  body: |
+    On app-07 only, staff can't log in to the admin console with their
+    one-time codes, the payment gateway rejects its API calls with
+    "timestamp out of range", and TLS to the internal API fails with
+    "certificate is not yet valid". The same codes and calls work against
+    app-05 and app-06. Nothing was deployed.
+
+environment: |
+  app-07, app-05 and app-06 (Debian) are identical web nodes. They are
+  meant to sync time from two internal NTP servers, ntp1 (10.30.0.10) and
+  ntp2 (10.30.0.11), through chrony. Outbound traffic from app-07 passes
+  its host firewall (nftables) with a default policy of drop and a short
+  allow-list.
+
+diagram:
+  nodes:
+    - { id: app, label: "app-07", col: 0, row: 0, status: degraded }
+    - { id: chrony, label: "chrony", col: 1, row: 0, status: down }
+    - { id: ntp, label: "ntp1 / ntp2 (UDP 123)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: app, to: chrony }
+    - { from: chrony, to: ntp }
+
+terminal:
+  prompt: "ops@app-07:~$"
+  commands:
+    - match: "timedatectl"
+      when_actions: [enable-chrony, allow-ntp]
+      output: |
+        Local time: Mon 2026-10-26 10:21:04 UTC
+        Universal time: Mon 2026-10-26 10:21:04 UTC
+        Time zone: Etc/UTC (UTC, +0000)
+        System clock synchronized: yes
+        NTP service: active
+    - match: "timedatectl"
+      when_actions: [enable-chrony]
+      output: |
+        Local time: Mon 2026-10-26 10:29:41 UTC
+        Universal time: Mon 2026-10-26 10:29:41 UTC
+        Time zone: Etc/UTC (UTC, +0000)
+        System clock synchronized: no
+        NTP service: active
+    - match: "timedatectl"
+      evidence: not-synced
+      output: |
+        Local time: Mon 2026-10-26 10:29:41 UTC
+        Universal time: Mon 2026-10-26 10:29:41 UTC
+        Time zone: Etc/UTC (UTC, +0000)
+        System clock synchronized: no
+        NTP service: inactive
+    - match: "systemctl is-active chrony"
+      when_actions: [enable-chrony]
+      output: |
+        active
+    - match: "systemctl is-active chrony"
+      evidence: chrony-down
+      output: |
+        inactive
+    - match: "systemctl status chrony"
+      when_actions: [enable-chrony]
+      output: |
+        ● chrony.service - chrony, an NTP client/server
+             Active: active (running) since Mon 2026-10-26 10:22:05 UTC; 2s ago
+    - match: "systemctl status chrony"
+      evidence: chrony-disabled
+      output: |
+        ○ chrony.service - chrony, an NTP client/server
+             Loaded: loaded (/lib/systemd/system/chrony.service; disabled)
+             Active: inactive (dead)
+
+hypotheses:
+  - id: ntp-off
+    text: "app-07's clock isn't being synchronised: chrony is installed but disabled, so the clock has drifted away from the others."
+    correct: true
+  - id: wrong-timezone
+    text: "app-07 is set to the wrong time zone."
+    feedback: "timedatectl shows the zone is Etc/UTC, the same as the other nodes, and a time zone is only a display setting: the clock itself, in UTC, is what tokens and certificates compare."
+  - id: bad-tokens
+    text: "The one-time-code secrets on app-07 are corrupt."
+    feedback: "Codes, API timestamps and TLS validity all fail at once, and they're all time-based. Three unrelated corruptions would be a coincidence."
+  - id: ca-expired
+    text: "The internal CA certificate expired."
+    feedback: "The same CA works on app-05 and app-06. The message is \"not yet valid\" (the clock is behind the certificate's start date), not \"expired\"."
+
+actions:
+  - id: enable-chrony
+    label: "Enable and start chrony (systemctl enable --now chrony), and check the unit is the only time service running"
+    kind: fix
+    feedback: "chrony starts and will start at every boot. Time synchronisation is a service that must run, not a one-time correction."
+  - id: date-set
+    label: "date -s to set the clock to the right time by hand"
+    kind: wrong
+    feedback: "It fixes the clock for a while, and the drift returns. A manual step also jumps the clock, which can break running processes. The service that keeps it correct has to run."
+  - id: disable-checks
+    label: "Disable the timestamp check on the payment gateway client"
+    kind: wrong
+    feedback: "The check exists to reject replayed requests. Turning it off removes a protection to hide a bad clock."
+  - id: reboot
+    label: "sudo reboot"
+    kind: destructive
+    match_regex: "^sudo reboot$"
+    feedback: "A reboot does not enable a disabled service; app-07 comes back with the same drifting clock, minus several minutes of availability."
+
+solution_paths:
+  - [enable-chrony]
+
+key_evidence: [not-synced, chrony-disabled]
+
+evidence_labels:
+  not-synced: "timedatectl: System clock synchronized: no, NTP service inactive"
+  chrony-disabled: "chrony.service is installed but disabled"
+
+hints:
+  nudge: "Codes, API timestamps and certificates all depend on the same thing. What is it?"
+  direction: "Check whether the clock is synchronised and whether a time-sync service is running (timedatectl, systemctl)."
+  answer: "chrony is disabled on app-07. Enable and start it."
+
+analogy:
+  title: "One watch that stopped"
+  text: |
+    Everyone in the office checks their watch against the station clock
+    each morning. One person's watch was never wound, so it runs behind.
+    Their train tickets are stamped with the wrong time and the ticket
+    office turns them away.
+
+debrief:
+  root_cause: |
+    Authentication tokens, API signatures and certificate validity all
+    compare timestamps. app-07 had its time service disabled, so its clock
+    drifted; every time-based check failed together.
+  ideal_path:
+    - "Notice all three failures are time-based."
+    - "Check the sync status with timedatectl."
+    - "Find the time service disabled."
+    - "Enable it."
+  real_world: |
+    When unrelated things (TOTP, signed requests, TLS) fail on one host, check
+    the clock first. It costs one command.
+
+concepts:
+  - term: "NTP"
+    text: "A protocol where a host asks a time server for the correct time and adjusts its clock gradually."
+    url: "https://chrony-project.org/documentation.html"
+  - term: "Clock skew"
+    text: "The difference between one machine's clock and another's. Signed tokens and certificates tolerate only a small skew."
+    url: "https://man7.org/linux/man-pages/man1/timedatectl.1.html"
+
+sources:
+  - title: "timedatectl(1): Linux manual page"
+    url: "https://man7.org/linux/man-pages/man1/timedatectl.1.html"
+    retrieved: 2026-10-26
+  - title: "chrony documentation"
+    url: "https://chrony-project.org/documentation.html"
+    retrieved: 2026-10-26
+  - title: "systemctl(1): enable --now"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemctl.html"
+    retrieved: 2026-10-26
+  - title: "RFC 6238: TOTP, time-based one-time password"
+    url: "https://datatracker.ietf.org/doc/html/rfc6238"
+    retrieved: 2026-10-26
+
+stages:
+  - id: ntp-blocked
+    update: |
+      10:22 Reopened: chrony is running on app-07, but timedatectl still
+      says the clock is not synchronised eight minutes later, and the
+      codes still fail. app-05 and app-06 sync fine.
+    terminal:
+      commands:
+        - match: "chronyc sources"
+          when_actions: [allow-ntp]
+          output: |
+            MS Name/IP address         Stratum Poll Reach LastRx Last sample
+            ===============================================================================
+            ^* ntp1.internal                 2   6    17     5   +112us[ +310us] +/-  14ms
+            ^+ ntp2.internal                 2   6    17     5   -88us[ +120us] +/-  16ms
+        - match: "chronyc sources"
+          evidence: sources-unreachable
+          output: |
+            MS Name/IP address         Stratum Poll Reach LastRx Last sample
+            ===============================================================================
+            ^? ntp1.internal                 0   9     0     -     +0ns[   +0ns] +/-    0ns
+            ^? ntp2.internal                 0   9     0     -     +0ns[   +0ns] +/-    0ns
+        - match: "chronyc tracking"
+          when_actions: [allow-ntp]
+          output: |
+            Reference ID    : 0A1E000A (ntp1.internal)
+            Stratum         : 3
+            System time     : 0.000041 seconds fast of NTP time
+            Leap status     : Normal
+        - match: "chronyc tracking"
+          evidence: no-reference
+          output: |
+            Reference ID    : 00000000 ()
+            Stratum         : 0
+            Leap status     : Not synchronised
+        - match: "sudo nft list ruleset"
+          when_actions: [allow-ntp]
+          output: |
+            table inet filter {
+              chain output {
+                type filter hook output priority 0; policy drop;
+                ct state established,related accept
+                udp dport 53 accept
+                tcp dport { 443, 5432 } accept
+                ip daddr { 10.30.0.10, 10.30.0.11 } udp dport 123 accept
+              }
+            }
+        - match: "sudo nft list ruleset"
+          evidence: no-ntp-rule
+          output: |
+            table inet filter {
+              chain output {
+                type filter hook output priority 0; policy drop;
+                ct state established,related accept
+                udp dport 53 accept
+                tcp dport { 443, 5432 } accept
+              }
+            }
+    hypotheses:
+      - id: egress-blocked
+        text: "app-07's outbound firewall (default drop) has no rule for UDP 123, so chrony can't reach ntp1/ntp2 and the sources show Reach 0."
+        correct: true
+      - id: ntp-servers-down
+        text: "The NTP servers are down."
+        feedback: "app-05 and app-06 are syncing from the same servers right now. The servers answer; app-07's packets never leave."
+      - id: chrony-conf
+        text: "chrony's config lists the wrong servers."
+        feedback: "chronyc sources lists ntp1 and ntp2 by the right names; the Reach column is 0, meaning no replies ever arrived, which points at the path."
+      - id: dns
+        text: "ntp1 and ntp2 don't resolve."
+        feedback: "The sources show names and the firewall allows DNS. Reach is 0 because the NTP packets are dropped, not because the names failed."
+    actions:
+      - id: allow-ntp
+        label: "Add an nftables output rule allowing UDP 123 to the two NTP servers only (ip daddr { 10.30.0.10, 10.30.0.11 } udp dport 123 accept) and persist it"
+        kind: fix
+        feedback: "chrony reaches its servers and the clock locks within moments. The rule opens exactly what the service needs, to the addresses it needs."
+      - id: allow-all
+        label: "Allow all outbound UDP"
+        kind: wrong
+        feedback: "That solves it by deleting the allow-list's purpose. A compromised service could now talk out over any UDP port. Allow UDP 123 to the two servers only."
+      - id: flush
+        label: "nft flush ruleset"
+        kind: destructive
+        feedback: "Flushing removes the host firewall entirely. The fault is one missing allow rule."
+      - id: public-ntp
+        label: "Point chrony at a public pool server instead"
+        kind: wrong
+        feedback: "The firewall blocks that too, and sending internal hosts to public time sources bypasses the company's standard."
+    solution_paths:
+      - [allow-ntp]
+    key_evidence: [sources-unreachable, no-reference, no-ntp-rule]
+    evidence_labels:
+      sources-unreachable: "chronyc sources: both servers have Reach 0"
+      no-reference: "chronyc tracking: Not synchronised"
+      no-ntp-rule: "The nftables output chain has no rule for UDP 123"
+    hints:
+      nudge: "chrony is running and still not synchronising. What could stop its packets?"
+      direction: "chronyc sources shows Reach 0; list the firewall rules."
+      answer: "Add an output rule for UDP 123 to the two internal NTP servers."
+    debrief:
+      root_cause: |
+        The first fault was a stopped service. Underneath it, app-07's
+        firewall (default drop) had no allow rule for NTP, so even a
+        running chrony could never sync. Allow only what's needed: UDP 123
+        to the two servers.
+      ideal_path:
+        - "Check chronyc sources: Reach 0."
+        - "List the egress rules."
+        - "Add a narrow rule for UDP 123 to ntp1/ntp2 and persist it."
+        - "Verify with chronyc tracking."

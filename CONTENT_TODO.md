@@ -1328,3 +1328,11 @@ the labels and tests use the quoted form.
 - [ ] gcp-iam-groups-access: "only security keys" 2SV method restriction is unverified; passkeys wording was dropped.
 - [ ] traffic-spike AWS origin lock: the secret custom header / VPC origin facts are from memory; add sources.
 - [ ] Known limits: acr-identity is credited for az-outage without teaching that the registry itself must be zone-redundant; the origin-locked options bundle the WAF with the lock-down, so the WAF is not tested separately.
+
+## linux (2026-10-26 multi-stage batch)
+- [ ] deleted-file-held-open: `lsof +L1` column layout and the SIZE/OFF value; the logrotate `-d` dry-run text and "(no postrotate script...)" line are representative.
+- [ ] too-many-open-files: `/proc/<pid>/limits` row spacing; the Python `OSError: [Errno 24]` journal line and `ss -tn state close-wait` counts are representative.
+- [ ] systemd-unit-wont-start: `systemctl status` for status=203/EXEC and the journal's "Failed at step EXEC" wording; `systemd-analyze critical-chain` output layout.
+- [ ] fstab-emergency-boot: the "Timed out waiting for device" and "Dependency failed" lines; `lsblk -f` column layout; confirm `RequiresMountsFor=` in a drop-in is what the PostgreSQL package expects.
+- [ ] clock-drift-auth-fails: `timedatectl` field layout (left-aligned here), `chronyc sources`/`tracking` columns, and the nftables ruleset text are representative.
+- [ ] port-already-in-use: `ss -ltnp` and `ps -o pid,ppid,etime,cmd` layouts; the orphaned-worker scenario is a teaching construct.
