@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-member-role-missing
+track: openstack
+difficulty: 2
+title: "A new data engineer can see everything in the project but can't launch anything"
+par_minutes: 10
+
+ticket:
+  from: "Bob (data engineer, analytics team)"
+  severity: SEV4
+  body: |
+    IT said my access to the analytics project is ready. I can log in to
+    the dashboard and list servers, images and networks, but launching an
+    instance fails with a 403. A colleague on the same team can launch
+    fine. Do I need admin?
+
+environment: |
+  You are the cloud operator, logged in with an admin account on the
+  controller. The project analytics belongs to the Default domain. Access is
+  granted by role assignments in Keystone. The default roles are admin,
+  member and reader. The onboarding script that created Bob's account
+  assigned him one role on the project.
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match_regex: "^openstack role assignment list( --effective)? --user bob --project analytics --names$"
+      example: "openstack role assignment list --effective --user bob --project analytics --names"
+      when_actions: [grant-member]
+      output: |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+        | Role   | User          | Group | Project           | Domain | System | Inherited |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+        | member | bob@Default   |       | analytics@Default |        |        | False     |
+        | reader | bob@Default   |       | analytics@Default |        |        | False     |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+    - match_regex: "^openstack role assignment list( --effective)? --user bob --project analytics --names$"
+      example: "openstack role assignment list --effective --user bob --project analytics --names"
+      evidence: reader-only
+      output: |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+        | Role   | User          | Group | Project           | Domain | System | Inherited |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+        | reader | bob@Default   |       | analytics@Default |        |        | False     |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+    - match_regex: "^openstack role assignment list( --effective)? --user carol --project analytics --names$"
+      example: "openstack role assignment list --effective --user carol --project analytics --names"
+      evidence: colleague-member
+      output: |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+        | Role   | User          | Group | Project           | Domain | System | Inherited |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+        | member | carol@Default |       | analytics@Default |        |        | False     |
+        +--------+---------------+-------+-------------------+--------+--------+-----------+
+
+logs:
+  - name: "Bob's failed launch (dashboard error, copied into the ticket)"
+    evidence: http-403
+    lines: |
+      Error: Unable to create the server.
+      Policy doesn't allow os_compute_api:servers:create to be performed. (HTTP 403)
+
+hypotheses:
+  - id: reader-only
+    text: "Bob was given only the reader role on analytics. Reading is allowed, but creating servers requires the member role (or admin)."
+    correct: true
+  - id: needs-admin
+    text: "Bob needs the admin role to launch instances."
+    feedback: "Launching an instance only needs member on the project. Admin is for the most privileged operations, and carol launches fine with member. Admin would give Bob far more than the job needs."
+  - id: quota
+    text: "The project's quota is exhausted."
+    feedback: "A quota error names the resource (\"Quota exceeded for cores ...\"). This one is a policy error: the request was refused before quota was considered."
+  - id: bug
+    text: "The compute policy is broken."
+    feedback: "The same call succeeds for carol in the same project. The policy is working; it is applying different results to different role assignments."
+
+actions:
+  - id: grant-member
+    label: "openstack role add --user bob --project analytics member"
+    kind: fix
+    feedback: "Bob now holds member on analytics, which implies reader and is what Nova's default policy requires to create servers. He gets exactly the access his job needs, in that one project."
+  - id: grant-admin
+    label: "openstack role add --user bob --project analytics admin"
+    kind: wrong
+    feedback: "It works: admin implies member. It also gives Bob the project's most privileged role for an everyday task, which the role docs reserve for the most sensitive operations. Grant the lowest role that works."
+  - id: edit-policy
+    label: "Edit Nova's policy.yaml so the reader role may create servers"
+    kind: wrong
+    feedback: "That changes what read-only means for every project in the cloud and has to be redone on every upgrade. The role assignment is the one thing that was wrong."
+  - id: share-account
+    label: "Tell Bob to use Carol's login for now"
+    kind: wrong
+    feedback: "Shared credentials destroy the audit trail, so anything he launches will be attributed to Carol. The fix is one role assignment for Bob."
+
+solution_paths:
+  - [grant-member]
+
+key_evidence: [http-403, reader-only, colleague-member]
+
+evidence_labels:
+  http-403: "Server create returns a policy 403, not a quota error"
+  reader-only: "Bob has only the reader role on analytics"
+  colleague-member: "Carol, who can launch, has the member role"
+
+hints:
+  nudge: "Bob can read but not write. What in Keystone decides that?"
+  direction: "Compare Bob's role assignments on the project with Carol's."
+  answer: "Bob only has reader. Add the member role for Bob on analytics: not admin."
+
+analogy:
+  title: "The library card that lets you read but not borrow"
+  text: |
+    One card lets you sit in the reading room and look at any book. Another
+    lets you take books home. Bob was issued the first. The librarian
+    doesn't give him the keys to the whole building; she upgrades his card.
+
+debrief:
+  root_cause: |
+    The onboarding script assigned Bob the reader role only. In Keystone's
+    default roles, reader is read-only and member is the general-purpose
+    role that Nova's default policy requires to create servers (admin also
+    works, because it implies member, but it is far broader). Granting
+    member on the project fixes it with the least privilege.
+  ideal_path:
+    - "Read the error: a policy 403, not a quota error."
+    - "Check Bob's role assignments on analytics: reader only."
+    - "Compare with a teammate who can launch: member."
+    - "Add the member role for Bob on that project only."
+    - "Verify the effective roles for Bob."
+  real_world: |
+    Fix the onboarding script so new users get member by default, and
+    review who holds admin on projects: it is the role most often given to
+    make an error go away.
+
+concepts:
+  - term: "Default roles"
+    text: "Keystone ships three: reader (read-only), member (the general-purpose role for creating and changing resources) and admin (the most privileged). Admin implies member, which implies reader."
+    url: "https://docs.openstack.org/keystone/latest/admin/service-api-protection.html"
+  - term: "Role assignment"
+    text: "A grant of one role to one user (or group) on one project or domain. Roles only apply where they are assigned."
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/role-assignment.html"
+
+sources:
+  - title: "Keystone: service API protection (admin, member, reader and implied roles)"
+    url: "https://docs.openstack.org/keystone/latest/admin/service-api-protection.html"
+    retrieved: 2026-10-26
+  - title: "Nova: policy reference (os_compute_api:servers:create defaults to project member or admin)"
+    url: "https://docs.openstack.org/nova/latest/configuration/policy.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: role assignment list"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/role-assignment.html"
+    retrieved: 2026-10-26

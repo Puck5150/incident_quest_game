@@ -13,3 +13,4 @@
 - { id: azure,         name: "Azure",                  requires: [networking], station: { city: "Amsterdam", lat: 52.4, lon: 4.9 } }
 - { id: gcp,           name: "Google Cloud",           requires: [networking], station: { city: "Tokyo", lat: 35.7, lon: 139.7, side: left } }
 - { id: cloud-design,  name: "Cloud System Design",    requires: [aws, azure, gcp], requires_any: true, station: { city: "Singapore", lat: 1.4, lon: 103.8, side: left } }
+- { id: openstack,    name: "OpenStack",              requires: [networking], station: { city: "Austin", lat: 30.3, lon: -97.7, side: left } }
