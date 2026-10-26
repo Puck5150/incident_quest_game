@@ -1,0 +1,271 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: too-many-open-files
+track: linux
+difficulty: 3
+title: "The API falls over under load with \"Too many open files\""
+par_minutes: 15
+
+ticket:
+  from: "Support lead"
+  severity: SEV3
+  body: |
+    Every afternoon around 14:00, when the sale traffic ramps up, the
+    quotes API starts failing for about a third of requests and recovers if
+    someone restarts it. Dev swears the code didn't change. The engineer on
+    call already ran ulimit -n 65535 in their shell and restarted it, and
+    it still fell over at 14:20.
+
+environment: |
+  quotes-01 (Debian) runs quotes-api.service (user quotes), a Python API
+  that opens one connection per client plus a connection to Postgres and to
+  an upstream pricing service. It is started by systemd, not from a shell.
+
+diagram:
+  nodes:
+    - { id: lb, label: "load balancer", col: 0, row: 0, status: ok }
+    - { id: api, label: "quotes-api (pid 4410)", col: 1, row: 0, status: degraded }
+    - { id: price, label: "pricing service", col: 2, row: 0, status: ok }
+  edges:
+    - { from: lb, to: api }
+    - { from: api, to: price }
+
+terminal:
+  prompt: "ops@quotes-01:~$"
+  commands:
+    - match: "systemctl show -p LimitNOFILESoft quotes-api"
+      when_actions: [set-limitnofile]
+      output: |
+        LimitNOFILESoft=65536
+    - match: "systemctl show -p LimitNOFILESoft quotes-api"
+      evidence: unit-limit
+      output: |
+        LimitNOFILESoft=1024
+    - match: "systemctl status quotes-api"
+      when_actions: [set-limitnofile]
+      output: |
+        ● quotes-api.service - Quotes API
+             Loaded: loaded (/etc/systemd/system/quotes-api.service; enabled)
+            Drop-In: /etc/systemd/system/quotes-api.service.d
+                     └─limits.conf
+             Active: active (running) since Mon 2026-10-26 15:02:11 UTC; 38min ago
+           Main PID: 5127 (python3)
+    - match: "grep 'open files' /proc/5127/limits"
+      when_actions: [set-limitnofile]
+      output: |
+        Max open files            65536                65536                files
+    - match: "grep 'open files' /proc/4410/limits"
+      evidence: process-limit
+      output: |
+        Max open files            1024                 524288               files
+    - match: "ls /proc/5127/fd | wc -l"
+      when_actions: [set-limitnofile]
+      evidence: fd-keeps-growing
+      output: |
+        6120
+    - match: "ls /proc/4410/fd | wc -l"
+      evidence: fd-at-limit
+      output: |
+        1024
+    - match_regex: "^(sudo )?journalctl -u quotes-api"
+      example: "sudo journalctl -u quotes-api -n 20"
+      evidence: emfile-log
+      output: |
+        Oct 26 14:20:03 quotes-01 python3[4410]: OSError: [Errno 24] Too many open files
+        Oct 26 14:20:03 quotes-01 python3[4410]: socket.accept() failed, dropping connection
+    - match: "cat /etc/systemd/system/quotes-api.service"
+      output: |
+        [Service]
+        User=quotes
+        ExecStart=/opt/quotes/bin/quotes-api
+        Restart=on-failure
+
+hypotheses:
+  - id: unit-limit
+    text: "The service runs under systemd with the default soft open-file limit of 1024. The ulimit -n the on-call set only applies to that shell, not to units started by systemd."
+    correct: true
+  - id: leak
+    text: "The application leaks file descriptors, so any limit will eventually run out."
+    feedback: "There may be a leak, but that isn't what failed at 14:20: the process hit exactly 1024, the unit's limit, because the load needed more connections than 1024. Fix the limit first, then check whether the count keeps climbing."
+  - id: fs-max
+    text: "The system-wide fs.file-max is exhausted."
+    feedback: "The per-process limit (1024) is the one in the error. System-wide, /proc/sys/fs/file-nr shows millions free."
+  - id: nic
+    text: "The network interface is dropping connections."
+    feedback: "The log line is an OSError from accept(): the process refusing to open another file, not a network drop."
+
+actions:
+  - id: set-limitnofile
+    label: "Add a drop-in for quotes-api with LimitNOFILE=65536, then systemctl daemon-reload and restart the service (and check /proc/<pid>/limits)"
+    kind: fix
+    feedback: "systemd now starts the service with 65,536 open files allowed, and the new process shows it in /proc/<pid>/limits. The limit is part of the unit, so it survives restarts and reboots."
+  - id: ulimit-shell
+    label: "Run ulimit -n 65535 in the shell and restart the service again"
+    kind: wrong
+    feedback: "ulimit sets the limit for that shell and the processes it starts. A unit started by systemd inherits nothing from your shell: it takes its limits from the unit (LimitNOFILE)."
+  - id: limits-conf
+    label: "Raise nofile in /etc/security/limits.conf"
+    kind: wrong
+    feedback: "limits.conf is applied by PAM to login sessions. A systemd service never goes through PAM login, so it ignores that file."
+  - id: nofile-unlimited
+    label: "Set LimitNOFILE=infinity so it can never run out"
+    kind: wrong
+    feedback: "A runaway descriptor leak would then take the whole host's file table with it instead of failing in one service. A generous, finite limit that you monitor is the right shape."
+  - id: reboot
+    label: "sudo reboot"
+    kind: destructive
+    match_regex: "^sudo reboot$"
+    feedback: "A reboot restarts the service with the same 1024 limit and takes the host down on top of it."
+
+solution_paths:
+  - [set-limitnofile]
+
+key_evidence: [emfile-log, unit-limit, process-limit, fd-at-limit]
+
+evidence_labels:
+  emfile-log: "The log reports Errno 24, Too many open files"
+  unit-limit: "systemd gives the unit a soft limit of 1024"
+  process-limit: "The running process's soft limit is 1024"
+  fd-at-limit: "The process has exactly 1024 descriptors open"
+
+hints:
+  nudge: "The on-call raised a limit and nothing changed. Whose limit did they raise?"
+  direction: "Compare the process's real limit in /proc/<pid>/limits with what systemd gave the unit (systemctl show -p LimitNOFILESoft)."
+  answer: "systemd started the unit with a soft limit of 1024. Set LimitNOFILE in a drop-in, daemon-reload, restart, and confirm in /proc/<pid>/limits."
+
+analogy:
+  title: "The coat-check with 1024 hooks"
+  text: |
+    A theatre coat-check has a fixed number of hooks, set by the venue, not
+    by the guests. A guest shouting "I need more hooks!" from the lobby
+    changes nothing. The venue has to put more hooks up.
+
+debrief:
+  root_cause: |
+    The service ran with the default soft limit of 1024 open files; at peak
+    each client connection plus upstream and database sockets needed more.
+    The limit a process gets depends on how it is started: a systemd unit
+    takes it from LimitNOFILE, not from a shell's ulimit or from
+    limits.conf.
+  ideal_path:
+    - "Read the error: Errno 24 is the per-process descriptor limit."
+    - "Check the running process's limits and its descriptor count."
+    - "Find that the unit, not the shell, sets the limit."
+    - "Set LimitNOFILE in a drop-in, reload and restart."
+    - "Verify in /proc/<pid>/limits."
+  real_world: |
+    The fix that works in your shell and not in production usually means
+    the process gets its limits from somewhere other than your shell:
+    systemd, a container runtime or a supervisor.
+
+concepts:
+  - term: "File descriptor"
+    text: "A number the kernel gives a process for each open file, socket or pipe. Every connection to a server costs one."
+    url: "https://man7.org/linux/man-pages/man2/open.2.html"
+  - term: "LimitNOFILE"
+    text: "The systemd setting for how many descriptors a service may open. It is applied when the service starts."
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html"
+
+sources:
+  - title: "systemd.exec(5): Process Properties, LimitNOFILE"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html"
+    retrieved: 2026-10-26
+  - title: "getrlimit(2): Linux manual page (RLIMIT_NOFILE)"
+    url: "https://man7.org/linux/man-pages/man2/getrlimit.2.html"
+    retrieved: 2026-10-26
+  - title: "proc_pid_limits(5): /proc/pid/limits"
+    url: "https://man7.org/linux/man-pages/man5/proc_pid_limits.5.html"
+    retrieved: 2026-10-26
+  - title: "limits.conf(5): applied by pam_limits at login"
+    url: "https://man7.org/linux/man-pages/man5/limits.conf.5.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: descriptor-leak
+    update: |
+      15:40 Reopened: the API now survives the afternoon peak, but the
+      descriptor count never goes back down. It was 2,900 at 14:30 and is
+      6,120 at 15:40 with traffic falling, and nothing is closing. At this
+      rate it hits 65,536 tomorrow.
+    logs:
+      - name: "quotes-api changelog (last release)"
+        evidence: new-client
+        lines: |
+          v2.14.0  pricing client: switch to requests.Session with a custom
+                   adapter (per-call timeout removed, "the upstream is fast").
+    terminal:
+      commands:
+        - match: "ss -tn state close-wait | wc -l"
+          when_actions: [pricing-timeout]
+          output: |
+            12
+        - match: "ss -tn state close-wait | wc -l"
+          evidence: close-wait
+          output: |
+            5894
+        - match: "ss -tnp state close-wait dst 10.4.0.30"
+          evidence: stuck-to-pricing
+          output: |
+            Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+            1      0      10.4.0.11:51234     10.4.0.30:8443   users:(("python3",pid=5127,fd=87))
+            1      0      10.4.0.11:51236     10.4.0.30:8443   users:(("python3",pid=5127,fd=88))
+        - match: "cat /opt/quotes/pricing_client.py"
+          evidence: no-timeout
+          output: |
+            import requests
+
+            session = requests.Session()
+
+            def price(sku):
+                resp = session.get(PRICING_URL, params={"sku": sku})   # no timeout=
+                return resp.json()
+    hypotheses:
+      - id: no-timeout
+        text: "The pricing client calls the upstream with no timeout, and connections that the upstream half-closed sit in CLOSE_WAIT forever because the application never closes its end."
+        correct: true
+      - id: limit-too-low
+        text: "65,536 is still too low and should be raised again."
+        feedback: "Raising the limit only moves the day it runs out. The count rises while traffic falls, so something holds descriptors it should have closed."
+      - id: kernel-leak
+        text: "The kernel isn't releasing sockets."
+        feedback: "The sockets are in CLOSE_WAIT: the kernel is waiting for the application to close its end. That state exists because of the application."
+      - id: upstream-down
+        text: "The pricing service is unhealthy."
+        feedback: "Pricing answers fine; its connections are in CLOSE_WAIT because it closed its end and quotes-api never did."
+    actions:
+      - id: pricing-timeout
+        label: "Fix the pricing client: pass a timeout to every call (timeout=(2, 5)), close each response (a with block), and redeploy"
+        kind: fix
+        feedback: "Calls to pricing now give up after a few seconds and their sockets are closed. The CLOSE_WAIT pile drains as the service restarts, and the descriptor count stays flat."
+      - id: raise-again
+        label: "Raise LimitNOFILE to 1,000,000"
+        kind: wrong
+        feedback: "It delays the failure by days and lets a leak eat the host's file table. The count only grows because connections are never closed."
+      - id: nightly-restart
+        label: "Restart the service every night with a timer"
+        kind: wrong
+        feedback: "A nightly restart hides the leak and drops in-flight requests. It is a stopgap that becomes permanent."
+      - id: kill-connections
+        label: "Kill the service's sockets with ss -K"
+        kind: destructive
+        feedback: "That drops live customer requests, and the client code still leaks: the pile starts growing again as soon as traffic returns."
+    solution_paths:
+      - [pricing-timeout]
+    key_evidence: [close-wait, no-timeout]
+    evidence_labels:
+      close-wait: "Thousands of sockets stuck in CLOSE_WAIT"
+      no-timeout: "The pricing client makes its call with no timeout and never closes the response"
+    hints:
+      nudge: "The count keeps rising while traffic falls. What state are those sockets in?"
+      direction: "Count CLOSE_WAIT sockets and read the code that calls the pricing service."
+      answer: "The pricing client has no timeout and doesn't close responses. Add a timeout and close with a context manager."
+    debrief:
+      root_cause: |
+        The limit was the first problem. The second was a leak: the pricing
+        client opened connections it never closed, so CLOSE_WAIT sockets
+        piled up. A bigger limit would have delayed the failure; closing
+        the sockets removes it.
+      ideal_path:
+        - "Watch the descriptor count against traffic."
+        - "Count sockets by state and find the CLOSE_WAIT pile."
+        - "Read the pricing client: no timeout, no close."
+        - "Fix the client, not the limit."

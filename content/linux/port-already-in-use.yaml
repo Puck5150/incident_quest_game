@@ -1,0 +1,229 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: port-already-in-use
+track: linux
+difficulty: 3
+title: "The new release won't start: \"address already in use\""
+par_minutes: 15
+
+ticket:
+  from: "Release manager"
+  severity: SEV3
+  body: |
+    The 4.2 deploy of the webhooks service finished but the service is
+    flapping: it starts, then dies within a second with "bind: address
+    already in use" on port 9000. Rolling back isn't an option, the old
+    version had a bug that 4.2 fixes. We never started two copies.
+
+environment: |
+  hooks-02 (Debian) runs webhooks.service (user hooks), an HTTP receiver
+  on port 9000. The deploy pipeline runs systemctl restart webhooks. The
+  service forks a worker process that does the actual listening.
+
+diagram:
+  nodes:
+    - { id: unit, label: "webhooks.service (new)", col: 0, row: 0, status: down }
+    - { id: old, label: "old worker (pid 2087)", col: 1, row: 0, status: degraded }
+    - { id: port, label: "port 9000", col: 2, row: 0, status: degraded }
+  edges:
+    - { from: unit, to: port }
+    - { from: old, to: port }
+
+terminal:
+  prompt: "ops@hooks-02:~$"
+  commands:
+    - match: "ss -ltnp sport = :9000"
+      when_actions: [kill-old-worker]
+      output: |
+        State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+        LISTEN 0      128          0.0.0.0:9000       0.0.0.0:*     users:(("webhooks",pid=3150,fd=6))
+    - match: "ss -ltnp sport = :9000"
+      evidence: old-pid-listening
+      output: |
+        State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+        LISTEN 0      128          0.0.0.0:9000       0.0.0.0:*     users:(("webhooks",pid=2087,fd=6))
+    - match: "ps -o pid,ppid,etime,cmd -p 2087"
+      evidence: orphan
+      output: |
+        PID PPID ELAPSED CMD
+        2087 1 3-04:12:09 /opt/webhooks/bin/webhooks --worker
+    - match: "systemctl status webhooks"
+      output: |
+        ● webhooks.service - Webhooks receiver
+             Active: activating (auto-restart) (Result: exit-code)
+             Main PID: 3101 (code=exited, status=1/FAILURE)
+    - match_regex: "^(sudo )?journalctl -u webhooks"
+      example: "sudo journalctl -u webhooks -n 20"
+      evidence: bind-error
+      output: |
+        Oct 26 11:02:14 hooks-02 systemd[1]: webhooks.service: Unit process 2087 (webhooks) remains running after unit stopped.
+        Oct 26 11:02:15 hooks-02 webhooks[3101]: listen tcp 0.0.0.0:9000: bind: address already in use
+        Oct 26 11:02:15 hooks-02 systemd[1]: webhooks.service: Main process exited, code=exited, status=1/FAILURE
+
+hypotheses:
+  - id: orphan-worker
+    text: "An old worker (pid 2087, parent 1) from the previous release is still listening on port 9000. The new main process can't bind it."
+    correct: true
+  - id: other-service
+    text: "A different service, such as another web server, has taken port 9000."
+    feedback: "ss names the process: it is webhooks itself, started three days ago, an orphan of the old release."
+  - id: firewall
+    text: "A firewall rule is holding the port."
+    feedback: "\"Address already in use\" is a bind error from the kernel about a socket, not a firewall block."
+  - id: reuse
+    text: "TIME_WAIT sockets from the restart are blocking the bind."
+    feedback: "ss shows a LISTEN socket owned by pid 2087. TIME_WAIT would show as such, and listeners normally set SO_REUSEADDR to bind through it."
+
+actions:
+  - id: kill-old-worker
+    label: "sudo kill 2087 (stop that specific old worker with SIGTERM), then restart webhooks"
+    kind: fix
+    match_regex: "^sudo kill 2087$"
+    feedback: "The old worker exits and frees port 9000, and the new service can bind. You killed the one process identified by evidence, with the polite signal."
+  - id: killall
+    label: "sudo killall -9 webhooks"
+    kind: destructive
+    match_regex: "^sudo killall -9 webhooks$"
+    feedback: "SIGKILL by name also kills the new main process and any worker handling a request, with no chance to finish. Target the pid you identified, and ask it nicely first."
+  - id: change-port
+    label: "Change the new release to port 9001"
+    kind: wrong
+    feedback: "Every sender and the load balancer use 9000. Moving the service leaves the orphan running and breaks the callers."
+  - id: reboot
+    label: "sudo reboot"
+    kind: destructive
+    match_regex: "^sudo reboot$"
+    feedback: "That clears the orphan and takes the host down, and the next deploy leaves another orphan."
+
+solution_paths:
+  - [kill-old-worker]
+
+key_evidence: [bind-error, old-pid-listening, orphan]
+
+evidence_labels:
+  bind-error: "journal: bind: address already in use"
+  old-pid-listening: "ss shows pid 2087 listening on 9000"
+  orphan: "pid 2087 is three days old with parent PID 1"
+
+hints:
+  nudge: "Something already owns the port. Who?"
+  direction: "Ask ss which process is listening on 9000, then look at that process."
+  answer: "pid 2087, an orphaned worker from the old release (parent 1), holds the port. Stop it with SIGTERM and restart."
+
+analogy:
+  title: "The tenant who never moved out"
+  text: |
+    The new tenant arrives with the keys, but the old tenant's furniture is
+    still in the flat. The landlord assumed the old tenant left when the
+    lease ended. The new tenant can't move in until the room is empty.
+
+debrief:
+  root_cause: |
+    The old release's worker outlived its parent, so it kept listening on
+    9000 after the restart. The new main process failed to bind and
+    systemd restarted it in a loop.
+  ideal_path:
+    - "Read the bind error."
+    - "Find the listener with ss -ltnp."
+    - "Inspect it: old, parent PID 1."
+    - "Stop that one process and restart."
+  real_world: |
+    "Address already in use" almost always means a listener you forgot
+    about. Find it by port, not by name.
+
+concepts:
+  - term: "Orphan process"
+    text: "A process whose parent exited. The kernel hands it to PID 1, and it keeps running."
+    url: "https://man7.org/linux/man-pages/man2/fork.2.html"
+  - term: "bind()"
+    text: "The call a server makes to claim a local address and port. Only one socket may hold a given port at a time."
+    url: "https://man7.org/linux/man-pages/man2/bind.2.html"
+
+sources:
+  - title: "bind(2): EADDRINUSE"
+    url: "https://man7.org/linux/man-pages/man2/bind.2.html"
+    retrieved: 2026-10-26
+  - title: "ss(8): Linux manual page"
+    url: "https://man7.org/linux/man-pages/man8/ss.8.html"
+    retrieved: 2026-10-26
+  - title: "kill(1): Linux manual page"
+    url: "https://man7.org/linux/man-pages/man1/kill.1.html"
+    retrieved: 2026-10-26
+  - title: "systemd.kill(5): KillMode"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: killmode-process
+    update: |
+      11:10 Reopened: webhooks 4.2 is healthy. At 11:25 the pipeline
+      deploys a hotfix, 4.2.1. The same error comes back, and a worker pid
+      from 4.2 is listening on 9000. This cannot keep happening on every
+      deploy.
+    terminal:
+      commands:
+        - match: "systemctl show -p KillMode webhooks"
+          when_actions: [killmode-control-group]
+          output: |
+            KillMode=control-group
+        - match: "systemctl show -p KillMode webhooks"
+          evidence: killmode-process
+          output: |
+            KillMode=process
+        - match: "systemctl cat webhooks"
+          when_actions: [killmode-control-group]
+          output: |
+            [Service]
+            User=hooks
+            ExecStart=/opt/webhooks/bin/webhooks
+        - match: "systemctl cat webhooks"
+          evidence: unit-killmode
+          output: |
+            [Service]
+            User=hooks
+            ExecStart=/opt/webhooks/bin/webhooks
+            KillMode=process
+    hypotheses:
+      - id: killmode
+        text: "The unit sets KillMode=process, so on stop or restart systemd signals only the main process. The forked worker is left behind and keeps the port."
+        correct: true
+      - id: deploy-race
+        text: "The deploy script restarts before the old process finishes stopping."
+        feedback: "systemctl restart waits for the stop job. The worker was never part of what was stopped, so no amount of waiting would help."
+      - id: sigterm
+        text: "The workers ignore SIGTERM."
+        feedback: "They never receive one: with KillMode=process only the main process gets signalled."
+      - id: reuseport
+        text: "Enable SO_REUSEPORT so both versions can listen."
+        feedback: "Two versions sharing a port splits incoming requests between old and new code. That hides the orphan instead of removing it."
+    actions:
+      - id: killmode-control-group
+        label: "Remove KillMode=process from the local unit so the default (control-group) applies (systemctl edit --full webhooks), then restart the service"
+        kind: fix
+        feedback: "Stopping or restarting the unit now signals every process in its cgroup, including the leftover 4.2 worker that still belongs to it, so the restart clears port 9000 and a future deploy leaves nothing behind."
+      - id: pkill-in-deploy
+        label: "Add a pkill -f webhooks step to the deploy pipeline"
+        kind: wrong
+        feedback: "It works until a name matches something else. systemd already tracks every process in the service's cgroup; use it."
+      - id: sigkill
+        label: "Set SendSIGKILL and KillSignal=SIGKILL"
+        kind: wrong
+        feedback: "That would kill every process abruptly, giving none of them a chance to finish a request. The problem is which processes get signalled, not how."
+    solution_paths:
+      - [killmode-control-group]
+    key_evidence: [killmode-process, unit-killmode]
+    evidence_labels:
+      killmode-process: "systemctl show: KillMode=process"
+      unit-killmode: "The unit file sets KillMode=process"
+    hints:
+      nudge: "Why did a worker survive the restart?"
+      direction: "Read the unit's KillMode."
+      answer: "KillMode=process leaves forked workers running. Remove it so the default control-group applies, then restart."
+    debrief:
+      root_cause: |
+        Killing the orphan once cleared the symptom. The unit's KillMode=process
+        meant every restart would orphan the worker again. control-group stops
+        every process the service started.
+      ideal_path:
+        - "Ask why it happened again."
+        - "Check the unit's KillMode."
+        - "Return to control-group."

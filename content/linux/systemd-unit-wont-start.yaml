@@ -1,0 +1,289 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: systemd-unit-wont-start
+track: linux
+difficulty: 3
+title: "After last night's upgrade the reports service won't start"
+par_minutes: 15
+
+ticket:
+  from: "Finance operations"
+  severity: SEV3
+  body: |
+    The morning sales report didn't arrive. The team that owns the box says
+    they patched it last night and rebooted. reports-api shows as failed.
+    Someone tried "systemctl start reports-api" and it says it started, then
+    it's failed again a second later.
+
+environment: |
+  reports-01 (Debian) runs reports-api.service (user reports), a small
+  HTTP service that listens on 10.20.0.15:8080, the host's address on the
+  internal network. The vendor's package installed the binary and the unit.
+
+diagram:
+  nodes:
+    - { id: unit, label: "reports-api.service", col: 0, row: 0, status: down }
+    - { id: bin, label: "binary", col: 1, row: 0, status: down }
+    - { id: net, label: "10.20.0.15 (internal NIC)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: unit, to: bin }
+    - { from: unit, to: net }
+
+terminal:
+  prompt: "ops@reports-01:~$"
+  commands:
+    - match: "systemctl status reports-api"
+      when_actions: [fix-execstart]
+      output: |
+        ● reports-api.service - Reports API
+             Loaded: loaded (/etc/systemd/system/reports-api.service; enabled)
+             Active: active (running) since Mon 2026-10-26 09:12:44 UTC; 2s ago
+           Main PID: 912 (reports-api)
+    - match: "systemctl status reports-api"
+      evidence: failed-203
+      output: |
+        × reports-api.service - Reports API
+             Loaded: loaded (/etc/systemd/system/reports-api.service; enabled)
+             Active: failed (Result: exit-code) since Mon 2026-10-26 08:55:12 UTC; 4min ago
+            Process: 811 ExecStart=/usr/local/bin/reports-api (code=exited, status=203/EXEC)
+    - match_regex: "^(sudo )?journalctl -u reports-api"
+      example: "sudo journalctl -u reports-api -n 20"
+      evidence: exec-error
+      output: |
+        Oct 26 08:55:12 reports-01 systemd[811]: reports-api.service: Failed at step EXEC spawning /usr/local/bin/reports-api: No such file or directory
+        Oct 26 08:55:12 reports-01 systemd[1]: reports-api.service: Main process exited, code=exited, status=203/EXEC
+    - match: "systemctl cat reports-api"
+      when_actions: [fix-execstart]
+      output: |
+        [Unit]
+        Description=Reports API
+
+        [Service]
+        User=reports
+        ExecStart=/opt/reports/bin/reports-api
+        Restart=no
+    - match: "systemctl cat reports-api"
+      evidence: old-path
+      output: |
+        [Unit]
+        Description=Reports API
+
+        [Service]
+        User=reports
+        ExecStart=/usr/local/bin/reports-api
+        Restart=no
+    - match: "ls -l /usr/local/bin/reports-api /opt/reports/bin/reports-api"
+      evidence: moved-binary
+      output: |
+        ls: cannot access '/usr/local/bin/reports-api': No such file or directory
+        -rwxr-xr-x 1 root root 8421376 Oct 25 23:10 /opt/reports/bin/reports-api
+
+hypotheses:
+  - id: moved-binary
+    text: "The vendor package moved the binary from /usr/local/bin to /opt/reports/bin, and the unit still points at the old path (status 203/EXEC)."
+    correct: true
+  - id: permissions
+    text: "The reports user can't execute the binary."
+    feedback: "203/EXEC with \"No such file or directory\" means systemd could not find the file at all. A permission problem would say Permission denied."
+  - id: dependency
+    text: "A dependency such as the database isn't up."
+    feedback: "The service never started: systemd failed at the EXEC step before the program ran, so no dependency could have failed it."
+  - id: corrupt-unit
+    text: "The unit file is corrupt."
+    feedback: "systemd loaded it fine (Loaded: loaded). It is valid, just pointing at a path that no longer exists."
+
+actions:
+  - id: fix-execstart
+    label: "Correct ExecStart to /opt/reports/bin/reports-api in the local unit (systemctl edit --full reports-api), then restart"
+    kind: fix
+    feedback: "systemd finds the binary and starts it. The unit lives in /etc/systemd/system, so it is ours to edit; systemctl edit --full reloads systemd for you and keeps the change in one place."
+  - id: symlink
+    label: "ln -s /opt/reports/bin/reports-api /usr/local/bin/reports-api"
+    kind: wrong
+    feedback: "It makes this start by hiding the real location behind a link nobody will remember, and the next upgrade that moves the binary again breaks it silently. Point the unit at the real path."
+  - id: chmod
+    label: "chmod 777 /opt/reports/bin/reports-api"
+    kind: destructive
+    feedback: "The file is already executable by its owner and group. Making a root-owned binary world-writable lets any local user replace it with their own program."
+  - id: reboot
+    label: "sudo reboot"
+    kind: destructive
+    match_regex: "^sudo reboot$"
+    feedback: "The unit points at a missing file; a reboot reproduces the failure and takes the host down."
+
+solution_paths:
+  - [fix-execstart]
+
+key_evidence: [failed-203, exec-error, old-path, moved-binary]
+
+evidence_labels:
+  failed-203: "systemctl status: exited with status=203/EXEC"
+  exec-error: "journal: failed at step EXEC, No such file or directory"
+  old-path: "ExecStart points at /usr/local/bin/reports-api"
+  moved-binary: "The binary now lives in /opt/reports/bin"
+
+hints:
+  nudge: "Status 203 isn't the app's exit code; it's systemd's. Where does it say the failure happened?"
+  direction: "Read the journal for the EXEC step, then compare ExecStart with where the binary really is."
+  answer: "The package moved the binary to /opt/reports/bin; the unit still starts /usr/local/bin/reports-api. Fix ExecStart in the local unit and restart."
+
+analogy:
+  title: "The taxi sent to the old address"
+  text: |
+    The company moved offices over the weekend, and the taxi booking still
+    sends the driver to the old building. The driver turns up and finds
+    nobody there. He didn't refuse the job; there was no one to collect.
+
+debrief:
+  root_cause: |
+    The vendor package relocated the binary, but a locally written unit
+    still pointed at the old path. systemd reports exit status 203 when it
+    cannot execute the file at all; the journal's "failed at step EXEC ...
+    No such file or directory" names the path.
+  ideal_path:
+    - "Check status: 203/EXEC."
+    - "Read the journal for the failing step and the path."
+    - "Compare ExecStart with where the binary actually is."
+    - "Fix the path in the local unit and restart."
+  real_world: |
+    Package upgrades move files. After one, check that local units still
+    point at real paths (systemd-analyze verify catches a missing
+    ExecStart), and read status codes as systemd's own vocabulary before
+    suspecting the program. If a vendor ships the unit, change it with a
+    drop-in so upgrades don't overwrite you.
+
+concepts:
+  - term: "Exit status 203/EXEC"
+    text: "systemd could not execute the command in ExecStart, for example because the path doesn't exist. The program itself never ran."
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html"
+  - term: "Drop-in override"
+    text: "A small file in a unit's .d directory that overrides or adds settings without editing the original, so package updates don't overwrite it."
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html"
+
+sources:
+  - title: "systemd.exec(5): Process exit codes (203/EXEC)"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html"
+    retrieved: 2026-10-26
+  - title: "systemd.unit(5): Unit file drop-ins"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html"
+    retrieved: 2026-10-26
+  - title: "systemd.service(5): ExecStart, Restart"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html"
+    retrieved: 2026-10-26
+  - title: "systemd.special(7): network-online.target"
+    url: "https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: started-before-network
+    update: |
+      09:13 Reopened: reports-api is running and the report job succeeded.
+      At 09:30 the planned second reboot (the kernel patch needs two) takes
+      place, and after it reports-api is failed again. Started by hand ten
+      minutes later it runs fine.
+    terminal:
+      commands:
+        - match: "systemctl status reports-api.service"
+          when_actions: [order-after-network]
+          output: |
+            ● reports-api.service - Reports API
+                 Loaded: loaded (/etc/systemd/system/reports-api.service; enabled)
+                 Active: active (running) since Mon 2026-10-26 09:41:07 UTC; 2s ago
+               Main PID: 640 (reports-api)
+        - match: "systemctl status reports-api.service"
+          evidence: failed-after-boot
+          output: |
+            × reports-api.service - Reports API
+                 Loaded: loaded (/etc/systemd/system/reports-api.service; enabled)
+                 Active: failed (Result: exit-code) since Mon 2026-10-26 09:31:01 UTC; 10min ago
+                Process: 611 ExecStart=/opt/reports/bin/reports-api (code=exited, status=1/FAILURE)
+        - match_regex: "^(sudo )?journalctl -xeu reports-api"
+          example: "sudo journalctl -xeu reports-api"
+          evidence: bind-error
+          output: |
+            Oct 26 09:31:01 reports-01 reports-api[611]: listen tcp 10.20.0.15:8080: bind: cannot assign requested address
+            Oct 26 09:31:01 reports-01 systemd[1]: reports-api.service: Main process exited, code=exited, status=1/FAILURE
+        - match: "systemctl cat reports-api"
+          when_actions: [order-after-network]
+          output: |
+            [Unit]
+            Description=Reports API
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            User=reports
+            ExecStart=/opt/reports/bin/reports-api
+            Restart=no
+        - match_regex: "^systemd-analyze critical-chain reports-api\\.service$"
+          example: "systemd-analyze critical-chain reports-api.service"
+          output: |
+            The time when unit became active or started is printed after the "@" character.
+            The time the unit took to start is printed after the "+" character.
+
+            reports-api.service @3.912s
+            └─basic.target @3.870s
+              └─sockets.target @3.868s
+                └─dbus.socket @3.866s
+                  └─sysinit.target @3.850s
+        - match_regex: "^systemd-analyze critical-chain network-online\\.target$"
+          example: "systemd-analyze critical-chain network-online.target"
+          evidence: net-late
+          output: |
+            The time when unit became active or started is printed after the "@" character.
+            The time the unit took to start is printed after the "+" character.
+
+            network-online.target @21.304s
+            └─systemd-networkd-wait-online.service @9.102s +12.199s
+              └─systemd-networkd.service @8.900s +190ms
+                └─network-pre.target @8.890s
+    hypotheses:
+      - id: no-ordering
+        text: "The unit declares no ordering after the network, so at boot systemd starts it in parallel with network setup, about 17 seconds before 10.20.0.15 exists, and bind fails. Started by hand later, the address is there."
+        correct: true
+      - id: wrong-ip
+        text: "The service is configured with the wrong IP address."
+        feedback: "10.20.0.15 is the host's real address and the service runs when started later. The address wasn't there yet at the moment it tried to bind."
+      - id: restart
+        text: "Add Restart=always so it keeps retrying until it works."
+        feedback: "That would paper over it with repeated failures and start-rate limits. The unit should wait for what it needs rather than keep falling over."
+      - id: sleep
+        text: "Add ExecStartPre=/bin/sleep 30."
+        feedback: "A sleep is a guess: too short on a slow day, wasted time on a fast one. Ordering after network-online.target waits for the real condition."
+    actions:
+      - id: order-after-network
+        label: "Add After=network-online.target and Wants=network-online.target to the reports-api unit (systemctl edit --full reports-api), then restart"
+        kind: fix
+        feedback: "systemd now starts the service after the network is configured, and it binds on the first try after a reboot. The ordering is declared once, not worked around."
+      - id: always
+        label: "Add Restart=always so it retries"
+        kind: wrong
+        feedback: "It works only by failing repeatedly until the address appears, hits the start-rate limit if that takes too long, and hides the real ordering mistake."
+      - id: bind-any
+        label: "Change the listen address to 0.0.0.0"
+        kind: wrong
+        feedback: "Binding to every interface makes the service reachable from networks it was never meant to be on. The service needs an address; it needs to wait for it."
+      - id: sleep-pre
+        label: "ExecStartPre=/bin/sleep 30"
+        kind: wrong
+        feedback: "A fixed delay is a guess that eventually fails; wait for the target instead."
+    solution_paths:
+      - [order-after-network]
+    key_evidence: [bind-error, net-late]
+    evidence_labels:
+      bind-error: "bind: cannot assign requested address at boot"
+      net-late: "network-online.target is reached at 21 s; the service started at about 4 s"
+    hints:
+      nudge: "It runs when you start it later. What is different at boot?"
+      direction: "Read the bind error, then compare when the service starts with when the network is up (systemd-analyze critical-chain)."
+      answer: "Add After= and Wants=network-online.target so the service starts once the address exists."
+    debrief:
+      root_cause: |
+        With the path fixed, a second problem showed after the next reboot:
+        the unit declared no ordering, so systemd started it in parallel with
+        network setup and the bind to a specific address failed. Declare the
+        dependency instead of guessing a delay.
+      ideal_path:
+        - "Notice that it only fails after a boot."
+        - "Read the bind error."
+        - "Compare the service's start time with network-online.target using systemd-analyze."
+        - "Add After= and Wants=network-online.target and restart."
