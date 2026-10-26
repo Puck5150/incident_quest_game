@@ -1,0 +1,273 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-octavia-amphora-error
+track: openstack
+difficulty: 4
+title: "The new load balancer goes straight to ERROR, and then keeps failing over"
+par_minutes: 25
+
+ticket:
+  from: "Web team"
+  severity: SEV3
+  body: |
+    We created the load balancer web-lb for the new storefront and it went
+    to ERROR within a minute. The cloud team rotated the amphora image last
+    week and said the other load balancers were not affected. We can't
+    launch until this works. Please don't hand us an unmanaged HAProxy VM
+    instead, we need Octavia.
+
+environment: |
+  You are the cloud operator with admin access. Octavia uses amphorae
+  (service VMs running HAProxy) on the management network lb-mgmt-net
+  (172.16.0.0/24). The controller's address on lb-mgmt-net is 172.16.0.10.
+  octavia-worker, octavia-health-manager and octavia-housekeeping run on
+  controller-01. octavia.conf selects the amphora image by Glance tag
+  (amp_image_tag = amphora). The amphora image was replaced last week with
+  a new build named amphora-x64-haproxy-2026.2.
+
+diagram:
+  nodes:
+    - { id: api, label: "web-lb (Octavia API)", col: 0, row: 0, status: degraded }
+    - { id: worker, label: "octavia-worker", col: 1, row: 0, status: degraded }
+    - { id: glance, label: "Glance image tag 'amphora'", col: 2, row: 0, status: down }
+  edges:
+    - { from: api, to: worker }
+    - { from: worker, to: glance }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack loadbalancer show web-lb -c provisioning_status"
+      when_actions: [tag-amphora-image]
+      output: |
+        +---------------------+--------+
+        | Field               | Value  |
+        +---------------------+--------+
+        | provisioning_status | ACTIVE |
+        +---------------------+--------+
+    - match: "openstack loadbalancer show web-lb -c provisioning_status"
+      evidence: lb-error
+      output: |
+        +---------------------+-------+
+        | Field               | Value |
+        +---------------------+-------+
+        | provisioning_status | ERROR |
+        +---------------------+-------+
+    - match: "openstack image show amphora-x64-haproxy-2026.2 -c tags -c status"
+      when_actions: [tag-amphora-image]
+      output: |
+        +--------+----------+
+        | Field  | Value    |
+        +--------+----------+
+        | status | active   |
+        | tags   | amphora  |
+        +--------+----------+
+    - match: "openstack image show amphora-x64-haproxy-2026.2 -c tags -c status"
+      evidence: new-image-untagged
+      output: |
+        +--------+--------+
+        | Field  | Value  |
+        +--------+--------+
+        | status | active |
+        | tags   |        |
+        +--------+--------+
+    - match: "openstack image show amphora-x64-haproxy-2026.1 -c tags -c status"
+      output: |
+        +--------+--------+
+        | Field  | Value  |
+        +--------+--------+
+        | status | active |
+        | tags   |        |
+        +--------+--------+
+
+logs:
+  - name: "/var/log/octavia/octavia-worker.log (controller-01)"
+    evidence: no-image-tag
+    lines: |
+      2026-10-26 11:02:41 ERROR octavia.controller.worker.v2.tasks.compute_tasks [-] Failed to build compute instance due to: No image with tag 'amphora' could be found
+      2026-10-26 11:02:41 WARNING octavia.controller.worker.v2.controller_worker [-] Task 'web-lb-create-amp' failed; reverting
+      2026-10-26 11:02:42 ERROR octavia.controller.worker.v2.controller_worker [-] Load balancer 'web-lb' provisioning status set to ERROR
+
+hypotheses:
+  - id: image-untagged
+    text: "Octavia selects the amphora image by the Glance tag amphora. The 2026.2 image was uploaded without it and the old one's tag was removed, so no image carries the tag and the worker can't build an amphora."
+    correct: true
+  - id: no-capacity
+    text: "Nova has no capacity for a new amphora."
+    feedback: "The worker never got as far as asking Nova to boot a VM: it failed first because no image matched the tag. A capacity failure would be a Nova error."
+  - id: lb-config
+    text: "The load balancer definition is wrong."
+    feedback: "The failure comes from building the amphora, before the listener or members are involved. The error names the image tag."
+  - id: octavia-down
+    text: "Octavia is down."
+    feedback: "The API accepted the request and octavia-worker logged exactly why it failed. The services are running."
+
+actions:
+  - id: tag-amphora-image
+    label: "openstack image set --tag amphora amphora-x64-haproxy-2026.2, then openstack loadbalancer failover web-lb"
+    kind: fix
+    feedback: "The worker can find the image again through the tag, which is how octavia.conf is set up to choose it, and the failover rebuilds the amphora for the load balancer that errored."
+  - id: use-image-id
+    label: "Hard-code the new image's ID in octavia.conf and restart the Octavia services"
+    kind: wrong
+    feedback: "It works for now, but you lose the point of the tag: the next image rotation needs another config change and restart. The tag lets you swap images without reconfiguring Octavia."
+  - id: manual-haproxy
+    label: "Launch an HAProxy VM by hand for the web team"
+    kind: wrong
+    feedback: "The team asked for Octavia. An unmanaged VM is not health-checked, failed over or updated by it."
+
+solution_paths:
+  - [tag-amphora-image]
+
+key_evidence: [no-image-tag, new-image-untagged, lb-error]
+
+evidence_labels:
+  no-image-tag: "octavia-worker: No image with tag 'amphora' could be found"
+  new-image-untagged: "amphora-x64-haproxy-2026.2 has no tags"
+  lb-error: "web-lb provisioning status is ERROR"
+
+hints:
+  nudge: "Octavia doesn't pick an image by name. How does it pick one?"
+  direction: "Read the worker log for what it was looking for, then look at the tags on the new image."
+  answer: "The new image has no amphora tag. Tag it, then fail over web-lb."
+
+analogy:
+  title: "The recipe that says \"use the jar with the red lid\""
+  text: |
+    The kitchen's recipe calls for the jar with a red lid, not a particular
+    brand. Someone swapped in a new jar and forgot to put a red lid on it,
+    and the cook came back with nothing.
+
+debrief:
+  root_cause: |
+    Octavia's controller worker looks up the amphora image by a Glance tag
+    (amp_image_tag = amphora), so images can be replaced without changing
+    its configuration. The new image was uploaded without the tag and the
+    old one's tag was removed, so no image matched and the amphora build
+    failed, leaving the load balancer in ERROR.
+  ideal_path:
+    - "Read the worker log: no image with tag 'amphora'."
+    - "Check the new image: no tags."
+    - "Tag it and fail over the load balancer."
+  real_world: |
+    Make the image upload job set the tag in the same step. The Octavia
+    docs' upload example includes --tag for exactly this reason.
+
+concepts:
+  - term: "amp_image_tag"
+    text: "An Octavia setting naming the Glance tag it uses to find the amphora image, which lets you update the image without reconfiguring Octavia."
+    url: "https://docs.openstack.org/octavia/latest/configuration/configref.html"
+  - term: "Amphora"
+    text: "The service VM, running HAProxy, that Octavia creates to carry a load balancer's traffic."
+    url: "https://docs.openstack.org/octavia/latest/admin/guides/operator-maintenance.html"
+
+sources:
+  - title: "Octavia configuration reference: amp_image_tag"
+    url: "https://docs.openstack.org/octavia/latest/configuration/configref.html"
+    retrieved: 2026-10-26
+  - title: "Octavia: operator maintenance (amphora image upload with --tag, failover)"
+    url: "https://docs.openstack.org/octavia/latest/admin/guides/operator-maintenance.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: heartbeat-bind
+    update: |
+      11:25 Reopened: web-lb now builds and shows ACTIVE, but after about a
+      minute its operating status goes to ERROR and Octavia starts failing
+      its amphora over, over and over. The new amphora boots fine each time.
+    terminal:
+      commands:
+        - match: "openstack loadbalancer show web-lb -c operating_status"
+          when_actions: [heartbeat-bind-ip]
+          output: |
+            +------------------+--------+
+            | Field            | Value  |
+            +------------------+--------+
+            | operating_status | ONLINE |
+            +------------------+--------+
+        - match: "openstack loadbalancer show web-lb -c operating_status"
+          evidence: operating-error
+          output: |
+            +------------------+-------+
+            | Field            | Value |
+            +------------------+-------+
+            | operating_status | ERROR |
+            +------------------+-------+
+        - match: "ss -lunp sport = :5555"
+          when_actions: [heartbeat-bind-ip]
+          output: |
+            State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+            UNCONN 0      0        172.16.0.10:5555      0.0.0.0:*     users:(("octavia-health",pid=2210,fd=7))
+        - match: "ss -lunp sport = :5555"
+          evidence: bound-loopback
+          output: |
+            State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+            UNCONN 0      0          127.0.0.1:5555      0.0.0.0:*     users:(("octavia-health",pid=2210,fd=7))
+    files:
+      - path: "/etc/octavia/octavia.conf"
+        language: ini
+        evidence: bind-ip-default
+        content: |
+          [health_manager]
+          bind_port = 5555
+          heartbeat_key = ****
+          controller_ip_port_list = 172.16.0.10:5555
+          heartbeat_timeout = 60
+    logs:
+      - name: "/var/log/octavia/octavia-health-manager.log (controller-01)"
+        evidence: failover-loop
+        lines: |
+          11:21:08 WARNING octavia.controller.healthmanager.health_manager [-] Amphora 7e4a... health message was not received in 60 seconds
+          11:21:08 INFO octavia.controller.healthmanager.health_manager [-] Attempting failover of amphora 7e4a...
+          11:23:41 WARNING octavia.controller.healthmanager.health_manager [-] Amphora 3b9c... health message was not received in 60 seconds
+          11:23:41 INFO octavia.controller.healthmanager.health_manager [-] Attempting failover of amphora 3b9c...
+    hypotheses:
+      - id: listener-bind
+        text: "The health manager listens on 127.0.0.1 (the bind_ip default) while amphorae send their heartbeats to 172.16.0.10, so every heartbeat is lost and Octavia concludes each amphora is dead after 60 seconds."
+        correct: true
+      - id: bad-image
+        text: "The new amphora image is broken."
+        feedback: "The amphora boots and Octavia builds the load balancer to ACTIVE. It is the heartbeat that never arrives, and every rebuilt amphora hits the same wall."
+      - id: timeout
+        text: "heartbeat_timeout is too short."
+        feedback: "60 seconds is the default. The messages are not slow; none is received at all, because nothing is listening on the address they are sent to."
+      - id: secgroup
+        text: "A security group blocks the heartbeat."
+        feedback: "The problem is visible on the controller itself: the health manager's socket is bound to loopback, which no packet from another host can reach, whatever a security group says."
+    actions:
+      - id: heartbeat-bind-ip
+        label: "Set bind_ip = 172.16.0.10 in [health_manager] and restart octavia-health-manager"
+        kind: fix
+        feedback: "The health manager now listens on the management address the amphorae send to (the one in controller_ip_port_list), so heartbeats arrive and the load balancer stays ONLINE."
+      - id: bind-all
+        label: "Set bind_ip = 0.0.0.0"
+        kind: wrong
+        feedback: "It would receive heartbeats, and on every interface of the controller including those that face outside networks. Listen only on the lb-mgmt-net address."
+      - id: raise-timeout
+        label: "Raise heartbeat_timeout to 3600"
+        kind: wrong
+        feedback: "The load balancer would sit in ERROR for an hour with no failover, which hides a dead amphora instead of recovering from it. The timeout was never the problem."
+    solution_paths:
+      - [heartbeat-bind-ip]
+    key_evidence: [bound-loopback, bind-ip-default, failover-loop, operating-error]
+    evidence_labels:
+      bound-loopback: "The health manager listens on 127.0.0.1:5555"
+      bind-ip-default: "octavia.conf sets controller_ip_port_list but no bind_ip, so it is the loopback default"
+      failover-loop: "Health manager: no heartbeat in 60 seconds, then failover, repeatedly"
+      operating-error: "web-lb's operating status is ERROR"
+    hints:
+      nudge: "Octavia says it isn't receiving heartbeats. Where would they have to arrive?"
+      direction: "Check which address the health manager is listening on and which one the amphorae are told to use."
+      answer: "bind_ip defaults to 127.0.0.1. Set it to the controller's lb-mgmt-net address, 172.16.0.10, and restart the health manager."
+    debrief:
+      root_cause: |
+        Each amphora sends a UDP heartbeat to the controller addresses in
+        controller_ip_port_list. The health manager's bind_ip defaults to
+        127.0.0.1, so it listened where no amphora could reach it. After
+        heartbeat_timeout (60 seconds) with nothing received, it declared
+        each amphora dead and failed it over, forever. The earlier image-tag
+        error had hidden this by stopping any amphora from being built.
+      ideal_path:
+        - "Read the health manager log: no heartbeat, failover loop."
+        - "Check what the health manager is bound to: 127.0.0.1."
+        - "Compare with controller_ip_port_list: 172.16.0.10."
+        - "Bind to the lb-mgmt-net address and restart."

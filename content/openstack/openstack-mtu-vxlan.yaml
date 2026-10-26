@@ -1,0 +1,237 @@
+# yaml-language-server: $schema=../../schemas/incident.json
+id: openstack-mtu-vxlan
+track: openstack
+difficulty: 4
+title: "SSH works and small requests work, but big transfers between servers hang"
+par_minutes: 25
+
+ticket:
+  from: "Platform engineer"
+  severity: SEV3
+  body: |
+    On the new app-net network, servers on different compute hosts can ping
+    each other, SSH in, and run small API calls. But scp of anything over a
+    few kilobytes hangs, and large HTTP responses stall halfway. Two
+    servers on the same compute host transfer files fine. Nothing is
+    dropping at the security group, we checked.
+
+environment: |
+  The cloud uses VXLAN tenant networks. The physical network between the
+  compute hosts carries a standard 1500-byte MTU (the network team can't
+  change that this quarter). app-net was created by a Terraform module that
+  was copied from a VMware environment and sets mtu = 1500 on every network
+  it creates. Older networks were created without that setting.
+
+diagram:
+  nodes:
+    - { id: a, label: "app-01 (compute-01)", col: 0, row: 0, status: ok }
+    - { id: net, label: "VXLAN over 1500-byte underlay", col: 1, row: 0, status: degraded }
+    - { id: b, label: "app-02 (compute-02)", col: 2, row: 0, status: ok }
+  edges:
+    - { from: a, to: net }
+    - { from: net, to: b }
+
+terminal:
+  prompt: "ops@controller-01:~$"
+  commands:
+    - match: "openstack network show app-net -c mtu -c provider:network_type"
+      when_actions: [set-network-mtu]
+      output: |
+        +-----------------------+-------+
+        | Field                 | Value |
+        +-----------------------+-------+
+        | mtu                   | 1450  |
+        | provider:network_type | vxlan |
+        +-----------------------+-------+
+    - match: "openstack network show app-net -c mtu -c provider:network_type"
+      evidence: network-mtu-1500
+      output: |
+        +-----------------------+-------+
+        | Field                 | Value |
+        +-----------------------+-------+
+        | mtu                   | 1500  |
+        | provider:network_type | vxlan |
+        +-----------------------+-------+
+    - match: "openstack network show legacy-net -c mtu -c provider:network_type"
+      evidence: other-network-1450
+      output: |
+        +-----------------------+-------+
+        | Field                 | Value |
+        +-----------------------+-------+
+        | mtu                   | 1450  |
+        | provider:network_type | vxlan |
+        +-----------------------+-------+
+
+logs:
+  - name: "Path MTU test from app-01 to app-02 (ping with the don't-fragment bit)"
+    evidence: pmtu-1450
+    lines: |
+      $ ping -c 2 -M do -s 1422 10.60.0.12    # 1450-byte packets
+      2 packets transmitted, 2 received, 0% packet loss
+      $ ping -c 2 -M do -s 1423 10.60.0.12    # 1451-byte packets
+      2 packets transmitted, 0 received, 100% packet loss
+      $ ip -br link show eth0
+      eth0   UP   fa:16:3e:5a:11:0b   <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+
+hypotheses:
+  - id: mtu-too-big
+    text: "app-net advertises an MTU of 1500, but VXLAN adds about 50 bytes of headers on a 1500-byte underlay. Full-size packets between hosts don't fit and are dropped. Small packets and same-host traffic are not affected."
+    correct: true
+  - id: security-group
+    text: "A security group is dropping the larger packets."
+    feedback: "Security groups match on protocol, port and address, not on packet size. The same flow works for small packets, and the path test fails at one exact size, 1451 bytes."
+  - id: tcp-stack
+    text: "The servers' TCP stack is misconfigured."
+    feedback: "Two servers on the same compute host transfer fine with the same settings. What differs is the path between hosts."
+  - id: nic
+    text: "A physical NIC or switch port on the compute hosts is faulty."
+    feedback: "Small packets cross the same hardware without loss, and the failure begins at exactly 1451 bytes. A faulty port would not care about size."
+
+actions:
+  - id: set-network-mtu
+    label: "openstack network set --mtu 1450 app-net, and remove the mtu = 1500 override from the Terraform module"
+    kind: fix
+    feedback: "1450 is what a 1500-byte underlay can carry after VXLAN's headers, the same value legacy-net already has. The network's MTU is advertised to servers by DHCP, and fixing the module stops new networks being created wrong."
+  - id: guest-mtu
+    label: "ip link set dev eth0 mtu 1450 on every server by hand"
+    kind: wrong
+    feedback: "It helps those servers until they reboot or renew their lease, and the network keeps advertising 1500 to everything new. The wrong value is on the network, so fix it there."
+  - id: jumbo-frames
+    label: "Ask the network team to enable jumbo frames on the physical switches"
+    kind: wrong
+    feedback: "That is a valid design later, but the network team has said it can't be done this quarter, and until it is done the cloud must work at 1450."
+
+solution_paths:
+  - [set-network-mtu]
+
+key_evidence: [network-mtu-1500, other-network-1450, pmtu-1450]
+
+evidence_labels:
+  network-mtu-1500: "app-net has mtu 1500 on a VXLAN network"
+  other-network-1450: "legacy-net, created without the override, has mtu 1450"
+  pmtu-1450: "Packets up to 1450 bytes cross; 1451 bytes are lost"
+
+hints:
+  nudge: "Small works, big hangs, and it fails at exactly one size. What is special about that number?"
+  direction: "Compare app-net's MTU with an older network's, and with what the physical network carries once VXLAN headers are added."
+  answer: "app-net should be 1450 (1500 minus the VXLAN headers). Set it with network set --mtu and remove the override from the Terraform module."
+
+analogy:
+  title: "The lorry that is a few centimetres too tall for the tunnel"
+  text: |
+    Cars and vans go through all day. The big lorries wait at the entrance
+    forever. The road is fine and the lorries are fine: the lorry plus its
+    roof box is a little taller than the tunnel, and nobody measured.
+
+debrief:
+  root_cause: |
+    VXLAN wraps every packet in extra headers (about 50 bytes with IPv4
+    endpoints). On a 1500-byte physical network a tenant network can
+    therefore carry at most about 1450 bytes. app-net was created with
+    mtu = 1500, so servers sent 1500-byte packets that become 1550 bytes on
+    the wire and are dropped between hosts. Small packets fit, and servers on
+    the same host never use the tunnel.
+  ideal_path:
+    - "Note the pattern: small works, large hangs, same-host works."
+    - "Find the exact size where it fails: 1451 bytes."
+    - "Compare app-net's MTU (1500) with an older VXLAN network's (1450)."
+    - "Set the network MTU to 1450 and fix the module."
+  real_world: |
+    Treat 1500 on an overlay network as a bug. Let Neutron compute the MTU
+    from the physical network unless you have a reason to set it.
+
+concepts:
+  - term: "Overlay overhead"
+    text: "VXLAN encapsulation adds headers to each packet, so the MTU of the tenant network has to be smaller than the physical network's MTU by that overhead. The Neutron docs give 9000 to 8950 as the example."
+    url: "https://docs.openstack.org/neutron/latest/admin/config-mtu.html"
+  - term: "Path MTU"
+    text: "The largest packet that can cross the whole path without fragmenting. A packet with the don't-fragment bit set that exceeds it is dropped."
+    url: "https://docs.openstack.org/neutron/latest/admin/config-mtu.html"
+
+sources:
+  - title: "Neutron: MTU considerations (VXLAN example 9000 to 8950; DHCP supplies MTU; net-mtu-writable)"
+    url: "https://docs.openstack.org/neutron/latest/admin/config-mtu.html"
+    retrieved: 2026-10-26
+  - title: "OpenStack client: network set (--mtu)"
+    url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/network.html"
+    retrieved: 2026-10-26
+
+stages:
+  - id: static-guest-mtu
+    update: |
+      Next day: app-net now reports 1450 and most servers are fine after
+      their DHCP renewal. web-03 and web-04, built from the hardened image,
+      still hang on large transfers after a reboot. Their interface still
+      shows mtu 1500.
+    terminal:
+      commands:
+        - match: "curl -s --max-time 20 -o /dev/null -w '%{http_code} %{size_download}\\n' http://10.60.0.13/big.bin"
+          when_actions: [remove-static-mtu]
+          output: |
+            200 52428800
+        - match: "curl -s --max-time 20 -o /dev/null -w '%{http_code} %{size_download}\\n' http://10.60.0.13/big.bin"
+          evidence: transfer-stalls
+          output: |
+            000 14480
+        - match: "openstack network show app-net -c mtu"
+          evidence: network-now-1450
+          output: |
+            +-------+-------+
+            | Field | Value |
+            +-------+-------+
+            | mtu   | 1450  |
+            +-------+-------+
+    files:
+      - path: "/etc/netplan/50-cloud-init.yaml"
+        language: yaml
+        evidence: static-mtu-netplan
+        content: |
+          network:
+            version: 2
+            ethernets:
+              ens3:
+                dhcp4: true
+                mtu: 1500
+    hypotheses:
+      - id: image-pins-mtu
+        text: "The hardened image's network config pins mtu: 1500, so web-03 and web-04 ignore the value DHCP now advertises."
+        correct: true
+      - id: network-not-updated
+        text: "The network change didn't take effect."
+        feedback: "app-net reports 1450 and other servers on it pick it up. Only the two with a pinned value in their own network config are still at 1500."
+      - id: dhcp-agent
+        text: "The DHCP agent isn't sending the MTU."
+        feedback: "Other servers on the same network received the new value. The two that don't have a static setting that overrides whatever DHCP sends."
+    actions:
+      - id: remove-static-mtu
+        label: "Remove the mtu: 1500 line from the netplan config in the hardened image (and apply it on web-03 and web-04)"
+        kind: fix
+        feedback: "DHCP supplies the network's MTU, so the servers follow the network from now on and a future change to it needs no image rebuild."
+      - id: hardcode-1450
+        label: "Change the pinned value to mtu: 1450 in the image"
+        kind: wrong
+        feedback: "It works today, and it pins another copy of the number in a place that nobody updates when the network changes."
+      - id: reboot-only
+        label: "Just reboot web-03 and web-04 again"
+        kind: wrong
+        feedback: "They already rebooted and came back at 1500, because the pinned value is in their own configuration."
+    solution_paths:
+      - [remove-static-mtu]
+    key_evidence: [network-now-1450, static-mtu-netplan, transfer-stalls]
+    evidence_labels:
+      transfer-stalls: "A 50 MB download from web-03 stalls after 14,480 bytes"
+      network-now-1450: "app-net reports mtu 1450"
+      static-mtu-netplan: "The image's netplan sets mtu: 1500"
+    hints:
+      nudge: "The network is right. What is different about these two servers?"
+      direction: "Read the network config the hardened image ships with."
+      answer: "The image pins mtu: 1500. Remove the line so DHCP's value is used."
+    debrief:
+      root_cause: |
+        Fixing the network updated the MTU that DHCP advertises. The
+        hardened image's own netplan configuration pinned mtu: 1500, which
+        overrides that, so servers built from it stayed at 1500.
+      ideal_path:
+        - "Confirm the network is right and most servers follow it."
+        - "Compare with the two that don't: their image."
+        - "Remove the pinned MTU so DHCP decides."

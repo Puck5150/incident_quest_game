@@ -34,6 +34,14 @@
   summary: "Lists the compute instances in the current project."
   parts:
     - { token: "server list", meaning: "List servers: ID, name, status, networks and image." }
+    - { token: "--host compute-05", meaning: "Only servers running on this compute host (admin only)." }
+    - { token: "--all-projects", meaning: "Include every project's servers, not just yours (admin only)." }
+    - { token: "--long", meaning: "Add more columns, such as flavor and host." }
+    - { token: "-c Name", meaning: "Keep only the Name column." }
+    - { token: "-c Status", meaning: "Keep only the Status column." }
+    - { token: "-c Flavor", meaning: "Keep only the Flavor column." }
+    - { token: "-c Host", meaning: "Keep only the compute host the server runs on (with --long)." }
+    - { token: "--status BUILD", meaning: "Only servers in this state; BUILD means still being created." }
   why: "It is the simplest authenticated read, so it doubles as a check that your login, project and permissions all work."
   alternatives:
     - { command: "openstack server show <name>", note: "Every detail about one server." }
@@ -444,3 +452,62 @@
   alternatives:
     - { command: "openstack stack resource list <stack>", note: "Check what it will remove first." }
   docs: { title: "python-heatclient: stack delete", url: "https://docs.openstack.org/python-heatclient/latest/cli/stack.html" }
+
+- id: openstack-network-show
+  match: "^openstack network show "
+  summary: "Prints a Neutron network's MTU and type, keeping only the fields you pick."
+  parts:
+    - { token: "network show app-net", meaning: "Details of one network, by name or ID." }
+    - { token: "-c mtu", meaning: "Keep only the MTU the network advertises to its ports." }
+    - { token: "-c provider:network_type", meaning: "Keep only how the network is carried: vxlan, vlan, flat..." }
+  why: "The MTU a network hands to its servers has to fit inside what the underlay carries. An overlay such as VXLAN adds headers, so its MTU has to be lower."
+  alternatives:
+    - { command: "openstack network list --long", note: "The same fields for every network." }
+  docs: { title: "Neutron: MTU considerations", url: "https://docs.openstack.org/neutron/latest/admin/config-mtu.html" }
+
+- id: openstack-image-show
+  match: "^openstack image show "
+  summary: "Prints one image's status and tags, keeping only the fields you pick."
+  parts:
+    - { token: "image show amphora-x64-haproxy-2026.2", meaning: "Details of one image, by name or ID." }
+    - { token: "-c tags", meaning: "Keep only the tags set on the image." }
+    - { token: "-c status", meaning: "Keep only the status." }
+  why: "Services such as Octavia find an image by tag, not by name. An image with the right name and no tag is invisible to them."
+  alternatives:
+    - { command: "openstack image list --tag amphora", note: "Which images carry a tag." }
+  docs: { title: "OpenStack client: image show", url: "https://docs.openstack.org/python-openstackclient/latest/cli/command-objects/image-v2.html" }
+
+- id: openstack-loadbalancer-show
+  match: "^openstack loadbalancer show "
+  summary: "Prints a load balancer's provisioning and operating status."
+  parts:
+    - { token: "loadbalancer show web-lb", meaning: "Details of one Octavia load balancer." }
+    - { token: "-c provisioning_status", meaning: "Keep only whether Octavia finished building it (ACTIVE, ERROR...)." }
+    - { token: "-c operating_status", meaning: "Keep only whether it is working (ONLINE, ERROR...)." }
+  why: "Provisioning says whether the load balancer was built. Operating says whether it is healthy. They fail for different reasons."
+  alternatives:
+    - { command: "openstack loadbalancer amphora list", note: "The amphora VMs behind a load balancer and their status." }
+  docs: { title: "Octavia: load balancer commands", url: "https://docs.openstack.org/python-octaviaclient/latest/cli/index.html" }
+
+- id: nova-manage-db-version
+  match: "^(sudo )?nova-manage (api_)?db version$"
+  summary: "Prints the schema version of Nova's database."
+  parts:
+    - { token: "nova-manage", meaning: "Nova's administrative tool; it talks to the database directly." }
+    - { token: "api_db version", meaning: "(If given) the API database. Without api_ it is the main (cell) database." }
+    - { token: "db version", meaning: "Print the current schema version." }
+  why: "After a package upgrade the code expects a newer schema. Comparing the database's version with what the new release needs shows whether the sync was run."
+  alternatives:
+    - { command: "nova-status upgrade check", note: "Release-specific readiness checks." }
+  docs: { title: "nova-manage", url: "https://docs.openstack.org/nova/latest/cli/nova-manage.html" }
+
+- id: nova-manage-online-data-migrations
+  match: "^(sudo )?nova-manage db online_data_migrations"
+  summary: "Moves existing data in Nova's database to the layout the new release uses, in batches."
+  parts:
+    - { token: "db online_data_migrations", meaning: "Run the data migrations that are done while the cloud is running." }
+    - { token: "--max-count 1000", meaning: "Handle at most this many objects per run. Without it, batches of 50 until done." }
+  why: "The schema sync changes the tables; this moves the rows. Its exit status says whether it finished: only 0 means nothing is left."
+  alternatives:
+    - { command: "nova-status upgrade check", note: "Readiness checks before the next upgrade." }
+  docs: { title: "nova-manage: db online_data_migrations", url: "https://docs.openstack.org/nova/latest/cli/nova-manage.html" }
