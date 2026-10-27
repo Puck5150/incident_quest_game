@@ -32,10 +32,14 @@ const slug = (s: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
 
-export function addNode(c: CanvasChallenge, d: Design, type: string, lane: string): Design | string {
+// A challenge may carry its own cap (the sandbox does); scored ones use MAX_NODES.
+export type Capped = CanvasChallenge & { max_nodes?: number }
+
+export function addNode(c: Capped, d: Design, type: string, lane: string): Design | string {
   const p = c.palette.find((x) => x.id === type)
   if (!p) return 'Unknown component.'
-  if (d.nodes.length >= MAX_NODES) return `A design can have at most ${MAX_NODES} components.`
+  const max = c.max_nodes ?? MAX_NODES
+  if (d.nodes.length >= max) return `A design can have at most ${max} components.`
   if (!lanesFor(c, type).some((l) => l.id === lane)) return `${p.label} can't go in ${laneLabel(c, lane)}.`
   const base = slug(p.short ?? p.label)
   let n = 1
