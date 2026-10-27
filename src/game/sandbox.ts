@@ -19,8 +19,8 @@ export const SPIKE = 3 // the traffic-spike check: this many times normal traffi
 export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxChallenge | string {
   if (base.provider !== f.provider) return `extends "${base.id}", which is a ${base.provider} challenge, not ${f.provider}`
   const taken = new Set(base.palette.map((p) => p.id))
-  const clash = f.palette.find((p) => taken.has(p.id))
-  if (clash) return `palette id "${clash.id}" is already in ${base.id}'s palette`
+  const clash = f.palette.find((p, i) => taken.has(p.id) || f.palette.findIndex((q) => q.id === p.id) !== i)
+  if (clash) return `palette id "${clash.id}" is already in ${base.id}'s palette or repeated`
   return {
     type: 'challenge',
     mode: 'canvas',
@@ -47,6 +47,7 @@ export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxCh
   }
 }
 
+const isNeutral = (c: SandboxChallenge, type: string) => rolesOf(c, type).every((r) => r === 'neutral') && rolesOf(c, type).length > 0
 const rolesOf = (c: SandboxChallenge, type: string) => c.palette.find((p) => p.id === type)?.roles ?? []
 
 // The checks on offer for this design. Only roles the design contains are
@@ -73,11 +74,35 @@ export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
   return tests
 }
 
+// The engine knows nothing of neutral parts, so judge a filtered copy: neutral
+// parts at the front (users -> cdn -> waf -> alb) are transparent, linking users
+// straight to what they feed; every other neutral part, and every link touching
+// one, is dropped, so a queue or cache in the middle carries no user traffic.
+function withoutNeutral(c: SandboxChallenge, d: Design): Design {
+  const neutral = new Set(d.nodes.filter((n) => isNeutral(c, n.type)).map((n) => n.id))
+  const front = new Set<string>()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const e of d.edges)
+      if (e.kind === 'traffic' && neutral.has(e.to) && !front.has(e.to) && (e.from === USERS || front.has(e.from))) {
+        front.add(e.to)
+        grew = true
+      }
+  }
+  const through = d.edges
+    .filter((e) => e.kind === 'traffic' && front.has(e.from) && !neutral.has(e.to))
+    .map((e) => ({ ...e, from: USERS }))
+  const kept = d.edges.filter((e) => !neutral.has(e.from) && !neutral.has(e.to))
+  const seen = new Set(kept.map((e) => `${e.from}>${e.to}`))
+  return { nodes: d.nodes.filter((n) => !neutral.has(n.id)), edges: [...kept, ...through.filter((e) => !seen.has(`${e.from}>${e.to}`))] }
+}
+
 // Runs one check. The engine fails every occupied zone that no zone test names
 // (so a design can't hide in an unlisted zone); passing the whole generated
 // menu names every occupied zone, so a single zone check reports only its zone.
 export function runCheck(c: SandboxChallenge, d: Design, testId: string): CanvasTestResult | undefined {
-  return evaluateCanvas({ ...c, stress_tests: sandboxChecks(c, d) }, d).tests.find((t) => t.id === testId)
+  const judged = withoutNeutral(c, d)
+  return evaluateCanvas({ ...c, stress_tests: sandboxChecks(c, d) }, judged).tests.find((t) => t.id === testId)
 }
 
 // The first reason this design couldn't have been built in this cloud's editor, or undefined.

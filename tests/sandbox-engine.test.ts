@@ -4,7 +4,7 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
-import { resolveSandbox, runCheck, sandboxChecks, validateDesign, SANDBOX_MAX_NODES } from '../src/game/sandbox.ts'
+import { resolveSandbox, runCheck, sandboxChecks, validateDesign, SANDBOX_MAX_NODES, SPIKE } from '../src/game/sandbox.ts'
 import type { SandboxChallenge, SandboxFile } from '../src/schema/sandbox.ts'
 import type { Design } from '../src/schema/canvas.ts'
 
@@ -71,6 +71,10 @@ describe('resolveSandbox', () => {
     expect(c.provider).toBe('aws')
   })
 
+  it('refuses duplicate ids among its own extra parts', () => {
+    expect(resolveSandbox({ ...file, palette: [file.palette[0], file.palette[0]] }, base)).toMatch(/sqs/)
+  })
+
   it('refuses a base from another cloud or a colliding palette id', () => {
     const azure = canvases.find((x) => x.provider === 'azure')!
     expect(resolveSandbox(file, azure)).toMatch(/aws/)
@@ -106,8 +110,10 @@ describe('sandboxChecks', () => {
     const checks = sandboxChecks(c, noDb)
     expect(checks.every((t) => !t.check.reach.includes('write-store'))).toBe(true)
     expect(outcome(noDb)['zone-use1-az1']).toBe(false) // the only web server is gone, not "no database"
+    expect(runCheck(c, noDb, 'zone-use1-az1')!.reasons.join(' ')).not.toMatch(/database/i)
     const dbOnly: Design = { nodes: [node('rds-1', 'rds', 'use1-az1')], edges: [] }
     expect(sandboxChecks(c, dbOnly).some((t) => t.id === 'spike')).toBe(false)
+    expect(sandboxChecks(c, dbOnly).every((t) => t.check.reach.join() === 'write-store')).toBe(true)
   })
 })
 
@@ -141,6 +147,32 @@ describe('runCheck', () => {
     expect(runCheck(c, twoZone, 'nope')).toBeUndefined()
   })
 
+  it('a neutral part in front of the load balancer (or a chain of them) changes nothing', () => {
+    const front: Design = {
+      nodes: [...twoZone.nodes, node('cdn-1', 'cdn', 'global'), node('cdn-2', 'cdn', 'global')],
+      edges: [...twoZone.edges.filter((e) => e.from !== 'users'), traffic('users', 'cdn-1'), traffic('cdn-1', 'alb-1')],
+    }
+    expect(outcome(front)).toEqual(outcome(twoZone))
+    const chain: Design = {
+      nodes: front.nodes,
+      edges: [...twoZone.edges.filter((e) => e.from !== 'users'), traffic('users', 'cdn-1'), traffic('cdn-1', 'cdn-2'), traffic('cdn-2', 'alb-1')],
+    }
+    expect(outcome(chain)).toEqual(outcome(twoZone))
+  })
+
+  it('a queue between the load balancer and a web server does not make it reachable', () => {
+    const viaQueue: Design = {
+      nodes: [node('alb-1', 'alb', 'use1'), node('sqs-1', 'sqs', 'use1'), node('web-1', 'ec2-web', 'use1-az1'), node('web-2', 'ec2-web', 'use1-az2')],
+      edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1'), traffic('alb-1', 'sqs-1'), traffic('sqs-1', 'web-2')],
+    }
+    expect(outcome(viaQueue)['zone-use1-az1']).toBe(false) // web-2 is only behind the queue, so it can't take over
+  })
+
+  it('pins the spike: one web server is 2x, short of 3x', () => {
+    expect(outcome(oneZone).spike).toBe(false)
+    expect(sandboxChecks(c, twoZone).find((t) => t.id === 'spike')!.check.capacity).toBe(SPIKE)
+  })
+
   it('neutral parts neither help nor hurt a result', () => {
     const withQueue: Design = { nodes: [...twoZone.nodes, node('sqs-1', 'sqs', 'use1')], edges: [...twoZone.edges, traffic('web-1', 'sqs-1')] }
     expect(outcome(withQueue)).toEqual(outcome(twoZone))
@@ -158,6 +190,7 @@ describe('validateDesign', () => {
     ['a duplicate id', { nodes: [node('a', 'alb', 'use1'), node('a', 'alb', 'use1')], edges: [] }, /Duplicate/],
     ['the reserved id', { nodes: [node('users', 'alb', 'use1')], edges: [] }, /reserved/],
     ['a link to nowhere', { nodes: [node('alb-1', 'alb', 'use1')], edges: [traffic('alb-1', 'ghost')] }, /ghost/],
+    ['a link from nowhere', { nodes: [node('alb-1', 'alb', 'use1')], edges: [traffic('ghost', 'alb-1')] }, /ghost/],
     [
       'replication between non-databases',
       { nodes: [node('alb-1', 'alb', 'use1'), node('web-1', 'ec2-web', 'use1-az1')], edges: [{ from: 'alb-1', to: 'web-1', kind: 'sync' as const }] },
@@ -165,6 +198,11 @@ describe('validateDesign', () => {
     ],
   ])('rejects %s', (_name, d, message) => {
     expect(validateDesign(c, d as Design)).toMatch(message)
+  })
+
+  it('accepts exactly the cap', () => {
+    const at: Design = { nodes: Array.from({ length: SANDBOX_MAX_NODES }, (_, i) => node(`w-${i}`, 'ec2-web', 'use1-az1')), edges: [] }
+    expect(validateDesign(c, at)).toBeUndefined()
   })
 
   it('rejects a design over the cap', () => {
