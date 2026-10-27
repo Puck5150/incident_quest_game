@@ -26,6 +26,14 @@ describe('the pure operations', () => {
     expect(deleteDesign(one, 'nope')).toEqual(one)
   })
 
+  it('createDesign never reuses an id; rename and update of an unknown id change nothing', () => {
+    const one = createDesign(emptySandbox(), { id: 'a1', name: 'One', provider: 'aws', now })
+    const two = createDesign(one, { id: 'a1', name: 'Two', provider: 'aws', now })
+    expect(new Set(two.designs.map((d) => d.id)).size).toBe(2)
+    expect(renameDesign(one, 'nope', 'X')).toEqual(one)
+    expect(updateDesign(one, 'nope', design, now)).toEqual(one)
+  })
+
   it('names are trimmed, never empty and at most 60 characters', () => {
     expect(createDesign(emptySandbox(), { id: 'a', name: '   ', provider: 'gcp', now }).designs[0].name).toBe('Untitled design')
     expect(createDesign(emptySandbox(), { id: 'a', name: 'x'.repeat(100), provider: 'gcp', now }).designs[0].name).toHaveLength(60)
@@ -61,6 +69,32 @@ describe('loadSandbox and saveSandbox', () => {
     const backups = [...s.data.entries()].filter(([k]) => k.startsWith(`${KEY}:backup-`))
     expect(backups).toHaveLength(1)
     expect(backups[0][1]).toBe(raw)
+  })
+
+  it('loading garbage twice leaves one backup and a valid empty store', () => {
+    const s = fake('garbage')
+    loadSandbox(s)
+    expect(JSON.parse(s.data.get(KEY)!)).toEqual(emptySandbox())
+    loadSandbox(s)
+    expect([...s.data.keys()].filter((k) => k.startsWith(`${KEY}:backup-`))).toHaveLength(1)
+  })
+
+  it('when the backup fails, saving refuses and the original stays until a clean load', () => {
+    const s = fake('garbage')
+    const picky = { getItem: s.getItem, setItem: (k: string, v: string) => { if (k.includes('backup')) throw new Error('quota'); s.setItem(k, v) } }
+    expect(loadSandbox(picky)).toEqual(emptySandbox())
+    expect(saveSandbox(createDesign(emptySandbox(), { id: 'a', name: 'n', provider: 'aws', now }), picky)).toBe(false)
+    expect(s.data.get(KEY)).toBe('garbage')
+    s.data.delete(KEY)
+    loadSandbox(s)
+    expect(saveSandbox(emptySandbox(), s)).toBe(true)
+  })
+
+  it('duplicate design ids are invalid and backed up', () => {
+    const d = { id: 'a', name: 'n', provider: 'aws', design: { nodes: [], edges: [] }, updatedAt: 'x' }
+    const s = fake(JSON.stringify({ version: 1, designs: [d, d] }))
+    expect(loadSandbox(s)).toEqual(emptySandbox())
+    expect([...s.data.keys()].filter((k) => k.startsWith(`${KEY}:backup-`))).toHaveLength(1)
   })
 
   it('works when storage throws on read, and reports a failed write', () => {

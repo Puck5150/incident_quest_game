@@ -46,12 +46,17 @@ function readData(x: unknown): SandboxData | undefined {
     if (!isObj(d) || !isStr(d.id) || !d.id || !isStr(d.name) || !isProvider(d.provider) || !isStr(d.updatedAt)) return undefined
     const design = readDesign(d.design)
     if (!design) return undefined
+    if (designs.some((x) => x.id === d.id)) return undefined
     designs.push({ id: d.id, name: d.name, provider: d.provider, design, updatedAt: d.updatedAt })
   }
   return { version: 1, designs }
 }
 
+// Set when invalid data could not be backed up: saving then would overwrite the only copy.
+let unsafeToSave = false
+
 export function loadSandbox(storage?: Store): SandboxData {
+  unsafeToSave = false
   try {
     const store = storage ?? localStorage
     const raw = store.getItem(KEY)
@@ -62,7 +67,14 @@ export function loadSandbox(storage?: Store): SandboxData {
     } catch {
       // not JSON: fall through to the backup
     }
-    store.setItem(`${KEY}:backup-${Date.now()}`, raw)
+    try {
+      store.setItem(`${KEY}:backup-${Date.now()}`, raw)
+    } catch {
+      unsafeToSave = true
+      return emptySandbox()
+    }
+    // Replace the bad value so a reload does not pile up another backup.
+    store.setItem(KEY, JSON.stringify(emptySandbox()))
   } catch {
     // storage blocked: fall through to an empty store
   }
@@ -71,6 +83,7 @@ export function loadSandbox(storage?: Store): SandboxData {
 
 // false when the write failed (blocked or full): the designs last for this visit only.
 export function saveSandbox(data: SandboxData, storage?: Store): boolean {
+  if (unsafeToSave) return false
   try {
     const store = storage ?? localStorage
     store.setItem(KEY, JSON.stringify(data))
@@ -85,7 +98,7 @@ export const newId = () => `${Date.now().toString(36)}${Math.random().toString(3
 
 export const createDesign = (data: SandboxData, a: { id: string; name: string; provider: Provider; now?: Date }): SandboxData => ({
   ...data,
-  designs: [...data.designs, { id: a.id, name: cleanName(a.name), provider: a.provider, design: { nodes: [], edges: [] }, updatedAt: (a.now ?? new Date()).toISOString() }],
+  designs: [...data.designs, { id: data.designs.some((d) => d.id === a.id) ? newId() : a.id, name: cleanName(a.name), provider: a.provider, design: { nodes: [], edges: [] }, updatedAt: (a.now ?? new Date()).toISOString() }],
 })
 export const renameDesign = (data: SandboxData, id: string, name: string): SandboxData => ({
   ...data,
