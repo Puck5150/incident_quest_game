@@ -13,7 +13,7 @@ import { MAX_NODES, ROLES, USERS } from './constants.ts'
 
 export { MAX_NODES, ROLES, USERS } from './constants.ts'
 
-const PaletteItemSchema = z.strictObject({
+export const PaletteItemSchema = z.strictObject({
   id,
   label: z.string().min(1),
   short: z.string().min(1).max(22).optional(),
@@ -49,6 +49,19 @@ const CheckSchema = z.strictObject({
   capacity: z.number().positive().optional(), // surviving `serve` capacity needed
 })
 
+export const LayoutSchema = z.strictObject({
+  regions: z
+    .array(
+      z.strictObject({
+        id,
+        label: z.string().min(1),
+        zones: z.array(z.strictObject({ id, label: z.string().min(1) })).min(1),
+      }),
+    )
+    .min(1),
+  global: z.boolean().default(false),
+})
+
 export const CanvasChallengeSchema = z
   .strictObject({
     type: z.literal('challenge'),
@@ -65,18 +78,7 @@ export const CanvasChallengeSchema = z
     requirements: z.array(z.string().min(1)).min(1),
     budget: z.number().positive(),
 
-    layout: z.strictObject({
-      regions: z
-        .array(
-          z.strictObject({
-            id,
-            label: z.string().min(1),
-            zones: z.array(z.strictObject({ id, label: z.string().min(1) })).min(1),
-          }),
-        )
-        .min(1),
-      global: z.boolean().default(false),
-    }),
+    layout: LayoutSchema,
     palette: z.array(PaletteItemSchema).min(2),
     // Facts about the two replication link types, shown next to the connect controls.
     link_facts: z.strictObject({ sync: z.array(z.string().min(1)).min(1), async: z.array(z.string().min(1)).min(1) }),
