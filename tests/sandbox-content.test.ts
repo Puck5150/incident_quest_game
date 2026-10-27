@@ -47,6 +47,10 @@ describe('sandbox files', () => {
     expect(new Set(s.palette.map((p) => p.id)).size).toBe(s.palette.length)
   })
 
+  it('every cloud has a sandbox', () => {
+    expect(content.sandboxes.map((s) => s.provider).sort()).toEqual(['aws', 'azure', 'gcp'])
+  })
+
   it('a sandbox file whose extends names another cloud is rejected by the build', () => {
     const tmp = fs.mkdtempSync(path.join(import.meta.dirname, '.tmp-sb-'))
     try {
@@ -71,7 +75,7 @@ describe('sandbox files', () => {
       .replace(/import\(/g, 'fakeImport(')
     const fakeImport = (id: string) => Promise.resolve({ default: { fetched: id } })
     const loadSandbox = new Function('fakeImport', `${body}\nreturn loadSandbox`)(fakeImport)
-    const none = loadSandbox('azure')
+    const none = loadSandbox('nope')
     expect(typeof none.then).toBe('function')
     expect(await none).toBeUndefined()
     expect(await loadSandbox('aws')).toBeDefined()

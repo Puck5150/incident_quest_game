@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=../../schemas/sandbox.json
+type: sandbox
+id: azure-sandbox
+provider: azure
+title: "Azure design sandbox"
+extends: azure-portal-canvas
+
+layout:
+  global: true
+  regions:
+    - id: eus2
+      label: "East US 2"
+      zones:
+        - { id: eus2-z1, label: "Zone 1" }
+        - { id: eus2-z2, label: "Zone 2" }
+    - id: wus2
+      label: "West US 2"
+      zones:
+        - { id: wus2-z1, label: "Zone 1 (West US 2)" }
+        - { id: wus2-z2, label: "Zone 2 (West US 2)" }
+
+palette:
+  - id: service-bus
+    label: "Azure Service Bus namespace"
+    short: "Service Bus"
+    scope: regional
+    roles: [neutral]
+    cost: 1
+    facts:
+      - "A managed message broker with queues and publish-subscribe topics, so one part of a system can hand work to another without both being online at once."
+      - "In a region with availability zones, a namespace is zone-redundant automatically at no extra cost: messages are copied synchronously across zones before they are acknowledged, so losing one zone loses no data."
+      - "Surviving a whole-region outage needs the Premium tier and Geo-Replication, and you promote the secondary region yourself."
+  - id: managed-redis
+    label: "Azure Managed Redis cache"
+    short: "cache"
+    scope: regional
+    roles: [neutral]
+    cost: 2
+    facts:
+      - "Microsoft is retiring Azure Cache for Redis and recommends Azure Managed Redis as its replacement, so this part models the newer service."
+      - "With high availability on, the cache has at least two nodes, and in a region with availability zones they sit in different zones. Without high availability, the cache has no second node to fall back on."
+      - "Replication between the nodes is asynchronous, so writes not yet copied to another zone can be lost in a zone failure. Failover to a healthy zone typically takes 10 to 15 seconds."
+      - "High availability does not cover a whole-region outage; that takes active geo-replication between caches in different regions."
+  - id: blob
+    label: "Azure Blob Storage account"
+    short: "Blob"
+    scope: regional
+    roles: [neutral]
+    cost: 1
+    facts:
+      - "With zone-redundant storage (ZRS), data is written synchronously to three or more availability zones in the region, so it stays readable and writable if one zone is lost."
+      - "With locally redundant storage (LRS), all copies sit in one datacenter in the region. That protects against drive, server and rack failures, but a fire or flood in that datacenter could destroy them all."
+      - "Geo-redundant options (GRS and GZRS) add an asynchronous copy in a second, distant region. Because that copy lags, a regional disaster can lose the most recent writes."
+
+sources:
+  - title: "Introduction to Azure Service Bus Messaging"
+    url: "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-messaging-overview"
+    retrieved: 2026-10-27
+  - title: "Reliability in Azure Service Bus"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-service-bus"
+    retrieved: 2026-10-27
+  - title: "High availability for Azure Cache for Redis"
+    url: "https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/cache-high-availability"
+    retrieved: 2026-10-27
+  - title: "Reliability in Azure Managed Redis"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-managed-redis"
+    retrieved: 2026-10-27
+  - title: "Data redundancy - Azure Storage"
+    url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy"
+    retrieved: 2026-10-27
