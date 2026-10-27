@@ -1,7 +1,7 @@
 # Design sandbox
 
 Date: 2026-10-27
-Status: draft for review
+Status: implemented on branch design-sandbox
 
 ## Purpose
 
@@ -55,9 +55,14 @@ the rest of the content (and previewable like other kinds). Each file has:
   | part | AWS | Azure | Google Cloud |
   |---|---|---|---|
   | queue | Amazon SQS | Azure Service Bus | Pub/Sub |
-  | cache | Amazon ElastiCache | Azure Cache for Redis | Memorystore |
+  | cache | Amazon ElastiCache | Azure Managed Redis (`managed-redis`; Azure Cache for Redis is being retired) | Memorystore for Redis (a zonal node) |
   | object storage | Amazon S3 | Azure Blob Storage | Cloud Storage |
   | CDN | Amazon CloudFront | (Azure Front Door, already in the base palette) | Cloud CDN |
+
+  Scopes follow the docs: SQS, S3, Service Bus, Managed Redis, Blob Storage and
+  Cloud Storage are regional; ElastiCache and Memorystore (a node) are zonal;
+  CloudFront and Cloud CDN are global, and so is Pub/Sub (Google calls it a
+  global service).
 
   Each has `facts` and the file has `sources` (title, url, retrieved), written
   from the vendor documentation in our own words. Questions about what a
@@ -71,7 +76,11 @@ the rest of the content (and previewable like other kinds). Each file has:
 ### Roles
 
 `ROLES` in `src/schema/constants.ts` gains `neutral`. A neutral part can be
-placed and linked, and the engine ignores it. The extra parts above use it.
+placed and linked. The extra parts above use it. Before checks run
+(`withoutNeutral` in `src/game/sandbox.ts`), neutral parts reachable from
+`users` through only neutral parts (for example a CDN in front) are
+transparent: users link straight to what they front. Every other neutral part,
+and every link touching one, is dropped, so the engine never sees it.
 `ROLES` is shared by the canvas and pick-cloud schemas, so the generated JSON
 Schemas are regenerated (`npm run schemas`); adding a role value does not
 change any existing file's validity. The plan verifies that nothing in the
@@ -114,18 +123,23 @@ type only; it is not in the content schema for scored challenges, which keep 12.
   the category filter.
 - Shape: `{ version: 1, designs: [{ id, name, provider, design, updatedAt }] }`.
 - Validated by hand, as `progress.ts` does, so no Zod in the startup bundle.
-  Anything that fails validation is backed up to a second key and the store
-  starts empty, never silently discarded.
+  Anything that fails validation (including duplicate design ids) is backed up
+  to `incident-quest:sandbox:backup-<ms>` and the key is reset to an empty
+  store, never silently discarded.
 - Functions: `loadSandbox`, `saveSandbox`, `createDesign`, `renameDesign`,
   `deleteDesign`, `updateDesign`. All pure over a value plus the thin
   storage read/write, with `localStorage` looked up inside a try, as in
-  `categoryFilter.ts`.
+  `categoryFilter.ts`. `saveSandbox` returns false when storage is blocked or
+  full, or when corrupt saved data could not be backed up (saving would
+  overwrite the only copy). `createDesign` swaps in a fresh id if the given one
+  is already taken.
 - **Export:** one design as `{ version: 1, name, provider, design }`.
-- **Import:** parses and then validates the design against that cloud's sandbox
+- **Import:** `readExport` checks the file's shape, then validates the design against that cloud's sandbox
   challenge: known types, node lanes allowed for their scope, edges join real
   nodes, replication links join two stores, under the node cap. A file that
-  fails is rejected with a message naming the first problem. Import never
-  produces a design the editor could not have produced.
+  fails is rejected with a message naming the first problem. Files over
+  1,000,000 bytes are refused in the list screen. Import never produces a
+  design the editor could not have produced.
 
 ### Screens
 
@@ -136,17 +150,18 @@ type only; it is not in the content schema for scored challenges, which keep 12.
   `CanvasScreen` keeps its brief, hints, cost meter and stress-run flow around
   it. This is a refactor of a shipped screen: it lands first and the existing
   `canvas-ui.test.tsx` and `canvas-edit.test.ts` must pass unchanged.
-- **`SandboxListScreen`**: New (name and cloud), Open, Rename, Delete (confirm),
+- **`SandboxListScreen`**: New (name and cloud), Open, Rename, Delete (inline confirm),
   Import. Empty state explains what the sandbox is.
 - **`SandboxScreen`**: `CanvasEditor` plus a "Run a check" menu from
   `sandboxChecks`. Results reuse `StressResults`; failed components highlight on
   the board. Total cost is shown as information. Edits autosave. When the
   design contains neutral parts, the results panel says that queues, caches,
   CDNs and object storage are not judged by these checks. No score, XP or
-  progress write.
+  progress write. `App` keys the editor by design id, so it remounts per
+  design.
 - **Routing** (`src/App.tsx`): new `Screen` variant `{ name: 'sandbox'; id?: string }`;
   routes `#/sandbox` and `#/sandbox/<id>`; a "Design sandbox" nav button beside
-  "Clearance map". Not gated by unlocks. An unknown id falls back to the list.
+  "Clearance map". Not gated by unlocks. An unknown or stale id replaces the history entry and lands on the list.
   The category filter, shifts and preview do not read sandbox data.
 
 ### Error handling and edge cases
