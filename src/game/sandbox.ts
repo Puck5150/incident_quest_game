@@ -10,7 +10,7 @@ import type { CanvasTest, Design } from '../schema/canvas.ts'
 import type { SandboxChallenge, SandboxFile } from '../schema/sandbox.ts'
 import type { CanvasChallenge } from '../schema/canvas.ts'
 import { evaluateCanvas, type CanvasTestResult } from './canvas.ts'
-import { lanes } from './canvasEdit.ts'
+import { connect, lanes } from './canvasEdit.ts'
 
 export const SANDBOX_MAX_NODES = 40
 export const SPIKE = 3 // the traffic-spike check: this many times normal traffic
@@ -59,7 +59,7 @@ export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
   const reach = (['serve', 'write-store'] as const).filter(has)
   if (!reach.length) return []
   const check = { reach }
-  const occupied = (lane: string) => d.nodes.some((n) => n.lane === lane)
+  const occupied = (lane: string) => d.nodes.some((n) => n.lane === lane && !isNeutral(c, n.type)) // neutral parts don't make a zone worth testing
   const label = (type: string) => c.palette.find((p) => p.id === type)?.label ?? type
   const judged = [...new Set(d.nodes.filter((n) => rolesOf(c, n.type).some((r) => r !== 'neutral')).map((n) => n.type))]
 
@@ -74,27 +74,36 @@ export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
   return tests
 }
 
-// The engine knows nothing of neutral parts, so judge a filtered copy: neutral
-// parts at the front (users -> cdn -> waf -> alb) are transparent, linking users
-// straight to what they feed; every other neutral part, and every link touching
-// one, is dropped, so a queue or cache in the middle carries no user traffic.
+// The engine knows nothing of neutral parts, so judge a copy with every neutral
+// part contracted away: each traffic path from users or a judged part through
+// one or more neutral parts to a judged part becomes a direct link, and every
+// other link touching a neutral part is dropped. A queue, cache, CDN or bucket
+// therefore behaves exactly as if the link ran straight through it (or, hanging
+// off a server, as if it weren't there).
 function withoutNeutral(c: SandboxChallenge, d: Design): Design {
   const neutral = new Set(d.nodes.filter((n) => isNeutral(c, n.type)).map((n) => n.id))
-  const front = new Set<string>()
-  for (let grew = true; grew; ) {
-    grew = false
-    for (const e of d.edges)
-      if (e.kind === 'traffic' && neutral.has(e.to) && !front.has(e.to) && (e.from === USERS || front.has(e.from))) {
-        front.add(e.to)
-        grew = true
+  const edges = d.edges.filter((e) => !neutral.has(e.from) && !neutral.has(e.to))
+  const seen = new Set(edges.map((e) => `${e.from}>${e.to}>${e.kind}`))
+  for (const start of [USERS, ...d.nodes.filter((n) => !neutral.has(n.id)).map((n) => n.id)]) {
+    const visited = new Set<string>()
+    const stack = [start]
+    while (stack.length) {
+      const from = stack.pop()!
+      for (const e of d.edges) {
+        if (e.kind !== 'traffic' || e.from !== from) continue
+        if (neutral.has(e.to)) {
+          if (!visited.has(e.to)) {
+            visited.add(e.to)
+            stack.push(e.to)
+          }
+        } else if (from !== start && e.to !== start && !seen.has(`${start}>${e.to}>traffic`)) {
+          seen.add(`${start}>${e.to}>traffic`)
+          edges.push({ from: start, to: e.to, kind: 'traffic' })
+        }
       }
+    }
   }
-  const through = d.edges
-    .filter((e) => e.kind === 'traffic' && front.has(e.from) && !neutral.has(e.to))
-    .map((e) => ({ ...e, from: USERS }))
-  const kept = d.edges.filter((e) => !neutral.has(e.from) && !neutral.has(e.to))
-  const seen = new Set(kept.map((e) => `${e.from}>${e.to}`))
-  return { nodes: d.nodes.filter((n) => !neutral.has(n.id)), edges: [...kept, ...through.filter((e) => !seen.has(`${e.from}>${e.to}`))] }
+  return { nodes: d.nodes.filter((n) => !neutral.has(n.id)), edges }
 }
 
 // Runs one check. The engine fails every occupied zone that no zone test names
@@ -112,6 +121,7 @@ export function validateDesign(c: SandboxChallenge, d: Design): string | undefin
   const laneScope = new Map(lanes(c).map((l) => [l.id, l.scope]))
   const ids = new Set<string>()
   for (const n of d.nodes) {
+    if (!n.id) return "A component id can't be empty."
     if (n.id === USERS) return `"${USERS}" is reserved and can't be a component id.`
     if (ids.has(n.id)) return `Duplicate component id "${n.id}".`
     ids.add(n.id)
@@ -119,10 +129,13 @@ export function validateDesign(c: SandboxChallenge, d: Design): string | undefin
     if (!p) return `"${n.id}" is a ${n.type}, which isn't in this cloud's palette.`
     if (laneScope.get(n.lane) !== p.scope) return `${n.id} (${p.label}) can't go in lane "${n.lane}".`
   }
-  const isStore = (id: string) => rolesOf(c, d.nodes.find((n) => n.id === id)?.type ?? '').includes('write-store')
+  // Replay the links through the editor's own rules, so import can't admit a design the editor refuses.
+  let built: Design = { nodes: d.nodes, edges: [] }
   for (const e of d.edges) {
     if (e.from !== USERS && !ids.has(e.from)) return `A link starts at "${e.from}", which isn't in the design.`
     if (!ids.has(e.to)) return `A link ends at "${e.to}", which isn't in the design.`
-    if (e.kind !== 'traffic' && !(isStore(e.from) && isStore(e.to))) return 'Replication links must join two databases.'
+    const next = connect(c, built, e.from, e.to, e.kind)
+    if (typeof next === 'string') return next
+    built = next
   }
 }

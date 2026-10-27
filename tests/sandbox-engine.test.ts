@@ -160,12 +160,46 @@ describe('runCheck', () => {
     expect(outcome(chain)).toEqual(outcome(twoZone))
   })
 
-  it('a queue between the load balancer and a web server does not make it reachable', () => {
-    const viaQueue: Design = {
-      nodes: [node('alb-1', 'alb', 'use1'), node('sqs-1', 'sqs', 'use1'), node('web-1', 'ec2-web', 'use1-az1'), node('web-2', 'ec2-web', 'use1-az2')],
-      edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1'), traffic('alb-1', 'sqs-1'), traffic('sqs-1', 'web-2')],
-    }
-    expect(outcome(viaQueue)['zone-use1-az1']).toBe(false) // web-2 is only behind the queue, so it can't take over
+  describe('neutral parts are contracted away', () => {
+    const worker = (via: Design['nodes'], links: Design['edges']): Design => ({
+      nodes: [node('alb-1', 'alb', 'use1'), node('web-1', 'ec2-web', 'use1-az1'), node('web-2', 'ec2-web', 'use1-az2'), node('rds-1', 'rds', 'use1-az1'), ...via],
+      edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1'), traffic('web-2', 'rds-1'), traffic('web-1', 'rds-1'), ...links],
+    })
+    const direct = worker([], [traffic('web-1', 'web-2')])
+
+    it('a queue between a web server and a worker acts as a direct link', () => {
+      const q = worker([node('sqs-1', 'sqs', 'use1')], [traffic('web-1', 'sqs-1'), traffic('sqs-1', 'web-2')])
+      expect(outcome(q)).toEqual(outcome(direct))
+    })
+
+    it('a queue between the load balancer and a web server acts as a direct link', () => {
+      const viaQueue: Design = {
+        nodes: [node('alb-1', 'alb', 'use1'), node('sqs-1', 'sqs', 'use1'), node('web-1', 'ec2-web', 'use1-az1'), node('web-2', 'ec2-web', 'use1-az2')],
+        edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1'), traffic('alb-1', 'sqs-1'), traffic('sqs-1', 'web-2')],
+      }
+      const plain: Design = { nodes: viaQueue.nodes.filter((n) => n.id !== 'sqs-1'), edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1'), traffic('alb-1', 'web-2')] }
+      expect(outcome(viaQueue)).toEqual(outcome(plain))
+    })
+
+    it('a chain of two neutrals, or a neutral cycle, still terminates and acts as a direct link', () => {
+      const chain = worker([node('sqs-1', 'sqs', 'use1'), node('sqs-2', 'sqs', 'use1')], [traffic('web-1', 'sqs-1'), traffic('sqs-1', 'sqs-2'), traffic('sqs-2', 'web-2')])
+      expect(outcome(chain)).toEqual(outcome(direct))
+      const cycle = worker(
+        [node('sqs-1', 'sqs', 'use1'), node('sqs-2', 'sqs', 'use1')],
+        [traffic('web-1', 'sqs-1'), traffic('sqs-1', 'sqs-2'), traffic('sqs-2', 'sqs-1'), traffic('sqs-2', 'web-2')],
+      )
+      expect(outcome(cycle)).toEqual(outcome(direct))
+    })
+
+    it('a cache hanging off a web server changes nothing', () => {
+      const cached = { nodes: [...twoZone.nodes, node('sqs-1', 'sqs', 'use1')], edges: [...twoZone.edges, traffic('web-1', 'sqs-1')] }
+      expect(outcome(cached)).toEqual(outcome(twoZone))
+    })
+
+    it('a zone holding only neutral parts offers no check', () => {
+      const d: Design = { ...twoZone, nodes: [...twoZone.nodes, node('sqs-1', 'sqs', 'usw2-az1')] }
+      expect(sandboxChecks(c, d).map((t) => t.id)).toEqual(sandboxChecks(c, twoZone).map((t) => t.id))
+    })
   })
 
   it('pins the spike: one web server is 2x, short of 3x', () => {
@@ -203,6 +237,20 @@ describe('validateDesign', () => {
   it('accepts exactly the cap', () => {
     const at: Design = { nodes: Array.from({ length: SANDBOX_MAX_NODES }, (_, i) => node(`w-${i}`, 'ec2-web', 'use1-az1')), edges: [] }
     expect(validateDesign(c, at)).toBeUndefined()
+  })
+
+  it.each([
+    ['a link to itself', [traffic('alb-1', 'alb-1')], /itself/],
+    ['a duplicate link', [traffic('users', 'alb-1'), traffic('users', 'alb-1')], /already exists/],
+    ['two replication sources', [{ from: 'rds-1', to: 'rds-3', kind: 'sync' as const }, { from: 'rds-2', to: 'rds-3', kind: 'async' as const }], /already replicates/],
+    ['a replication cycle', [{ from: 'rds-1', to: 'rds-2', kind: 'sync' as const }, { from: 'rds-2', to: 'rds-1', kind: 'sync' as const }], /other way/],
+  ])('rejects %s as the editor would', (_name, edges, message) => {
+    const nodes = [node('alb-1', 'alb', 'use1'), node('rds-1', 'rds', 'use1-az1'), node('rds-2', 'rds', 'use1-az2'), node('rds-3', 'rds', 'usw2-az1')]
+    expect(validateDesign(c, { nodes, edges })).toMatch(message)
+  })
+
+  it('rejects an empty component id', () => {
+    expect(validateDesign(c, { nodes: [node('', 'alb', 'use1')], edges: [] })).toMatch(/empty/)
   })
 
   it('rejects a design over the cap', () => {
