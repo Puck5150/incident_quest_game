@@ -37,7 +37,7 @@ feedback**, not scoring.
 
 ## Design
 
-### Content: `content/sandbox/{aws,azure,gcp}.yaml`
+### Content: `content/sandbox/{aws,azure,gcp}-sandbox.yaml`
 
 A new content kind, `sandbox`, one file per cloud, validated at build time with
 the rest of the content (and previewable like other kinds). Each file has:
@@ -77,10 +77,11 @@ the rest of the content (and previewable like other kinds). Each file has:
 
 `ROLES` in `src/schema/constants.ts` gains `neutral`. A neutral part can be
 placed and linked. The extra parts above use it. Before checks run
-(`withoutNeutral` in `src/game/sandbox.ts`), neutral parts reachable from
-`users` through only neutral parts (for example a CDN in front) are
-transparent: users link straight to what they front. Every other neutral part,
-and every link touching one, is dropped, so the engine never sees it.
+(`withoutNeutral` in `src/game/sandbox.ts`), every neutral part is contracted
+away: a traffic path through one or more neutral parts (a CDN in front, a
+queue between tiers) becomes a direct link from the part before to the part
+after, as if the neutral part were not drawn. Any other link touching a
+neutral part is dropped, so the engine never sees one.
 `ROLES` is shared by the canvas and pick-cloud schemas, so the generated JSON
 Schemas are regenerated (`npm run schemas`); adding a role value does not
 change any existing file's validity. The plan verifies that nothing in the
@@ -90,7 +91,7 @@ engine, the editor or the schemas treats the role list as exhaustive.
 
 `src/game/sandbox.ts` (pure, no React):
 
-- `sandboxChallenge(file, base): CanvasChallenge` builds an in-memory challenge:
+- `resolveSandbox(file, base)` builds an in-memory challenge:
   palette = base palette plus the file's extras (ids must not collide),
   the file's layout, a placeholder brief and requirements, a very large budget,
   no reference designs or counter-examples, and a `max_nodes` of 40.
@@ -152,11 +153,12 @@ type only; it is not in the content schema for scored challenges, which keep 12.
   `canvas-ui.test.tsx` and `canvas-edit.test.ts` must pass unchanged.
 - **`SandboxListScreen`**: New (name and cloud), Open, Rename, Delete (inline confirm),
   Import. Empty state explains what the sandbox is.
-- **`SandboxScreen`**: `CanvasEditor` plus a "Run a check" menu from
-  `sandboxChecks`. Results reuse `StressResults`; failed components highlight on
+- **`SandboxScreen`**: `CanvasEditor` plus a "Check" menu from
+  `sandboxChecks`. Results show in the screen's own panel; failed components highlight on
   the board. Total cost is shown as information. Edits autosave. When the
   design contains neutral parts, the results panel says that queues, caches,
-  CDNs and object storage are not judged by these checks. No score, XP or
+  CDNs and object storage are not judged by these checks, and that a link
+  through one counts as a link straight past it. No score, XP or
   progress write. `App` keys the editor by design id, so it remounts per
   design.
 - **Routing** (`src/App.tsx`): new `Screen` variant `{ name: 'sandbox'; id?: string }`;
