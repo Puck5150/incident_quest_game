@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { exportDesign, loadSandbox, saveSandbox, type SandboxData, type SavedDesign } from '../game/sandboxStore.ts'
+import { canSave, exportDesign, loadSandbox, saveSandbox, type SandboxData, type SavedDesign } from '../game/sandboxStore.ts'
 
 // This visit's designs when storage refused them, so moving between the list
 // and a design doesn't lose them (each screen otherwise reloads from storage).
@@ -9,7 +9,7 @@ let unsaved: SandboxData | undefined
 // false when storage refused the write (the designs then last for this visit only).
 export function useSandbox() {
   const [data, setData] = useState(() => unsaved ?? loadSandbox())
-  const [saved, setSaved] = useState(!unsaved)
+  const [saved, setSaved] = useState(() => !unsaved && canSave())
   const latest = useRef(data)
   const update = (f: (d: SandboxData) => SandboxData) => {
     const next = f(latest.current)

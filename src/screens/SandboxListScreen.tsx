@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { loadSandbox as loadCloud } from 'virtual:content'
 import { PROVIDERS, PROVIDER_NAMES, type Provider } from '../schema/constants.ts'
 import type { Design } from '../schema/canvas.ts'
@@ -16,7 +16,28 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
   const [renaming, setRenaming] = useState<{ id: string; name: string }>()
   const [deleting, setDeleting] = useState<string>()
   const [problem, setProblem] = useState('')
+  const [notice, setNotice] = useState('') // announced: what an import did
   const listTitle = useRef<HTMLHeadingElement>(null)
+  // After closing a rename or delete confirm, focus goes back to the button that opened it.
+  const refocus = useRef('')
+  useEffect(() => {
+    if (!refocus.current) return
+    document.getElementById(refocus.current)?.focus()
+    refocus.current = ''
+  })
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => void (mounted.current = false)
+  }, [])
+  const closeRename = (id: string) => {
+    refocus.current = `rename-${id}`
+    setRenaming(undefined)
+  }
+  const keep = (id: string) => {
+    refocus.current = `delete-${id}`
+    setDeleting(undefined)
+  }
 
   // createDesign swaps in a fresh id if ours is taken, so read it back (the new design is last).
   function add(a: { name: string; provider: Provider; design?: Design }) {
@@ -32,13 +53,24 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
 
   async function importFile(file: File) {
     setProblem('')
-    const r = readExport(await file.text())
+    setNotice('')
+    if (file.size > 1_000_000) return setProblem('That file is too big to be a design (over 1 MB).')
+    let text: string
+    try {
+      text = await file.text()
+    } catch {
+      return setProblem("Couldn't read that file.")
+    }
+    const r = readExport(text)
     if ('error' in r) return setProblem(r.error)
     const cloud = await loadCloud(r.provider).catch(() => undefined)
+    // Left the screen meanwhile: another screen may have saved since, so don't write.
+    if (!mounted.current) return
     if (!cloud) return setProblem(`The ${PROVIDER_NAMES[r.provider]} sandbox couldn't be loaded, so this file can't be checked. Try again later.`)
     const bad = validateDesign(cloud, r.design)
     if (bad) return setProblem(bad)
-    add(r)
+    add(r) // update() merges onto the latest state, so edits made while loading are kept
+    setNotice(`Imported ${r.name}.`)
   }
 
   return (
@@ -53,9 +85,10 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
       <p role="status" aria-live="polite">
         {!saved && (
           <span className="block rounded-md border border-warn px-3 py-2 text-sm">
-            This browser is blocking storage, so designs last only until you close this tab. Export a design to keep it.
+            This browser is blocking storage, so designs last only until you reload or close this tab. Export a design to keep it.
           </span>
         )}
+        {notice && <span className="block text-sm text-muted">{notice}</span>}
       </p>
 
       <form
@@ -94,14 +127,22 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
         {data.designs.length === 0 && <p className="text-sm text-muted">No designs yet. Create one above, or import a file.</p>}
         <ul className="space-y-2">
           {data.designs.map((d) => (
-            <li key={d.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-panel p-3">
+            <li
+              key={d.id}
+              className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-panel p-3"
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') return
+                if (renaming?.id === d.id) closeRename(d.id)
+                else if (deleting === d.id) keep(d.id)
+              }}
+            >
               {renaming?.id === d.id ? (
                 <form
                   className="flex flex-wrap items-center gap-3"
                   onSubmit={(e) => {
                     e.preventDefault()
                     update((s) => renameDesign(s, d.id, renaming.name))
-                    setRenaming(undefined)
+                    closeRename(d.id)
                   }}
                 >
                   <input
@@ -115,7 +156,7 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
                   <button type="submit" className={button}>
                     Save name
                   </button>
-                  <button type="button" className={button} onClick={() => setRenaming(undefined)}>
+                  <button type="button" className={button} onClick={() => closeRename(d.id)}>
                     Cancel
                   </button>
                 </form>
@@ -127,7 +168,7 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
                     <span className="ml-2 text-xs font-normal text-muted">{d.design.nodes.length} components</span>
                   </button>
                   <span className="flex-1" />
-                  <button className={button} aria-label={`Rename ${d.name}`} onClick={() => setRenaming({ id: d.id, name: d.name })}>
+                  <button id={`rename-${d.id}`} className={button} aria-label={`Rename ${d.name}`} onClick={() => setRenaming({ id: d.id, name: d.name })}>
                     Rename
                   </button>
                   <button className={button} aria-label={`Export ${d.name}`} onClick={() => download(d)}>
@@ -146,12 +187,12 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
                       >
                         Yes, delete
                       </button>
-                      <button className={button} autoFocus onClick={() => setDeleting(undefined)}>
+                      <button className={button} autoFocus onClick={() => keep(d.id)}>
                         Keep
                       </button>
                     </>
                   ) : (
-                    <button className={button} aria-label={`Delete ${d.name}`} onClick={() => setDeleting(d.id)}>
+                    <button id={`delete-${d.id}`} className={button} aria-label={`Delete ${d.name}`} onClick={() => setDeleting(d.id)}>
                       Delete
                     </button>
                   )}

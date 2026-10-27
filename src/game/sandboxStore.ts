@@ -81,6 +81,9 @@ export function loadSandbox(storage?: Store): SandboxData {
   return emptySandbox()
 }
 
+// false after loadSandbox found bad data it couldn't back up: saves are refused until reload.
+export const canSave = () => !unsafeToSave
+
 // false when the write failed (blocked or full): the designs last for this visit only.
 export function saveSandbox(data: SandboxData, storage?: Store): boolean {
   if (unsafeToSave) return false

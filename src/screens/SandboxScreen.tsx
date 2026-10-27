@@ -16,7 +16,7 @@ const button =
 
 // One saved design in the editor. No scoring, XP or progress: a check shows
 // what survives and why, and cost is only information.
-export default function SandboxScreen({ id, onBack }: { id: string; onBack: () => void }) {
+export default function SandboxScreen({ id, onBack, onMissing }: { id: string; onBack: () => void; onMissing: () => void }) {
   const { data, update, saved } = useSandbox()
   const entry = data.designs.find((d) => d.id === id)
   const [c, setC] = useState<SandboxChallenge | null>() // null: this cloud's sandbox couldn't load
@@ -25,8 +25,8 @@ export default function SandboxScreen({ id, onBack }: { id: string; onBack: () =
 
   // An id with no saved design (a stale link) goes back to the list.
   useEffect(() => {
-    if (!entry) onBack()
-  }, [entry, onBack])
+    if (!entry) onMissing()
+  }, [entry, onMissing])
   const provider = entry?.provider
   useEffect(() => {
     if (provider)
@@ -35,6 +35,10 @@ export default function SandboxScreen({ id, onBack }: { id: string; onBack: () =
         () => setC(null),
       )
   }, [provider])
+  // App focuses the heading on navigation, but the cloud loads after that: focus it once it's here.
+  useEffect(() => {
+    if (c !== undefined) document.getElementById('screen-title')?.focus()
+  }, [c])
 
   if (!entry) return null
   const back = (

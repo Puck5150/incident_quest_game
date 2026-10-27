@@ -344,7 +344,13 @@ export default function App() {
           )}
           {screen.name === 'sandbox' &&
             (screen.id ? (
-              <SandboxScreen key={screen.id} id={screen.id} onBack={() => go('#/sandbox')} />
+              <SandboxScreen
+                key={screen.id}
+                id={screen.id}
+                onBack={() => go('#/sandbox')}
+                // a stale link is replaced, not stacked, so Back doesn't bounce into it again
+                onMissing={() => location.replace('#/sandbox')}
+              />
             ) : (
               <SandboxListScreen onOpen={(id) => go(`#/sandbox/${id}`)} />
             ))}

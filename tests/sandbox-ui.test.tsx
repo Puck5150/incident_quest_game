@@ -143,3 +143,85 @@ it('rename and delete (with a confirmation) from the list', async () => {
   await waitFor(() => expect(screen.queryByRole('button', { name: /Second/ })).toBeNull())
   expect(JSON.parse(localStorage.getItem(KEY)!).designs).toEqual([])
 })
+
+it('focus lands on the design heading after creating or opening one', async () => {
+  render(<App />)
+  open()
+  await screen.findByRole('heading', { name: 'Design sandbox' })
+  await create('Focus me', 'aws')
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Focus me' })))
+  fireEvent.click(screen.getByRole('button', { name: '← All designs' }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Focus me/ }))
+  await screen.findByRole('region', { name: 'Palette' })
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Focus me' })))
+})
+
+it('a stale design link goes back to the list without adding a history entry', async () => {
+  history.replaceState(null, '', `${location.pathname}#/sandbox/gone`)
+  const before = history.length
+  render(<App />)
+  await screen.findByRole('button', { name: 'Create design' })
+  await waitFor(() => expect(location.hash).toBe('#/sandbox'))
+  expect(history.length).toBe(before)
+})
+
+const one = () =>
+  localStorage.setItem(KEY, JSON.stringify({ version: 1, designs: [{ id: 'a1', name: 'First', provider: 'aws', updatedAt: '2026-10-27T00:00:00.000Z', design: { nodes: [], edges: [] } }] }))
+
+it('rename and delete give focus back, Escape cancels them, and Delete alone deletes nothing', async () => {
+  one()
+  render(<App />)
+  open()
+  await screen.findByRole('button', { name: /^First/ })
+  fireEvent.click(screen.getByRole('button', { name: 'Rename First' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename First' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Rename First' }))
+  fireEvent.keyDown(screen.getByLabelText('New name'), { key: 'Escape' })
+  expect(screen.queryByLabelText('New name')).toBeNull()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename First' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Rename First' }))
+  fireEvent.change(screen.getByLabelText('New name'), { target: { value: 'Renamed' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save name' }))
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename Renamed' }))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Renamed' }))
+  expect(JSON.parse(localStorage.getItem(KEY)!).designs).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Keep' }))
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete Renamed' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Renamed' }))
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Keep' }), { key: 'Escape' })
+  expect(screen.queryByRole('button', { name: 'Yes, delete Renamed' })).toBeNull()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete Renamed' }))
+  expect(JSON.parse(localStorage.getItem(KEY)!).designs).toHaveLength(1)
+})
+
+const importText = async (text: string | File) => {
+  const input = screen.getByLabelText('Import a design') as HTMLInputElement
+  const file = typeof text === 'string' ? new File([text], 'f.json', { type: 'application/json' }) : text
+  fireEvent.change(input, { target: { files: [file] } })
+}
+
+it('announces an import, and shows each import error verbatim', async () => {
+  render(<App />)
+  open()
+  await screen.findByRole('heading', { name: 'Design sandbox' })
+  const good = { version: 1, name: 'Shop', provider: 'aws', design: { nodes: [{ id: 'alb-1', type: 'alb', lane: 'use1' }], edges: [] } }
+  await importText(JSON.stringify(good))
+  await screen.findByRole('button', { name: /^Shop/ })
+  expect(screen.getAllByRole('status').some((s) => s.textContent === 'Imported Shop.')).toBe(true)
+
+  await importText('not json')
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("That file isn't valid JSON."))
+  await importText(JSON.stringify({ ...good, provider: 'oracle' }))
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('The design file names a cloud this game does not have.'))
+  await importText(JSON.stringify({ ...good, design: { nodes: good.design.nodes, edges: [{ from: 'users', to: 'zzz', kind: 'traffic' }] } }))
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('A link ends at "zzz", which isn\'t in the design.'))
+
+  await importText(new File(['x'.repeat(1_000_001)], 'big.json'))
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/too big/))
+  const unreadable = new File(['{}'], 'u.json')
+  Object.defineProperty(unreadable, 'text', { value: () => Promise.reject(new Error('nope')) })
+  await importText(unreadable)
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("Couldn't read that file."))
+})
