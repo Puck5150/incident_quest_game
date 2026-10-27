@@ -155,7 +155,7 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
               </div>
               {hasNeutral && (
                 <p className="mt-3 text-xs text-muted">
-                  Queues, caches, CDNs and object storage aren't judged by these checks yet; they can be placed and linked, and the checks ignore them.
+                  Queues, caches, CDNs and object storage aren't judged by these checks yet. A link through one is treated as a direct link to what's behind it.
                 </p>
               )}
             </section>

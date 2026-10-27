@@ -10,7 +10,7 @@ const button =
   'rounded-md border border-line px-2.5 py-1 text-sm hover:border-accent focus-visible:outline-2 focus-visible:outline-accent'
 
 export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => void }) {
-  const { data, update, saved } = useSandbox()
+  const { data, update, saved, unreadable, backup } = useSandbox()
   const [name, setName] = useState('')
   const [provider, setProvider] = useState<Provider>('aws')
   const [renaming, setRenaming] = useState<{ id: string; name: string }>()
@@ -83,9 +83,16 @@ export default function SandboxListScreen({ onOpen }: { onOpen: (id: string) => 
         saved in this browser.
       </p>
       <p role="status" aria-live="polite">
+        {backup && (
+          <span className="block rounded-md border border-warn px-3 py-2 text-sm">
+            Your saved designs couldn't be read, so a copy was kept in this browser ({backup}) and the sandbox started empty.
+          </span>
+        )}
         {!saved && (
           <span className="block rounded-md border border-warn px-3 py-2 text-sm">
-            This browser is blocking storage, so designs last only until you reload or close this tab. Export a design to keep it.
+            {unreadable
+              ? "Your saved designs couldn't be read and a backup copy couldn't be written, so nothing will be saved until that's fixed. Export what you build."
+              : 'This browser is blocking storage, so designs last only until you reload or close this tab. Export a design to keep it.'}
           </span>
         )}
         {notice && <span className="block text-sm text-muted">{notice}</span>}

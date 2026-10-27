@@ -54,9 +54,12 @@ function readData(x: unknown): SandboxData | undefined {
 
 // Set when invalid data could not be backed up: saving then would overwrite the only copy.
 let unsafeToSave = false
+// The key invalid data was copied to on the latest load, so the player can be told.
+let backupKey: string | undefined
 
 export function loadSandbox(storage?: Store): SandboxData {
   unsafeToSave = false
+  backupKey = undefined
   try {
     const store = storage ?? localStorage
     const raw = store.getItem(KEY)
@@ -67,8 +70,10 @@ export function loadSandbox(storage?: Store): SandboxData {
     } catch {
       // not JSON: fall through to the backup
     }
+    const key = `${KEY}:backup-${Date.now()}`
     try {
-      store.setItem(`${KEY}:backup-${Date.now()}`, raw)
+      store.setItem(key, raw)
+      backupKey = key
     } catch {
       unsafeToSave = true
       return emptySandbox()
@@ -83,6 +88,7 @@ export function loadSandbox(storage?: Store): SandboxData {
 
 // false after loadSandbox found bad data it couldn't back up: saves are refused until reload.
 export const canSave = () => !unsafeToSave
+export const recoveredBackupKey = () => backupKey
 
 // false when the write failed (blocked or full): the designs last for this visit only.
 export function saveSandbox(data: SandboxData, storage?: Store): boolean {

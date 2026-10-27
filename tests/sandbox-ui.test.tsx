@@ -94,6 +94,8 @@ it('offers no checks until the design has something to judge, and says neutral p
   add('Amazon SQS queue', 'use1')
   expect((screen.getByRole('button', { name: 'Run check' }) as HTMLButtonElement).disabled).toBe(true)
   expect(screen.getByText(/aren't judged by these checks/)).toBeTruthy()
+  expect(screen.getByText(/A link through one is treated as a direct link to what's behind it/)).toBeTruthy()
+  expect(screen.queryByText(/ignore them/)).toBeNull()
 })
 
 it('an unknown design id falls back to the list', async () => {
