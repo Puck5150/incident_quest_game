@@ -186,7 +186,7 @@ export function contentPlugin(dir: string): Plugin {
           `const loaders = {${loaders.join(',')}}`,
           `export const loadItem = (id) => loaders[id]().then((m) => m.default)`,
           `const sandboxLoaders = {${sandboxes.join(',')}}`,
-          `export const loadSandbox = (provider) => sandboxLoaders[provider]?.().then((m) => m.default)`,
+          `export const loadSandbox = async (provider) => (await sandboxLoaders[provider]?.())?.default`,
         ].join('\n')
       }
       if (id.startsWith('\0' + SANDBOX_PREFIX)) {

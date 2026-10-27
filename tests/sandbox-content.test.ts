@@ -4,7 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { contentKind, loadContent } from '../vite-plugin-content.ts'
+import { contentKind, contentPlugin, loadContent } from '../vite-plugin-content.ts'
 import { parseItem } from '../src/content/item.ts'
 
 const dir = path.resolve(import.meta.dirname, '../content')
@@ -34,6 +34,7 @@ describe('sandbox files', () => {
   it.each(content.sandboxes.map((s) => [s.id, s] as const))('%s: extends a same-cloud canvas and adds only explained neutral parts', (_id, s) => {
     const raw = fs.readFileSync(path.join(dir, 'sandbox', `${s.id}.yaml`), 'utf8')
     expect(raw.split('\n')[0]).toBe('# yaml-language-server: $schema=../../schemas/sandbox.json')
+    expect(s.provider).toBe(content.canvases.find((c) => c.id === (/^extends:\s*(\S+)/m.exec(raw) ?? [])[1])?.provider)
     const extras = s.palette.filter((p) => p.roles.includes('neutral'))
     expect(extras.length).toBeGreaterThanOrEqual(3)
     for (const p of extras) {
@@ -56,5 +57,23 @@ describe('sandbox files', () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
+  })
+
+  it('the generated loadSandbox always returns a promise, resolving to undefined for a cloud with no sandbox', async () => {
+    const plugin = contentPlugin(dir) as { load: (id: string) => string }
+    const src = plugin.load('\0virtual:content')
+    // Run the generated module's loader lines, with import() swapped for the sandbox's own data.
+    const body = src
+      .split('\n')
+      .filter((l) => l.includes('sandboxLoaders'))
+      .join('\n')
+      .replace(/export const/g, 'const')
+      .replace(/import\(/g, 'fakeImport(')
+    const fakeImport = (id: string) => Promise.resolve({ default: { fetched: id } })
+    const loadSandbox = new Function('fakeImport', `${body}\nreturn loadSandbox`)(fakeImport)
+    const none = loadSandbox('azure')
+    expect(typeof none.then).toBe('function')
+    expect(await none).toBeUndefined()
+    expect(await loadSandbox('aws')).toBeDefined()
   })
 })
