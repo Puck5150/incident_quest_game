@@ -10,4 +10,6 @@ declare module 'virtual:content' {
   export default content
   // One item's full content, loaded on demand as its own chunk.
   export function loadItem(id: string): Promise<Item>
+  // One cloud's design sandbox, loaded on demand as its own chunk (undefined if that cloud has none).
+  export function loadSandbox(provider: 'aws' | 'azure' | 'gcp'): Promise<import('./schema/sandbox.ts').SandboxChallenge | undefined>
 }

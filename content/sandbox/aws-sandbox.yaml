@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=../../schemas/sandbox.json
+type: sandbox
+id: aws-sandbox
+provider: aws
+title: "AWS design sandbox"
+extends: aws-checkout-canvas
+
+layout:
+  global: true
+  regions:
+    - id: use1
+      label: "us-east-1"
+      zones:
+        - { id: use1-az1, label: "us-east-1a" }
+        - { id: use1-az2, label: "us-east-1b" }
+    - id: usw2
+      label: "us-west-2"
+      zones:
+        - { id: usw2-az1, label: "us-west-2a" }
+        - { id: usw2-az2, label: "us-west-2b" }
+
+palette:
+  - id: sqs
+    label: "Amazon SQS queue"
+    short: "SQS"
+    scope: regional
+    roles: [neutral]
+    cost: 1
+    facts:
+      - "A hosted message queue that lets one part of a system hand work to another without calling it directly."
+      - "Messages are stored redundantly across multiple SQS servers, and a message stays in the queue until a consumer deletes it or it passes the retention period (4 days by default)."
+  - id: elasticache
+    label: "ElastiCache cache node"
+    short: "cache"
+    scope: zonal
+    roles: [neutral]
+    cost: 2
+    facts:
+      - "A cache node runs in one Availability Zone. With Multi-AZ enabled, the replicas are spread across different zones."
+      - "If the primary node fails, the replica with the least replication lag is promoted, usually within seconds. Replication is asynchronous, so a little recent data can be lost. With no replica, a replacement primary starts empty."
+  - id: s3
+    label: "Amazon S3 bucket"
+    short: "S3"
+    scope: regional
+    roles: [neutral]
+    cost: 1
+    facts:
+      - "In the S3 Standard class, each object is stored redundantly across at least three Availability Zones in the Region, so it survives the loss of a whole zone."
+      - "Designed for 99.999999999% durability and 99.99% availability over a year. The One Zone-IA class keeps data in a single zone instead."
+  - id: cloudfront
+    label: "CloudFront distribution"
+    short: "CDN"
+    scope: global
+    roles: [neutral]
+    cost: 2
+    facts:
+      - "Serves content from edge locations around the world, routing each viewer to the one with the lowest latency."
+      - "On a cache miss, an edge location fetches the file from your origin, such as an S3 bucket or a web server, and keeps a copy (24 hours by default unless the origin says otherwise)."
+
+sources:
+  - title: "What is Amazon Simple Queue Service?"
+    url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html"
+    retrieved: 2026-10-27
+  - title: "Minimizing downtime in ElastiCache by using Multi-AZ with Valkey and Redis OSS"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html"
+    retrieved: 2026-10-27
+  - title: "Data protection in Amazon S3"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html"
+    retrieved: 2026-10-27
+  - title: "What is Amazon CloudFront?"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html"
+    retrieved: 2026-10-27
