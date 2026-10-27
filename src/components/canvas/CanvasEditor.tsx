@@ -18,6 +18,7 @@ export default function CanvasEditor({
   down,
   belowBoard,
   aside,
+  downNoun,
 }: {
   c: Capped
   design: Design
@@ -25,6 +26,7 @@ export default function CanvasEditor({
   down: Set<string> // components to show as lost (a stress test or check result)
   belowBoard?: ReactNode // under the board: cost and the run button
   aside?: ReactNode // under the inspector: results, field guide, hints
+  downNoun?: 'test' | 'check' // how a lost component is labelled
 }) {
   const uid = useId()
   const [selected, setSelected] = useState<string>()
@@ -160,6 +162,7 @@ export default function CanvasEditor({
             design={design}
             selected={selected}
             down={down}
+            downNoun={downNoun}
             connectFrom={connecting?.from}
             validTargets={new Set(connecting ? targets(c, design, connecting.from, connecting.kind) : [])}
             dragging={drag?.payload}
