@@ -23,23 +23,23 @@ palette:
   - id: pubsub
     label: "Pub/Sub topic"
     short: "Pub/Sub"
-    scope: regional
+    scope: global
     roles: [neutral]
     cost: 1
     facts:
       - "An asynchronous messaging service that decouples the systems that publish messages from the systems that process them."
-      - "Topic and subscription names are global, but each message is stored in one region and is always persisted to multiple zones there, so a single zone outage does not stop delivery."
-      - "A subscription keeps unacknowledged messages for 7 days by default (up to 31), and a message can be sent again if it is not acknowledged within the acknowledgment deadline."
+      - "By default Pub/Sub is a global service: topics and subscriptions are not tied to a region. Each message is still stored in the region where it was published, in multiple zones there, so losing one zone does not stop delivery."
+      - "Unacknowledged messages are kept for 7 days unless you change it (31 days at most), and an unacknowledged message is delivered again once the acknowledgment deadline passes."
   - id: memorystore
-    label: "Memorystore for Redis instance"
+    label: "Memorystore for Redis node"
     short: "cache"
     scope: zonal
     roles: [neutral]
     cost: 2
     facts:
-      - "Basic tier is a single node with no cross-zone replication and is meant as an ephemeral cache. Standard tier adds a replica in another zone and fails over automatically."
-      - "Replication is asynchronous, so acknowledged writes can be lost during a failover."
-      - "Memorystore for Redis does not support cross-region replication, and Google recommends Memorystore for Valkey for cross-region disaster recovery."
+      - "On the Basic tier this is a single node in one zone with no cross-zone replication, suited to an ephemeral cache. The Standard tier adds a replica node in another zone and fails over to it automatically."
+      - "Standard-tier replication is asynchronous, so a write that was already acknowledged can still be lost when a failover happens."
+      - "This product cannot replicate across regions; Google points to Memorystore for Valkey when you need cross-region disaster recovery."
   - id: gcs
     label: "Cloud Storage bucket"
     short: "GCS"
@@ -57,13 +57,13 @@ palette:
     roles: [neutral]
     cost: 2
     facts:
-      - "Caches content at Google's edge locations around the world and answers from there when it has a matching cached response, which cuts latency and load on the origin."
-      - "It is switched on for a global external Application Load Balancer backend rather than running on its own, and the origin can be an instance group, a backend bucket or a GKE backend."
+      - "Keeps cached copies at Google edge locations worldwide and serves a request from the cache when a matching response is there, lowering latency and the load on the origin."
+      - "It is enabled on a global external or classic Application Load Balancer rather than running on its own. The origin can be Compute Engine or GKE backends, or a Cloud Storage backend bucket."
       - "On a cache miss, the request goes through the load balancer to the origin, and a cacheable response is stored for later requests."
 
 sources:
   - title: "What is Pub/Sub?"
-    url: "https://cloud.google.com/pubsub/docs/overview"
+    url: "https://docs.cloud.google.com/pubsub/docs/overview"
     retrieved: 2026-10-27
   - title: "Pub/Sub: Introduction to reliability"
     url: "https://docs.cloud.google.com/pubsub/docs/reliability-intro"
@@ -72,14 +72,14 @@ sources:
     url: "https://docs.cloud.google.com/pubsub/docs/subscription-properties"
     retrieved: 2026-10-27
   - title: "High availability for Memorystore for Redis"
-    url: "https://cloud.google.com/memorystore/docs/redis/high-availability"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/high-availability-for-memorystore-for-redis"
     retrieved: 2026-10-27
   - title: "Redis tier capabilities"
     url: "https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers"
     retrieved: 2026-10-27
   - title: "Bucket locations"
-    url: "https://cloud.google.com/storage/docs/locations"
+    url: "https://docs.cloud.google.com/storage/docs/locations"
     retrieved: 2026-10-27
   - title: "Cloud CDN overview"
-    url: "https://cloud.google.com/cdn/docs/overview"
+    url: "https://docs.cloud.google.com/cdn/docs/overview"
     retrieved: 2026-10-27

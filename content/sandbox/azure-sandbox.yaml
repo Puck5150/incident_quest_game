@@ -29,7 +29,7 @@ palette:
     facts:
       - "A managed message broker with queues and publish-subscribe topics, so one part of a system can hand work to another without both being online at once."
       - "In a region with availability zones, a namespace is zone-redundant automatically at no extra cost: messages are copied synchronously across zones before they are acknowledged, so losing one zone loses no data."
-      - "Surviving a whole-region outage needs the Premium tier and Geo-Replication, and you promote the secondary region yourself."
+      - "The built-in way to keep working through a region outage is Geo-Replication, which is a Premium-tier feature; you decide when to promote the secondary region."
   - id: managed-redis
     label: "Azure Managed Redis cache"
     short: "cache"
@@ -38,7 +38,7 @@ palette:
     cost: 2
     facts:
       - "Microsoft is retiring Azure Cache for Redis and recommends Azure Managed Redis as its replacement, so this part models the newer service."
-      - "With high availability on, the cache has at least two nodes, and in a region with availability zones they sit in different zones. Without high availability, the cache has no second node to fall back on."
+      - "With high availability on, the cache has at least two nodes, and in a region with availability zones they sit in different zones."
       - "Replication between the nodes is asynchronous, so writes not yet copied to another zone can be lost in a zone failure. Failover to a healthy zone typically takes 10 to 15 seconds."
       - "High availability does not cover a whole-region outage; that takes active geo-replication between caches in different regions."
   - id: blob
@@ -49,7 +49,7 @@ palette:
     cost: 1
     facts:
       - "With zone-redundant storage (ZRS), data is written synchronously to three or more availability zones in the region, so it stays readable and writable if one zone is lost."
-      - "With locally redundant storage (LRS), all copies sit in one datacenter in the region. That protects against drive, server and rack failures, but a fire or flood in that datacenter could destroy them all."
+      - "Locally redundant storage (LRS) keeps every copy inside a single datacenter in the region. It covers drive, server and rack failures, but a disaster such as fire or flooding there could take all the copies."
       - "Geo-redundant options (GRS and GZRS) add an asynchronous copy in a second, distant region. Because that copy lags, a regional disaster can lose the most recent writes."
 
 sources:
