@@ -1,0 +1,271 @@
+# yaml-language-server: $schema=../../schemas/canvas.json
+type: challenge
+mode: canvas
+id: azure-cache-before-the-sale
+track: cloud-design
+difficulty: 3
+title: "Keep the database standing on sale day, on Azure"
+provider: azure
+par_minutes: 15
+
+brief: |
+  The shop's checkout works on a normal day. A sale doubles traffic, and every
+  product page re-reads the same data from the database, so the database
+  buckles even though the web tier has room to spare. You build the
+  architecture in East US 2: keep the checkout up through the sale and through
+  losing a zone, a web server or the database server.
+
+requirements:
+  - "Serve 2× normal traffic, even with one availability zone down"
+  - "Keep the database within what it can read on a sale day: 1× normal reads"
+  - "Keep accepting orders if either zone or the database server fails, losing none"
+  - "Survive any single web server failing"
+  - "Stay within 12 cost units per month"
+budget: 12
+
+layout:
+  regions:
+    - id: r1
+      label: "East US 2"
+      zones:
+        - { id: r1-a, label: "Zone 1" }
+        - { id: r1-b, label: "Zone 2" }
+
+palette:
+  - id: lb
+    label: "Application Gateway v2"
+    short: "App Gateway"
+    scope: regional
+    roles: [route]
+    cost: 1
+    facts:
+      - "A regional layer-7 load balancer with autoscaling and zone redundancy."
+      - "A zone-resilient load balancer with health checks can route traffic to VMs in healthy zones."
+  - id: vm
+    label: "Azure virtual machine (web, zonal)"
+    short: "web"
+    scope: zonal
+    roles: [serve]
+    capacity: 1
+    cost: 1
+    facts:
+      - "A zonal VM is pinned to a single availability zone and isn't resilient to zone outages by itself."
+      - "Each server handles 1× normal traffic (scenario number)."
+  - id: db
+    label: "Azure Database for PostgreSQL flexible server"
+    short: "PostgreSQL"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts:
+      - "A server runs in one availability zone."
+      - "High availability adds a standby server, billed like the primary, in the same zone (zonal HA) or another zone (zone-redundant HA)."
+      - "On a sale day this database can read 1× normal traffic (scenario number)."
+  - id: cache
+    label: "Azure Managed Redis cache (high availability)"
+    short: "Managed Redis"
+    scope: regional
+    roles: [cache]
+    cost: 2
+    facts:
+      - "With high availability the cache has at least two nodes, and in a region with availability zones they sit in different zones. Spreading the nodes over zones means one zone going down is less likely to take the cache offline."
+      - "Replication between the nodes is asynchronous, so data not yet copied to another zone can be lost in a zone failure. A failover to a healthy zone typically takes 10 to 15 seconds."
+      - "While the cache is up it answers 9 in 10 reads (scenario number); the database sees the rest."
+
+link_facts:
+  sync:
+    - "Like PostgreSQL high availability: a transaction isn't complete until both primary and standby acknowledge the write."
+    - "Failover is automatic, typically within 60-120 seconds."
+  async:
+    - "Like a read replica: updated asynchronously, so it can lag the primary."
+    - "Azure doesn't promote read replicas automatically."
+
+stress_tests:
+  - id: sale
+    label: "A sale: 2× traffic"
+    event: { none: true }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: zone-a
+    label: "Zone 1 fails during the sale"
+    event: { zone_outage: r1-a }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: zone-b
+    label: "Zone 2 fails during the sale"
+    event: { zone_outage: r1-b }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: vm-failure
+    label: "Any one web server fails during the sale"
+    event: { single_failure: vm }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: db-host
+    label: "The database server fails during the sale"
+    event: { single_failure: db }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+
+reference_designs:
+  - name: "Recommended"
+    why: "Two web servers per zone keep 2× capacity after losing a zone; a standby in the other zone (zone-redundant HA) takes over writes. One high-availability cache, linked from every web server, spans the zones, so in a zone outage the service redirects traffic to its nodes in the healthy zone."
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1 }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: web-1, to: cache-1, kind: traffic }
+        - { from: web-2, to: cache-1, kind: traffic }
+        - { from: web-3, to: cache-1, kind: traffic }
+        - { from: web-4, to: cache-1, kind: traffic }
+
+counter_examples:
+  - name: "No cache: every read goes to the database"
+    fails: [sale, zone-a, zone-b, vm-failure, db-host]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "A cache that no web server reads from"
+    fails: [sale, zone-a, zone-b, vm-failure, db-host]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1 }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "The cache is linked from the Zone 1 web servers only"
+    fails: [sale, zone-a, vm-failure, db-host]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1 }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: web-1, to: cache-1, kind: traffic }
+        - { from: web-2, to: cache-1, kind: traffic }
+
+hints:
+  nudge: "A normal day passes. What changes on a sale day, and who is doing all the reading?"
+  direction: "Put something between the web servers and the database that answers repeat reads, and link every web server to it. Then check which servers still read from it after you lose a zone."
+  answer: "Two web servers in each zone, the database in one zone with a zone-redundant standby in the other, plus one Azure Managed Redis cache with high availability, linked from every web server."
+
+analogy:
+  title: "The reference desk"
+  text: |
+    A busy library answers the same questions all day. The librarian could walk
+    to the stacks for every one, or keep the popular answers on a card at the
+    desk and only walk to the stacks for the rest. On a quiet day nobody can
+    tell the difference. On sale day the queue is out the door, and the
+    librarian who has to fetch every answer from the stacks is the one who
+    gives up first.
+
+debrief:
+  summary: |
+    The database was fine on a normal day and failed on the sale because every
+    page view read from it. A cache takes the repeated reads off the database:
+    the application asks the cache first and only reads the database for what
+    the cache does not have. Here, a live cache answers nine in ten reads, so
+    the database sees a tenth of the load, but only for the web servers that
+    are actually linked to it.
+
+    Azure's reliability guidance for Azure Managed Redis recommends using high
+    availability, which gives the cache at least two nodes, and using zone
+    redundancy by deploying that cache into a region with availability zones,
+    where the nodes sit in different zones. Spreading the nodes over zones
+    means one zone going down is less likely to take the cache offline. The
+    one regional cache linked from every web server stands in for it.
+
+    The same page recommends designing for cache-aside: if Redis
+    briefly drops out, the app should read straight from the database, slower
+    but still up. Here that means a cache pause sends reads back to the
+    database for a few seconds. The page also says a zone failover typically
+    takes 10 to 15 seconds, and that data not yet replicated
+    to another zone can be lost, because replication between nodes is
+    asynchronous.
+
+    The hit rate and the database's limit are scenario numbers, not
+    measurements; real figures depend on the data and the traffic. This
+    challenge does not model the failover pause, the loss of unreplicated cache
+    data, the cache having fewer resources while a zone is down, read replicas,
+    active geo-replication, expiry and staleness, or writes.
+  real_world: |
+    Keep the shape safe as well as available: only the load balancer takes
+    traffic from users, and the web servers, cache and database stay behind it.
+    Resilience does not replace backups: keep automated backups with
+    point-in-time restore on the database.
+
+sources:
+  - title: "Reliability in Azure Managed Redis"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-managed-redis"
+    retrieved: 2026-10-28
+  - title: "Cache-Aside Pattern"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside"
+    retrieved: 2026-10-28
+  - title: "Reliability in Azure Database for PostgreSQL"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql"
+    retrieved: 2026-09-30
+  - title: "Reliability in Azure Virtual Machines"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-virtual-machines"
+    retrieved: 2026-09-30
+  - title: "What is Azure Application Gateway"
+    url: "https://learn.microsoft.com/en-us/azure/application-gateway/overview"
+    retrieved: 2026-09-30

@@ -152,6 +152,7 @@
                 "route",
                 "serve",
                 "write-store",
+                "cache",
                 "neutral"
               ]
             }
@@ -304,6 +305,30 @@
               "capacity": {
                 "type": "number",
                 "exclusiveMinimum": 0
+              },
+              "read_load": {
+                "type": "object",
+                "properties": {
+                  "traffic": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "hit": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "exclusiveMaximum": 1
+                  },
+                  "db_capacity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "traffic",
+                  "hit",
+                  "db_capacity"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [

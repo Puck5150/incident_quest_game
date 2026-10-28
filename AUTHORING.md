@@ -507,6 +507,19 @@ zone/region lanes, traffic links, and sync/async replication links. Start from
     end, like Cloud Run). Anything else fails every test with a plain reason.
   - **The application writes, not the load balancer.** Only a `serve` part's
     link to the database counts as the application's write path.
+  - **Read load and caches (opt-in).** A check may carry
+    `read_load: { traffic, hit, db_capacity }`, which needs both `serve` and
+    `write-store` in `reach`. The serving servers share `traffic` equally; a
+    server with a traffic link to a surviving `cache` part sends only
+    `1 − hit` of its share to the database, and any other server sends all of
+    it. The check fails if the total exceeds `db_capacity` (all three are
+    multiples of normal reads). A `cache` part has the role `cache` and no other
+    role. Only a link *from* a server *to* the cache shields it. Not modelled:
+    read replicas, cache replicas the player places separately, expiry and
+    staleness, writes, warm-up. State every number as a scenario number, and
+    model each cloud's cache from that cloud's own documentation: the scope
+    (zonal or regional) and the failure behavior are different services' facts,
+    never one cloud's assumed for another.
 - **Counter-examples replace enumeration.** Free-form designs can't all be
   checked, so list the mistakes the challenge is about, each with the exact
   tests it must fail. The validator runs them. If one fails for an *unintended*

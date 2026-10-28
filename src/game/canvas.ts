@@ -24,6 +24,7 @@ export type CanvasEvaluation = {
 }
 
 type Node = Design['nodes'][number]
+const fmt = (x: number) => String(Number(x.toFixed(2)))
 
 export function evaluateCanvas(c: CanvasChallenge, design: Design): CanvasEvaluation {
   const palette = new Map(c.palette.map((p) => [p.id, p]))
@@ -104,6 +105,7 @@ function check(
   // (when the palette offers a load balancer) never straight to a web server
   // unless that service has its own managed front end (`public`).
   const toDb: string[] = []
+  const toCache: string[] = []
   const direct: string[] = []
   const traffic = d.edges.filter((e) => {
     if (e.kind !== 'traffic') return false
@@ -111,11 +113,14 @@ function check(
     const n = byId.get(e.to)
     if (!n) return true
     if (has(n, 'write-store')) return void toDb.push(n.id), false
+    if (has(n, 'cache')) return void toCache.push(n.id), false
     if (needsEntry && !has(n, 'route') && !type(n.id)?.public) return void direct.push(n.id), false
     return true
   })
   if (toDb.length)
     reasons.push(`users connect straight to the database (${toDb.join(', ')}); keep it private and reach it only through the web tier.`)
+  if (toCache.length)
+    reasons.push(`users connect straight to the cache (${toCache.join(', ')}); keep it private and reach it only from the web servers.`)
   if (direct.length)
     reasons.push(`users connect straight to ${direct.join(', ')}; put a load balancer or other entry point in front.`)
   // The design is wrong before any failure: skip the downstream reachability noise.
@@ -162,8 +167,9 @@ function check(
     }
   }
 
-  if (t.check.capacity !== undefined) {
-    // A server only adds capacity if it can actually write to the database.
+  // The servers that count: reachable, and able to reach whichever database
+  // currently accepts writes (every reachable server, when the design has no database).
+  const serversThatCount = () => {
     const stores = d.nodes.filter((n) => has(n, 'write-store')).map((n) => n.id)
     const w = writer(d, removed, has)
     const endpoint = 'problem' in w ? new Set(stores) : w.endpoint
@@ -171,6 +177,12 @@ function check(
     const serving = stores.length
       ? reached.filter((n) => traffic.some((e) => e.from === n.id && endpoint.has(e.to)))
       : reached
+    return { w, reached, serving }
+  }
+
+  if (t.check.capacity !== undefined) {
+    // A server only adds capacity if it can actually write to the database.
+    const { reached, serving } = serversThatCount()
     const unlinked = reached.filter((n) => !serving.includes(n)).map((n) => n.id)
     const cap = serving.reduce((sum, n) => sum + (c.palette.find((p) => p.id === n.type)?.capacity ?? 0), 0)
     if (cap < t.check.capacity) {
@@ -180,6 +192,30 @@ function check(
           : `only ${cap}× of the ${t.check.capacity}× traffic needed can be served (${serving.map((n) => n.id).join(', ')}).`,
       )
       if (unlinked.length) reasons.push(`${unlinked.join(', ')} can't reach the database, so they don't count as serving capacity.`)
+    }
+  }
+
+  // Opt-in (check.read_load): the database's read load. The serving servers share the reads
+  // equally; one linked to a surviving cache sends only the misses to the database. Skipped
+  // when nothing serves or nothing can accept writes: the reasons above already failed that.
+  const rl = t.check.read_load
+  if (rl) {
+    const { w, serving } = serversThatCount()
+    if (!('problem' in w) && serving.length) {
+      const caches = d.nodes.filter((n) => has(n, 'cache'))
+      const live = new Set(caches.filter((n) => !removed.has(n.id)).map((n) => n.id))
+      const open = serving.filter((n) => !traffic.some((e) => e.from === n.id && live.has(e.to)))
+      const share = rl.traffic / serving.length
+      const load = share * open.length + share * (serving.length - open.length) * (1 - rl.hit)
+      if (load - rl.db_capacity > 1e-9) {
+        const lost = caches.filter((n) => removed.has(n.id)).map((n) => n.id)
+        const why = !caches.length
+          ? 'there is no cache in the design'
+          : lost.length === caches.length
+            ? `${lost.join(', ')} ${lost.length > 1 ? 'were' : 'was'} lost`
+            : `${open.map((n) => n.id).join(', ')} ${open.length > 1 ? 'are' : 'is'} not linked to a surviving cache`
+        reasons.push(`${w.writer} would see ${fmt(load)}× normal reads but can take ${rl.db_capacity}× (${why}).`)
+      }
     }
   }
   return reasons

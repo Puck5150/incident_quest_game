@@ -1,0 +1,284 @@
+# yaml-language-server: $schema=../../schemas/canvas.json
+type: challenge
+mode: canvas
+id: gcp-cache-before-the-sale
+track: cloud-design
+difficulty: 3
+title: "Keep the database standing on sale day, on Google Cloud"
+provider: gcp
+par_minutes: 15
+
+brief: |
+  The shop's checkout works on a normal day. A sale doubles traffic, and every
+  product page re-reads the same data from the database, so the database
+  buckles even though the web tier has room to spare. You build the
+  architecture in us-central1: keep the checkout up through the sale, through
+  losing a zone, a web server or the database server, and through losing a
+  cache node.
+
+requirements:
+  - "Serve 2× normal traffic, even with one zone down"
+  - "Keep the database within what it can read on a sale day: 1× normal reads"
+  - "Keep accepting orders if either zone or the database server fails, losing none"
+  - "Survive any single web server or cache node failing"
+  - "Stay within 14 cost units per month"
+budget: 14
+
+layout:
+  regions:
+    - id: r1
+      label: "us-central1"
+      zones:
+        - { id: r1-a, label: "us-central1-a" }
+        - { id: r1-b, label: "us-central1-b" }
+
+palette:
+  - id: lb
+    label: "Regional external Application Load Balancer"
+    short: "Regional ALB"
+    scope: regional
+    roles: [route]
+    cost: 1
+    facts:
+      - "Regional external Application Load Balancers support backends in a single region."
+      - "Placing resources in more than one zone of a region lowers the chance that one outage takes them all; if a zone goes down, traffic can shift to another zone in the same region."
+  - id: vm
+    label: "Compute Engine VM (web)"
+    short: "web"
+    scope: zonal
+    roles: [serve]
+    capacity: 1
+    cost: 1
+    facts:
+      - "VM instances are zonal resources."
+      - "Each server handles 1× normal traffic (scenario number)."
+  - id: db
+    label: "Cloud SQL for PostgreSQL instance"
+    short: "Cloud SQL"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts:
+      - "High availability pairs a primary with a standby in a different zone."
+      - "On a sale day this database can read 1× normal traffic (scenario number)."
+  - id: cache
+    label: "Memorystore for Redis (Basic tier)"
+    short: "Memorystore"
+    scope: zonal
+    roles: [cache]
+    cost: 2
+    facts:
+      - "On the Basic tier this is one Redis node with no replication, so no cross-zone replication. Google describes it as an ephemeral cache, pitched at applications that treat Redis purely as a cache and can live with it restarting empty."
+      - "You choose a zone for the instance when you create it."
+      - "While a linked cache is up it answers 9 in 10 reads (scenario number); the database sees the rest."
+
+link_facts:
+  sync:
+    - "Like Cloud SQL high availability: writes reach both zones before they're confirmed."
+    - "On failover, expect about 60 seconds of unavailability."
+  async:
+    - "Like a read replica: changes on the primary are updated on it in almost real time."
+    - "You can promote it to a primary instance."
+
+stress_tests:
+  - id: sale
+    label: "A sale: 2× traffic"
+    event: { none: true }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: zone-a
+    label: "us-central1-a fails during the sale"
+    event: { zone_outage: r1-a }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: zone-b
+    label: "us-central1-b fails during the sale"
+    event: { zone_outage: r1-b }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: vm-failure
+    label: "Any one web server fails during the sale"
+    event: { single_failure: vm }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: db-host
+    label: "The database server fails during the sale"
+    event: { single_failure: db }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: cache-failure
+    label: "Any one cache node fails during the sale"
+    event: { single_failure: cache }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+
+reference_designs:
+  - name: "Recommended"
+    why: "Two web servers per zone keep 2× capacity after losing a zone; a standby in the other zone takes over writes. A Basic-tier cache in each zone, with every web server linked to both, leaves one cache shielding the database when a zone or a node is lost."
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1-a }
+        - { id: cache-2, type: cache, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: web-1, to: cache-1, kind: traffic }
+        - { from: web-2, to: cache-1, kind: traffic }
+        - { from: web-3, to: cache-1, kind: traffic }
+        - { from: web-4, to: cache-1, kind: traffic }
+        - { from: web-1, to: cache-2, kind: traffic }
+        - { from: web-2, to: cache-2, kind: traffic }
+        - { from: web-3, to: cache-2, kind: traffic }
+        - { from: web-4, to: cache-2, kind: traffic }
+
+counter_examples:
+  - name: "No cache: every read goes to the database"
+    fails: [sale, zone-a, zone-b, vm-failure, db-host, cache-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "Caches that no web server reads from"
+    fails: [sale, zone-a, zone-b, vm-failure, db-host, cache-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1-a }
+        - { id: cache-2, type: cache, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "One cache node in one zone"
+    fails: [zone-a, cache-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1-a }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: web-1, to: cache-1, kind: traffic }
+        - { from: web-2, to: cache-1, kind: traffic }
+        - { from: web-3, to: cache-1, kind: traffic }
+        - { from: web-4, to: cache-1, kind: traffic }
+
+hints:
+  nudge: "A normal day passes. What changes on a sale day, and who is doing all the reading?"
+  direction: "Put something between the web servers and the database that answers repeat reads, link the web servers to it, then ask what happens to the database when that something is gone."
+  answer: "Two web servers in each zone, the database in one zone with a standby in the other, plus a Memorystore Basic-tier cache in each zone, with every web server linked to both."
+
+analogy:
+  title: "The reference desk"
+  text: |
+    A busy library answers the same questions all day. The librarian could walk
+    to the stacks for every one, or keep the popular answers on a card at the
+    desk and only walk to the stacks for the rest. On a quiet day nobody can
+    tell the difference. On sale day the queue is out the door, and the
+    librarian who has to fetch every answer from the stacks is the one who
+    gives up first. If the desk cards get thrown out mid-rush, everyone is
+    back to the stacks at once.
+
+debrief:
+  summary: |
+    The database was fine on a normal day and failed on the sale because every
+    page view read from it. A cache takes the repeated reads off the database:
+    the application asks the cache first and only reads the database for what
+    the cache does not have. Here, a live cache answers nine in ten reads, so
+    the database sees a tenth of the load.
+
+    Google's documentation describes the Basic tier as a single Redis node with
+    no replication, including no cross-zone replication, pitched at
+    applications that treat Redis purely as a cache and can live with it
+    restarting empty. The documented high-availability option is the
+    Standard tier, which uses replication and automatic failover. The canvas
+    has no such tier, so two Basic-tier caches, one per zone, with every web
+    server linked to both, stand in for it: losing one zone or one node leaves
+    the other still shielding the database. That is a stand-in, not the
+    Standard tier's mechanism.
+
+    The hit rate and the database's limit are scenario numbers, not
+    measurements; real figures depend on the data and the traffic. This
+    challenge does not model the Standard tier's replicas and automatic failover,
+    what happens to a Basic-tier node's data when it fails, read replicas,
+    expiry and staleness, or writes.
+  real_world: |
+    Keep the shape safe as well as available: only the load balancer takes
+    traffic from users, and the web servers, caches and database stay behind
+    it. Resilience does not replace backups: keep automated backups with
+    point-in-time recovery on the database.
+
+sources:
+  - title: "Redis tier capabilities"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers"
+    retrieved: 2026-10-28
+  - title: "High availability for Memorystore for Redis"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/high-availability-for-memorystore-for-redis"
+    retrieved: 2026-10-28
+  - title: "Create and manage Redis instances"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/creating-managing-instances"
+    retrieved: 2026-10-28
+  - title: "Compute Engine: Regions and zones"
+    url: "https://docs.cloud.google.com/compute/docs/regions-zones"
+    retrieved: 2026-10-28
+  - title: "Cloud Load Balancing overview"
+    url: "https://docs.cloud.google.com/load-balancing/docs/load-balancing-overview"
+    retrieved: 2026-10-28
+  - title: "About high availability"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/high-availability"
+    retrieved: 2026-10-28
+  - title: "About replication in Cloud SQL"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/replication"
+    retrieved: 2026-10-28
