@@ -3,7 +3,7 @@ import { loadSandbox as loadCloud } from 'virtual:content'
 import type { Design } from '../schema/canvas.ts'
 import type { SandboxChallenge } from '../schema/sandbox.ts'
 import type { CanvasTestResult } from '../game/canvas.ts'
-import { runCheck, sandboxChecks, validateDesign } from '../game/sandbox.ts'
+import { readsJudged, runCheck, sandboxChecks, SPIKE, READ_HIT, DB_READS, validateDesign } from '../game/sandbox.ts'
 import { updateDesign } from '../game/sandboxStore.ts'
 import { PROVIDER_NAMES } from '../schema/constants.ts'
 import CanvasEditor from '../components/canvas/CanvasEditor.tsx'
@@ -73,6 +73,8 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
   const part = (type: string) => c.palette.find((p) => p.id === type)
   const cost = design.nodes.reduce((sum, n) => sum + (part(n.type)?.cost ?? 0), 0)
   const hasNeutral = design.nodes.some((n) => part(n.type)?.roles.includes('neutral'))
+  const reads = readsJudged(c, design)
+  const hasCache = design.nodes.some((n) => part(n.type)?.roles.includes('cache'))
 
   return (
     <div className="space-y-4">
@@ -154,8 +156,16 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
               </div>
               {hasNeutral && (
                 <p className="mt-3 text-xs text-muted">
-                  Queues, caches, CDNs and object storage aren't judged by these checks yet. A link through one is treated as a direct link to what's behind it.
+                  Queues, CDNs and object storage aren't judged by these checks yet. A link through one is treated as a direct link to what's behind it.
                 </p>
+              )}
+              {reads && (
+                <p className="mt-3 text-xs text-muted">
+                  Reads are judged at {SPIKE}× normal. A cache that is up and linked from a web server answers {Math.round(READ_HIT * 10)} in 10 of that server's reads; the database can read {DB_READS}× normal. These are scenario numbers, not measurements.
+                </p>
+              )}
+              {hasCache && !reads && (
+                <p className="mt-3 text-xs text-muted">A cache is judged once the design has a web server and a database.</p>
               )}
             </section>
           </>
