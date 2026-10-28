@@ -21,6 +21,7 @@ export default function Board({
   onSelect,
   onPointerDownChip,
   readOnly,
+  downNoun = 'test',
 }: {
   c: CanvasChallenge
   design: Design
@@ -32,6 +33,7 @@ export default function Board({
   onSelect?: (id: string) => void
   onPointerDownChip?: (e: ReactPointerEvent, id: string) => void
   readOnly?: boolean // debrief: a picture of a design, no interaction
+  downNoun?: 'test' | 'check' // the sandbox runs checks, not tests
 }) {
   const arrowId = useId() // unique per board: the debrief shows two
   const box = useRef<HTMLDivElement>(null)
@@ -103,7 +105,7 @@ export default function Board({
         onClick={() => onSelect?.(id)}
         onPointerDown={id === USERS ? undefined : (e) => onPointerDownChip?.(e, id)}
         aria-pressed={selected === id}
-        aria-label={`${label}${sub ? `, ${sub}` : ''}${isDown ? ', down in this test' : ''}${target ? ', can be linked' : ''}`}
+        aria-label={`${label}${sub ? `, ${sub}` : ''}${isDown ? `, down in this ${downNoun}` : ''}${target ? ', can be linked' : ''}`}
         className={`${look} hover:border-accent/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
           target ? 'border-dashed border-accent' : ''
         } ${dim ? 'opacity-40' : ''}`}

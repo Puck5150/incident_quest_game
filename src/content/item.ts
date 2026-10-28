@@ -41,10 +41,11 @@ export const itemMeta = (item: Item) =>
 
 // Which schema a content file uses. `type: challenge` files are design
 // challenges (`mode: canvas` for the canvas kind, `providers:` for "pick your
-// cloud"); everything else is an incident. Top-level keys only: block text is
+// cloud"); `type: sandbox` files are design sandboxes; everything else is an incident. Top-level keys only: block text is
 // indented, so it can't match these. Also names the file in schemas/.
-export type ContentKind = 'incident' | 'challenge' | 'canvas' | 'pick-cloud-canvas' | 'pick-cloud-slot'
+export type ContentKind = 'incident' | 'challenge' | 'canvas' | 'pick-cloud-canvas' | 'pick-cloud-slot' | 'sandbox'
 export function contentKind(raw: string): ContentKind {
+  if (/^type:\s*sandbox\s*$/m.test(raw)) return 'sandbox'
   const challenge = /^type:\s*challenge\s*$/m.test(raw)
   const canvas = challenge && /^mode:\s*canvas\s*$/m.test(raw)
   const multi = /^providers:/m.test(raw)
@@ -130,6 +131,8 @@ function variantsOf<M extends { providers: Provider[] }, C extends Challenge | C
 export function parseItem(raw: string, where: string): { item?: Item; errors: string[] } {
   const errors: string[] = []
   const kind = contentKind(raw)
+  if (kind === 'sandbox')
+    return { errors: [`${where}: sandbox files are checked by the build (run npm test); the preview page can't play them.`] }
   const base = (m: MultiBase) => ({ id: m.id, track: m.track, title: m.title, difficulty: m.difficulty, published: m.published, providers: m.providers })
 
   if (kind === 'pick-cloud-canvas') {

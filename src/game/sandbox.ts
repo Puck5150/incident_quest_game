@@ -1,0 +1,141 @@
+// The design sandbox, as pure functions: turning a sandbox file into a
+// challenge the canvas engine understands, building the menu of failure checks
+// from what the design actually contains, and validating a design against a
+// cloud's palette and lanes (used on import and when a saved design is opened).
+//
+// No scoring: a check shows what survives and why.
+
+import { USERS } from '../schema/constants.ts'
+import type { CanvasTest, Design } from '../schema/canvas.ts'
+import type { SandboxChallenge, SandboxFile } from '../schema/sandbox.ts'
+import type { CanvasChallenge } from '../schema/canvas.ts'
+import { evaluateCanvas, type CanvasTestResult } from './canvas.ts'
+import { connect, lanes } from './canvasEdit.ts'
+
+export const SANDBOX_MAX_NODES = 40
+export const SPIKE = 3 // the traffic-spike check: this many times normal traffic
+
+// Returns an error message when the file can't extend the base.
+export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxChallenge | string {
+  if (base.provider !== f.provider) return `extends "${base.id}", which is a ${base.provider} challenge, not ${f.provider}`
+  const taken = new Set(base.palette.map((p) => p.id))
+  const clash = f.palette.find((p, i) => taken.has(p.id) || f.palette.findIndex((q) => q.id === p.id) !== i)
+  if (clash) return `palette id "${clash.id}" is already in ${base.id}'s palette or repeated`
+  return {
+    type: 'challenge',
+    mode: 'canvas',
+    id: f.id,
+    track: base.track,
+    difficulty: 1,
+    title: f.title,
+    provider: f.provider,
+    par_minutes: 1,
+    brief: 'A free-form sandbox: build anything, then run the checks.',
+    requirements: ['No requirements: the checks show what survives and why.'],
+    budget: 1_000_000,
+    layout: f.layout,
+    palette: [...base.palette, ...f.palette],
+    link_facts: base.link_facts,
+    stress_tests: [],
+    reference_designs: [],
+    counter_examples: [],
+    hints: base.hints,
+    analogy: base.analogy,
+    debrief: base.debrief,
+    sources: [...base.sources, ...f.sources],
+    max_nodes: SANDBOX_MAX_NODES,
+  }
+}
+
+const isNeutral = (c: SandboxChallenge, type: string) => rolesOf(c, type).every((r) => r === 'neutral') && rolesOf(c, type).length > 0
+const rolesOf = (c: SandboxChallenge, type: string) => c.palette.find((p) => p.id === type)?.roles ?? []
+
+// The checks on offer for this design. Only roles the design contains are
+// required, so a design with no database isn't failed for lacking one; a design
+// with nothing the engine judges (no web server, no database) gets no checks,
+// because every one would pass without meaning anything.
+export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
+  const has = (role: 'serve' | 'write-store') => d.nodes.some((n) => rolesOf(c, n.type).includes(role))
+  const reach = (['serve', 'write-store'] as const).filter(has)
+  if (!reach.length) return []
+  const check = { reach }
+  const occupied = (lane: string) => d.nodes.some((n) => n.lane === lane && !isNeutral(c, n.type)) // neutral parts don't make a zone worth testing
+  const label = (type: string) => c.palette.find((p) => p.id === type)?.label ?? type
+  const judged = [...new Set(d.nodes.filter((n) => rolesOf(c, n.type).some((r) => r !== 'neutral')).map((n) => n.type))]
+
+  const tests: CanvasTest[] = [
+    ...c.layout.regions.flatMap((r) => r.zones).filter((z) => occupied(z.id)).map((z): CanvasTest => ({ id: `zone-${z.id}`, label: `Lose ${z.label}`, event: { zone_outage: z.id }, check })),
+    ...c.layout.regions
+      .filter((r) => occupied(r.id) || r.zones.some((z) => occupied(z.id)))
+      .map((r): CanvasTest => ({ id: `region-${r.id}`, label: `Lose region ${r.label}`, event: { region_outage: r.id }, check })),
+    ...judged.map((t): CanvasTest => ({ id: `one-${t}`, label: `Lose any one ${label(t)}`, event: { single_failure: t }, check })),
+  ]
+  if (has('serve')) tests.push({ id: 'spike', label: `Traffic spike: ${SPIKE}× normal`, event: { none: true }, check: { reach, capacity: SPIKE } })
+  return tests
+}
+
+// The engine knows nothing of neutral parts, so judge a copy with every neutral
+// part contracted away: each traffic path from users or a judged part through
+// one or more neutral parts to a judged part becomes a direct link, and every
+// other link touching a neutral part is dropped. A queue, cache, CDN or bucket
+// therefore behaves exactly as if the link ran straight through it (or, hanging
+// off a server, as if it weren't there).
+function withoutNeutral(c: SandboxChallenge, d: Design): Design {
+  const neutral = new Set(d.nodes.filter((n) => isNeutral(c, n.type)).map((n) => n.id))
+  const edges = d.edges.filter((e) => !neutral.has(e.from) && !neutral.has(e.to))
+  const seen = new Set(edges.map((e) => `${e.from}>${e.to}>${e.kind}`))
+  for (const start of [USERS, ...d.nodes.filter((n) => !neutral.has(n.id)).map((n) => n.id)]) {
+    const visited = new Set<string>()
+    const stack = [start]
+    while (stack.length) {
+      const from = stack.pop()!
+      for (const e of d.edges) {
+        if (e.kind !== 'traffic' || e.from !== from) continue
+        if (neutral.has(e.to)) {
+          if (!visited.has(e.to)) {
+            visited.add(e.to)
+            stack.push(e.to)
+          }
+        } else if (from !== start && e.to !== start && !seen.has(`${start}>${e.to}>traffic`)) {
+          seen.add(`${start}>${e.to}>traffic`)
+          edges.push({ from: start, to: e.to, kind: 'traffic' })
+        }
+      }
+    }
+  }
+  return { nodes: d.nodes.filter((n) => !neutral.has(n.id)), edges }
+}
+
+// Runs one check. The engine fails every occupied zone that no zone test names
+// (so a design can't hide in an unlisted zone); passing the whole generated
+// menu names every occupied zone, so a single zone check reports only its zone.
+export function runCheck(c: SandboxChallenge, d: Design, testId: string): CanvasTestResult | undefined {
+  const judged = withoutNeutral(c, d)
+  return evaluateCanvas({ ...c, stress_tests: sandboxChecks(c, d) }, judged).tests.find((t) => t.id === testId)
+}
+
+// The first reason this design couldn't have been built in this cloud's editor, or undefined.
+export function validateDesign(c: SandboxChallenge, d: Design): string | undefined {
+  if (d.nodes.length > c.max_nodes) return `A design can have at most ${c.max_nodes} components.`
+  const palette = new Map(c.palette.map((p) => [p.id, p]))
+  const laneScope = new Map(lanes(c).map((l) => [l.id, l.scope]))
+  const ids = new Set<string>()
+  for (const n of d.nodes) {
+    if (!n.id) return "A component id can't be empty."
+    if (n.id === USERS) return `"${USERS}" is reserved and can't be a component id.`
+    if (ids.has(n.id)) return `Duplicate component id "${n.id}".`
+    ids.add(n.id)
+    const p = palette.get(n.type)
+    if (!p) return `"${n.id}" is a ${n.type}, which isn't in this cloud's palette.`
+    if (laneScope.get(n.lane) !== p.scope) return `${n.id} (${p.label}) can't go in lane "${n.lane}".`
+  }
+  // Replay the links through the editor's own rules, so import can't admit a design the editor refuses.
+  let built: Design = { nodes: d.nodes, edges: [] }
+  for (const e of d.edges) {
+    if (e.from !== USERS && !ids.has(e.from)) return `A link starts at "${e.from}", which isn't in the design.`
+    if (!ids.has(e.to)) return `A link ends at "${e.to}", which isn't in the design.`
+    const next = connect(c, built, e.from, e.to, e.kind)
+    if (typeof next === 'string') return next
+    built = next
+  }
+}

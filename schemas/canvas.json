@@ -151,7 +151,8 @@
               "enum": [
                 "route",
                 "serve",
-                "write-store"
+                "write-store",
+                "neutral"
               ]
             }
           },

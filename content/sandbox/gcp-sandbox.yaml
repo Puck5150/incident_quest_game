@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=../../schemas/sandbox.json
+type: sandbox
+id: gcp-sandbox
+provider: gcp
+title: "Google Cloud design sandbox"
+extends: gcp-signup-canvas
+
+layout:
+  global: true
+  regions:
+    - id: usc1
+      label: "us-central1"
+      zones:
+        - { id: usc1-a, label: "us-central1-a" }
+        - { id: usc1-b, label: "us-central1-b" }
+    - id: use1
+      label: "us-east1"
+      zones:
+        - { id: use1-b, label: "us-east1-b" }
+        - { id: use1-c, label: "us-east1-c" }
+
+palette:
+  - id: pubsub
+    label: "Pub/Sub topic"
+    short: "Pub/Sub"
+    scope: global
+    roles: [neutral]
+    cost: 1
+    facts:
+      - "An asynchronous messaging service that decouples the systems that publish messages from the systems that process them."
+      - "By default Pub/Sub is a global service: topics and subscriptions are not tied to a region. Each message is still stored in the region where it was published, in multiple zones there, so losing one zone does not stop delivery."
+      - "Unacknowledged messages are kept for 7 days unless you change it (31 days at most), and an unacknowledged message is delivered again once the acknowledgment deadline passes."
+  - id: memorystore
+    label: "Memorystore for Redis node"
+    short: "cache"
+    scope: zonal
+    roles: [neutral]
+    cost: 2
+    facts:
+      - "On the Basic tier this is a single node in one zone with no cross-zone replication, suited to an ephemeral cache. The Standard tier adds a replica node in another zone and fails over to it automatically."
+      - "Standard-tier replication is asynchronous, so a write that was already acknowledged can still be lost when a failover happens."
+      - "This product cannot replicate across regions; Google points to Memorystore for Valkey when you need cross-region disaster recovery."
+  - id: gcs
+    label: "Cloud Storage bucket"
+    short: "GCS"
+    scope: regional
+    roles: [neutral]
+    cost: 1
+    facts:
+      - "A bucket in a single region keeps its data redundant across multiple zones in that region, so a zone failure does not make it unavailable."
+      - "Dual-region and multi-region buckets add redundancy across regions, asynchronously, for higher availability than one region."
+      - "You choose the bucket's location when you create it, and it decides how the data is replicated and what it costs."
+  - id: cloud-cdn
+    label: "Cloud CDN"
+    short: "CDN"
+    scope: global
+    roles: [neutral]
+    cost: 2
+    facts:
+      - "Keeps cached copies at Google edge locations worldwide and serves a request from the cache when a matching response is there, lowering latency and the load on the origin."
+      - "It is enabled on a global external or classic Application Load Balancer rather than running on its own. The origin can be Compute Engine or GKE backends, or a Cloud Storage backend bucket."
+      - "On a cache miss, the request goes through the load balancer to the origin, and a cacheable response is stored for later requests."
+
+sources:
+  - title: "What is Pub/Sub?"
+    url: "https://docs.cloud.google.com/pubsub/docs/overview"
+    retrieved: 2026-10-27
+  - title: "Pub/Sub: Introduction to reliability"
+    url: "https://docs.cloud.google.com/pubsub/docs/reliability-intro"
+    retrieved: 2026-10-27
+  - title: "Subscription properties"
+    url: "https://docs.cloud.google.com/pubsub/docs/subscription-properties"
+    retrieved: 2026-10-27
+  - title: "High availability for Memorystore for Redis"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/high-availability-for-memorystore-for-redis"
+    retrieved: 2026-10-27
+  - title: "Redis tier capabilities"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers"
+    retrieved: 2026-10-27
+  - title: "Bucket locations"
+    url: "https://docs.cloud.google.com/storage/docs/locations"
+    retrieved: 2026-10-27
+  - title: "Cloud CDN overview"
+    url: "https://docs.cloud.google.com/cdn/docs/overview"
+    retrieved: 2026-10-27

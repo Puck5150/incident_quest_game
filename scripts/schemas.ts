@@ -13,6 +13,7 @@ import { ScenarioSchema } from '../src/schema/scenario.ts'
 import { ChallengeSchema } from '../src/schema/challenge.ts'
 import { CanvasChallengeSchema } from '../src/schema/canvas.ts'
 import { MultiCanvasSchema, MultiSlotSchema } from '../src/schema/multi.ts'
+import { SandboxSchema } from '../src/schema/sandbox.ts'
 import { CommandLibrarySchema } from '../src/schema/commands.ts'
 import type { ContentKind } from '../vite-plugin-content.ts'
 
@@ -25,6 +26,7 @@ export const SCHEMAS: Record<ContentKind | 'commands', z.ZodType> = {
   canvas: CanvasChallengeSchema,
   'pick-cloud-canvas': MultiCanvasSchema,
   'pick-cloud-slot': MultiSlotSchema,
+  sandbox: SandboxSchema,
 }
 
 export const OUT_DIR = path.resolve(import.meta.dirname, '../schemas')
