@@ -91,13 +91,18 @@ facts, and the learner is told so.
   generated check's `check` object, including the spike check. This respects the
   schema rule that `read_load` needs both `serve` and `write-store` in `reach`.
 - **No cache:** unchanged, byte for byte.
-- **Cache but no web server or no database:** `reach` lacks a role, so no
-  `read_load` is added and the cache stays inert, as it is today.
-- **Zone and region checks:** a zone holding only a cache now counts as
-  occupied (it is no longer neutral), so it gets a "Lose <zone>" check.
-- **"Lose any one cache":** generated only when the read-load gate holds. With
-  no web server or no database it would pass without meaning anything, which the
-  function's own comment says to avoid.
+- **Cache but no web server or no database:** the cache is inert and is
+  treated exactly as a neutral part is today: contracted away by
+  `withoutNeutral()`, never occupying a zone for a "Lose <zone>" check, and
+  never getting a "Lose any one cache" check. A design without both a web server
+  and a database therefore gets byte-for-byte the checks and results it gets
+  now. One helper, `readsJudged(c, d)`, holds the rule (the design has a cache,
+  a `serve` part and a `write-store` part), and both the check generator and the
+  neutral contraction use it.
+- **Zone and region checks:** once reads are judged, a zone holding only a
+  cache is occupied (the cache is no longer neutral), so it gets a "Lose <zone>"
+  check.
+- **"Lose any one cache":** generated only when reads are judged.
 - **Labels:** every check that carries `read_load` says so in its label
   ("Lose us-east-1a, reads at 3x"), so the learner sees what is being judged.
 
@@ -116,10 +121,13 @@ list.
   object storage aren't judged by these checks yet." It becomes "Queues, CDNs
   and object storage aren't judged by these checks yet.", and is shown only when
   the design contains a neutral part (as today).
-- When the read-load gate holds, a second short note states the two scenario
-  numbers in plain words: reads are judged at 3x normal; a linked cache that is
-  up answers 9 in 10 reads; the database can read 1x normal. It says these are
-  scenario numbers, not measurements.
+- When reads are judged, a second short note states the two scenario numbers in
+  plain words: reads are judged at 3x normal; a linked cache that is up answers
+  9 in 10 of that server's reads; the database can read 1x normal. It says these
+  are scenario numbers, not measurements.
+- When the design has a cache but reads are not judged (no web server or no
+  database), a short note says a cache is judged once the design has a web
+  server and a database.
 
 ### Saved designs and import/export
 
@@ -136,8 +144,8 @@ Inputs the spec implies that a happy path would not exercise:
 2. A cache linked from only some web servers: only those servers are shielded,
    and the reason names the others.
 3. The only cache in a zone no one named, lost with that zone.
-4. A cache but no database, or no web server: no read-load line and no
-   "Lose any one cache" check.
+4. A cache but no database, or no web server: the cache is inert, so checks and
+   results are identical to the same design without it.
 5. A cache linked only from the database, or reached straight from users: it
    shields nothing, and the reason is the cycle-1 reason.
 6. A sandbox file whose extra part has `[cache, neutral]`, `[serve]`, or an
