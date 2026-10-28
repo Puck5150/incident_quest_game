@@ -67,7 +67,7 @@ palette:
     roles: [cache]
     cost: 2
     facts:
-      - "A cache node runs in one Availability Zone."
+      - "Each cache node is placed in one Availability Zone, chosen by you or by ElastiCache."
       - "A node with no replica that fails is replaced by a new primary that starts empty."
       - "While a linked cache is up it answers 9 in 10 reads (scenario number); the database sees the rest."
 
@@ -217,7 +217,7 @@ counter_examples:
 hints:
   nudge: "A normal day passes. What changes on a sale day, and who is doing all the reading?"
   direction: "Put something between the web servers and the database that answers repeat reads, link the web servers to it, then ask what happens to the database when that something is gone."
-  answer: "Two web servers and a database with a sync standby in each zone as before, plus an ElastiCache node in each zone with every web server linked to both."
+  answer: "Two web servers in each zone, the database in one zone with a sync standby in the other, plus an ElastiCache node in each zone with every web server linked to both."
 
 analogy:
   title: "The reference desk"
@@ -236,18 +236,24 @@ debrief:
     page view read from it. A cache takes the repeated reads off the database:
     the application asks the cache first and only reads the database for what
     the cache does not have. Here, a live cache answers nine in ten reads, so
-    the database sees a tenth of the load.
+    the database sees a tenth of the load. ElastiCache calls the pattern
+    lazy loading: the application asks the cache first, and on a miss reads
+    the database and writes the answer into the cache.
 
     The cache is not the source of truth. An ElastiCache node with no replica
     that fails is replaced by one that starts empty, so until it warms up
     every read goes back to the database. Put a cache node in each zone and
     link every web server to both, and losing one zone or one node leaves the
-    other still shielding the database.
+    other still shielding the database. On AWS the documented way to get this
+    is one ElastiCache cluster with Multi-AZ turned on: a primary plus a
+    replica in another Availability Zone, with automatic failover. The two
+    linked cache nodes on the canvas stand in for that.
 
     The hit rate and the database's limit are scenario numbers, not
     measurements; real figures depend on the data and the traffic. This
     challenge does not model read replicas, ElastiCache replicas and Multi-AZ
-    replication groups, expiry and staleness, or writes.
+    replication groups, ElastiCache Serverless (which spans zones on its own),
+    expiry and staleness, or writes.
   real_world: |
     Keep the shape safe as well as available: only the load balancer takes
     traffic from users, and the web servers, caches and database stay behind
@@ -257,6 +263,12 @@ debrief:
 sources:
   - title: "Minimizing downtime in ElastiCache by using Multi-AZ with Valkey and Redis OSS"
     url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html"
+    retrieved: 2026-10-28
+  - title: "Choosing regions and availability zones for ElastiCache"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/RegionsAndAZs.html"
+    retrieved: 2026-10-28
+  - title: "Caching strategies for Memcached (lazy loading section)"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html"
     retrieved: 2026-10-28
   - title: "Amazon RDS: Multi-AZ DB instance deployments"
     url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
