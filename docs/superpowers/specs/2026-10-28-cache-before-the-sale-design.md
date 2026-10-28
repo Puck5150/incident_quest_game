@@ -1,7 +1,7 @@
 # Cache before the sale: database read load and a build-it-yourself cache lesson
 
 Date: 2026-10-28
-Status: draft for review
+Status: draft for review (revised after the provider-docs rule, below)
 
 ## Purpose
 
@@ -16,7 +16,8 @@ load, then bring in caching to prevent it. This spec covers the first of two
 cycles:
 
 1. **This spec (cycle 1):** an opt-in read-load rule in the engine, a `cache`
-   role, and one new scored challenge that teaches the failure and then the fix.
+   role, and three new scored challenges, one per cloud, that teach the failure
+   and then the fix.
 2. **Cycle 2 (separate spec):** the design sandbox's cache parts switch from
    `neutral` to `cache` and the sandbox's check menu uses the same rule.
 
@@ -29,6 +30,11 @@ both cycles.
 - Challenge first, sandbox practice afterwards (cycle 2).
 - Real cloud services on all three clouds, AWS first. Facts come from vendor
   documentation, in our own words.
+- **Each provider's documentation is the only source of truth.** A capability,
+  scope or failure behavior documented for one cloud is never assumed for
+  another. Where the clouds' documented behavior differs, each cloud gets its
+  own model, not a shared item with a footnote. If the docs do not say it, it
+  is not in the content.
 - The read-load rule applies only where an author opts in; scored challenges
   that do not set it behave exactly as before.
 
@@ -39,113 +45,111 @@ both cycles.
   cannot take the read load.
 - Adding a cache and linking the web servers to it makes the sale test pass, and
   the results say what the cache absorbed.
-- Losing the cache, or losing the zone it sits in, fails with a reason that
-  names the load the database would see; a second cache in the other zone fixes
-  it.
-- The challenge exists for AWS, Azure and Google Cloud in one file.
+- On AWS and Google Cloud, where the docs describe a cache node that lives in
+  one zone, losing that node or its zone fails with a reason that names the load
+  the database would see; a second cache in the other zone fixes it.
+- On Azure, where the docs describe a zone-redundant cache, a zone outage does
+  not take the cache out, and the challenge does not pretend it does.
+- Each cloud has its own challenge file, authored from that cloud's docs.
 - Every existing challenge's evaluation is byte-for-byte unchanged.
 
 ## Design
 
-### The challenge: `cache-before-the-sale`
+### The challenges: one per cloud
 
-`content/cloud-design/cache-before-the-sale.yaml`, a `pick-cloud-canvas` with
-`providers: [aws, azure, gcp]`, track `cloud-design`, difficulty 3, in the same
-shape as `zone-resilient-checkout`.
+Three single-provider canvas challenges in `content/cloud-design/`, in the same
+shape as `aws-checkout-canvas`, `azure-portal-canvas` and `gcp-signup-canvas`
+(`mode: canvas`, `provider` fixed): `aws-cache-before-the-sale`,
+`azure-cache-before-the-sale`, `gcp-cache-before-the-sale`. Track
+`cloud-design`, difficulty 3. They are not a pick-cloud file: that shape gives a
+palette item one scope for all clouds, which would force the three caches into
+one model that no vendor's documentation supports.
 
-**Brief.** The checkout from the earlier zone challenge works on a normal day. A
-sale doubles traffic, every product page re-reads the same data from the
-database, and the database buckles. Build a design that survives the sale and
-still survives losing a zone, a web server, the database host, or the cache.
+**Why not one pick-cloud file.** Checked against the docs on 2026-10-28:
+ElastiCache documents a cache node that runs in one Availability Zone;
+Memorystore for Redis Basic tier documents a single node in one zone; Azure
+Managed Redis documents a high-availability cache of at least two nodes in
+different zones, and does not say that a non-HA cache is pinned to one zone (HA
+also cannot be turned off once on). So the AWS and Google Cloud caches are
+zonal parts and the Azure cache is a regional (zone-redundant) part.
 
-**Requirements shown to the player.**
-- Serve 2× normal traffic, with either zone down.
-- Keep the database within what it can read on a sale day.
-- Survive any single web server, the database server, or a cache failing.
-- Stay within the budget.
+**Brief (each, in the cloud's own words).** The checkout from the earlier zone
+challenge works on a normal day. A sale doubles traffic, every product page
+re-reads the same data from the database, and the database buckles. Build a
+design that survives the sale and still survives losing a zone, a web server,
+the database host, and, where the docs make it a real failure, the cache.
 
-**Layout.** The same one-region, two-zone layout and per-cloud labels as
-`zone-resilient-checkout` (`r1`, `r1-a`, `r1-b`).
+**Layout.** One region, two zones, with the cloud's own names (`us-east-1`,
+`us-east-1a`, `us-east-1b`; `East US 2`, `Zone 1`, `Zone 2`;
+`us-central1`, `us-central1-a`, `us-central1-b`).
 
-**Palette.**
+**Palette (each).** The load balancer, web server and database come from that
+cloud's existing checkout challenge (copied, not referenced), plus one cache:
 
-| id | role | scope | cost | capacity |
+| cloud | cache part | scope | cost | what the docs support |
 |---|---|---|---|---|
-| `lb` | route | regional | 1 | |
-| `vm` | serve | zonal | 1 | 1 |
-| `db` | write-store | zonal | 2 | |
-| `cache` | cache | zonal | 2 | |
+| AWS | ElastiCache cache node | zonal | 2 | a node runs in one Availability Zone; with no replica, a replacement primary starts empty |
+| Azure | Azure Managed Redis cache, high availability | regional | 2 | HA gives at least two nodes, in different zones where the region has them; failover typically takes 10 to 15 seconds; writes not yet replicated can be lost in a zone failure |
+| Google Cloud | Memorystore for Redis, Basic tier | zonal | 2 | a single node in one zone with no cross-zone replication, suited to an ephemeral cache |
 
-`lb`, `vm` and `db` reuse the per-cloud labels, `short` names, facts and
-`differences` text from `zone-resilient-checkout` (copied, not referenced; the
-two files stay independent).
+Each cache part has facts written from that cloud's pages only, read while
+authoring; a fact the docs do not support is left out, not borrowed from
+another cloud. `capacity` is 0 and the role is `cache` alone.
 
-`cache` per cloud:
+**Stress tests (each).** All carry `read_load` (below) and require `serve` and
+`write-store`:
 
-| cloud | label | short |
+| id | event | on |
 |---|---|---|
-| AWS | Amazon ElastiCache for Redis OSS node | `ElastiCache` |
-| Azure | Azure Managed Redis cache | `Managed Redis` |
-| Google Cloud | Memorystore for Redis instance | `Memorystore` |
+| `sale` | none | all three |
+| `zone-a`, `zone-b` | zone outage | all three |
+| `vm-failure` | `single_failure: vm` | all three |
+| `db-host` | `single_failure: db` | all three |
+| `cache-failure` | `single_failure: cache` | AWS and Google Cloud only |
 
-Each carries `facts` that describe a **single cache node with no standby, in one
-zone**, and a `differences` paragraph. All three clouds also offer cache
-configurations with a replica in another zone; this challenge does not model
-those (a cache is one zonal part), and the `differences` text says so plainly.
-The Azure part is Azure Managed Redis, not Azure Cache for Redis, which
-Microsoft is retiring. Every fact, and each service's scope and what its
-failure means, is verified against the vendor documentation while authoring,
-not recalled. A fact that cannot be confirmed from a docs page is left out.
+Azure has no `cache-failure` test: its documented cache is zone-redundant, so a
+zone outage cannot remove it, and the docs describe its other failure modes
+(failover blips of seconds, a region outage) as ones the application should
+absorb by falling back to the database, not as a fault the design can prevent
+with another cache. The debrief says so and cites the page. (Whether the
+Google Cloud docs describe a node failure well enough to name it in a test
+label is checked while authoring; the label states the event, not a claim.)
 
-**Stress tests.** Six, all with `read_load` (below):
+Every check has `capacity: 2`. Numbers: `read_load: { traffic: 2, hit: 0.9,
+db_capacity: 1 }`, stated as scenario numbers like the web server's "1× normal
+traffic". On a normal day (1×) the database copes without a cache, so the
+problem only shows on sale day. They are authored per file; nothing says the
+three clouds share numbers.
 
-| id | event | check |
-|---|---|---|
-| `sale` | none | reach serve, write-store; capacity 2 |
-| `zone-a` | `zone_outage: r1-a` | reach serve, write-store; capacity 2 |
-| `zone-b` | `zone_outage: r1-b` | reach serve, write-store; capacity 2 |
-| `vm-failure` | `single_failure: vm` | reach serve, write-store; capacity 2 |
-| `db-host` | `single_failure: db` | reach serve, write-store; capacity 2 |
-| `cache-failure` | `single_failure: cache` | reach serve, write-store; capacity 2 |
+**Reference design ("Recommended").**
+- AWS and Google Cloud: one load balancer, two web servers in each zone, a
+  primary database in the first zone with a synchronous standby in the second, a
+  cache in each zone, every web server linked to both caches. Passes all six
+  tests. Cost 13, budget 14.
+- Azure: the same, with one regional cache linked from every web server. Passes
+  all five tests. Cost 11, budget 12.
 
-(The existing challenge's `db-host` and `vm-failure` do not require `serve`
-and `write-store` together; here every test does, because the read load only
-exists when something serves and something stores.)
+**Counter-examples**, each listing the tests it fails, checked by the build:
+- No cache: fails every test (the reason on each is the database read load).
+- A cache that no web server links to: fails every test.
+- AWS and Google Cloud: one cache in one zone, linked from every web server:
+  fails that zone's test and `cache-failure`.
+- Azure: a cache linked from the web servers in one zone only: fails the tests
+  where the unlinked servers carry the sale.
+Exact `fails` lists are fixed when the plan's tests run; the build check
+enforces them.
 
-Shared numbers: `read_load: { traffic: 2, hit: 0.9, db_capacity: 1 }`. These are
-scenario numbers, like the web server's "1× normal traffic": the labelled
-facts say so, and the debrief says the real figures depend on the workload.
-On a normal day (1×) the database copes without a cache, so the problem only
-appears on sale day, which is the point of the lesson.
+**Hints, analogy, debrief (each).** The nudge points at the reason, not the
+design ("a normal day passes; what changes on a sale day, and who is doing all
+the reading?"). The debrief names the pattern (cache-aside: check the cache
+first, read the database on a miss), and on every cloud what its own docs say
+about a cache that is down or empty. It says what is not modelled: read
+replicas, cache replicas the player places separately, expiry and staleness,
+writes. It keeps the checkout debrief's reminders about private subnets,
+encryption and backups.
 
-**Reference design ("Recommended").** One load balancer, two web servers in each
-zone, a primary database in `r1-a` with a synchronous standby in `r1-b`, and a
-cache in each zone, every web server linked to both caches. It passes all six
-tests. Cost 13 against a budget of 14.
-
-**Counter-examples**, each listing the tests it fails:
-- No cache (the plain checkout): fails all six; the reason on each is the
-  database read load.
-- One cache in `r1-a`, linked from every web server: fails `zone-a` and
-  `cache-failure`, passes the rest.
-- Two caches that no web server links to: fails all six (a cache nothing reads
-  from protects nothing).
-
-**Hints, analogy, debrief.** The hints point at the failing reason without giving
-the design: nudge ("a normal day passes; what is different about a sale day,
-and who is doing all the reading?"), direction (a cache between the web servers
-and the database, and what happens when it is cold), answer. The debrief names
-the pattern (cache-aside: the application checks the cache first and reads the
-database only on a miss), the catch (a cold or lost cache sends every read back
-to the database, which is why the design needs more than one cache and why
-losing it is a stress test), and what is deliberately not modelled: read
-replicas, cache replicas, expiry and staleness, and writes. It keeps the
-checkout debrief's reminders about private subnets, encryption and backups.
-
-**Sources**, per cloud, from vendor documentation read while authoring
-(Amazon ElastiCache, Azure Managed Redis, Memorystore for Redis, plus the pages
-already cited by `zone-resilient-checkout` for the load balancer, VM and
-database). Each has title, url and retrieved date.
+**Sources**, per file, from that cloud's documentation read while authoring
+(each file lists only its own cloud's pages): title, url, retrieved date.
 
 ### Engine: the `read_load` rule
 
@@ -248,14 +252,15 @@ number.
   `cache` accepted as a role; an item with `cache` and another role rejected.
 - Every existing canvas test passes unchanged, including `canvas-ui.test.tsx`
   and `canvas-edit.test.ts`.
-- Content tests for the challenge, in the pattern already used for canvases: the
-  reference design passes all six tests on each of the three clouds; each
-  counter-example fails exactly the tests it lists; every palette item has
-  facts; the file has sources for each cloud; the JSON-schema freshness test
-  covers the new field.
-- Browser pass (the extension is connected now): play the challenge on all three
-  clouds, see the plain checkout fail on the sale test, add a cache, link it,
-  rerun, then lose the cache.
+- Content tests for the challenges, in the pattern already used for canvases: the
+  build-time check (`canvasChecks`) runs each file's reference design (must
+  pass) and counter-examples (must fail exactly what they list); every palette
+  item has facts; each file has its own cloud's sources; the JSON-schema
+  freshness test covers the new field; one test asserts the AWS and Google Cloud
+  caches are zonal and the Azure cache is regional.
+- Browser pass (the extension is connected now): play each cloud's challenge, see
+  the plain checkout fail on the sale test, add a cache, link it, rerun, then
+  lose the zone (and, on AWS and Google Cloud, the cache).
 
 ## Out of scope
 
@@ -263,17 +268,19 @@ number.
 - Queues, buffers, workers, and write availability through a queue.
 - Read replicas, cache replicas and failover, expiry, staleness, write-through,
   warm-up.
-- Per-cloud numbers; one set of scenario numbers serves all three clouds.
+- A shared multi-cloud version of this challenge: the documented cache behavior differs per cloud.
 - Any change to existing challenges.
 
 ## Open points
 
-None blocking. Settled while authoring, from the vendor docs, not decided here:
+None blocking. Settled while authoring, from each cloud's docs, not decided here:
 
-- The exact wording of each cloud's cache facts, and whether the single-node,
-  no-standby configuration is described accurately for Azure Managed Redis
-  (where that is the high-availability-off configuration). If a cloud's docs do
-  not support describing it honestly as a zonal part, the plan raises it before
-  content is written.
-- The scenario numbers (traffic 2, hit 0.9, database capacity 1) and the budget
-  (14) are starting values, each in one place in the file.
+- The exact wording of each cache's facts. The scope choices (AWS and Google
+  Cloud zonal, Azure regional) rest on pages read on 2026-10-28 and, for the
+  AWS and Google Cloud parts, on the pages already cited by the sandbox files.
+  They are re-read while authoring.
+- Whether the Google Cloud docs describe a Basic-tier node failure explicitly
+  enough to name it in the `cache-failure` label. If not, the label says only
+  that a cache node is lost.
+- The scenario numbers (traffic 2, hit 0.9, database capacity 1) and budgets
+  (14, 12) are starting values, each in one place per file.
