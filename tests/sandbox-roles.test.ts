@@ -7,6 +7,7 @@ import { expect, it } from 'vitest'
 import { ROLES } from '../src/schema/constants.ts'
 import { CanvasChallengeSchema } from '../src/schema/canvas.ts'
 import { checkRaw } from '../src/content/item.ts'
+import { SandboxSchema } from '../src/schema/sandbox.ts'
 
 it('neutral is a role', () => {
   expect(ROLES).toContain('neutral')
@@ -20,4 +21,26 @@ it('the canvas schema accepts a palette item with only the neutral role', () => 
   const errors: string[] = []
   expect(checkRaw(raw, CanvasChallengeSchema, 'aws-checkout-canvas', errors)).toBeTruthy()
   expect(errors).toEqual([])
+})
+
+// The first palette part of the AWS sandbox (the queue) is rewritten with other role lists.
+// checkRaw validates shape only, so nothing here runs the engine.
+const sandboxWithRoles = (roles: string) => {
+  const file = path.resolve(import.meta.dirname, '../content/sandbox/aws-sandbox.yaml')
+  const raw = fs.readFileSync(file, 'utf8').replace('roles: [neutral]', `roles: ${roles}`)
+  const errors: string[] = []
+  const ok = checkRaw(raw, SandboxSchema, 'aws-sandbox', errors)
+  return { ok, errors }
+}
+
+it('a sandbox file accepts an extra part with only the cache role', () => {
+  const { ok, errors } = sandboxWithRoles('[cache]')
+  expect(errors).toEqual([])
+  expect(ok).toBeTruthy()
+})
+
+it.each([['[cache, neutral]'], ['[serve]'], ['[write-store]'], ['[route]'], ['[]']])('a sandbox file refuses an extra part with roles %s, naming the allowed roles', (roles) => {
+  const { ok, errors } = sandboxWithRoles(roles)
+  expect(ok).toBeUndefined()
+  expect(errors.join(' ')).toMatch(/neutral or cache/)
 })
