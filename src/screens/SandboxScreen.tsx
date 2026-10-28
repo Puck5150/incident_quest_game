@@ -7,7 +7,6 @@ import { runCheck, sandboxChecks, validateDesign } from '../game/sandbox.ts'
 import { updateDesign } from '../game/sandboxStore.ts'
 import { PROVIDER_NAMES } from '../schema/constants.ts'
 import CanvasEditor from '../components/canvas/CanvasEditor.tsx'
-import FieldGuide from '../components/FieldGuide.tsx'
 import Icon from '../components/Icon.tsx'
 import { download, useSandbox } from '../components/useSandbox.ts'
 
@@ -159,7 +158,6 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
                 </p>
               )}
             </section>
-            <FieldGuide mode="design" />
           </>
         }
       />

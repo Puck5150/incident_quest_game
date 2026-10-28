@@ -96,6 +96,8 @@ it('offers no checks until the design has something to judge, and says neutral p
   expect(screen.getByText(/aren't judged by these checks/)).toBeTruthy()
   expect(screen.getByText(/A link through one is treated as a direct link to what's behind it/)).toBeTruthy()
   expect(screen.queryByText(/ignore them/)).toBeNull()
+  // The scored-design field manual talks about briefs, budgets and submitting; the sandbox has none.
+  expect(screen.queryByText(/Field manual/)).toBeNull()
 })
 
 it('an unknown design id falls back to the list', async () => {
