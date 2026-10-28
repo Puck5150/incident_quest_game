@@ -41,7 +41,7 @@ palette:
     cost: 1
     facts:
       - "Regional external Application Load Balancers support backends in a single region."
-      - "Spread backends across zones so traffic can move to another zone if one fails."
+      - "Putting resources in different zones of a region reduces the risk of an outage; if a zone is unavailable, traffic can be moved to another zone in the region."
   - id: vm
     label: "Compute Engine VM (web)"
     short: "web"
@@ -59,7 +59,6 @@ palette:
     roles: [write-store]
     cost: 2
     facts:
-      - "An instance runs in one zone."
       - "High availability pairs a primary with a standby in a different zone."
       - "On a sale day this database can read 1× normal traffic (scenario number)."
   - id: cache
@@ -78,8 +77,8 @@ link_facts:
     - "Like Cloud SQL high availability: writes reach both zones before they're confirmed."
     - "On failover, expect about 60 seconds of unavailability."
   async:
-    - "Like a read replica: replicated asynchronously."
-    - "It doesn't take over writes automatically."
+    - "Like a read replica: changes on the primary are updated on it in almost real time."
+    - "You can promote it to a primary instance."
 
 stress_tests:
   - id: sale
@@ -241,10 +240,10 @@ debrief:
     the database sees a tenth of the load.
 
     Google's documentation describes the Basic tier as a single Redis node with
-    no replication, including no cross-zone replication, suited to applications
-    that use Redis as a cache, and says it can withstand a cold restart and a
-    full cache flush. The documented high-availability option is the Standard
-    tier, which replicates to replicas and fails over automatically. The canvas
+    no replication, including no cross-zone replication, best suited to
+    applications that use Redis as a cache and can cope with a cold restart and
+    a full flush of its data. The documented high-availability option is the
+    Standard tier, which uses replication and automatic failover. The canvas
     has no such tier, so two Basic-tier caches, one per zone, with every web
     server linked to both, stand in for it: losing one zone or one node leaves
     the other still shielding the database. That is a stand-in, not the
@@ -273,10 +272,13 @@ sources:
     retrieved: 2026-10-28
   - title: "Compute Engine: Regions and zones"
     url: "https://docs.cloud.google.com/compute/docs/regions-zones"
-    retrieved: 2026-09-30
+    retrieved: 2026-10-28
   - title: "Cloud Load Balancing overview"
     url: "https://docs.cloud.google.com/load-balancing/docs/load-balancing-overview"
-    retrieved: 2026-09-30
-  - title: "Cloud SQL for PostgreSQL: High availability"
+    retrieved: 2026-10-28
+  - title: "About high availability"
     url: "https://docs.cloud.google.com/sql/docs/postgres/high-availability"
-    retrieved: 2026-09-30
+    retrieved: 2026-10-28
+  - title: "About replication in Cloud SQL"
+    url: "https://docs.cloud.google.com/sql/docs/postgres/replication"
+    retrieved: 2026-10-28
