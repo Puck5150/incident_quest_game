@@ -41,7 +41,7 @@ palette:
     cost: 1
     facts:
       - "Regional external Application Load Balancers support backends in a single region."
-      - "Putting resources in different zones of a region reduces the risk of an outage; if a zone is unavailable, traffic can be moved to another zone in the region."
+      - "Placing resources in more than one zone of a region lowers the chance that one outage takes them all; if a zone goes down, traffic can shift to another zone in the same region."
   - id: vm
     label: "Compute Engine VM (web)"
     short: "web"
