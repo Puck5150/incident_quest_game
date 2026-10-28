@@ -44,10 +44,25 @@ const EventSchema = z.union([
   z.strictObject({ single_failure: id }), // each component of this palette type, one at a time
 ])
 
-const CheckSchema = z.strictObject({
-  reach: z.array(z.enum(['serve', 'write-store'])).min(1),
-  capacity: z.number().positive().optional(), // surviving `serve` capacity needed
-})
+const CheckSchema = z
+  .strictObject({
+    reach: z.array(z.enum(['serve', 'write-store'])).min(1),
+    capacity: z.number().positive().optional(), // surviving `serve` capacity needed
+    // Opt-in: also judge the database's read load. `traffic` is the reads, in multiples of
+    // normal, that the web tier sends; `hit` is the share a live, linked cache answers;
+    // `db_capacity` is the most reads the database can take, in the same multiples.
+    read_load: z
+      .strictObject({
+        traffic: z.number().positive(),
+        hit: z.number().gt(0).lt(1),
+        db_capacity: z.number().positive(),
+      })
+      .optional(),
+  })
+  .superRefine((k, ctx) => {
+    if (k.read_load && !(k.reach.includes('serve') && k.reach.includes('write-store')))
+      ctx.addIssue({ code: 'custom', message: 'read_load needs both serve and write-store in reach', path: ['read_load'], input: k })
+  })
 
 export const LayoutSchema = z.strictObject({
   regions: z
@@ -106,6 +121,7 @@ export const CanvasChallengeSchema = z
 
     c.palette.forEach((p, i) => {
       if (p.public && !p.roles.includes('serve')) issue('`public` only applies to a part with the serve role', ['palette', i, 'public'])
+      if (p.roles.includes('cache') && p.roles.length > 1) issue('a cache part has no other role', ['palette', i, 'roles'])
     })
     const zones = new Set(c.layout.regions.flatMap((r) => r.zones.map((z) => z.id)))
     const regions = new Set(c.layout.regions.map((r) => r.id))

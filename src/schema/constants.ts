@@ -6,7 +6,7 @@ export const RPO_LEVELS = ['zero', 'seconds', 'minutes', 'hours'] as const
 
 export const MAX_NODES = 12
 // neutral: placed and linked like any part, but the engine's checks ignore it.
-export const ROLES = ['route', 'serve', 'write-store', 'neutral'] as const
+export const ROLES = ['route', 'serve', 'write-store', 'cache', 'neutral'] as const
 export const USERS = 'users' // implicit source of all traffic
 
 export const PROVIDERS = ['aws', 'azure', 'gcp'] as const

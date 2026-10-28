@@ -120,6 +120,7 @@
                 "route",
                 "serve",
                 "write-store",
+                "cache",
                 "neutral"
               ]
             }
