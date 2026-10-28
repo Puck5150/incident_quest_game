@@ -68,7 +68,7 @@ palette:
     roles: [cache]
     cost: 2
     facts:
-      - "On the Basic tier this is one Redis node with no replication, so no cross-zone replication. Google describes it as an ephemeral cache, best suited to applications that use Redis as a cache."
+      - "On the Basic tier this is one Redis node with no replication, so no cross-zone replication. Google describes it as an ephemeral cache, pitched at applications that treat Redis purely as a cache and can live with it restarting empty."
       - "You choose a zone for the instance when you create it."
       - "While a linked cache is up it answers 9 in 10 reads (scenario number); the database sees the rest."
 
@@ -102,7 +102,7 @@ stress_tests:
     event: { single_failure: db }
     check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
   - id: cache-failure
-    label: "Any one cache node is lost during the sale"
+    label: "Any one cache node fails during the sale"
     event: { single_failure: cache }
     check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
 
@@ -240,9 +240,9 @@ debrief:
     the database sees a tenth of the load.
 
     Google's documentation describes the Basic tier as a single Redis node with
-    no replication, including no cross-zone replication, best suited to
-    applications that use Redis as a cache and can cope with a cold restart and
-    a full flush of its data. The documented high-availability option is the
+    no replication, including no cross-zone replication, pitched at
+    applications that treat Redis purely as a cache and can live with it
+    restarting empty. The documented high-availability option is the
     Standard tier, which uses replication and automatic failover. The canvas
     has no such tier, so two Basic-tier caches, one per zone, with every web
     server linked to both, stand in for it: losing one zone or one node leaves

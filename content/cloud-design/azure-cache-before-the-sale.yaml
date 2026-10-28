@@ -68,7 +68,7 @@ palette:
     roles: [cache]
     cost: 2
     facts:
-      - "With high availability the cache has at least two nodes, and in a region with availability zones they sit in different zones. Zone redundancy reduces the risk that a zone outage makes the cache unavailable."
+      - "With high availability the cache has at least two nodes, and in a region with availability zones they sit in different zones. Spreading the nodes over zones means one zone going down is less likely to take the cache offline."
       - "Replication between the nodes is asynchronous, so data not yet copied to another zone can be lost in a zone failure. A failover to a healthy zone typically takes 10 to 15 seconds."
       - "While the cache is up it answers 9 in 10 reads (scenario number); the database sees the rest."
 
@@ -230,23 +230,23 @@ debrief:
     Azure's reliability guidance for Azure Managed Redis recommends using high
     availability, which gives the cache at least two nodes, and using zone
     redundancy by deploying that cache into a region with availability zones,
-    where the nodes sit in different zones. That reduces the risk that a zone
-    outage makes the cache unavailable. The one regional cache linked from every
-    web server stands in for it.
+    where the nodes sit in different zones. Spreading the nodes over zones
+    means one zone going down is less likely to take the cache offline. The
+    one regional cache linked from every web server stands in for it.
 
-    The same page recommends designing for cache-aside: the application keeps
-    working, with degraded performance, by falling back to the primary data
-    store when Redis is temporarily unavailable. Here that means a cache
-    pause sends reads back to the database for a few seconds. The page also says a zone
-    failover typically takes 10 to 15 seconds, and that data not yet replicated
+    The same page recommends designing for cache-aside: if Redis
+    briefly drops out, the app should read straight from the database, slower
+    but still up. Here that means a cache pause sends reads back to the
+    database for a few seconds. The page also says a zone failover typically
+    takes 10 to 15 seconds, and that data not yet replicated
     to another zone can be lost, because replication between nodes is
     asynchronous.
 
     The hit rate and the database's limit are scenario numbers, not
     measurements; real figures depend on the data and the traffic. This
     challenge does not model the failover pause, the loss of unreplicated cache
-    data, the cache having fewer resources while a zone is down, read replicas, active geo-replication, expiry and staleness, or
-    writes.
+    data, the cache having fewer resources while a zone is down, read replicas,
+    active geo-replication, expiry and staleness, or writes.
   real_world: |
     Keep the shape safe as well as available: only the load balancer takes
     traffic from users, and the web servers, cache and database stay behind it.

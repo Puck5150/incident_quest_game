@@ -91,7 +91,16 @@ describe('read_load', () => {
 
   it('direction matters: a link from the cache to a server, or from the database to the cache, shields nothing', () => {
     const d = plus([cache('cache-1', 'use1-az1')], [T('cache-1', 'web-1'), T('cache-1', 'web-2'), T('db-1', 'cache-1')])
-    expect(run(d).sale.pass).toBe(false)
+    const r = run(d).sale
+    expect(r.pass).toBe(false)
+    expect(r.reasons).toEqual(['db-1 would see 2× normal reads but can take 1× (web-1, web-2 are not linked to a surviving cache).'])
+  })
+
+  it('users linking straight to the cache is told to keep it private, not to put a load balancer in front', () => {
+    const d = plus([cache('cache-1', 'use1-az1')], [T('users', 'cache-1'), T('web-1', 'cache-1'), T('web-2', 'cache-1')])
+    const reasons = run(d).sale.reasons
+    expect(reasons).toContain('users connect straight to the cache (cache-1); keep it private and reach it only from the web servers.')
+    expect(reasons.some((x) => /load balancer/.test(x))).toBe(false)
   })
 
   it('unnamed zone: a design that hides its only cache in a zone no test names still fails', () => {

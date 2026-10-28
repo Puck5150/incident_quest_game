@@ -105,6 +105,7 @@ function check(
   // (when the palette offers a load balancer) never straight to a web server
   // unless that service has its own managed front end (`public`).
   const toDb: string[] = []
+  const toCache: string[] = []
   const direct: string[] = []
   const traffic = d.edges.filter((e) => {
     if (e.kind !== 'traffic') return false
@@ -112,11 +113,14 @@ function check(
     const n = byId.get(e.to)
     if (!n) return true
     if (has(n, 'write-store')) return void toDb.push(n.id), false
+    if (has(n, 'cache')) return void toCache.push(n.id), false
     if (needsEntry && !has(n, 'route') && !type(n.id)?.public) return void direct.push(n.id), false
     return true
   })
   if (toDb.length)
     reasons.push(`users connect straight to the database (${toDb.join(', ')}); keep it private and reach it only through the web tier.`)
+  if (toCache.length)
+    reasons.push(`users connect straight to the cache (${toCache.join(', ')}); keep it private and reach it only from the web servers.`)
   if (direct.length)
     reasons.push(`users connect straight to ${direct.join(', ')}; put a load balancer or other entry point in front.`)
   // The design is wrong before any failure: skip the downstream reachability noise.
