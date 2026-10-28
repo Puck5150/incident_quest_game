@@ -37,7 +37,7 @@ palette:
     roles: [cache]
     cost: 2
     facts:
-      - "On the Basic tier this is one Redis node with no replication, so no cross-zone replication; you choose its region and zone when you create it. Google describes it as an ephemeral cache. The Standard tier adds a replica with cross-zone replication and automatic failover."
+      - "On the Basic tier this is one Redis node with no replication, so no cross-zone replication; you choose its region and zone when you create it. Google describes it as an ephemeral cache. The Standard tier adds a replica and automatic failover, with cross-zone replication where the region supports it."
       - "Standard-tier replication is asynchronous, so a write that was already acknowledged can still be lost when a failover happens."
       - "This product cannot replicate across regions; Google points to Memorystore for Valkey when you need cross-region disaster recovery."
   - id: gcs

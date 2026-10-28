@@ -37,7 +37,7 @@ palette:
     roles: [cache]
     cost: 2
     facts:
-      - "Microsoft has announced a retirement timeline for Azure Cache for Redis and recommends moving to Azure Managed Redis, so this part models the newer service."
+      - "Azure Cache for Redis now has a published retirement timeline, and Microsoft points existing users to Azure Managed Redis, so this part models the newer service."
       - "With high availability on, the cache has at least two nodes, and in a region with availability zones they sit in different zones."
       - "Replication between the nodes is asynchronous, so writes not yet copied to another zone can be lost in a zone failure. Failover to a healthy zone typically takes 10 to 15 seconds."
       - "Surviving a whole-region outage takes active geo-replication, which links cache instances in different regions; you are responsible for redirecting your application to a healthy instance."
