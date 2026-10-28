@@ -104,7 +104,7 @@ stress_tests:
 
 reference_designs:
   - name: "Recommended"
-    why: "Two web servers per zone keep 2× capacity after losing a zone; a standby in the other zone (zone-redundant HA) takes over writes. One high-availability cache, linked from every web server, spans the zones, so a zone outage does not remove it."
+    why: "Two web servers per zone keep 2× capacity after losing a zone; a standby in the other zone (zone-redundant HA) takes over writes. One high-availability cache, linked from every web server, spans the zones, so in a zone outage the service redirects traffic to its nodes in the healthy zone."
     design:
       nodes:
         - { id: lb, type: lb, lane: r1 }
@@ -206,7 +206,7 @@ counter_examples:
 hints:
   nudge: "A normal day passes. What changes on a sale day, and who is doing all the reading?"
   direction: "Put something between the web servers and the database that answers repeat reads, and link every web server to it. Then check which servers still read from it after you lose a zone."
-  answer: "Two web servers and a database with a zone-redundant standby as before, plus one Azure Managed Redis cache with high availability, linked from every web server."
+  answer: "Two web servers in each zone, the database in one zone with a zone-redundant standby in the other, plus one Azure Managed Redis cache with high availability, linked from every web server."
 
 analogy:
   title: "The reference desk"
@@ -236,16 +236,16 @@ debrief:
 
     The same page recommends designing for cache-aside: the application keeps
     working, with degraded performance, by falling back to the primary data
-    store when Redis is temporarily unavailable. Here that means the database
-    has to be able to take reads for a short time. The page also says a zone
+    store when Redis is temporarily unavailable. Here that means a cache
+    pause sends reads back to the database for a few seconds. The page also says a zone
     failover typically takes 10 to 15 seconds, and that data not yet replicated
     to another zone can be lost, because replication between nodes is
     asynchronous.
 
     The hit rate and the database's limit are scenario numbers, not
     measurements; real figures depend on the data and the traffic. This
-    challenge does not model the failover pause or the loss of unreplicated cache
-    data, read replicas, active geo-replication, expiry and staleness, or
+    challenge does not model the failover pause, the loss of unreplicated cache
+    data, the cache having fewer resources while a zone is down, read replicas, active geo-replication, expiry and staleness, or
     writes.
   real_world: |
     Keep the shape safe as well as available: only the load balancer takes
@@ -256,6 +256,9 @@ debrief:
 sources:
   - title: "Reliability in Azure Managed Redis"
     url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-managed-redis"
+    retrieved: 2026-10-28
+  - title: "Cache-Aside Pattern"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside"
     retrieved: 2026-10-28
   - title: "Reliability in Azure Database for PostgreSQL"
     url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql"
