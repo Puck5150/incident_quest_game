@@ -1,0 +1,269 @@
+# yaml-language-server: $schema=../../schemas/canvas.json
+type: challenge
+mode: canvas
+id: aws-cache-before-the-sale
+track: cloud-design
+difficulty: 3
+title: "Keep the database standing on sale day, on AWS"
+provider: aws
+par_minutes: 15
+
+brief: |
+  The shop's checkout works on a normal day. A sale doubles traffic, and every
+  product page re-reads the same data from the database, so the database
+  buckles even though the web tier has room to spare. You build the
+  architecture: keep the checkout up through the sale, through losing a zone, a
+  web server or the database server, and through losing a cache node.
+
+requirements:
+  - "Serve 2× normal traffic, even with one Availability Zone down"
+  - "Keep the database within what it can read on a sale day: 1× normal reads"
+  - "Keep accepting orders if either zone or the database server fails, losing none"
+  - "Survive any single web server or cache node failing"
+  - "Stay within 14 cost units per month"
+budget: 14
+
+layout:
+  regions:
+    - id: r1
+      label: "us-east-1"
+      zones:
+        - { id: r1-a, label: "us-east-1a" }
+        - { id: r1-b, label: "us-east-1b" }
+
+palette:
+  - id: lb
+    label: "Application Load Balancer"
+    short: "ALB"
+    scope: regional
+    roles: [route]
+    cost: 1
+    facts:
+      - "A regional load balancer. AWS load balancers reroute traffic to targets in healthy Availability Zones."
+  - id: vm
+    label: "EC2 web server"
+    short: "web"
+    scope: zonal
+    roles: [serve]
+    capacity: 1
+    cost: 1
+    facts:
+      - "Runs in one Availability Zone."
+      - "Each server handles 1× normal traffic (scenario number)."
+  - id: db
+    label: "RDS for PostgreSQL DB instance"
+    short: "RDS"
+    scope: zonal
+    roles: [write-store]
+    cost: 2
+    facts:
+      - "A DB instance runs in one Availability Zone."
+      - "Connect two instances with a replication link to make one a standby or a replica of the other."
+      - "On a sale day this database can read 1× normal traffic (scenario number)."
+  - id: cache
+    label: "ElastiCache cache node"
+    short: "ElastiCache"
+    scope: zonal
+    roles: [cache]
+    cost: 2
+    facts:
+      - "A cache node runs in one Availability Zone."
+      - "A node with no replica that fails is replaced by a new primary that starts empty."
+      - "While a linked cache is up it answers 9 in 10 reads (scenario number); the database sees the rest."
+
+link_facts:
+  sync:
+    - "Like RDS Multi-AZ: a synchronous standby in another Availability Zone."
+    - "Failover is automatic, typically 60–120 seconds; the database's DNS name moves to the standby."
+  async:
+    - "Like an RDS read replica: replication is asynchronous, so it can lag behind."
+    - "Promotion to a standalone instance is a manual step."
+
+stress_tests:
+  - id: sale
+    label: "A sale: 2× traffic"
+    event: { none: true }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: zone-a
+    label: "us-east-1a fails during the sale"
+    event: { zone_outage: r1-a }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: zone-b
+    label: "us-east-1b fails during the sale"
+    event: { zone_outage: r1-b }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: vm-failure
+    label: "Any one web server fails during the sale"
+    event: { single_failure: vm }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: db-host
+    label: "The database server fails during the sale"
+    event: { single_failure: db }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+  - id: cache-failure
+    label: "Any one cache node fails during the sale"
+    event: { single_failure: cache }
+    check: { reach: [serve, write-store], capacity: 2, read_load: { traffic: 2, hit: 0.9, db_capacity: 1 } }
+
+reference_designs:
+  - name: "Recommended"
+    why: "Two web servers per zone keep 2× capacity after losing a zone; a synchronous standby in the other zone takes over writes. A cache node in each zone, with every web server linked to both, leaves one cache shielding the database when a zone or a node is lost."
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1-a }
+        - { id: cache-2, type: cache, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: web-1, to: cache-1, kind: traffic }
+        - { from: web-2, to: cache-1, kind: traffic }
+        - { from: web-3, to: cache-1, kind: traffic }
+        - { from: web-4, to: cache-1, kind: traffic }
+        - { from: web-1, to: cache-2, kind: traffic }
+        - { from: web-2, to: cache-2, kind: traffic }
+        - { from: web-3, to: cache-2, kind: traffic }
+        - { from: web-4, to: cache-2, kind: traffic }
+
+counter_examples:
+  - name: "No cache: every read goes to the database"
+    fails: [sale, zone-a, zone-b, vm-failure, db-host, cache-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "Caches that no web server reads from"
+    fails: [sale, zone-a, zone-b, vm-failure, db-host, cache-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1-a }
+        - { id: cache-2, type: cache, lane: r1-b }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+  - name: "One cache node in one zone"
+    fails: [zone-a, cache-failure]
+    design:
+      nodes:
+        - { id: lb, type: lb, lane: r1 }
+        - { id: web-1, type: vm, lane: r1-a }
+        - { id: web-2, type: vm, lane: r1-a }
+        - { id: web-3, type: vm, lane: r1-b }
+        - { id: web-4, type: vm, lane: r1-b }
+        - { id: db-1, type: db, lane: r1-a }
+        - { id: db-2, type: db, lane: r1-b }
+        - { id: cache-1, type: cache, lane: r1-a }
+      edges:
+        - { from: users, to: lb, kind: traffic }
+        - { from: lb, to: web-1, kind: traffic }
+        - { from: lb, to: web-2, kind: traffic }
+        - { from: lb, to: web-3, kind: traffic }
+        - { from: lb, to: web-4, kind: traffic }
+        - { from: web-1, to: db-1, kind: traffic }
+        - { from: web-2, to: db-1, kind: traffic }
+        - { from: web-3, to: db-1, kind: traffic }
+        - { from: web-4, to: db-1, kind: traffic }
+        - { from: db-1, to: db-2, kind: sync }
+        - { from: web-1, to: cache-1, kind: traffic }
+        - { from: web-2, to: cache-1, kind: traffic }
+        - { from: web-3, to: cache-1, kind: traffic }
+        - { from: web-4, to: cache-1, kind: traffic }
+
+hints:
+  nudge: "A normal day passes. What changes on a sale day, and who is doing all the reading?"
+  direction: "Put something between the web servers and the database that answers repeat reads, link the web servers to it, then ask what happens to the database when that something is gone."
+  answer: "Two web servers and a database with a sync standby in each zone as before, plus an ElastiCache node in each zone with every web server linked to both."
+
+analogy:
+  title: "The reference desk"
+  text: |
+    A busy library answers the same questions all day. The librarian could walk
+    to the stacks for every one, or keep the popular answers on a card at the
+    desk and only walk to the stacks for the rest. On a quiet day nobody can
+    tell the difference. On sale day the queue is out the door, and the
+    librarian who has to fetch every answer from the stacks is the one who
+    gives up first. If the desk cards get thrown out mid-rush, everyone is
+    back to the stacks at once.
+
+debrief:
+  summary: |
+    The database was fine on a normal day and failed on the sale because every
+    page view read from it. A cache takes the repeated reads off the database:
+    the application asks the cache first and only reads the database for what
+    the cache does not have. Here, a live cache answers nine in ten reads, so
+    the database sees a tenth of the load.
+
+    The cache is not the source of truth. An ElastiCache node with no replica
+    that fails is replaced by one that starts empty, so until it warms up
+    every read goes back to the database. Put a cache node in each zone and
+    link every web server to both, and losing one zone or one node leaves the
+    other still shielding the database.
+
+    The hit rate and the database's limit are scenario numbers, not
+    measurements; real figures depend on the data and the traffic. This
+    challenge does not model read replicas, ElastiCache replicas and Multi-AZ
+    replication groups, expiry and staleness, or writes.
+  real_world: |
+    Keep the shape safe as well as available: only the load balancer takes
+    traffic from users, and the web servers, caches and database stay behind
+    it. Resilience does not replace backups: keep automated backups with
+    point-in-time restore on the database.
+
+sources:
+  - title: "Minimizing downtime in ElastiCache by using Multi-AZ with Valkey and Redis OSS"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html"
+    retrieved: 2026-10-28
+  - title: "Amazon RDS: Multi-AZ DB instance deployments"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html"
+    retrieved: 2026-09-30
+  - title: "Amazon RDS: Failing over a Multi-AZ DB instance"
+    url: "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html"
+    retrieved: 2026-09-30
+  - title: "AWS Well-Architected Reliability Pillar: REL10-BP01 Deploy the workload to multiple locations"
+    url: "https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_fault_isolation_multiaz_region_system.html"
+    retrieved: 2026-09-30
