@@ -34,13 +34,13 @@ palette:
     label: "Azure Managed Redis cache"
     short: "cache"
     scope: regional
-    roles: [neutral]
+    roles: [cache]
     cost: 2
     facts:
-      - "Microsoft is retiring Azure Cache for Redis and recommends Azure Managed Redis as its replacement, so this part models the newer service."
+      - "Azure Cache for Redis now has a published retirement timeline, and Microsoft points existing users to Azure Managed Redis, so this part models the newer service."
       - "With high availability on, the cache has at least two nodes, and in a region with availability zones they sit in different zones."
       - "Replication between the nodes is asynchronous, so writes not yet copied to another zone can be lost in a zone failure. Failover to a healthy zone typically takes 10 to 15 seconds."
-      - "High availability does not cover a whole-region outage; that takes active geo-replication between caches in different regions."
+      - "Microsoft's documented option for surviving a region outage is active geo-replication, which links caches across regions; you point the client application at another instance yourself."
   - id: blob
     label: "Azure Blob Storage account"
     short: "Blob"
@@ -61,10 +61,10 @@ sources:
     retrieved: 2026-10-27
   - title: "High availability for Azure Cache for Redis"
     url: "https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/cache-high-availability"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-28
   - title: "Reliability in Azure Managed Redis"
     url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-managed-redis"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-28
   - title: "Data redundancy - Azure Storage"
     url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy"
     retrieved: 2026-10-27

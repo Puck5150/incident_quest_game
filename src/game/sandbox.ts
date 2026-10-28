@@ -14,6 +14,8 @@ import { connect, lanes } from './canvasEdit.ts'
 
 export const SANDBOX_MAX_NODES = 40
 export const SPIKE = 3 // the traffic-spike check: this many times normal traffic
+export const READ_HIT = 0.9 // scenario number: the share of reads a live, linked cache answers
+export const DB_READS = 1 // scenario number: the most reads the database can take, in multiples of normal
 
 // Returns an error message when the file can't extend the base.
 export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxChallenge | string {
@@ -47,41 +49,55 @@ export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxCh
   }
 }
 
-const isNeutral = (c: SandboxChallenge, type: string) => rolesOf(c, type).every((r) => r === 'neutral') && rolesOf(c, type).length > 0
 const rolesOf = (c: SandboxChallenge, type: string) => c.palette.find((p) => p.id === type)?.roles ?? []
+const hasRole = (c: SandboxChallenge, d: Design, role: string) => d.nodes.some((n) => rolesOf(c, n.type).includes(role as never))
+
+// Reads are judged only when the design has a cache, a web server and a database.
+// Without all three a cache is inert: treated as a neutral part is, so such a
+// design gets exactly the checks and results it always has.
+export const readsJudged = (c: SandboxChallenge, d: Design) => hasRole(c, d, 'cache') && hasRole(c, d, 'serve') && hasRole(c, d, 'write-store')
+
+const isNeutral = (c: SandboxChallenge, type: string, reads: boolean) => {
+  const roles = rolesOf(c, type)
+  return roles.length > 0 && roles.every((r) => r === 'neutral' || (r === 'cache' && !reads))
+}
 
 // The checks on offer for this design. Only roles the design contains are
 // required, so a design with no database isn't failed for lacking one; a design
 // with nothing the engine judges (no web server, no database) gets no checks,
 // because every one would pass without meaning anything.
 export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
-  const has = (role: 'serve' | 'write-store') => d.nodes.some((n) => rolesOf(c, n.type).includes(role))
+  const has = (role: 'serve' | 'write-store') => hasRole(c, d, role)
   const reach = (['serve', 'write-store'] as const).filter(has)
   if (!reach.length) return []
-  const check = { reach }
-  const occupied = (lane: string) => d.nodes.some((n) => n.lane === lane && !isNeutral(c, n.type)) // neutral parts don't make a zone worth testing
+  const reads = readsJudged(c, d)
+  const check = { reach, ...(reads && { read_load: { traffic: SPIKE, hit: READ_HIT, db_capacity: DB_READS } }) }
+  const note = reads ? `, reads at ${SPIKE}×` : ''
+  const occupied = (lane: string) => d.nodes.some((n) => n.lane === lane && !isNeutral(c, n.type, reads)) // neutral parts don't make a zone worth testing
   const label = (type: string) => c.palette.find((p) => p.id === type)?.label ?? type
-  const judged = [...new Set(d.nodes.filter((n) => rolesOf(c, n.type).some((r) => r !== 'neutral')).map((n) => n.type))]
+  const judged = [...new Set(d.nodes.filter((n) => !isNeutral(c, n.type, reads) && rolesOf(c, n.type).length > 0).map((n) => n.type))]
 
   const tests: CanvasTest[] = [
-    ...c.layout.regions.flatMap((r) => r.zones).filter((z) => occupied(z.id)).map((z): CanvasTest => ({ id: `zone-${z.id}`, label: `Lose ${z.label}`, event: { zone_outage: z.id }, check })),
+    ...c.layout.regions.flatMap((r) => r.zones).filter((z) => occupied(z.id)).map((z): CanvasTest => ({ id: `zone-${z.id}`, label: `Lose ${z.label}${note}`, event: { zone_outage: z.id }, check })),
     ...c.layout.regions
       .filter((r) => occupied(r.id) || r.zones.some((z) => occupied(z.id)))
-      .map((r): CanvasTest => ({ id: `region-${r.id}`, label: `Lose region ${r.label}`, event: { region_outage: r.id }, check })),
-    ...judged.map((t): CanvasTest => ({ id: `one-${t}`, label: `Lose any one ${label(t)}`, event: { single_failure: t }, check })),
+      .map((r): CanvasTest => ({ id: `region-${r.id}`, label: `Lose region ${r.label}${note}`, event: { region_outage: r.id }, check })),
+    ...judged.map((t): CanvasTest => ({ id: `one-${t}`, label: `Lose any one ${label(t)}${note}`, event: { single_failure: t }, check })),
   ]
-  if (has('serve')) tests.push({ id: 'spike', label: `Traffic spike: ${SPIKE}× normal`, event: { none: true }, check: { reach, capacity: SPIKE } })
+  if (has('serve')) tests.push({ id: 'spike', label: `Traffic spike: ${SPIKE}× normal`, event: { none: true }, check: { ...check, capacity: SPIKE } })
   return tests
 }
 
 // The engine knows nothing of neutral parts, so judge a copy with every neutral
 // part contracted away: each traffic path from users or a judged part through
 // one or more neutral parts to a judged part becomes a direct link, and every
-// other link touching a neutral part is dropped. A queue, cache, CDN or bucket
+// other link touching a neutral part is dropped. A queue, CDN or bucket
 // therefore behaves exactly as if the link ran straight through it (or, hanging
-// off a server, as if it weren't there).
+// off a server, as if it weren't there). A cache does too only while it is inert
+// (no web server or no database); otherwise readsJudged applies the read checks.
 function withoutNeutral(c: SandboxChallenge, d: Design): Design {
-  const neutral = new Set(d.nodes.filter((n) => isNeutral(c, n.type)).map((n) => n.id))
+  const reads = readsJudged(c, d)
+  const neutral = new Set(d.nodes.filter((n) => isNeutral(c, n.type, reads)).map((n) => n.id))
   const edges = d.edges.filter((e) => !neutral.has(e.from) && !neutral.has(e.to))
   const seen = new Set(edges.map((e) => `${e.from}>${e.to}>${e.kind}`))
   for (const start of [USERS, ...d.nodes.filter((n) => !neutral.has(n.id)).map((n) => n.id)]) {

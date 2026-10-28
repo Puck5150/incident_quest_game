@@ -229,3 +229,35 @@ it('announces an import, and shows each import error verbatim', async () => {
   await importText(unreadable)
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe("Couldn't read that file."))
 })
+
+it('says caches are judged once the design has a web server and a database, and states the scenario numbers', async () => {
+  render(<App />)
+  open()
+  await screen.findByRole('heading', { name: 'Design sandbox' })
+  await create('Cache', 'aws')
+
+  // Only a cache: inert, with a note saying what it needs.
+  add('ElastiCache cache node', 'use1-az1')
+  expect(screen.getByText(/A cache is judged once the design has a web server and a database/)).toBeTruthy()
+  expect(screen.queryByText(/scenario numbers/)).toBeNull()
+  expect(screen.queryByText(/aren't judged by these checks/)).toBeNull() // no queue, CDN or storage in the design
+
+  // With a web server and a database, reads are judged and the numbers are stated.
+  add('EC2 web server', 'use1-az1')
+  add('RDS for PostgreSQL DB instance', 'use1-az1')
+  expect(screen.queryByText(/A cache is judged once/)).toBeNull()
+  expect(screen.getByText(/Reads are judged at 3× normal/)).toBeTruthy()
+  expect(screen.getByText(/answers 9 in 10/)).toBeTruthy()
+  expect(screen.getByText(/can read 1× normal/)).toBeTruthy()
+  expect(screen.getByText(/scenario numbers, not measurements/)).toBeTruthy()
+})
+
+it('the neutral-parts note no longer lists caches', async () => {
+  render(<App />)
+  open()
+  await screen.findByRole('heading', { name: 'Design sandbox' })
+  await create('Queue', 'aws')
+  add('Amazon SQS queue', 'use1')
+  expect(screen.getByText(/Queues, CDNs and object storage aren't judged by these checks yet/)).toBeTruthy()
+  expect(screen.queryByText(/Queues, caches/)).toBeNull()
+})

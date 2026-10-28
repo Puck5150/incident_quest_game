@@ -34,10 +34,10 @@ palette:
     label: "Memorystore for Redis node"
     short: "cache"
     scope: zonal
-    roles: [neutral]
+    roles: [cache]
     cost: 2
     facts:
-      - "On the Basic tier this is a single node in one zone with no cross-zone replication, suited to an ephemeral cache. The Standard tier adds a replica node in another zone and fails over to it automatically."
+      - "On the Basic tier this is one Redis node with no replication, so no cross-zone replication; you choose its region and zone when you create it. Google describes it as an ephemeral cache. The Standard tier adds a replica, cross-zone replication and automatic failover."
       - "Standard-tier replication is asynchronous, so a write that was already acknowledged can still be lost when a failover happens."
       - "This product cannot replicate across regions; Google points to Memorystore for Valkey when you need cross-region disaster recovery."
   - id: gcs
@@ -73,10 +73,13 @@ sources:
     retrieved: 2026-10-27
   - title: "High availability for Memorystore for Redis"
     url: "https://docs.cloud.google.com/memorystore/docs/redis/high-availability-for-memorystore-for-redis"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-28
+  - title: "Create and manage Redis instances"
+    url: "https://docs.cloud.google.com/memorystore/docs/redis/creating-managing-instances"
+    retrieved: 2026-10-28
   - title: "Redis tier capabilities"
     url: "https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-28
   - title: "Bucket locations"
     url: "https://docs.cloud.google.com/storage/docs/locations"
     retrieved: 2026-10-27

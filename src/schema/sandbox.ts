@@ -17,13 +17,13 @@ export const SandboxSchema = z
     title: z.string().min(1),
     extends: id, // the canvas challenge whose palette is reused
     layout: LayoutSchema,
-    palette: z.array(PaletteItemSchema).min(1), // extra parts, all neutral
+    palette: z.array(PaletteItemSchema).min(1), // extra parts: neutral (not judged yet) or cache (judged for database reads)
     sources: SourcesSchema,
   })
   .superRefine((f, ctx) => {
     f.palette.forEach((p, i) => {
-      if (p.roles.length !== 1 || p.roles[0] !== 'neutral')
-        ctx.addIssue({ code: 'custom', message: 'sandbox parts are neutral: roles must be [neutral]', path: ['palette', i, 'roles'], input: f })
+      if (p.roles.length !== 1 || (p.roles[0] !== 'neutral' && p.roles[0] !== 'cache'))
+        ctx.addIssue({ code: 'custom', message: 'sandbox parts are neutral or cache: roles must be [neutral] or [cache]', path: ['palette', i, 'roles'], input: f })
     })
     const zones = f.layout.regions.flatMap((r) => r.zones.map((z) => z.id))
     const lanes = [...zones, ...f.layout.regions.map((r) => r.id), 'global']

@@ -1,5 +1,5 @@
 // The shipped sandbox files: they resolve against their canvas challenge, only
-// add neutral parts, and every part explains itself.
+// add neutral or cache parts, and every part explains itself.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,14 +31,15 @@ describe('sandbox files', () => {
     for (const s of content.sandboxes) expect(content.canvases.some((c) => c.id === s.id)).toBe(false)
   })
 
-  it.each(content.sandboxes.map((s) => [s.id, s] as const))('%s: extends a same-cloud canvas and adds only explained neutral parts', (_id, s) => {
+  it.each(content.sandboxes.map((s) => [s.id, s] as const))('%s: extends a same-cloud canvas and adds only explained neutral or cache parts', (_id, s) => {
     const raw = fs.readFileSync(path.join(dir, 'sandbox', `${s.id}.yaml`), 'utf8')
     expect(raw.split('\n')[0]).toBe('# yaml-language-server: $schema=../../schemas/sandbox.json')
     expect(s.provider).toBe(content.canvases.find((c) => c.id === (/^extends:\s*(\S+)/m.exec(raw) ?? [])[1])?.provider)
-    const extras = s.palette.filter((p) => p.roles.includes('neutral'))
+    const extras = s.palette.filter((p) => p.roles.includes('neutral') || p.roles.includes('cache'))
     expect(extras.length).toBeGreaterThanOrEqual(3)
     for (const p of extras) {
-      expect(p.roles, p.id).toEqual(['neutral'])
+      expect(['neutral', 'cache'], p.id).toContain(p.roles[0])
+      expect(p.roles, p.id).toHaveLength(1)
       expect(p.facts.length, p.id).toBeGreaterThan(0)
     }
     expect(s.layout.global).toBe(true)
