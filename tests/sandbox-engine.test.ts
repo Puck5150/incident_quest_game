@@ -290,6 +290,17 @@ describe('a cache judges the database, only when the design can be read-loaded',
     expect(reasons(fromUsers, 'spike')).toMatch(/users connect straight to the cache/)
   })
 
+  it('an inline cache (no direct web-to-database link) is judged, and the spike fails on the unreachable database', () => {
+    const inline: Design = {
+      nodes: [node('alb-1', 'alb', 'use1'), node('web-1', 'ec2-web', 'use1-az1'), node('cache-1', 'elasticache', 'use1-az1'), node('rds-1', 'rds', 'use1-az1')],
+      edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1'), traffic('web-1', 'cache-1'), traffic('cache-1', 'rds-1')],
+    }
+    expect(readsJudged(c, inline)).toBe(true)
+    const r = runCheck(c, inline, 'spike')!
+    expect(r.pass).toBe(false)
+    expect(r.reasons.join(' ')).toContain('nothing that users can reach is connected to the database')
+  })
+
   describe('an inert cache (no database, or no web server) changes nothing', () => {
     const noDb: Design = { nodes: [node('alb-1', 'alb', 'use1'), node('web-1', 'ec2-web', 'use1-az1')], edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1')] }
     const noWeb: Design = { nodes: [node('rds-1', 'rds', 'use1-az1')], edges: [] }

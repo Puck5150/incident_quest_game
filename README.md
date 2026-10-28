@@ -32,8 +32,9 @@ services side by side and says where they genuinely differ.
 from its real services (load balancers, web servers, databases, plus queues, caches,
 object storage and CDNs), save several designs in your browser, and run checks like
 "lose a zone", "lose a region" or a traffic spike to see what survives and why.
-There is no score. Queues, caches, object storage and CDNs can be placed and linked,
-but the checks don't judge them yet.
+There is no score. Queues, object storage and CDNs can be placed and linked, but the
+checks don't judge them yet. A cache is judged once the design has a web server and a
+database: the checks then run the reads at 3x normal, and show those numbers.
 
 **Play it:** https://puck5150.github.io/incident_quest_game/ (deployed from `main` by CI; see [RELEASING.md](RELEASING.md) for how changes go live and how to roll back)
 

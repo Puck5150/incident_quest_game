@@ -37,7 +37,7 @@ palette:
     cost: 2
     facts:
       - "Each cache node is placed in one Availability Zone, chosen by you or by ElastiCache. With Multi-AZ enabled, ElastiCache spreads the replicas across different zones."
-      - "If the primary fails, the replica with the least replication lag is promoted and writes usually resume within a few seconds. Replication is asynchronous, so the newest writes may not have reached the replica when it is promoted. With no replica, the new primary starts empty."
+      - "If the primary fails, the replica with the least replication lag is promoted and writes usually resume within a few seconds. Replication is asynchronous, so the newest writes may not have reached the replica when it is promoted. With no replica to promote, the replacement node begins with an empty cache."
   - id: s3
     label: "Amazon S3 bucket"
     short: "S3"

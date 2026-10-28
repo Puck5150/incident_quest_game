@@ -1,5 +1,5 @@
 // `neutral` is the role for parts the sandbox checks do not judge yet
-// (queues, caches, object storage, CDNs).
+// (queues, object storage, CDNs). Caches have their own role, `cache`.
 
 import fs from 'node:fs'
 import path from 'node:path'

@@ -91,9 +91,10 @@ export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
 // The engine knows nothing of neutral parts, so judge a copy with every neutral
 // part contracted away: each traffic path from users or a judged part through
 // one or more neutral parts to a judged part becomes a direct link, and every
-// other link touching a neutral part is dropped. A queue, cache, CDN or bucket
+// other link touching a neutral part is dropped. A queue, CDN or bucket
 // therefore behaves exactly as if the link ran straight through it (or, hanging
-// off a server, as if it weren't there).
+// off a server, as if it weren't there). A cache does too only while it is inert
+// (no web server or no database); otherwise readsJudged applies the read checks.
 function withoutNeutral(c: SandboxChallenge, d: Design): Design {
   const reads = readsJudged(c, d)
   const neutral = new Set(d.nodes.filter((n) => isNeutral(c, n.type, reads)).map((n) => n.id))
