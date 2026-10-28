@@ -4,7 +4,7 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
-import { resolveSandbox, runCheck, sandboxChecks, validateDesign, SANDBOX_MAX_NODES, SPIKE } from '../src/game/sandbox.ts'
+import { resolveSandbox, runCheck, sandboxChecks, validateDesign, readsJudged, SANDBOX_MAX_NODES, SPIKE, READ_HIT, DB_READS } from '../src/game/sandbox.ts'
 import type { SandboxChallenge, SandboxFile } from '../src/schema/sandbox.ts'
 import type { Design } from '../src/schema/canvas.ts'
 
@@ -27,6 +27,7 @@ const file: SandboxFile = {
   palette: [
     { id: 'sqs', label: 'Amazon SQS queue', short: 'SQS', scope: 'regional', roles: ['neutral'], capacity: 0, cost: 1, facts: ['A message queue.'] },
     { id: 'cdn', label: 'Amazon CloudFront', short: 'CDN', scope: 'global', roles: ['neutral'], capacity: 0, cost: 2, facts: ['A CDN.'] },
+    { id: 'elasticache', label: 'ElastiCache cache node', short: 'cache', scope: 'zonal', roles: ['cache'], capacity: 0, cost: 2, facts: ['A cache.'] },
   ],
   sources: [{ title: 'Example', url: 'https://example.com', retrieved: '2026-10-27' }],
 }
@@ -65,7 +66,7 @@ const outcome = (d: Design) => Object.fromEntries(sandboxChecks(c, d).map((t) =>
 
 describe('resolveSandbox', () => {
   it('merges the base palette with the extras and carries the sandbox node cap', () => {
-    expect(c.palette.map((p) => p.id)).toEqual([...base.palette.map((p) => p.id), 'sqs', 'cdn'])
+    expect(c.palette.map((p) => p.id)).toEqual([...base.palette.map((p) => p.id), 'sqs', 'cdn', 'elasticache'])
     expect(c.max_nodes).toBe(SANDBOX_MAX_NODES)
     expect(c.layout.regions).toHaveLength(2)
     expect(c.provider).toBe('aws')
@@ -210,6 +211,101 @@ describe('runCheck', () => {
   it('neutral parts neither help nor hurt a result', () => {
     const withQueue: Design = { nodes: [...twoZone.nodes, node('sqs-1', 'sqs', 'use1')], edges: [...twoZone.edges, traffic('web-1', 'sqs-1')] }
     expect(outcome(withQueue)).toEqual(outcome(twoZone))
+  })
+})
+
+describe('a cache judges the database, only when the design can be read-loaded', () => {
+  // Two caches, one per zone, both linked from both web servers.
+  const caches = [node('cache-1', 'elasticache', 'use1-az1'), node('cache-2', 'elasticache', 'use1-az2')]
+  const linkAll = ['web-1', 'web-2'].flatMap((w) => ['cache-1', 'cache-2'].map((k) => traffic(w, k)))
+  const cached: Design = { nodes: [...twoZone.nodes, ...caches], edges: [...twoZone.edges, ...linkAll] }
+  const unlinked: Design = { nodes: [...twoZone.nodes, ...caches], edges: twoZone.edges }
+  const reasons = (d: Design, id: string) => runCheck(c, d, id)!.reasons.join(' ')
+
+  it('pins the scenario numbers and when reads are judged', () => {
+    expect([READ_HIT, DB_READS, SPIKE]).toEqual([0.9, 1, 3])
+    expect(readsJudged(c, cached)).toBe(true)
+    expect(readsJudged(c, twoZone)).toBe(false) // no cache
+    expect(readsJudged(c, { nodes: twoZone.nodes.filter((n) => n.type !== 'rds').concat(caches), edges: [] })).toBe(false) // no database
+    expect(readsJudged(c, { nodes: twoZone.nodes.filter((n) => n.type !== 'ec2-web').concat(caches), edges: [] })).toBe(false) // no web server
+  })
+
+  it('no cache: no check carries read_load and the labels are untouched', () => {
+    expect(sandboxChecks(c, twoZone).every((t) => !t.check.read_load)).toBe(true)
+    expect(sandboxChecks(c, twoZone).every((t) => !/reads at/.test(t.label))).toBe(true)
+  })
+
+  it('a cache in each zone, every server linked to both, survives everything the same design survives, and losing any one cache', () => {
+    expect(outcome(cached)).toEqual({
+      'zone-use1-az1': true,
+      'zone-use1-az2': true,
+      'region-use1': false,
+      'one-alb': false,
+      'one-ec2-web': true,
+      'one-rds': true,
+      'one-elasticache': true,
+      spike: true,
+    })
+  })
+
+  it('every check carries spike-level reads and says so, except the spike which already says 3x', () => {
+    const checks = sandboxChecks(c, cached)
+    for (const t of checks) expect(t.check.read_load).toEqual({ traffic: SPIKE, hit: READ_HIT, db_capacity: DB_READS })
+    for (const t of checks.filter((x) => x.id !== 'spike')) expect(t.label, t.id).toMatch(/, reads at 3×$/)
+    expect(checks.find((t) => t.id === 'spike')!.label).toBe(`Traffic spike: ${SPIKE}× normal`)
+    expect(checks.find((t) => t.id === 'spike')!.check.capacity).toBe(SPIKE)
+  })
+
+  it('unlinked caches shield nothing: every check fails and the reason names the web servers', () => {
+    expect(Object.values(outcome(unlinked)).every((p) => !p)).toBe(true)
+    expect(reasons(unlinked, 'spike')).toContain('rds-1 would see 3× normal reads but can take 1× (web-1, web-2 are not linked to a surviving cache).')
+  })
+
+  it('partial links: only the linked server is shielded and the reason names the other', () => {
+    const partial: Design = { nodes: unlinked.nodes, edges: [...twoZone.edges, traffic('web-1', 'cache-1'), traffic('web-1', 'cache-2')] }
+    expect(outcome(partial).spike).toBe(false)
+    expect(reasons(partial, 'spike')).toMatch(/web-2 is not linked to a surviving cache/)
+    expect(reasons(partial, 'spike')).not.toMatch(/web-1/)
+  })
+
+  it('losing the only cache fails, and a cache alone in its zone and region gets its own checks', () => {
+    const lone: Design = {
+      nodes: [...twoZone.nodes, node('cache-1', 'elasticache', 'usw2-az1')],
+      edges: [...twoZone.edges, traffic('web-1', 'cache-1'), traffic('web-2', 'cache-1')],
+    }
+    const ids = sandboxChecks(c, lone).map((t) => t.id)
+    expect(ids).toEqual(expect.arrayContaining(['zone-usw2-az1', 'region-usw2', 'one-elasticache']))
+    for (const id of ['zone-usw2-az1', 'region-usw2', 'one-elasticache']) {
+      expect(runCheck(c, lone, id)!.pass, id).toBe(false)
+      expect(reasons(lone, id), id).toMatch(/cache-1 was lost/)
+    }
+    expect(outcome(lone)['zone-use1-az1']).toBe(true) // the cache lives in the other region
+  })
+
+  it('direction matters: a cache linked only from the database, or straight from users, shields nothing', () => {
+    const fromDb: Design = { nodes: unlinked.nodes, edges: [...twoZone.edges, traffic('rds-1', 'cache-1')] }
+    expect(reasons(fromDb, 'spike')).toMatch(/web-1, web-2 are not linked to a surviving cache/)
+    const fromUsers: Design = { nodes: unlinked.nodes, edges: [...twoZone.edges, traffic('users', 'cache-1')] }
+    expect(runCheck(c, fromUsers, 'spike')!.pass).toBe(false)
+    expect(reasons(fromUsers, 'spike')).toMatch(/users connect straight to the cache/)
+  })
+
+  describe('an inert cache (no database, or no web server) changes nothing', () => {
+    const noDb: Design = { nodes: [node('alb-1', 'alb', 'use1'), node('web-1', 'ec2-web', 'use1-az1')], edges: [traffic('users', 'alb-1'), traffic('alb-1', 'web-1')] }
+    const noWeb: Design = { nodes: [node('rds-1', 'rds', 'use1-az1')], edges: [] }
+    it.each([
+      ['no database', noDb],
+      ['no web server', noWeb],
+    ])('%s', (_name, plain) => {
+      const withCache: Design = { nodes: [...plain.nodes, node('cache-1', 'elasticache', 'use1-az2')], edges: [...plain.edges, ...(plain === noDb ? [traffic('web-1', 'cache-1')] : [])] }
+      expect(sandboxChecks(c, withCache).map((t) => t.id)).toEqual(sandboxChecks(c, plain).map((t) => t.id)) // no zone check for the cache's zone, no one-elasticache
+      expect(sandboxChecks(c, withCache).every((t) => !t.check.read_load)).toBe(true)
+      expect(outcome(withCache)).toEqual(outcome(plain))
+    })
+  })
+
+  it('a saved design that contains a cache still opens', () => {
+    expect(validateDesign(c, cached)).toBeUndefined()
   })
 })
 
