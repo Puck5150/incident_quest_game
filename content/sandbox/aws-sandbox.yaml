@@ -33,11 +33,11 @@ palette:
     label: "ElastiCache cache node"
     short: "cache"
     scope: zonal
-    roles: [neutral]
+    roles: [cache]
     cost: 2
     facts:
-      - "A cache node runs in one Availability Zone. With Multi-AZ enabled, the replicas are spread across different zones."
-      - "If the primary node fails, the replica with the least replication lag is promoted, usually within seconds. Replication is asynchronous, so a little recent data can be lost. With no replica, a replacement primary starts empty."
+      - "Each cache node is placed in one Availability Zone, chosen by you or by ElastiCache. With Multi-AZ enabled, ElastiCache spreads the replicas across different zones."
+      - "If the primary fails, the replica with the least replication lag is promoted and writes usually resume within a few seconds. Replication is asynchronous, so a small amount of data can be lost to lag. With no replica, the new primary starts empty."
   - id: s3
     label: "Amazon S3 bucket"
     short: "S3"
@@ -63,7 +63,10 @@ sources:
     retrieved: 2026-10-27
   - title: "Minimizing downtime in ElastiCache by using Multi-AZ with Valkey and Redis OSS"
     url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-28
+  - title: "Choosing regions and availability zones for ElastiCache"
+    url: "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/RegionsAndAZs.html"
+    retrieved: 2026-10-28
   - title: "Data protection in Amazon S3"
     url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html"
     retrieved: 2026-10-27
