@@ -433,6 +433,30 @@ describe('an edge judges the traffic spike only when the design has a caching pa
   })
 })
 
+describe('the real Azure sandbox: a second entry path around Front Door', () => {
+  const az = loadContent(path.resolve(import.meta.dirname, '../content')).sandboxes.find((s) => s.provider === 'azure')!
+  const design = (second: boolean): Design => ({
+    nodes: [
+      node('tm', 'traffic-manager', 'global'),
+      { ...node('fd', 'front-door', 'global'), caching: true },
+      node('agw', 'app-gateway', 'eus2'),
+      node('app', 'app-instance', 'eus2-z1'),
+      node('pg', 'pg', 'eus2-z1'),
+    ],
+    edges: [traffic('users', 'tm'), traffic('tm', 'fd'), traffic('fd', 'agw'), traffic('agw', 'app'), traffic('app', 'pg'), ...(second ? [traffic('tm', 'agw')] : [])],
+  })
+  it('the spike passes behind Front Door; a path around it withholds the discount and the one-front-door check', () => {
+    expect(runCheck(az, design(false), 'spike')!.pass).toBe(true)
+    const direct = runCheck(az, design(false), 'one-front-door')!
+    expect(direct.pass).toBe(false)
+    console.log('REASONS', JSON.stringify(direct.reasons))
+    const around = runCheck(az, design(true), 'spike')!
+    expect(around.pass).toBe(false)
+    expect(around.reasons).toContain('users can also reach app without passing fd.')
+    expect(runCheck(az, design(true), 'one-front-door')!.pass).toBe(true)
+  })
+})
+
 describe('overlays', () => {
   const overlay = { id: 'alb', caching: { label: 'Caching', default: false, facts: ['A fact.'] } }
   it('add a caching setting to an inherited route part', () => {

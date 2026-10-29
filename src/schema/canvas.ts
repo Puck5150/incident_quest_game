@@ -16,7 +16,7 @@ export { MAX_NODES, ROLES, USERS } from './constants.ts'
 // A route part may offer a caching setting (a CDN-style edge). `default` is whether it is on when the
 // part is placed; each cloud's docs decide what a learner has to switch on.
 export const CachingSchema = z.strictObject({
-  label: z.string().min(1), // what the cloud calls the setting, e.g. "Cloud CDN"
+  label: z.string().min(1), // the setting's label, the cloud's own name where it has one, e.g. "Cloud CDN"
   default: z.boolean(),
   facts: z.array(z.string().min(1)).min(1),
 })

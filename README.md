@@ -35,9 +35,8 @@ object storage and CDNs), save several designs in your browser, and run checks l
 There is no score. Queues and object storage can be placed and linked, but the
 checks don't judge them yet. A cache is judged once the design has a web server and a
 database: the checks then run the reads at 3x normal, and show those numbers. CDN or
-edge parts (CloudFront, Azure Front Door and Traffic Manager, a Google global load
-balancer with Cloud CDN) are judged on the traffic spike, each modelled the way its own
-cloud's docs describe it.
+edge parts (CloudFront, Azure Front Door, a Google global load balancer with Cloud CDN)
+are judged on the traffic spike; Azure Traffic Manager can add a second entry path.
 
 **Play it:** https://puck5150.github.io/incident_quest_game/ (deployed from `main` by CI; see [RELEASING.md](RELEASING.md) for how changes go live and how to roll back)
 

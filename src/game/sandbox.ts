@@ -67,12 +67,13 @@ const rolesOf = (c: SandboxChallenge, type: string) => c.palette.find((p) => p.i
 const hasRole = (c: SandboxChallenge, d: Design, role: string) => d.nodes.some((n) => rolesOf(c, n.type).includes(role as never))
 
 // Reads are judged only when the design has a cache, a web server and a database.
-// Without all three a cache is inert: treated as a neutral part is, so such a
-// design gets exactly the checks and results it always has.
 // The edge rule applies when the design has a part with a caching setting and a web server to relieve.
 export const edgeJudged = (c: SandboxChallenge, d: Design) =>
   d.nodes.some((n) => c.palette.find((p) => p.id === n.type)?.caching) && hasRole(c, d, 'serve')
 
+// Reads are judged only when the design has a cache, a web server and a database.
+// Without all three a cache is inert: treated as a neutral part is, so such a
+// design gets exactly the checks and results it always has.
 export const readsJudged = (c: SandboxChallenge, d: Design) => hasRole(c, d, 'cache') && hasRole(c, d, 'serve') && hasRole(c, d, 'write-store')
 
 const isNeutral = (c: SandboxChallenge, type: string, reads: boolean) => {

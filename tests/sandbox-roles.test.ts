@@ -46,7 +46,7 @@ it('a sandbox file accepts an extra part with only the route role', () => {
   expect(ok).toBeTruthy()
 })
 
-it.each([['[cache, neutral]'], ['[route, neutral]'], ['[serve]'], ['[write-store]'], ['[]']])('a sandbox file refuses an extra part with roles %s, naming the allowed roles', (roles) => {
+it.each([['[cache, neutral]'], ['[route, neutral]'], ['[route, route]'], ['[cache, cache]'], ['[serve]'], ['[write-store]'], ['[]']])('a sandbox file refuses an extra part with roles %s, naming the allowed roles', (roles) => {
   const { ok, errors } = sandboxWithRoles(roles)
   expect(ok).toBeUndefined()
   expect(errors.join(' ')).toMatch(/neutral, cache or route/)

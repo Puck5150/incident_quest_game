@@ -63,6 +63,12 @@ describe('edge_load', () => {
     expect(r.plain.pass).toBe(false) // the same design without edge_load still needs the full 6x
   })
 
+  it('a caching part with default off and no node setting is off: the discount is withheld and the reason says so', () => {
+    const off: CanvasChallenge = { ...c, palette: c.palette.map((p) => (p.id === 'edge' ? { ...p, caching: { ...p.caching!, default: false } } : p)) }
+    const r = Object.fromEntries(evaluateCanvas(off, behindEdge(['web-1', 'web-2'])).tests.map((t) => [t.id, t]))
+    expect(r.spike.reasons).toEqual(['only 4× of the 6× traffic needed can be served (web-1, web-2).', 'caching is off on edge-1.'])
+  })
+
   it('and a design that is still short says how much it needed after the edge', () => {
     const r = run(behindEdge(['web-1']))
     expect(r.spike.pass).toBe(false)
