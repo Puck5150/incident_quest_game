@@ -58,11 +58,12 @@ palette:
     roles: [route]
     cost: 1
     facts:
-      - "Traffic Manager answers DNS lookups with an endpoint, and the client then connects to that endpoint directly. It is not a proxy or a gateway and never sees the traffic, so there is nothing in its path to cache, inspect with a WAF or decrypt."
-      - "It is one global service: Microsoft deploys its infrastructure across several availability zones in many regions, so losing a zone or a region does not stop it answering lookups."
-      - "Front Door is documented as a potential single point of failure. For workloads that cannot tolerate that, Microsoft's mission-critical guidance puts Traffic Manager in front of Front Door and a second ingress path, such as Application Gateway."
+      - "Its whole job is the name lookup: it returns the address of an endpoint, and the client then talks to that endpoint directly, with Traffic Manager out of the path. It is not a proxy or a gateway."
+      - "It is not tied to any one region: Microsoft runs it in many regions, with its infrastructure spread across zones, so a zone or region outage leaves other copies still answering lookups."
+      - "Front Door is documented as a potential single point of failure. Microsoft says most workloads do not need to guard against that, and offers Traffic Manager in front of Front Door plus a second ingress path, such as Application Gateway, only for mission-critical ones."
       - "Traffic that moves to that second path stops getting Front Door's cache, and Application Gateway has no caching, so the origins carry load a cache would otherwise have absorbed."
-      - "Moving users off a failed path takes time. Resolvers and clients keep the DNS answer until its TTL runs out, and the health-check frequency and failure threshold add to the delay."
+      - "Routing Traffic Manager straight to app services, with no Application Gateway between, can leave you unable to protect them with a WAF, and the services must terminate TLS themselves."
+      - "Moving users off a failed path takes time. Resolvers may hold the old DNS answer up to its TTL, some upstream caches hold it longer, and the health-check frequency and failure threshold add to the delay."
 
 overlays:
   - id: front-door
@@ -70,11 +71,11 @@ overlays:
       label: "Enable caching"
       default: false
       facts:
-        - "Caching is switched on per Front Door route rather than added as a separate component. A request that reaches an edge site is answered from that site's cache when a valid response is held there, and sent to the origin when not."
-        - "Every edge site keeps its own cache, so even a route with caching on still sends some requests to the origin."
-        - "Only GET responses can be cached. Requests using any other method are always proxied through to the origin."
-        - "Microsoft recommends separate routes for static and dynamic content, with caching off on the dynamic one."
-        - "A misconfigured route can cache user-specific data and then hand it to other users, which the docs warn can become a privacy incident. Authenticated API endpoints are their example of content that should not be cached."
+        - "Front Door is itself a content delivery network, and caching is a setting on each route. With it on, a request the edge site that took it can answer from its cache is served right there, and anything else is fetched from the origin."
+        - "Each edge site manages its own cache and requests can land on different sites, so some traffic may still reach the origin even with caching on."
+        - "Only GET responses are cached; a request using any other method is never answered from the cache."
+        - "Keep static files on their own route with caching on, and send dynamic responses down a different route that does not cache. That split is Microsoft's recommendation."
+        - "Caching a response that was meant for one signed-in user lets Front Door serve it to others, leaking personal information. Microsoft names authenticated API endpoints as content not to cache."
 
 sources:
   - title: "Introduction to Azure Service Bus Messaging"
