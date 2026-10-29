@@ -614,7 +614,7 @@ export const setCaching = (d: Design, id: string, on: boolean): Design => ({
 })
 ```
 
-`AUTHORING.md` "Sandbox files": replace "may add only parts with `roles: [neutral]` (queue, object storage, CDN)" wording (it now reads: ...extra parts that are `roles: [neutral]` (queue, object storage, CDN) or `roles: [cache]` (the cache part, which carries no other role)) with: extra parts that are `roles: [neutral]` (queue, object storage), `roles: [cache]` (the cache part, which carries no other role) or `roles: [route]` (an entry point such as a CDN or a DNS routing service; it may offer a caching setting). Add one sentence: a sandbox file may carry `overlays` to add a `caching` setting to a route part it inherits from the canvas, so the scored canvas is not edited. Keep the paragraph's style.
+`AUTHORING.md` "Sandbox files": the paragraph says a sandbox file "may add only parts with `roles: [neutral]` (queue, cache, object storage, CDN)". Rewrite that clause to say it may add only extra parts that are `roles: [neutral]` (queue, object storage), `roles: [cache]` (the cache part, which carries no other role) or `roles: [route]` (an entry point such as a CDN or a DNS routing service; it may offer a caching setting). Add one sentence: a sandbox file may carry `overlays` to add a `caching` setting to a route part it inherits from the canvas, so the scored canvas is not edited. Keep the paragraph's style.
 
 - [ ] **Step 4: Run**
 
@@ -966,7 +966,7 @@ it('AWS: a CloudFront distribution caches by default, the toggle persists, and a
   cleanup()
   render(<App />)
   open()
-  fireEvent.click(await screen.findByRole('link', { name: /Edge shop/ }).catch(() => screen.getByText('Edge shop')))
+  fireEvent.click(await screen.findByRole('button', { name: /^Edge shop/ }))
   await screen.findByRole('region', { name: 'Palette' })
   selectNode('cdn-1')
   expect((caching('Caching') as HTMLInputElement).checked).toBe(false)
@@ -1012,7 +1012,7 @@ it('the edge note appears only when the design has a caching part and a web serv
 })
 ```
 
-(Adjust the exact node ids and the reload-open step to what the app really produces: node ids come from `addNode`'s slug of the part's `short ?? label`: `cdn-1` for CloudFront (`short: "CDN"`), `front-door-1`, `app-gateway-1`, `global-lb-1`, `lb-1`. For reopening a saved design, follow the existing reload test in this file. Keep every assertion's intent.)
+(Node ids come from `addNode`'s slug of the part's `short ?? label`: `cdn-1` for CloudFront (`short: "CDN"`), `front-door-1`, `app-gateway-1`, `global-lb-1` and `lb-1`. If the real ids differ, use the real ones and keep every assertion's intent.)
 
 Run: `npx vitest run tests/sandbox-ui.test.tsx` — Expected: FAIL.
 
