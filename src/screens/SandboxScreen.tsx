@@ -167,7 +167,7 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
               )}
               {edge && (
                 <p className="mt-3 text-xs text-muted">
-                  Caching is judged on the traffic spike. It assumes half of requests are cacheable GETs and that a caching edge answers {Math.round(EDGE_HIT * 10)} in 10 of those, so the web servers carry {Math.round((1 - EDGE_SHARE * EDGE_HIT) * 100)}% of the spike. These are scenario numbers, not measurements. Servers that users can also reach without passing the edge get no discount.
+                  Caching is judged on the traffic spike. It assumes half of requests are cacheable GETs and that a caching edge answers {Math.round(EDGE_HIT * 10)} in 10 of those, so the web servers carry {Math.round((1 - EDGE_SHARE * EDGE_HIT) * 100)}% of the spike. These are scenario numbers, not measurements. If users can reach any web server without passing the edge, no discount applies.
                 </p>
               )}
               {hasCache && !reads && (

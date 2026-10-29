@@ -326,6 +326,8 @@ it('the edge note appears only when the design has a caching part and a web serv
   expect(screen.getByText(/Caching is judged on the traffic spike/)).toBeTruthy()
   expect(screen.getByText(/half of requests are cacheable GETs/)).toBeTruthy()
   expect(screen.getByText(/scenario numbers, not measurements/, { exact: false })).toBeTruthy()
+  expect(screen.getByText(/55% of the spike/)).toBeTruthy()
+  expect(screen.getByText(/If users can reach any web server without passing the edge, no discount applies/)).toBeTruthy()
   add('Amazon SQS queue', 'use1')
   expect(screen.getByText(/Queues and object storage aren't judged by these checks yet/)).toBeTruthy()
   expect(screen.queryByText(/CDNs/)).toBeNull()
