@@ -58,12 +58,12 @@ palette:
     roles: [route]
     cost: 1
     facts:
-      - "Its whole job is the name lookup: it returns the address of an endpoint, and the client then talks to that endpoint directly, with Traffic Manager out of the path. It is not a proxy or a gateway."
+      - "It works at the DNS step: it returns the address of an endpoint, and the client then talks to that endpoint directly, with Traffic Manager out of the path."
       - "It is not tied to any one region: Microsoft runs it in many regions, with its infrastructure spread across zones, so a zone or region outage leaves other copies still answering lookups."
-      - "Front Door is documented as a potential single point of failure. Microsoft says most workloads do not need to guard against that, and offers Traffic Manager in front of Front Door plus a second ingress path, such as Application Gateway, only for mission-critical ones."
+      - "Front Door is documented as a potential single point of failure. For mission-critical workloads only, Microsoft describes putting Traffic Manager in front of Front Door plus a second ingress path, such as Application Gateway, and says most workloads don't need that setup."
       - "Traffic that moves to that second path stops getting Front Door's cache, and Application Gateway has no caching, so the origins carry load a cache would otherwise have absorbed."
       - "Routing Traffic Manager straight to app services, with no Application Gateway between, can leave you unable to protect them with a WAF, and the services must terminate TLS themselves."
-      - "Moving users off a failed path takes time. Resolvers may hold the old DNS answer up to its TTL, some upstream caches hold it longer, and the health-check frequency and failure threshold add to the delay."
+      - "Moving users off a failed path takes time. Resolvers may hold the old DNS answer up to its TTL, some upstream caches can hold it longer, and the health-check frequency and failure threshold add to the delay."
 
 overlays:
   - id: front-door
@@ -71,11 +71,11 @@ overlays:
       label: "Enable caching"
       default: false
       facts:
-        - "Front Door is itself a content delivery network, and caching is a setting on each route. With it on, a request the edge site that took it can answer from its cache is served right there, and anything else is fetched from the origin."
-        - "Each edge site manages its own cache and requests can land on different sites, so some traffic may still reach the origin even with caching on."
-        - "Only GET responses are cached; a request using any other method is never answered from the cache."
+        - "Front Door is itself a content delivery network, and caching is a setting on each route. With it on, a cache hit is served by the edge site that took the request; a miss is fetched from the origin."
+        - "Edge sites don't share a cache, and requests may be handled by different sites, so turning caching on may not stop all traffic to the origin."
+        - "Only GET responses can be cached; a request using any other method is never answered from the cache."
         - "Keep static files on their own route with caching on, and send dynamic responses down a different route that does not cache. That split is Microsoft's recommendation."
-        - "Caching a response that was meant for one signed-in user lets Front Door serve it to others, leaking personal information. Microsoft names authenticated API endpoints as content not to cache."
+        - "Caching a response meant for one user can let Front Door serve it to others, leaking personal information. Microsoft names authenticated API endpoints as content not to cache."
 
 sources:
   - title: "Introduction to Azure Service Bus Messaging"
