@@ -51,6 +51,31 @@ palette:
       - "With zone-redundant storage (ZRS), data is written synchronously to three or more availability zones in the region, so it stays readable and writable if one zone is lost."
       - "Locally redundant storage (LRS) keeps every copy inside a single datacenter in the region. It covers drive, server and rack failures, but a disaster such as fire or flooding there could take all the copies."
       - "Geo-redundant options (GRS and GZRS) add an asynchronous copy in a second, distant region. Because that copy lags, a regional disaster can lose the most recent writes."
+  - id: traffic-manager
+    label: "Azure Traffic Manager profile"
+    short: "Traffic Manager"
+    scope: global
+    roles: [route]
+    cost: 1
+    facts:
+      - "It works at the DNS step: it returns the address of an endpoint, and the client then talks to that endpoint directly, with Traffic Manager out of the path."
+      - "It is not tied to any one region: Microsoft runs it in many regions, with its infrastructure spread across zones, so a zone or region outage leaves other copies still answering lookups."
+      - "Front Door is documented as a potential single point of failure. For mission-critical workloads only, Microsoft describes putting Traffic Manager in front of Front Door plus a second ingress path, such as Application Gateway, and says most workloads don't need that setup."
+      - "Traffic that moves to that second path stops getting Front Door's cache, and Application Gateway has no caching, so the origins carry load a cache would otherwise have absorbed."
+      - "Routing Traffic Manager straight to app services, with no Application Gateway between, can leave you unable to protect them with a WAF, and the services must terminate TLS themselves."
+      - "Moving users off a failed path takes time. Resolvers may hold the old DNS answer up to its TTL, some upstream caches can hold it longer, and the health-check frequency and failure threshold add to the delay."
+
+overlays:
+  - id: front-door
+    caching:
+      label: "Enable caching"
+      default: false
+      facts:
+        - "Front Door is itself a content delivery network, and caching is a setting on each route. With it on, a cache hit is served by the edge site that took the request; a miss is fetched from the origin."
+        - "Edge sites don't share a cache, and requests may be handled by different sites, so turning caching on may not stop all traffic to the origin."
+        - "Only GET responses can be cached; a request using any other method is never answered from the cache."
+        - "Keep static files on their own route with caching on, and send dynamic responses down a different route that does not cache. That split is Microsoft's recommendation."
+        - "Caching a response meant for one user can let Front Door serve it to others, leaking personal information. Microsoft names authenticated API endpoints as content not to cache."
 
 sources:
   - title: "Introduction to Azure Service Bus Messaging"
@@ -68,3 +93,21 @@ sources:
   - title: "Data redundancy - Azure Storage"
     url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy"
     retrieved: 2026-10-27
+  - title: "Caching - Azure Front Door"
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-caching"
+    retrieved: 2026-10-29
+  - title: "Architecture Best Practices for Azure Front Door - Microsoft Azure Well-Architected Framework"
+    url: "https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-front-door"
+    retrieved: 2026-10-29
+  - title: "Global Routing Redundancy for Mission-Critical Web Applications"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/guide/networking/global-web-applications/overview"
+    retrieved: 2026-10-29
+  - title: "Mission-Critical Global HTTP Ingress"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/guide/networking/global-web-applications/mission-critical-global-http-ingress"
+    retrieved: 2026-10-29
+  - title: "How Azure Traffic Manager Works"
+    url: "https://learn.microsoft.com/en-us/azure/traffic-manager/traffic-manager-how-it-works"
+    retrieved: 2026-10-29
+  - title: "Reliability in Azure Traffic Manager"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-traffic-manager"
+    retrieved: 2026-10-29

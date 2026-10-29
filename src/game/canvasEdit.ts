@@ -84,3 +84,8 @@ export function connect(c: CanvasChallenge, d: Design, from: string, to: string,
 }
 
 export const disconnect = (d: Design, i: number): Design => ({ ...d, edges: d.edges.filter((_, j) => j !== i) })
+
+export const setCaching = (d: Design, id: string, on: boolean): Design => ({
+  ...d,
+  nodes: d.nodes.map((n) => (n.id === id ? { ...n, caching: on } : n)),
+})

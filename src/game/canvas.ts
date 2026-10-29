@@ -180,18 +180,53 @@ function check(
     return { w, reached, serving }
   }
 
+  // Opt-in (check.edge_load): a live, caching edge answers part of the traffic before it reaches the web
+  // servers. The discount applies only when every reachable web server sits behind an active edge; a server
+  // users can also reach without passing one (a direct link, a second entry path) gets none.
+  const edgeEffect = (el: { share: number; hit: number }) => {
+    const capable = d.nodes.filter((n) => type(n.id)?.caching)
+    if (!capable.length) return undefined
+    const on = (n: Node) => n.caching ?? type(n.id)!.caching!.default
+    const active = capable.filter((n) => on(n) && !removed.has(n.id))
+    const why: string[] = []
+    for (const n of capable) {
+      if (removed.has(n.id)) why.push(`${n.id} was lost, so it can't answer requests.`)
+      else if (!on(n)) why.push(`caching is off on ${n.id}.`)
+    }
+    const skip = new Set(active.map((n) => n.id))
+    const around = new Set<string>([USERS])
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const e of traffic) {
+        if (around.has(e.from) && alive(e.to) && !skip.has(e.to) && !around.has(e.to)) {
+          around.add(e.to)
+          grew = true
+        }
+      }
+    }
+    const reached = d.nodes.filter((n) => has(n, 'serve') && reachable.has(n.id))
+    const open = reached.filter((n) => around.has(n.id)).map((n) => n.id)
+    if (active.length && open.length) why.push(`users can also reach ${open.join(', ')} without passing ${active.map((n) => n.id).join(', ')}.`)
+    const covered = active.length > 0 && reached.length > 0 && !open.length
+    return { factor: covered ? 1 - el.share * el.hit : 1, pct: Math.round(el.share * el.hit * 100), why }
+  }
+
   if (t.check.capacity !== undefined) {
     // A server only adds capacity if it can actually write to the database.
     const { reached, serving } = serversThatCount()
     const unlinked = reached.filter((n) => !serving.includes(n)).map((n) => n.id)
     const cap = serving.reduce((sum, n) => sum + (c.palette.find((p) => p.id === n.type)?.capacity ?? 0), 0)
-    if (cap < t.check.capacity) {
+    const edge = t.check.edge_load ? edgeEffect(t.check.edge_load) : undefined
+    const needed = t.check.capacity * (edge?.factor ?? 1)
+    if (cap < needed - 1e-9) {
+      const answered = edge && edge.factor < 1 ? ` (${fmt(t.check.capacity)}× minus the ${edge.pct}% that the edge answers)` : ''
       reasons.push(
         cap === 0
-          ? `no serving capacity survives; ${t.check.capacity}× is needed.`
-          : `only ${cap}× of the ${t.check.capacity}× traffic needed can be served (${serving.map((n) => n.id).join(', ')}).`,
+          ? `no serving capacity survives; ${fmt(needed)}× is needed${answered}.`
+          : `only ${cap}× of the ${fmt(needed)}× traffic needed${answered} can be served (${serving.map((n) => n.id).join(', ')}).`,
       )
       if (unlinked.length) reasons.push(`${unlinked.join(', ')} can't reach the database, so they don't count as serving capacity.`)
+      if (edge) reasons.push(...edge.why)
     }
   }
 

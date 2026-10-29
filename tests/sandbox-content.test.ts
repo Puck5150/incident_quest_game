@@ -31,14 +31,14 @@ describe('sandbox files', () => {
     for (const s of content.sandboxes) expect(content.canvases.some((c) => c.id === s.id)).toBe(false)
   })
 
-  it.each(content.sandboxes.map((s) => [s.id, s] as const))('%s: extends a same-cloud canvas and adds only explained neutral or cache parts', (_id, s) => {
+  it.each(content.sandboxes.map((s) => [s.id, s] as const))('%s: extends a same-cloud canvas and adds only explained neutral, cache or route parts', (_id, s) => {
     const raw = fs.readFileSync(path.join(dir, 'sandbox', `${s.id}.yaml`), 'utf8')
     expect(raw.split('\n')[0]).toBe('# yaml-language-server: $schema=../../schemas/sandbox.json')
     expect(s.provider).toBe(content.canvases.find((c) => c.id === (/^extends:\s*(\S+)/m.exec(raw) ?? [])[1])?.provider)
-    const extras = s.palette.filter((p) => p.roles.includes('neutral') || p.roles.includes('cache'))
+    const extras = s.palette.filter((p) => p.roles.includes('neutral') || p.roles.includes('cache') || p.roles.includes('route'))
     expect(extras.length).toBeGreaterThanOrEqual(3)
     for (const p of extras) {
-      expect(['neutral', 'cache'], p.id).toContain(p.roles[0])
+      expect(['neutral', 'cache', 'route'], p.id).toContain(p.roles[0])
       expect(p.roles, p.id).toHaveLength(1)
       expect(p.facts.length, p.id).toBeGreaterThan(0)
     }

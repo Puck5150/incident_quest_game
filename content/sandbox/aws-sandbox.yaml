@@ -51,11 +51,20 @@ palette:
     label: "CloudFront distribution"
     short: "CDN"
     scope: global
-    roles: [neutral]
+    roles: [route]
     cost: 2
     facts:
-      - "Serves content from edge locations around the world, routing each viewer to the one with the lowest latency."
-      - "On a cache miss, an edge location fetches the file from your origin, such as an S3 bucket or a web server, and keeps a copy (24 hours by default unless the origin says otherwise)."
+      - "CloudFront is a global service. Viewers are served from edge locations, AWS data centers spread around the world."
+      - "DNS sends each viewer's request to whichever edge location suits it best, usually the one with the lowest latency for that viewer."
+      - "Regional edge caches sit between the edge locations and your origin, and each holds more than a single edge location can."
+    caching:
+      label: "Caching"
+      default: true
+      facts:
+        - "Caching is on from the start: an edge location keeps each file for 24 hours unless headers from the origin set a different time."
+        - "When the requested object is not cached, CloudFront forwards the request to the origin and keeps the returned object for the next viewer."
+        - "Only GET and HEAD responses are cached, plus OPTIONS if you opt in. Responses to PUT, POST, PATCH and DELETE are never cached, and those requests go from the edge location straight to the origin."
+        - "Attaching the CachingDisabled managed cache policy switches caching off; AWS suggests it for dynamic content and requests that can't be cached."
 
 sources:
   - title: "What is Amazon Simple Queue Service?"
@@ -72,4 +81,16 @@ sources:
     retrieved: 2026-10-27
   - title: "What is Amazon CloudFront?"
     url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-29
+  - title: "How CloudFront delivers content"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/HowCloudFrontWorks.html"
+    retrieved: 2026-10-29
+  - title: "Cache behavior settings"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/DownloadDistValuesCacheBehavior.html"
+    retrieved: 2026-10-29
+  - title: "Use managed cache policies"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html"
+    retrieved: 2026-10-29
+  - title: "Resilience in Amazon CloudFront"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/disaster-recovery-resiliency.html"
+    retrieved: 2026-10-29

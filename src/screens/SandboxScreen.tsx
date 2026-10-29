@@ -3,7 +3,7 @@ import { loadSandbox as loadCloud } from 'virtual:content'
 import type { Design } from '../schema/canvas.ts'
 import type { SandboxChallenge } from '../schema/sandbox.ts'
 import type { CanvasTestResult } from '../game/canvas.ts'
-import { readsJudged, runCheck, sandboxChecks, SPIKE, READ_HIT, DB_READS, validateDesign } from '../game/sandbox.ts'
+import { edgeJudged, EDGE_SHARE, EDGE_HIT, readsJudged, runCheck, sandboxChecks, SPIKE, READ_HIT, DB_READS, validateDesign } from '../game/sandbox.ts'
 import { updateDesign } from '../game/sandboxStore.ts'
 import { PROVIDER_NAMES } from '../schema/constants.ts'
 import CanvasEditor from '../components/canvas/CanvasEditor.tsx'
@@ -74,6 +74,7 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
   const cost = design.nodes.reduce((sum, n) => sum + (part(n.type)?.cost ?? 0), 0)
   const hasNeutral = design.nodes.some((n) => part(n.type)?.roles.includes('neutral'))
   const reads = readsJudged(c, design)
+  const edge = edgeJudged(c, design)
   const hasCache = design.nodes.some((n) => part(n.type)?.roles.includes('cache'))
 
   return (
@@ -156,12 +157,17 @@ export default function SandboxScreen({ id, onBack, onMissing }: { id: string; o
               </div>
               {hasNeutral && (
                 <p className="mt-3 text-xs text-muted">
-                  Queues, CDNs and object storage aren't judged by these checks yet. A link through one is treated as a direct link to what's behind it.
+                  Queues and object storage aren't judged by these checks yet. A link through one is treated as a direct link to what's behind it.
                 </p>
               )}
               {reads && (
                 <p className="mt-3 text-xs text-muted">
                   Reads are judged at {SPIKE}× normal. A cache that is up and linked from a web server answers {Math.round(READ_HIT * 10)} in 10 of that server's reads; the database can read {DB_READS}× normal. These are scenario numbers, not measurements.
+                </p>
+              )}
+              {edge && (
+                <p className="mt-3 text-xs text-muted">
+                  Caching is judged on the traffic spike. It assumes half of requests are cacheable GETs and that a caching edge answers {Math.round(EDGE_HIT * 10)} in 10 of those, so the web servers carry {Math.round((1 - EDGE_SHARE * EDGE_HIT) * 100)}% of the spike. These are scenario numbers, not measurements. If users can reach any web server without passing the edge, no discount applies.
                 </p>
               )}
               {hasCache && !reads && (

@@ -50,16 +50,25 @@ palette:
       - "A bucket in a single region keeps its data redundant across multiple zones in that region, so a zone failure does not make it unavailable."
       - "Dual-region and multi-region buckets add redundancy across regions, asynchronously, for higher availability than one region."
       - "You choose the bucket's location when you create it, and it decides how the data is replicated and what it costs."
-  - id: cloud-cdn
-    label: "Cloud CDN"
-    short: "CDN"
+  - id: global-alb
+    label: "Global external Application Load Balancer"
+    short: "Global LB"
     scope: global
-    roles: [neutral]
+    roles: [route]
     cost: 2
     facts:
-      - "Keeps cached copies at Google edge locations worldwide and serves a request from the cache when a matching response is there, lowering latency and the load on the origin."
-      - "It is enabled on a global external or classic Application Load Balancer rather than running on its own. The origin can be Compute Engine or GKE backends, or a Cloud Storage backend bucket."
-      - "On a cache miss, the request goes through the load balancer to the origin, and a cacheable response is stored for later requests."
+      - "This load balancer is not a single proxy: Google runs it on Google Front Ends (GFEs) spread across the globe. With Premium Tier, Google announces its IP address from points of presence worldwide, and each client reaches the GFE closest to it."
+      - "With Premium Tier only, a region whose backends are all unhealthy is not necessarily a dead end: the GFE there might spill requests over to a GFE in another region that has backends configured. On Standard Tier, the forwarding rule restricts the backends to instance groups and zonal NEGs located in its own region."
+      - "Google's feature comparison marks cross-region failover for the external Application Load Balancer in just two modes, global and classic, and footnotes classic as supported for Premium Tier."
+      - "The regional external Application Load Balancer is a different mode: it is a regional load balancer built on Envoy proxies and serves one configured region, so it is not this part."
+    caching:
+      label: "Cloud CDN"
+      default: false
+      facts:
+        - "You switch Cloud CDN on for a backend service or backend bucket that the URL map points to. The cache check is made by the GFE at Google's network edge, near the user, where the request first arrives; on a hit, that GFE answers without the backends being involved."
+        - "Among the external Application Load Balancer modes, Google's feature comparison shows Cloud CDN for global and classic only, and footnotes classic as supported for Premium Tier."
+        - "After a miss, the request continues from the GFE through the load balancer to one of your origin servers; when the reply is cacheable, Cloud CDN keeps a copy for later requests."
+        - "Cloud CDN only stores replies to GET requests. By default it does not cache successful HTML or JSON responses, and Google notes that its exact caching conditions may change from time to time."
 
 sources:
   - title: "What is Pub/Sub?"
@@ -85,4 +94,19 @@ sources:
     retrieved: 2026-10-27
   - title: "Cloud CDN overview"
     url: "https://docs.cloud.google.com/cdn/docs/overview"
-    retrieved: 2026-10-27
+    retrieved: 2026-10-29
+  - title: "Caching overview"
+    url: "https://docs.cloud.google.com/cdn/docs/caching"
+    retrieved: 2026-10-29
+  - title: "Load balancer feature comparison"
+    url: "https://docs.cloud.google.com/load-balancing/docs/features"
+    retrieved: 2026-10-29
+  - title: "Request distribution for external Application Load Balancers"
+    url: "https://docs.cloud.google.com/load-balancing/docs/https/request-distribution"
+    retrieved: 2026-10-29
+  - title: "Application Load Balancer overview"
+    url: "https://docs.cloud.google.com/load-balancing/docs/application-load-balancer"
+    retrieved: 2026-10-29
+  - title: "External Application Load Balancer overview"
+    url: "https://docs.cloud.google.com/load-balancing/docs/https"
+    retrieved: 2026-10-29

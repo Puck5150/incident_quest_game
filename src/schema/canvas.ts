@@ -13,6 +13,14 @@ import { MAX_NODES, ROLES, USERS } from './constants.ts'
 
 export { MAX_NODES, ROLES, USERS } from './constants.ts'
 
+// A route part may offer a caching setting (a CDN-style edge). `default` is whether it is on when the
+// part is placed; each cloud's docs decide what a learner has to switch on.
+export const CachingSchema = z.strictObject({
+  label: z.string().min(1), // the setting's label, the cloud's own name where it has one, e.g. "Cloud CDN"
+  default: z.boolean(),
+  facts: z.array(z.string().min(1)).min(1),
+})
+
 export const PaletteItemSchema = z.strictObject({
   id,
   label: z.string().min(1),
@@ -26,9 +34,10 @@ export const PaletteItemSchema = z.strictObject({
   // A `serve` component with its own managed public front end (e.g. Cloud Run's
   // HTTPS endpoint): users may connect to it directly, with no load balancer.
   public: z.boolean().optional(),
+  caching: CachingSchema.optional(),
 })
 
-const NodeSchema = z.strictObject({ id, type: id, lane: id })
+const NodeSchema = z.strictObject({ id, type: id, lane: id, caching: z.boolean().optional() })
 const EdgeSchema = z.strictObject({
   from: id,
   to: id,
@@ -58,10 +67,17 @@ const CheckSchema = z
         db_capacity: z.number().positive(),
       })
       .optional(),
+    // Opt-in: a live, caching edge answers `share` of the requests it can (cacheable GETs) at rate `hit`,
+    // so the web servers carry less of the spike. Applies only when every web server sits behind such an edge.
+    edge_load: z
+      .strictObject({ share: z.number().gt(0).lt(1), hit: z.number().gt(0).lt(1) })
+      .optional(),
   })
   .superRefine((k, ctx) => {
     if (k.read_load && !(k.reach.includes('serve') && k.reach.includes('write-store')))
       ctx.addIssue({ code: 'custom', message: 'read_load needs both serve and write-store in reach', path: ['read_load'], input: k })
+    if (k.edge_load && !(k.capacity !== undefined && k.reach.includes('serve')))
+      ctx.addIssue({ code: 'custom', message: 'edge_load needs capacity and serve in reach', path: ['edge_load'], input: k })
   })
 
 export const LayoutSchema = z.strictObject({
@@ -121,6 +137,7 @@ export const CanvasChallengeSchema = z
 
     c.palette.forEach((p, i) => {
       if (p.public && !p.roles.includes('serve')) issue('`public` only applies to a part with the serve role', ['palette', i, 'public'])
+      if (p.caching && !p.roles.includes('route')) issue('caching only applies to a part with the route role', ['palette', i, 'caching'])
       if (p.roles.includes('cache') && p.roles.length > 1) issue('a cache part has no other role', ['palette', i, 'roles'])
     })
     const zones = new Set(c.layout.regions.flatMap((r) => r.zones.map((z) => z.id)))
