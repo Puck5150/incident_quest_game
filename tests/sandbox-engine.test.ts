@@ -4,7 +4,7 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
-import { resolveSandbox, runCheck, sandboxChecks, validateDesign, readsJudged, SANDBOX_MAX_NODES, SPIKE, READ_HIT, DB_READS } from '../src/game/sandbox.ts'
+import { resolveSandbox, runCheck, sandboxChecks, validateDesign, readsJudged, edgeJudged, EDGE_SHARE, EDGE_HIT, SANDBOX_MAX_NODES, SPIKE, READ_HIT, DB_READS } from '../src/game/sandbox.ts'
 import type { SandboxChallenge, SandboxFile } from '../src/schema/sandbox.ts'
 import type { Design } from '../src/schema/canvas.ts'
 
@@ -28,6 +28,7 @@ const file: SandboxFile = {
     { id: 'sqs', label: 'Amazon SQS queue', short: 'SQS', scope: 'regional', roles: ['neutral'], capacity: 0, cost: 1, facts: ['A message queue.'] },
     { id: 'cdn', label: 'Amazon CloudFront', short: 'CDN', scope: 'global', roles: ['neutral'], capacity: 0, cost: 2, facts: ['A CDN.'] },
     { id: 'elasticache', label: 'ElastiCache cache node', short: 'cache', scope: 'zonal', roles: ['cache'], capacity: 0, cost: 2, facts: ['A cache.'] },
+    { id: 'edge', label: 'Edge', short: 'edge', scope: 'global', roles: ['route'], capacity: 0, cost: 2, facts: ['An edge.'], caching: { label: 'Caching', default: true, facts: ['Caches.'] } },
   ],
   sources: [{ title: 'Example', url: 'https://example.com', retrieved: '2026-10-27' }],
 }
@@ -66,7 +67,7 @@ const outcome = (d: Design) => Object.fromEntries(sandboxChecks(c, d).map((t) =>
 
 describe('resolveSandbox', () => {
   it('merges the base palette with the extras and carries the sandbox node cap', () => {
-    expect(c.palette.map((p) => p.id)).toEqual([...base.palette.map((p) => p.id), 'sqs', 'cdn', 'elasticache'])
+    expect(c.palette.map((p) => p.id)).toEqual([...base.palette.map((p) => p.id), 'sqs', 'cdn', 'elasticache', 'edge'])
     expect(c.max_nodes).toBe(SANDBOX_MAX_NODES)
     expect(c.layout.regions).toHaveLength(2)
     expect(c.provider).toBe('aws')
@@ -363,5 +364,89 @@ describe('validateDesign', () => {
   it('rejects a design over the cap', () => {
     const many: Design = { nodes: Array.from({ length: SANDBOX_MAX_NODES + 1 }, (_, i) => node(`w-${i}`, 'ec2-web', 'use1-az1')), edges: [] }
     expect(validateDesign(c, many)).toMatch(/40/)
+  })
+})
+
+describe('an edge judges the traffic spike only when the design has a caching part and a web server', () => {
+  const edgeIn = (webs: string[], extra: Design['edges'] = []): Design => ({
+    nodes: [node('edge-1', 'edge', 'global'), node('alb-1', 'alb', 'use1'), ...webs.map((w) => node(w, 'ec2-web', 'use1-az1')), node('rds-1', 'rds', 'use1-az1')],
+    edges: [traffic('users', 'edge-1'), traffic('edge-1', 'alb-1'), ...webs.flatMap((w) => [traffic('alb-1', w), traffic(w, 'rds-1')]), ...extra],
+  })
+  const spike = (d: Design) => sandboxChecks(c, d).find((t) => t.id === 'spike')!
+
+  it('pins the scenario numbers', () => {
+    expect(EDGE_SHARE).toBe(0.5)
+    expect(EDGE_HIT).toBe(0.9)
+  })
+
+  it('edgeJudged needs a caching part and a web server', () => {
+    expect(edgeJudged(c, twoZone)).toBe(false)
+    expect(edgeJudged(c, { nodes: [node('edge-1', 'edge', 'global')], edges: [] })).toBe(false)
+    expect(edgeJudged(c, edgeIn(['web-1']))).toBe(true)
+  })
+
+  it('only the spike check carries edge_load, and its label does not change', () => {
+    const checks = sandboxChecks(c, edgeIn(['web-1']))
+    expect(checks.filter((t) => t.check.edge_load).map((t) => t.id)).toEqual(['spike'])
+    expect(spike(edgeIn(['web-1'])).check.edge_load).toEqual({ share: EDGE_SHARE, hit: EDGE_HIT })
+    expect(spike(edgeIn(['web-1'])).label).toBe('Traffic spike: 3× normal')
+  })
+
+  it('a design with no caching part gets exactly the checks it always got', () => {
+    expect(spike(twoZone).check).toEqual({ reach: ['serve', 'write-store'], capacity: SPIKE })
+  })
+
+  it('an edge in front of one web server lets it survive the spike; without one it does not', () => {
+    expect(runCheck(c, edgeIn(['web-1']), 'spike')!.pass).toBe(true) // 3x x 0.55 = 1.65x, one server carries 2x
+    expect(runCheck(c, { ...oneZone }, 'spike')!.pass).toBe(false) // 3x on one 2x server
+  })
+
+  it('a bypass link means no discount', () => {
+    const r = runCheck(c, edgeIn(['web-1'], [traffic('users', 'alb-1')]), 'spike')!
+    expect(r.pass).toBe(false)
+    expect(r.reasons.join(' ')).toContain('users can also reach web-1 without passing edge-1.')
+  })
+
+  it('an edge is a global route part: it gets a "Lose any one" check and no zone or region check of its own', () => {
+    const ids = sandboxChecks(c, edgeIn(['web-1'])).map((t) => t.id)
+    expect(ids).toContain('one-edge')
+    expect(ids).not.toContain('zone-global')
+    expect(runCheck(c, edgeIn(['web-1']), 'one-edge')!.pass).toBe(false) // it is the only way in
+  })
+
+  it('a caching part with no web server adds no edge_load', () => {
+    const d: Design = { nodes: [node('edge-1', 'edge', 'global'), node('rds-1', 'rds', 'use1-az1')], edges: [] }
+    expect(sandboxChecks(c, d).some((t) => t.check.edge_load)).toBe(false)
+  })
+
+  it('keeps the cache rule independent: a design with both still judges reads', () => {
+    const d = edgeIn(['web-1'])
+    d.nodes.push(node('cache-1', 'elasticache', 'use1-az1'))
+    d.edges.push(traffic('web-1', 'cache-1'))
+    const checks = sandboxChecks(c, d)
+    expect(checks.every((t) => t.check.read_load)).toBe(true)
+    expect(spike(d).check.edge_load).toBeDefined()
+  })
+
+  it('saved designs without a caching choice still validate', () => {
+    expect(validateDesign(c, edgeIn(['web-1']))).toBeUndefined()
+  })
+})
+
+describe('overlays', () => {
+  const overlay = { id: 'alb', caching: { label: 'Caching', default: false, facts: ['A fact.'] } }
+  it('add a caching setting to an inherited route part', () => {
+    const r = resolveSandbox({ ...file, overlays: [overlay] }, base)
+    if (typeof r === 'string') throw new Error(r)
+    expect(r.palette.find((p) => p.id === 'alb')!.caching).toEqual(overlay.caching)
+    expect(base.palette.find((p) => p.id === 'alb')!.caching).toBeUndefined() // the base is not mutated
+  })
+
+  it('are refused for an unknown part, a repeated part, a part that already has a setting, or a part that is not a route', () => {
+    expect(resolveSandbox({ ...file, overlays: [{ ...overlay, id: 'nope' }] }, base)).toMatch(/"nope".*not in/)
+    expect(resolveSandbox({ ...file, overlays: [overlay, overlay] }, base)).toMatch(/more than once/)
+    const cached = { ...base, palette: base.palette.map((p) => (p.id === 'alb' ? { ...p, caching: overlay.caching } : p)) }
+    expect(resolveSandbox({ ...file, overlays: [overlay] }, cached)).toMatch(/already has a caching setting/)
+    expect(resolveSandbox({ ...file, overlays: [{ ...overlay, id: 'ec2-web' }] }, base)).toMatch(/isn't a route part/)
   })
 })

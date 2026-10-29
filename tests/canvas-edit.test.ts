@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadContent } from '../vite-plugin-content.ts'
-import { addNode, connect, disconnect, emptyDesign, lanesFor, moveNode, removeNode, targets } from '../src/game/canvasEdit.ts'
+import { addNode, connect, disconnect, emptyDesign, lanesFor, moveNode, removeNode, setCaching, targets } from '../src/game/canvasEdit.ts'
 import type { Design } from '../src/schema/canvas.ts'
 
 const c = loadContent(path.resolve(import.meta.dirname, '../content')).canvases.find((x) => x.id === 'aws-checkout-canvas')!
@@ -53,4 +53,11 @@ describe('canvas editing', () => {
     expect(targets(c, d, 'users', 'traffic')).toEqual(['web-1', 'rds-1', 'rds-2'])
     expect(disconnect(d, 0).edges).toEqual([])
   })
+})
+
+it('setCaching sets one node, leaves the others, and does not mutate the design', () => {
+  const d = { nodes: [{ id: 'a', type: 't', lane: 'global' }, { id: 'b', type: 't', lane: 'global' }], edges: [] }
+  const next = setCaching(d, 'a', false)
+  expect(next.nodes).toEqual([{ id: 'a', type: 't', lane: 'global', caching: false }, { id: 'b', type: 't', lane: 'global' }])
+  expect(d.nodes[0]).toEqual({ id: 'a', type: 't', lane: 'global' })
 })

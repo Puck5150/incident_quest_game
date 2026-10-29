@@ -1,5 +1,6 @@
 // `neutral` is the role for parts the sandbox checks do not judge yet
-// (queues, object storage, CDNs). Caches have their own role, `cache`.
+// (queues, object storage). Caches have `cache`, and entry points
+// (CloudFront, Traffic Manager, a global load balancer) have `route`.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -39,8 +40,24 @@ it('a sandbox file accepts an extra part with only the cache role', () => {
   expect(ok).toBeTruthy()
 })
 
-it.each([['[cache, neutral]'], ['[serve]'], ['[write-store]'], ['[route]'], ['[]']])('a sandbox file refuses an extra part with roles %s, naming the allowed roles', (roles) => {
+it('a sandbox file accepts an extra part with only the route role', () => {
+  const { ok, errors } = sandboxWithRoles('[route]')
+  expect(errors).toEqual([])
+  expect(ok).toBeTruthy()
+})
+
+it.each([['[cache, neutral]'], ['[route, neutral]'], ['[serve]'], ['[write-store]'], ['[]']])('a sandbox file refuses an extra part with roles %s, naming the allowed roles', (roles) => {
   const { ok, errors } = sandboxWithRoles(roles)
   expect(ok).toBeUndefined()
-  expect(errors.join(' ')).toMatch(/neutral or cache/)
+  expect(errors.join(' ')).toMatch(/neutral, cache or route/)
+})
+
+it('a sandbox file accepts an overlay that adds a caching setting to an inherited part, and refuses unknown keys in it', () => {
+  const file = path.resolve(import.meta.dirname, '../content/sandbox/aws-sandbox.yaml')
+  const raw = fs.readFileSync(file, 'utf8')
+  const overlay = (extra: string) => `${raw}\noverlays:\n  - id: alb\n    caching: { label: Caching, default: false, facts: ["A fact."] }${extra}\n`
+  const errors: string[] = []
+  expect(checkRaw(overlay(''), SandboxSchema, 'aws-sandbox', errors)).toBeTruthy()
+  expect(errors).toEqual([])
+  expect(checkRaw(overlay('\n    extra: 1'), SandboxSchema, 'aws-sandbox', [])).toBeUndefined()
 })

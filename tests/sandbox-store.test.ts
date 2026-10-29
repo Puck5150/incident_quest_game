@@ -140,4 +140,16 @@ describe('export and import', () => {
     expect(r.design.nodes[0]).toEqual({ id: 'a', type: 'alb', lane: 'use1' })
     expect(r.design.edges[0]).toEqual({ from: 'users', to: 'a', kind: 'traffic' })
   })
+
+  it('keeps a boolean caching choice on a node and drops anything else', () => {
+    const text = JSON.stringify({ version: 1, name: 'x', provider: 'aws', design: { nodes: [
+      { id: 'edge-1', type: 'cloudfront', lane: 'global', caching: false },
+      { id: 'edge-2', type: 'cloudfront', lane: 'global', caching: 'yes' },
+      { id: 'a', type: 'alb', lane: 'use1' },
+    ], edges: [] } })
+    const nodes = (readExport(text) as { design: Design }).design.nodes
+    expect(nodes[0].caching).toBe(false)
+    expect('caching' in nodes[1]).toBe(false)
+    expect('caching' in nodes[2]).toBe(false)
+  })
 })

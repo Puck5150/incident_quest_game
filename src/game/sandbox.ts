@@ -16,6 +16,8 @@ export const SANDBOX_MAX_NODES = 40
 export const SPIKE = 3 // the traffic-spike check: this many times normal traffic
 export const READ_HIT = 0.9 // scenario number: the share of reads a live, linked cache answers
 export const DB_READS = 1 // scenario number: the most reads the database can take, in multiples of normal
+export const EDGE_SHARE = 0.5 // scenario number: the share of requests that are cacheable GETs
+export const EDGE_HIT = 0.9 // scenario number: the share of those a live, caching edge answers
 
 // Returns an error message when the file can't extend the base.
 export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxChallenge | string {
@@ -23,6 +25,18 @@ export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxCh
   const taken = new Set(base.palette.map((p) => p.id))
   const clash = f.palette.find((p, i) => taken.has(p.id) || f.palette.findIndex((q) => q.id === p.id) !== i)
   if (clash) return `palette id "${clash.id}" is already in ${base.id}'s palette or repeated`
+  const overlays = f.overlays ?? []
+  for (const [i, o] of overlays.entries()) {
+    const p = base.palette.find((x) => x.id === o.id)
+    if (!p) return `overlay "${o.id}" is not in ${base.id}'s palette`
+    if (overlays.findIndex((q) => q.id === o.id) !== i) return `overlay "${o.id}" appears more than once`
+    if (p.caching) return `${o.id} already has a caching setting`
+    if (!p.roles.includes('route')) return `${o.id} isn't a route part, so it can't have a caching setting`
+  }
+  const basePalette = base.palette.map((p) => {
+    const o = overlays.find((x) => x.id === p.id)
+    return o ? { ...p, caching: o.caching } : p
+  })
   return {
     type: 'challenge',
     mode: 'canvas',
@@ -36,7 +50,7 @@ export function resolveSandbox(f: SandboxFile, base: CanvasChallenge): SandboxCh
     requirements: ['No requirements: the checks show what survives and why.'],
     budget: 1_000_000,
     layout: f.layout,
-    palette: [...base.palette, ...f.palette],
+    palette: [...basePalette, ...f.palette],
     link_facts: base.link_facts,
     stress_tests: [],
     reference_designs: [],
@@ -55,6 +69,10 @@ const hasRole = (c: SandboxChallenge, d: Design, role: string) => d.nodes.some((
 // Reads are judged only when the design has a cache, a web server and a database.
 // Without all three a cache is inert: treated as a neutral part is, so such a
 // design gets exactly the checks and results it always has.
+// The edge rule applies when the design has a part with a caching setting and a web server to relieve.
+export const edgeJudged = (c: SandboxChallenge, d: Design) =>
+  d.nodes.some((n) => c.palette.find((p) => p.id === n.type)?.caching) && hasRole(c, d, 'serve')
+
 export const readsJudged = (c: SandboxChallenge, d: Design) => hasRole(c, d, 'cache') && hasRole(c, d, 'serve') && hasRole(c, d, 'write-store')
 
 const isNeutral = (c: SandboxChallenge, type: string, reads: boolean) => {
@@ -84,7 +102,8 @@ export function sandboxChecks(c: SandboxChallenge, d: Design): CanvasTest[] {
       .map((r): CanvasTest => ({ id: `region-${r.id}`, label: `Lose region ${r.label}${note}`, event: { region_outage: r.id }, check })),
     ...judged.map((t): CanvasTest => ({ id: `one-${t}`, label: `Lose any one ${label(t)}${note}`, event: { single_failure: t }, check })),
   ]
-  if (has('serve')) tests.push({ id: 'spike', label: `Traffic spike: ${SPIKE}× normal`, event: { none: true }, check: { ...check, capacity: SPIKE } })
+  if (has('serve'))
+    tests.push({ id: 'spike', label: `Traffic spike: ${SPIKE}× normal`, event: { none: true }, check: { ...check, capacity: SPIKE, ...(edgeJudged(c, d) && { edge_load: { share: EDGE_SHARE, hit: EDGE_HIT } }) } })
   return tests
 }
 

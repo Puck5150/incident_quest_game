@@ -29,7 +29,7 @@ function readDesign(x: unknown): Design | undefined {
   const nodes: Design['nodes'] = []
   for (const n of x.nodes) {
     if (!isObj(n) || !isStr(n.id) || !isStr(n.type) || !isStr(n.lane)) return undefined
-    nodes.push({ id: n.id, type: n.type, lane: n.lane })
+    nodes.push({ id: n.id, type: n.type, lane: n.lane, ...(typeof n.caching === 'boolean' && { caching: n.caching }) })
   }
   const edges: Design['edges'] = []
   for (const e of x.edges) {

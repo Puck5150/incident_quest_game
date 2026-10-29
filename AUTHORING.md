@@ -534,7 +534,10 @@ The design sandbox has one file per cloud in `content/sandbox/<provider>-sandbox
 `id` matches the filename (for example `aws-sandbox`). It `extends` that cloud's
 single-provider canvas challenge, which supplies the load balancer, web server and
 database, and may add only extra parts that are `roles: [neutral]` (queue, object
-storage, CDN) or `roles: [cache]` (the cache part, which carries no other role). The layout is two regions with two zones each, plus `global: true`
+storage), `roles: [cache]` (the cache part, which carries no other role) or
+`roles: [route]` (an entry point such as a CDN or a DNS routing service; it may
+offer a caching setting). It may also carry `overlays` to add a `caching` setting
+to a route part it inherits from the canvas, so the scored canvas is not edited. The layout is two regions with two zones each, plus `global: true`
 for global-scope parts. Write `facts` and `sources` from the vendor docs in your
 own words, and set each part's `scope` and the `retrieved` date from what the docs
 say. Run `npm run schemas` after any schema change. `npm test` validates sandbox
