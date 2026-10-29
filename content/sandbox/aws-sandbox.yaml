@@ -54,17 +54,17 @@ palette:
     roles: [route]
     cost: 2
     facts:
-      - "A global service: it delivers content through a worldwide network of data centers called edge locations."
-      - "DNS routes each viewer to the edge location that can best serve the request, typically the nearest one by latency."
+      - "CloudFront is a global service. Viewers are served from edge locations, AWS data centers spread around the world."
+      - "DNS sends each viewer's request to whichever edge location suits it best, usually the one with the lowest latency for that viewer."
       - "Regional edge caches sit between the edge locations and your origin, and each holds more than a single edge location can."
     caching:
       label: "Caching"
       default: true
       facts:
-        - "On by default: unless the origin's headers say otherwise, a file stays in an edge location for 24 hours before it expires."
+        - "Caching is on from the start: an edge location keeps each file for 24 hours unless headers from the origin set a different time."
         - "When the requested object is not cached, CloudFront forwards the request to the origin and keeps the returned object for the next viewer."
         - "Only GET and HEAD responses are cached, plus OPTIONS if you opt in. Responses to PUT, POST, PATCH and DELETE are never cached, and those requests go from the edge location straight to the origin."
-        - "The CachingDisabled managed cache policy turns caching off. AWS describes it as useful for dynamic content and for requests that are not cacheable."
+        - "Attaching the CachingDisabled managed cache policy switches caching off; AWS suggests it for dynamic content and requests that can't be cached."
 
 sources:
   - title: "What is Amazon Simple Queue Service?"
