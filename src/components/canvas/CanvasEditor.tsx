@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { USERS } from '../../schema/constants.ts'
 import type { CanvasChallenge, Design } from '../../schema/canvas.ts'
-import { addNode, connect, disconnect, laneLabel, lanesFor, moveNode, removeNode, targets, type Capped } from '../../game/canvasEdit.ts'
+import { addNode, connect, disconnect, laneLabel, lanesFor, moveNode, removeNode, setCaching, targets, type Capped } from '../../game/canvasEdit.ts'
 import Board, { type DragPayload } from './Board.tsx'
 import Inspector from './Inspector.tsx'
 
@@ -180,6 +180,7 @@ export default function CanvasEditor({
             design={design}
             selected={selected === USERS || design.nodes.some((n) => n.id === selected) ? selected : undefined}
             onMove={(id, lane) => apply(moveNode(c, design, id, lane), `${id} moved to ${laneLabel(c, lane)}.`)}
+            onCaching={(id, on) => apply(setCaching(design, id, on), `${id}: caching ${on ? 'on' : 'off'}.`)}
             onConnect={(from, to, kind) => apply(connect(c, design, from, to, kind), `Linked ${from} to ${to} (${kind}).`)}
             onPickTarget={(from, kind) => {
               setConnecting({ from, kind })

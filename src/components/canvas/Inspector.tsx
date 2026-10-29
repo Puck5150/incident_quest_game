@@ -16,6 +16,7 @@ export default function Inspector({
   design,
   selected,
   onMove,
+  onCaching,
   onConnect,
   onPickTarget,
   onDisconnect,
@@ -26,6 +27,7 @@ export default function Inspector({
   design: Design
   selected?: string
   onMove: (id: string, lane: string) => void
+  onCaching: (id: string, on: boolean) => void
   onConnect: (from: string, to: string, kind: Kind) => void
   onPickTarget: (from: string, kind: Kind) => void // enter click-to-connect mode
   onDisconnect: (edgeIndex: number) => void
@@ -91,6 +93,25 @@ export default function Inspector({
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {node && item?.caching && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={node.caching ?? item.caching.default}
+              onChange={(e) => onCaching(node.id, e.target.checked)}
+              className="accent-accent"
+            />
+            {item.caching.label}
+          </label>
+          <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted">
+            {item.caching.facts.map((f) => (
+              <li key={f}>{f}</li>
+            ))}
+          </ul>
         </div>
       )}
 
