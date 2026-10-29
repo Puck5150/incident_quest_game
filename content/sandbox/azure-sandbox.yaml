@@ -51,6 +51,30 @@ palette:
       - "With zone-redundant storage (ZRS), data is written synchronously to three or more availability zones in the region, so it stays readable and writable if one zone is lost."
       - "Locally redundant storage (LRS) keeps every copy inside a single datacenter in the region. It covers drive, server and rack failures, but a disaster such as fire or flooding there could take all the copies."
       - "Geo-redundant options (GRS and GZRS) add an asynchronous copy in a second, distant region. Because that copy lags, a regional disaster can lose the most recent writes."
+  - id: traffic-manager
+    label: "Azure Traffic Manager profile"
+    short: "Traffic Manager"
+    scope: global
+    roles: [route]
+    cost: 1
+    facts:
+      - "Traffic Manager answers DNS lookups with an endpoint, and the client then connects to that endpoint directly. It is not a proxy or a gateway and never sees the traffic, so there is nothing in its path to cache, inspect with a WAF or decrypt."
+      - "It is one global service: Microsoft deploys its infrastructure across several availability zones in many regions, so losing a zone or a region does not stop it answering lookups."
+      - "Front Door is documented as a potential single point of failure. For workloads that cannot tolerate that, Microsoft's mission-critical guidance puts Traffic Manager in front of Front Door and a second ingress path, such as Application Gateway."
+      - "Traffic that moves to that second path stops getting Front Door's cache, and Application Gateway has no caching, so the origins carry load a cache would otherwise have absorbed."
+      - "Moving users off a failed path takes time. Resolvers and clients keep the DNS answer until its TTL runs out, and the health-check frequency and failure threshold add to the delay."
+
+overlays:
+  - id: front-door
+    caching:
+      label: "Enable caching"
+      default: false
+      facts:
+        - "Caching is switched on per Front Door route rather than added as a separate component. A request that reaches an edge site is answered from that site's cache when a valid response is held there, and sent to the origin when not."
+        - "Every edge site keeps its own cache, so even a route with caching on still sends some requests to the origin."
+        - "Only GET responses can be cached. Requests using any other method are always proxied through to the origin."
+        - "Microsoft recommends separate routes for static and dynamic content, with caching off on the dynamic one."
+        - "A misconfigured route can cache user-specific data and then hand it to other users, which the docs warn can become a privacy incident. Authenticated API endpoints are their example of content that should not be cached."
 
 sources:
   - title: "Introduction to Azure Service Bus Messaging"
@@ -68,3 +92,21 @@ sources:
   - title: "Data redundancy - Azure Storage"
     url: "https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy"
     retrieved: 2026-10-27
+  - title: "Caching - Azure Front Door"
+    url: "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-caching"
+    retrieved: 2026-10-29
+  - title: "Architecture Best Practices for Azure Front Door - Microsoft Azure Well-Architected Framework"
+    url: "https://learn.microsoft.com/en-us/azure/well-architected/service-guides/azure-front-door"
+    retrieved: 2026-10-29
+  - title: "Global Routing Redundancy for Mission-Critical Web Applications"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/guide/networking/global-web-applications/overview"
+    retrieved: 2026-10-29
+  - title: "Mission-Critical Global HTTP Ingress"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/guide/networking/global-web-applications/mission-critical-global-http-ingress"
+    retrieved: 2026-10-29
+  - title: "How Azure Traffic Manager Works"
+    url: "https://learn.microsoft.com/en-us/azure/traffic-manager/traffic-manager-how-it-works"
+    retrieved: 2026-10-29
+  - title: "Reliability in Azure Traffic Manager"
+    url: "https://learn.microsoft.com/en-us/azure/reliability/reliability-traffic-manager"
+    retrieved: 2026-10-29
