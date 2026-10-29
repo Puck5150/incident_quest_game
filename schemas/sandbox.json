@@ -147,6 +147,32 @@
           },
           "public": {
             "type": "boolean"
+          },
+          "caching": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "default": {
+                "type": "boolean"
+              },
+              "facts": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "label",
+              "default",
+              "facts"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

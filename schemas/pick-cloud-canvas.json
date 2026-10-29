@@ -511,6 +511,9 @@
                     "lane": {
                       "type": "string",
                       "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "caching": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -604,6 +607,9 @@
                     "lane": {
                       "type": "string",
                       "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "caching": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -720,6 +726,9 @@
                             "lane": {
                               "type": "string",
                               "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                            },
+                            "caching": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -812,6 +821,9 @@
                             "lane": {
                               "type": "string",
                               "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                            },
+                            "caching": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -927,6 +939,9 @@
                             "lane": {
                               "type": "string",
                               "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                            },
+                            "caching": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -1019,6 +1034,9 @@
                             "lane": {
                               "type": "string",
                               "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                            },
+                            "caching": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -1134,6 +1152,9 @@
                             "lane": {
                               "type": "string",
                               "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                            },
+                            "caching": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -1226,6 +1247,9 @@
                             "lane": {
                               "type": "string",
                               "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                            },
+                            "caching": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
