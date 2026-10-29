@@ -449,7 +449,7 @@ describe('the real Azure sandbox: a second entry path around Front Door', () => 
     expect(runCheck(az, design(false), 'spike')!.pass).toBe(true)
     const direct = runCheck(az, design(false), 'one-front-door')!
     expect(direct.pass).toBe(false)
-    console.log('REASONS', JSON.stringify(direct.reasons))
+    expect(direct.reasons).toEqual(['If fd fails: no surviving web server is connected to users.', 'If fd fails: nothing that users can reach is connected to the database (pg).'])
     const around = runCheck(az, design(true), 'spike')!
     expect(around.pass).toBe(false)
     expect(around.reasons).toContain('users can also reach app without passing fd.')
