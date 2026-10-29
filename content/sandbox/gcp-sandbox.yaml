@@ -50,16 +50,24 @@ palette:
       - "A bucket in a single region keeps its data redundant across multiple zones in that region, so a zone failure does not make it unavailable."
       - "Dual-region and multi-region buckets add redundancy across regions, asynchronously, for higher availability than one region."
       - "You choose the bucket's location when you create it, and it decides how the data is replicated and what it costs."
-  - id: cloud-cdn
-    label: "Cloud CDN"
-    short: "CDN"
+  - id: global-alb
+    label: "Global external Application Load Balancer"
+    short: "Global LB"
     scope: global
-    roles: [neutral]
+    roles: [route]
     cost: 2
     facts:
-      - "Keeps cached copies at Google edge locations worldwide and serves a request from the cache when a matching response is there, lowering latency and the load on the origin."
-      - "It is enabled on a global external or classic Application Load Balancer rather than running on its own. The origin can be Compute Engine or GKE backends, or a Cloud Storage backend bucket."
-      - "On a cache miss, the request goes through the load balancer to the origin, and a cacheable response is stored for later requests."
+      - "Google Front Ends, a fleet of proxies around the world, do this job. In Premium Tier a client lands on the nearest one, because the same IP address is advertised from many points of presence."
+      - "When the Google Front End handling a request has no healthy backend in its region, it might hand the request to one in another region that has backends configured. Google's feature comparison lists automatic failover to healthy backends in other regions only for the global and classic modes, and as supported for Premium Tier; Standard Tier keeps traffic to backends in the forwarding rule's region."
+      - "The regional external Application Load Balancer is a different mode: it is a regional load balancer built on Envoy proxies and serves one configured region, so it is not this part."
+    caching:
+      label: "Cloud CDN"
+      default: false
+      facts:
+        - "Cloud CDN is configured on the backend service or backend bucket that the load balancer's URL map routes to, so it is not a separate hop. The Google Front End that receives the request is the place that checks the cache."
+        - "Google's feature comparison lists Cloud CDN only for the global and classic modes of the external Application Load Balancer, as supported for Premium Tier."
+        - "On a cache miss, the Google Front End passes the request to the load balancer, which sends it on to an origin; the origin's response is stored only if it is cacheable."
+        - "Cacheable responses must answer a GET request. Successful HTML and JSON responses are not cached by default, and Google says the exact conditions for caching may change over time."
 
 sources:
   - title: "What is Pub/Sub?"
@@ -86,3 +94,18 @@ sources:
   - title: "Cloud CDN overview"
     url: "https://docs.cloud.google.com/cdn/docs/overview"
     retrieved: 2026-10-27
+  - title: "Caching overview"
+    url: "https://docs.cloud.google.com/cdn/docs/caching"
+    retrieved: 2026-10-29
+  - title: "Load balancer feature comparison"
+    url: "https://docs.cloud.google.com/load-balancing/docs/features"
+    retrieved: 2026-10-29
+  - title: "Request distribution for external Application Load Balancers"
+    url: "https://docs.cloud.google.com/load-balancing/docs/https/request-distribution"
+    retrieved: 2026-10-29
+  - title: "Application Load Balancer overview"
+    url: "https://docs.cloud.google.com/load-balancing/docs/application-load-balancer"
+    retrieved: 2026-10-29
+  - title: "External Application Load Balancer overview"
+    url: "https://docs.cloud.google.com/load-balancing/docs/https"
+    retrieved: 2026-10-29

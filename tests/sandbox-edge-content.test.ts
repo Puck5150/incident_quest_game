@@ -54,3 +54,27 @@ describe('azure', () => {
     for (const src of s.sources) expect(['learn.microsoft.com'], src.url).toContain(host(src.url))
   })
 })
+
+describe('gcp', () => {
+  const s = sandbox('gcp')
+  const alb = part('gcp', 'global-alb')
+
+  it('the global external load balancer is a global route part with a Cloud CDN setting that is off to start', () => {
+    expect(alb, 'global-alb').toBeDefined()
+    expect(alb!.roles).toEqual(['route'])
+    expect(alb!.scope).toBe('global')
+    expect(alb!.caching?.label).toBe('Cloud CDN')
+    expect(alb!.caching?.default).toBe(false)
+    expect(alb!.facts.length).toBeGreaterThan(0)
+    expect(alb!.caching!.facts.length).toBeGreaterThan(0)
+  })
+
+  it('the regional load balancer has no CDN setting, and the standalone Cloud CDN part is gone', () => {
+    expect(part('gcp', 'lb')!.caching).toBeUndefined()
+    expect(part('gcp', 'cloud-cdn')).toBeUndefined()
+  })
+
+  it("cites only Google Cloud's own documentation", () => {
+    for (const src of s.sources) expect(['cloud.google.com', 'docs.cloud.google.com'], src.url).toContain(host(src.url))
+  })
+})
