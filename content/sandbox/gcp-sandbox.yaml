@@ -58,7 +58,7 @@ palette:
     cost: 2
     facts:
       - "This load balancer is not a single proxy: Google runs it on Google Front Ends (GFEs) spread across the globe. With Premium Tier, Google announces its IP address from points of presence worldwide, and each client reaches the GFE closest to it."
-      - "With Premium Tier only, a region whose backends are all unhealthy is not necessarily a dead end: the GFE there might spill requests over to a GFE in another region that has backends configured. A Standard Tier forwarding rule allows only backends in its own region."
+      - "With Premium Tier only, a region whose backends are all unhealthy is not necessarily a dead end: the GFE there might spill requests over to a GFE in another region that has backends configured. On Standard Tier, the forwarding rule restricts the backends to instance groups and zonal NEGs located in its own region."
       - "Google's feature comparison marks cross-region failover for the external Application Load Balancer in just two modes, global and classic, and footnotes classic as supported for Premium Tier."
       - "The regional external Application Load Balancer is a different mode: it is a regional load balancer built on Envoy proxies and serves one configured region, so it is not this part."
     caching:
