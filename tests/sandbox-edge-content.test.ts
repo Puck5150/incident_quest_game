@@ -1,0 +1,30 @@
+// The sandbox's edge parts, per cloud: the right role and scope for each cloud's service,
+// the caching setting the cloud's own docs describe, and sources only from that cloud's docs.
+
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { loadContent } from '../vite-plugin-content.ts'
+
+const { sandboxes } = loadContent(path.resolve(import.meta.dirname, '../content'))
+const sandbox = (provider: string) => sandboxes.find((s) => s.provider === provider)!
+const part = (provider: string, id: string) => sandbox(provider).palette.find((p) => p.id === id)
+const host = (url: string) => new URL(url).hostname
+
+describe('aws', () => {
+  const s = sandbox('aws')
+  const p = part('aws', 'cloudfront')
+
+  it('CloudFront is a global route part that caches by default', () => {
+    expect(p, 'cloudfront').toBeDefined()
+    expect(p!.roles).toEqual(['route'])
+    expect(p!.scope).toBe('global')
+    expect(p!.caching?.default).toBe(true)
+    expect(p!.caching?.label).toBeTruthy()
+    expect(p!.facts.length).toBeGreaterThan(0)
+    expect(p!.caching!.facts.length).toBeGreaterThan(0)
+  })
+
+  it("cites only AWS's own documentation", () => {
+    for (const src of s.sources) expect(['docs.aws.amazon.com'], src.url).toContain(host(src.url))
+  })
+})
